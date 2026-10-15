@@ -1,7 +1,41 @@
 {:tasks
- {:requires ([babashka.fs :as fs] [clojure.string :as str])
+ {:requires ([babashka.fs :as fs] [clojure.string :as str] [clojure.edn :as edn])
+  :init (do
+          ;; deps.edn :champaca/jolt pins an upstream jolt commit; `bb jolt` builds
+          ;; it to ~/.cache/champaca/jolt/<sha>/jolt from a jolt checkout
+          ;; ($JOLT_SRC, default ~/dev/jolt) through a detached worktree.
+          (def jolt-pin (:champaca/jolt (edn/read-string (slurp "deps.edn"))))
+          (def jolt-dir (str (System/getenv "HOME") "/.cache/champaca/jolt/" (subs (:git/sha jolt-pin) 0 8)))
+          (def jolt-pinned (str jolt-dir "/jolt"))
+          ;; $JOLT wins, then the pinned build, then jolt on PATH
+          (defn jolt-bin []
+            (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt")))
+  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha>/jolt"
+        :task (let [sha (:git/sha jolt-pin)
+                    src (or (System/getenv "JOLT_SRC") (str (System/getenv "HOME") "/dev/jolt"))
+                    wt (str jolt-dir "/src")]
+                (if (fs/executable? jolt-pinned)
+                  (println "already built:" jolt-pinned)
+                  (do
+                    (when-not (fs/exists? src)
+                      (shell "git clone" (:git/url jolt-pin) src))
+                    (when-not (zero? (:exit (shell {:continue true :err :string} "git -C" src "cat-file" "-e" (str sha "^{commit}"))))
+                      (shell "git -C" src "fetch" (:git/url jolt-pin) sha))
+                    (when-not (fs/exists? wt)
+                      (shell "git -C" src "worktree" "add" "--detach" wt sha))
+                    ;; borrow the checkout's submodule objects when it has them
+                    (doseq [m (str/split-lines (:out (shell {:dir wt :out :string} "git config -f .gitmodules --get-regexp path")))
+                            :let [p (second (str/split m (re-pattern " ")))
+                                  ref (str src "/" p)]]
+                      (if (fs/exists? (str ref "/.git"))
+                        (shell {:dir wt} "git submodule update --init --reference" ref p)
+                        (shell {:dir wt} "git submodule update --init" p)))
+                    (shell {:dir wt} "make build")
+                    (fs/copy (str wt "/target/release/jolt") jolt-pinned {:replace-existing true})
+                    (shell jolt-pinned "--version"))))}
   test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected"
-        :task (let [_ (shell "mkdir -p target/classes target/lib-classes")
+        :task (let [_ (println "jolt:" (jolt-bin) (str/trim (:out (shell {:out :string} (jolt-bin) "--version"))))
+                    _ (shell "mkdir -p target/classes target/lib-classes")
                     ;; test/jar is packed into target/lib.jar, so its classes reach
                     ;; the runtime only from a jar on the classpath
                     _ (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
@@ -14,7 +48,7 @@
                     fails (doall
                            (for [m mains
                                  :let [{:keys [out exit]} (shell {:out :string :continue true}
-                                                                 "jolt -M -m champaca.main target/classes:target/lib.jar" m)
+                                                                 (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
                     ;; jolt programs calling Java, checked against expected output
@@ -25,7 +59,7 @@
                     ex-fails (doall
                               (for [[n what] examples
                                     :let [{:keys [out exit]} (shell {:out :string :continue true}
-                                                                    (str "jolt -M examples/" n ".clj"))
+                                                                    (jolt-bin) "-M" (str "examples/" n ".clj"))
                                           ok (and (zero? exit) (= out (slurp (str "examples/" n ".expected"))))]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok n))))

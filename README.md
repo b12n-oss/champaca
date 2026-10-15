@@ -87,10 +87,14 @@ Old cache directories aren't cleaned up, and generations aren't merged, so each 
 
 ## Run it
 
-You need jolt (0.8.21 or later) and JDK 25 with `JAVA_HOME` set. The zip inside each jmod is copied, the first time a class is looked up in it, under `~/.cache/champaca/jmods/`.
+You need jolt 0.8.22 or later (`deps.edn` sets that as `:jolt/min-version`) and JDK 25 with `JAVA_HOME` set. The zip inside each jmod is copied, the first time a class is looked up in it, under `~/.cache/champaca/jmods/`.
+
+`deps.edn` also pins an upstream jolt commit under `:champaca/jolt`, because a fix champaca wants hasn't reached a jolt release yet: `FileInputStream.skip` used to read the bytes it skipped, and now it seeks ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)). `bb jolt` builds that commit from a jolt checkout (`$JOLT_SRC`, or `~/dev/jolt`, cloned if missing) through a detached worktree, and puts the binary in `~/.cache/champaca/jolt/<sha>/jolt`. `bb test` runs on `$JOLT` if it's set, then on the pinned build if it exists, then on `jolt` from your `PATH`, and prints which one it picked. Everything also works on a released 0.8.22, just a bit slower on the first run.
 
 ```sh
+bb jolt                                               # build the pinned jolt (about 45 s, once per pin)
 bb test                                               # every test/java program vs the JVM, plus the examples/*.clj programs
+JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
 CHAMPACA_STATS=1 ...    # print classes loaded and methods compiled

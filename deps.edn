@@ -1,1 +1,6 @@
-{:paths ["src" "resources"]}
+{:paths ["src" "resources"]
+ :jolt/min-version "0.8.22"
+ ;; The jolt `bb test` runs on: upstream main past v0.8.22, for FileInputStream.skip
+ ;; as a seek (jolt-lang/jolt#1375). `bb jolt` builds it. Drop once a release has it.
+ :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
+                 :git/sha "9eb0b9b34aa229ca1403a1fce4472f39a26d2818"}}

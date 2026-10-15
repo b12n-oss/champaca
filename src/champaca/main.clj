@@ -108,6 +108,8 @@
 (defn- le16 [b i] (bit-or (bit-and (aget b i) 0xff) (bit-shift-left (bit-and (aget b (inc i)) 0xff) 8)))
 (defn- le32 [b i] (bit-or (le16 b i) (bit-shift-left (le16 b (+ i 2)) 16)))
 
+;; skip is an lseek on the jolt pinned in deps.edn (jolt#1375); a released
+;; 0.8.22 reads the skipped bytes, slower but the same answer.
 (defn- read-at [f off n]
   (with-open [in (java.io.FileInputStream. f)]
     (.skip in off)
