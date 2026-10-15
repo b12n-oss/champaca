@@ -1,6 +1,6 @@
-# champaca
+<p align="center"><img src="docs/images/logo.svg" alt="Champaca logo: a champaca flower seen from above, with narrow golden and saffron tepals around a green centre" width="128"></p>
 
-Champaca (จำปา) is a Thai flowering tree, known for its fragrance. This project grows Java libraries inside [jolt](https://github.com/jolt-lang/jolt).
+# Champaca
 
 > [!WARNING]
 > **Spike.** This checks whether [OpenLDK](https://github.com/atgreen/openldk) can be rebuilt in [jolt](https://github.com/jolt-lang/jolt). It runs real JDK code, but only along the paths the tests exercise.
@@ -96,6 +96,18 @@ CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Sche
 - **Reflection skips some metadata.** Methods, fields, constructors, `invoke`, `newInstance` and field get/set work (`test/java/Reflect.java`). Annotations, generic signatures, inner-class info and checked-exception lists all come back empty. Field access ignores access control.
 - **One thread.** `Thread.start0` does nothing, and monitors are no-ops.
 - `float`/`double` to string uses Scheme formatting, not `Double.toString`.
+
+## The name
+
+A champaca (*Magnolia champaca*, จำปา in Thai) is a tall tree from South and Southeast Asia, a relative of the magnolias. Its flowers have narrow tepals that run from gold to saffron orange, and their scent is strong enough that the oil goes into perfume.
+
+<p align="center"><img src="docs/images/champaca-1880.jpg" alt="Botanical plate of Michelia champaca: a branch with long green leaves, narrow saffron-orange flowers and a bud, beside a cluster of green fruit" width="240"></p>
+
+*Michelia champaca* (now *Magnolia champaca*), plate 191 of Francisco Manuel
+Blanco's *Flora de Filipinas*, Gran edición, Atlas I (about 1880 to 1883).
+Public domain, via
+[Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Michelia_champaca_Blanco1.191-cropped.jpg).
+The logo in `docs/images/logo.svg` was drawn for this project.
 
 ## License
 
