@@ -1,59 +1,61 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-labelledby="title">
   <title id="title">Champaca</title>
-  <!-- A champaca seen from above. Twelve narrow, pointed tepals with a
-       slight twist, set a little unevenly as on the tree: a deeper saffron
-       back whorl and a paler golden front whorl around a green cone. -->
+  <!-- A champaca seen from the side, drawn after plate 191 of Blanco's Flora
+       de Filipinas: narrow saffron tepals that spread loosely from a green
+       cup and curl outward at the tips, two of them drooping, on a short
+       stem with one leaf. -->
   <defs>
-    <!-- one strap-shaped tepal pointing up from the centre, its tip curling right -->
-    <path id="tepal" d="M64 64 C61.2 57 59.2 46 60 36 C60.6 29 62.4 24 65.6 19 C66.8 24.5 68.2 31 67.9 39 C67.6 49 66.4 57 64 64 Z"/>
-    <path id="rib" d="M64 59 C63.7 49 63.9 38 65.2 26"/>
-    <radialGradient id="saffron" cx="64" cy="64" r="45" gradientUnits="userSpaceOnUse">
-      <stop offset="0.12" stop-color="#FFD45E"/>
-      <stop offset="0.55" stop-color="#F99A24"/>
-      <stop offset="1" stop-color="#E9690C"/>
-    </radialGradient>
-    <radialGradient id="gold" cx="64" cy="64" r="38" gradientUnits="userSpaceOnUse">
-      <stop offset="0.12" stop-color="#FFF2B8"/>
-      <stop offset="0.5" stop-color="#FFCE48"/>
-      <stop offset="1" stop-color="#F7A428"/>
-    </radialGradient>
+    <!-- one strap-shaped tepal pointing up from its base at 0,0; the tip
+         curls right, and scale(-1 1) makes it curl left -->
+    <path id="tepal" d="M0 0 C-2 -9 -3.4 -21 -2.8 -31 C-2.3 -38 0.2 -43.5 6 -46 C4 -41 2.5 -35 2.6 -29 C2.8 -19 2 -9 0 0 Z"/>
+    <path id="rib" d="M0 -3 C-0.6 -14 -0.6 -25 0.4 -35"/>
+    <linearGradient id="saffron" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFC24A"/>
+      <stop offset="0.5" stop-color="#F7921E"/>
+      <stop offset="1" stop-color="#E4640A"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFE38A"/>
+      <stop offset="0.55" stop-color="#FFB838"/>
+      <stop offset="1" stop-color="#F38A18"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8DB45A"/>
+      <stop offset="1" stop-color="#4F7F35"/>
+    </linearGradient>
   </defs>
 
-  <!-- scaled up from the 64,64 centre so the flower fills the frame -->
-  <g transform="translate(64 64) scale(1.28) translate(-64 -64)">
-  <!-- back whorl: six long saffron tepals, angles and lengths a little uneven -->
-  <g fill="url(#saffron)" stroke="#C95F08" stroke-width="0.9" stroke-linejoin="round">
-    <use href="#tepal" transform="rotate(28 64 64)"/>
-    <use href="#tepal" transform="rotate(93 64 64) translate(64 64) scale(0.94) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(147 64 64)"/>
-    <use href="#tepal" transform="rotate(212 64 64) translate(64 64) scale(0.96) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(268 64 64)"/>
-    <use href="#tepal" transform="rotate(334 64 64) translate(64 64) scale(0.92) translate(-64 -64)"/>
+  <!-- stem and leaf -->
+  <path d="M63 80 C62 95 59 110 54 124" fill="none" stroke="#8C7A55" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M60.5 108 C70 102 84 103 95 111 C84 117 70 116 60.5 108 Z" fill="url(#leaf)" stroke="#3F6A2A" stroke-width="0.9" stroke-linejoin="round"/>
+  <path d="M61.5 108 C72 107 82 108 93 111" fill="none" stroke="#3F6A2A" stroke-width="0.7" stroke-linecap="round" opacity="0.7"/>
+
+  <!-- the bloom, enlarged about its base so it fills the frame -->
+  <g transform="translate(63 74) scale(1.28) translate(-63 -88)">
+  <!-- back tepals: long, saffron, at uneven angles; the outer two droop -->
+  <g fill="url(#saffron)" stroke="#C25A08" stroke-width="0.9" stroke-linejoin="round">
+    <use href="#tepal" transform="translate(63 88) rotate(-104) scale(-0.78 0.78)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(-64) scale(-0.98 0.98)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(-38) scale(-1.08 1.08)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(-14) scale(-1.02 1.02)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(11) scale(1.1)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(36) scale(1.04)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(61) scale(0.94)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(98) scale(0.74)"/>
   </g>
-  <!-- front whorl: six shorter golden tepals between them -->
-  <g fill="url(#gold)" stroke="#D97F0E" stroke-width="0.9" stroke-linejoin="round">
-    <use href="#tepal" transform="rotate(-3 64 64) translate(64 64) scale(0.74) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(61 64 64) translate(64 64) scale(0.7) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(118 64 64) translate(64 64) scale(0.76) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(182 64 64) translate(64 64) scale(0.71) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(239 64 64) translate(64 64) scale(0.75) translate(-64 -64)"/>
-    <use href="#tepal" transform="rotate(302 64 64) translate(64 64) scale(0.72) translate(-64 -64)"/>
+  <!-- front tepals: shorter and paler -->
+  <g fill="url(#gold)" stroke="#D27A0C" stroke-width="0.9" stroke-linejoin="round">
+    <use href="#tepal" transform="translate(63 88) rotate(-27) scale(-0.78 0.78)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(-2) scale(0.86)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(24) scale(0.76)"/>
   </g>
-  <!-- faint midribs on the front whorl -->
-  <g fill="none" stroke="#E58A12" stroke-width="0.8" stroke-linecap="round" opacity="0.55">
-    <use href="#rib" transform="rotate(-3 64 64) translate(64 64) scale(0.74) translate(-64 -64)"/>
-    <use href="#rib" transform="rotate(61 64 64) translate(64 64) scale(0.7) translate(-64 -64)"/>
-    <use href="#rib" transform="rotate(118 64 64) translate(64 64) scale(0.76) translate(-64 -64)"/>
-    <use href="#rib" transform="rotate(182 64 64) translate(64 64) scale(0.71) translate(-64 -64)"/>
-    <use href="#rib" transform="rotate(239 64 64) translate(64 64) scale(0.75) translate(-64 -64)"/>
-    <use href="#rib" transform="rotate(302 64 64) translate(64 64) scale(0.72) translate(-64 -64)"/>
+  <g fill="none" stroke="#E07E10" stroke-width="0.8" stroke-linecap="round" opacity="0.6">
+    <use href="#rib" transform="translate(63 88) rotate(-27) scale(-0.78 0.78)"/>
+    <use href="#rib" transform="translate(63 88) rotate(-2) scale(0.86)"/>
+    <use href="#rib" transform="translate(63 88) rotate(24) scale(0.76)"/>
   </g>
 
-  <!-- the centre: a slender green cone with a few cream stamens -->
-  <g transform="translate(64 64)">
-    <circle r="5.2" fill="#FFE9A8" stroke="#D99A2B" stroke-width="0.7"/>
-    <circle r="3.1" fill="#9DB23A" stroke="#6F7F1E" stroke-width="0.7"/>
-    <circle cx="-0.7" cy="-0.8" r="1.1" fill="#C8D667"/>
-  </g>
+  <!-- the green cup the tepals rise from -->
+  <path d="M56.5 86 C57 91 60 94 63 94 C66 94 69 91 69.5 86 C66 88 60 88 56.5 86 Z" fill="#7FA548" stroke="#4F7230" stroke-width="0.9" stroke-linejoin="round"/>
   </g>
 </svg>
