@@ -53,7 +53,7 @@ The classpath takes directories and jars, so a Java library loads straight from 
 
 From the command line it's a colon-separated list, as with `java -cp`: `jolt -M -m champaca.main classes:lib/gson-2.13.2.jar Main`. Two real libraries were checked this way against the JVM, with identical output: commons-lang3 3.12.0 (`StringUtils`) and gson 2.13.2 (parsing, `toJson` of a JSON tree, of a plain object and of a `Map`, `fromJson` into a class with no default constructor, pretty printing). They aren't in `bb test`, because they'd need the jars downloaded. `bb test` packs `test/jar` into `target/lib.jar` instead and runs `test/java/JarCheck.java` and `examples/jars.clj` against it.
 
-Classes outside `java.base` come from the other jmods: `java.sql`, `java.logging`, `jdk.unsupported` and so on. Modules are searched in name order and each one's zip is copied under `~/.cache/champaca/jmods/` the first time it's searched. A class from a module that sorts late, like `sun.misc.Unsafe` in `jdk.unsupported`, copies nearly all 69 of them (81 MB) on the first run.
+Classes outside `java.base` come from the other jmods: `java.sql`, `java.logging`, `jdk.unsupported` and so on. The first run reads each jmod's zip directory in place to build a package-to-module index (876 packages across JDK 25's 69 modules), and saves it as `~/.cache/champaca/jmods/<jdk>/packages.edn`. A class lookup goes straight to its module, and only a module that's actually used gets its zip copied there. `bb test` copies 4 of them, 20 MB.
 
 ## Reflection
 

@@ -2,12 +2,13 @@
   "Class loading, linking and the JIT hook, plus the command-line entry.
 
   Classes come from the user classpath first, then from the JDK's own
-  java.base.jmod. Loading a class registers it with the Scheme runtime and
+  jmods. Loading a class registers it with the Scheme runtime and
   defines every method as a stub; the first call to a stub calls back into
   jit!, which translates that one method and redefines the global in place.
   Native methods are bound by name from resources/champaca/natives.ss.
   That mirrors OpenLDK, which also compiles each method on first call."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.scheme :as s]
             [champaca.classfile :as cf]
@@ -99,17 +100,61 @@
           (swap! state assoc-in [:jmods module] zf)
           zf))))
 
-(defn- modules []
-  (or (:modules @state)
-      (let [names (->> (.listFiles (io/file (java-home) "jmods"))
-                       (map #(.getName %))
-                       (filter #(str/ends-with? % ".jmod"))
-                       (map #(subs % 0 (- (count %) 5)))
-                       (remove #{"java.base"})
-                       sort)
-            ms (vec (cons "java.base" names))]
-        (swap! state assoc :modules ms)
-        ms)))
+;; Which module holds a package comes from each jmod's zip central directory,
+;; read in place (4 bytes in, behind the header) so no module is copied just
+;; to be searched. jlink writes no zip comment, so the end-of-directory
+;; record is the file's last 22 bytes. The index is saved beside the copies.
+
+(defn- le16 [b i] (bit-or (bit-and (aget b i) 0xff) (bit-shift-left (bit-and (aget b (inc i)) 0xff) 8)))
+(defn- le32 [b i] (bit-or (le16 b i) (bit-shift-left (le16 b (+ i 2)) 16)))
+
+(defn- read-at [f off n]
+  (with-open [in (java.io.FileInputStream. f)]
+    (.skip in off)
+    (let [b (byte-array n)]
+      (loop [got 0]
+        (if (< got n)
+          (let [r (.read in b got (- n got))]
+            (if (neg? r) (throw (ex-info "short read" {:file (str f) :offset off :wanted n})) (recur (+ got r))))
+          b)))))
+
+(defn- jmod-packages
+  "The packages with classes in one jmod, as \"java/util/zip\"."
+  [f]
+  (let [eocd (read-at f (- (.length f) 22) 22)
+        _ (when-not (= 0x06054b50 (le32 eocd 0))
+            (throw (ex-info "jmod has no plain end-of-directory record" {:file (str f)})))
+        size (le32 eocd 12)
+        cd (read-at f (+ 4 (le32 eocd 16)) size)]
+    (loop [i 0 acc (transient #{})]
+      (if (>= i size)
+        (persistent! acc)
+        (let [nl (le16 cd (+ i 28))
+              entry (String. cd (+ i 46) nl "UTF-8")
+              slash (str/last-index-of entry "/")]
+          (recur (+ i 46 nl (le16 cd (+ i 30)) (le16 cd (+ i 32)))
+                 (if (and (str/starts-with? entry "classes/") (str/ends-with? entry ".class") (> slash 7))
+                   (conj! acc (subs entry 8 slash))
+                   acc)))))))
+
+(defn- package-modules []
+  (or (:package-modules @state)
+      (let [f (io/file (jmods-dir) "packages.edn")
+            idx (if (.exists f)
+                  (edn/read-string (slurp f))
+                  (let [idx (into {}
+                                  (for [jm (.listFiles (io/file (java-home) "jmods"))
+                                        :let [n (.getName jm)]
+                                        :when (str/ends-with? n ".jmod")
+                                        pkg (jmod-packages jm)]
+                                    [pkg (subs n 0 (- (count n) 5))]))
+                        tmp (io/file (str f ".tmp-" (System/nanoTime)))]
+                    (io/make-parents tmp)
+                    (spit tmp (pr-str idx))
+                    (when-not (.renameTo tmp f) (.delete tmp))
+                    idx))]
+        (swap! state assoc :package-modules idx)
+        idx)))
 
 (defn- read-entry [zf entry-name]
   (when-let [e (.getEntry zf entry-name)]
@@ -132,8 +177,9 @@
           (:classpath @state))))
 
 (defn- jdk-class-bytes [cname]
-  (let [rel (str "classes/" cname ".class")]
-    (some #(read-entry (jmod-zip %) rel) (modules))))
+  (when-let [slash (str/last-index-of cname "/")]
+    (when-let [module (get (package-modules) (subs cname 0 slash))]
+      (read-entry (jmod-zip module) (str "classes/" cname ".class")))))
 
 (defn- class-bytes [cname]
   (or (user-class-bytes cname) (jdk-class-bytes cname)))
