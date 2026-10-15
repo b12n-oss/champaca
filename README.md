@@ -38,7 +38,7 @@ The first run builds a cache under `~/.cache/openldk-jolt/<key>/` and later runs
 | Program | No cache | Warm cache |
 |---|---|---|
 | Hello | 0.95 s | 0.29 s |
-| Streams | 1.40 s (cold run, includes writing the cache) | 0.35 s |
+| Streams | 1.45–1.61 s | 0.35 s |
 | `examples/interop.clj` | 1.08 s | 0.31 s |
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, and jolt's runtime version, so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `OPENLDK_CACHE=off` disables it and `OPENLDK_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
