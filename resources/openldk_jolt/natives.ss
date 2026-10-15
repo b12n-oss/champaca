@@ -59,7 +59,7 @@
 (defnative "java/lang/Class.isPrimitive()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'prim) 1 0))
 (defnative "java/lang/Class.isInterface()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'interface) 1 0))
 (defnative "java/lang/Class.isHidden()Z" (this) 0)
-(defnative "java/lang/Class.getModifiers()I" (this) (fxlogand (jclass-flags (mirror-class this)) #xffff))
+(defnative "java/lang/Class.getModifiers()I" (this) (class-modifiers (mirror-class this)))
 (defnative "java/lang/Class.getSuperclass()Ljava/lang/Class;" (this)
   (let ([c (mirror-class this)])
     (and (jclass-super c) (not (eq? (jclass-kind c) 'interface)) (jmirror-of (jclass-super c)))))
@@ -192,7 +192,9 @@
      ("java.class.path" . "")
      ("sun.boot.library.path" . "")
      ("java.library.path" . "")
-     ("jdk.debug" . "release"))))
+     ("jdk.debug" . "release")
+     ;; reflection through invoke0/newInstance0 (reflect.ss), never method handles
+     ("jdk.reflect.useNativeAccessorOnly" . "true"))))
 
 (defnative "jdk/internal/util/SystemProps$Raw.platformProperties()[Ljava/lang/String;" ()
   (let* ([ndx (lambda (f) (top-level-value (string->symbol (string-append "jdk/internal/util/SystemProps$Raw:" f))))]
@@ -289,16 +291,4 @@
 
 ;; --- overrides of Java-coded methods ----------------------------------------------
 
-;; The JDK finds an enum's constants with getMethod("values").invoke(...).
-;; Reflective invoke needs method handles, so call values() directly.
-(define-override! "java/lang/Class.getEnumConstantsShared()[Ljava/lang/Object;"
-  (lambda (this)
-    (let* ([slot (jfield-index "java/lang/Class" "enumConstants")]
-           [cached (jslot this slot)])
-      (or cached
-          (let* ([n (jclass-name (mirror-class this))]
-                 [sym (string->symbol (string-append n ".values()[L" n ";"))])
-            (and (subclass? n "java/lang/Enum")
-                 (top-level-bound? sym)
-                 (begin (jinit n)
-                        (let ([vs ((top-level-value sym))]) (jslot-set! this slot vs) vs))))))))
+;; (none yet: Class.getEnumConstantsShared used to be one, before reflect.ss)

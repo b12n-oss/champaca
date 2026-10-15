@@ -1,0 +1,13 @@
+Widget super=java.lang.Object interfaces=[interface Named] 
+[boom/0:void, grow/1:int, name/0:java.lang.String, twice/1:long]
+2 constructors, 1 public
+w#3
+7
+42
+size=7
+w#42 42
+made=1 label=w
+ITE cause: java.lang.IllegalStateException: boom from w
+NoSuchMethodException Widget.nope()
+default#0
+{RED=1, BLUE=3} 1

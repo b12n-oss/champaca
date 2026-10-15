@@ -166,7 +166,8 @@
     {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
      ;; only JDK classes are cached; user classes change between runs
      :origin (if (user-class-bytes cname) :user :jdk)
-     :fields (mapv (fn [f] {:name (:name f) :desc (:desc f) :static (cf/static? f) :constant (:constant f)})
+     :fields (mapv (fn [f] {:name (:name f) :desc (:desc f) :flags (:flags f)
+                            :static (cf/static? f) :constant (:constant f)})
                    (:fields c))
      :methods (mapv (fn [m] (assoc m
                                    :native (cf/native? m)
@@ -216,7 +217,10 @@
             (apply cg/sx "vector" template)
             (str "'" (apply cg/sx (for [[k g] (sort vtable)] (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))))
             (str "'" (apply cg/sx (for [[k i] (sort layout)] (str "(" (cg/str-lit k) " . " i ")"))))
-            (str flags))]
+            (str flags)
+            ;; declared members, in classfile order, for reflection
+            (str "'" (cg/sx (apply cg/sx (for [m methods] (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m)))))
+                            (apply cg/sx (for [f fields] (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))))))))]
     (for [f fields :when (:static f)]
       (cg/sx "define" (cg/static-global name (:name f))
              (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))
@@ -254,7 +258,7 @@
     (when-not (get-in @state [:classes n])
       (run! ensure-loaded! ifaces)
       (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011
-                  :fields [{:name "fn" :desc "Ljava/lang/Object;" :static false}] :methods []}
+                  :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
             linked (reduce #(assoc-in %1 [:vtable %2] "openldk/Lambda.invoke") (link info) sam-keys)]
         (swap! state assoc-in [:classes n] linked)
         (let [text (registration-text linked)]
@@ -298,7 +302,7 @@
 
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
-                        ["openldk_jolt/runtime.ss" "openldk_jolt/natives.ss"
+                        ["openldk_jolt/runtime.ss" "openldk_jolt/natives.ss" "openldk_jolt/reflect.ss"
                          "openldk_jolt/codegen.clj" "openldk_jolt/main.clj"
                          "openldk_jolt/classfile.clj"]))))
 
@@ -376,6 +380,7 @@
   []
   (scheme! (slurp (io/resource "openldk_jolt/runtime.ss")))
   (scheme! (slurp (io/resource "openldk_jolt/natives.ss")))
+  (scheme! (slurp (io/resource "openldk_jolt/reflect.ss")))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
@@ -388,6 +393,9 @@
                      ;; the JVM initializes Reference before initPhase1; its <clinit>
                      ;; installs SharedSecrets.javaLangRefAccess, which initPhase1 uses
                      (jinit \"java/lang/ref/Reference\")
+                     ;; AccessibleObject.<clinit> installs langReflectAccess, which
+                     ;; ReflectionFactory needs (OpenLDK %initialize-system-phase1)
+                     (jinit \"java/lang/reflect/AccessibleObject\")
                      ((method-proc \"java/lang/System\" \"initPhase1()V\"))))")]
       (when-let [rec (:recording @state)]
         (when (and (not hit?) (zero? status))

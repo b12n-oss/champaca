@@ -63,7 +63,7 @@
 ;; slot index. vtable entries map "name(desc)" to the symbol whose top-level
 ;; value is the method procedure, a JIT stub until first call.
 (define-record-type jclass
-  (fields name super interfaces template vtable fields flags kind (mutable state) (mutable mirror)))
+  (fields name super interfaces template vtable fields flags kind meta (mutable state) (mutable mirror)))
 (define-record-type jobj (fields cls slots))
 (define-record-type jarr (fields elem vec))
 
@@ -74,12 +74,14 @@
     (for-each (lambda (p) (hashtable-set! t (car p) (cdr p))) al)
     t))
 
-(define (register-class! name super interfaces template vtable-alist field-alist flags)
+;; meta is ((methods ...) (fields ...)), each entry (name desc access-flags)
+;; in classfile order; reflection reads it and a member's slot is its index.
+(define (register-class! name super interfaces template vtable-alist field-alist flags meta)
   (hashtable-set! classes name
                   (make-jclass name super interfaces template (alist->table vtable-alist)
                                (alist->table field-alist) flags
                                (if (fxpositive? (fxlogand flags #x200)) 'interface 'class)
-                               'loaded #f)))
+                               meta 'loaded #f)))
 
 (define prim-names
   '(("Z" . "boolean") ("B" . "byte") ("C" . "char") ("S" . "short") ("I" . "int")
@@ -91,7 +93,7 @@
   (let ([c (make-jclass name (if (eq? kind 'array) "java/lang/Object" #f)
                         (if (eq? kind 'array) '("java/lang/Cloneable" "java/io/Serializable") '())
                         (vector) (make-hashtable string-hash string=?) (make-hashtable string-hash string=?)
-                        #x411 kind 'initialized #f)])
+                        #x411 kind '(() ()) 'initialized #f)])
     (hashtable-set! classes name c)
     c))
 
@@ -335,11 +337,15 @@
         (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "primitive")
                      (if (eq? (jclass-kind c) 'prim) 1 0))
         (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "modifiers")
-                     (fxlogand (jclass-flags c) #xffff))
+                     (class-modifiers c))
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
                        (jmirror (find-class (desc->class-name (substring (jclass-name c) 1 (string-length (jclass-name c))))))))
         m)))
+
+;; Class.getModifiers: access flags minus ACC_SUPER (0x20), which shares its
+;; bit with Modifier.SYNCHRONIZED; the JVM masks it off the same way.
+(define (class-modifiers c) (fxlogand (jclass-flags c) #x761f))
 
 (define (jmirror-of name) (jmirror (find-class name)))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'openldk "not a mirror" m)))
@@ -504,3 +510,21 @@
       (lambda args
         (jit! cname mname desc)
         (apply (top-level-value sym) args))))
+
+;; --- descriptors ----------------------------------------------------------------------
+
+(define (desc-args d)
+  ;; "(ILjava/lang/String;[J)V" -> ("I" "Ljava/lang/String;" "[J")
+  (let loop ([i 1] [acc '()])
+    (if (char=? (string-ref d i) #\))
+        (reverse acc)
+        (let scan ([j i])
+          (case (string-ref d j)
+            [(#\[) (scan (fx+ j 1))]
+            [(#\L) (let find ([k j]) (if (char=? (string-ref d k) #\;)
+                                         (loop (fx+ k 1) (cons (substring d i (fx+ k 1)) acc))
+                                         (find (fx+ k 1))))]
+            [else (loop (fx+ j 1) (cons (substring d i (fx+ j 1)) acc))])))))
+
+(define (desc-ret d)
+  (let loop ([i 0]) (if (char=? (string-ref d i) #\)) (substring d (fx+ i 1) (string-length d)) (loop (fx+ i 1)))))

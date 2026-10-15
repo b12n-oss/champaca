@@ -25,22 +25,6 @@
     [(#\L #\[) (cond [(not v) jolt-nil] [(java-string? v) (jstring->scheme v)] [else v])]
     [else v]))
 
-(define (desc-args d)
-  ;; "(ILjava/lang/String;[J)V" -> ("I" "Ljava/lang/String;" "[J")
-  (let loop ([i 1] [acc '()])
-    (if (char=? (string-ref d i) #\))
-        (reverse acc)
-        (let scan ([j i])
-          (case (string-ref d j)
-            [(#\[) (scan (fx+ j 1))]
-            [(#\L) (let find ([k j]) (if (char=? (string-ref d k) #\;)
-                                         (loop (fx+ k 1) (cons (substring d i (fx+ k 1)) acc))
-                                         (find (fx+ k 1))))]
-            [else (loop (fx+ j 1) (cons (substring d i (fx+ j 1)) acc))])))))
-
-(define (desc-ret d)
-  (let loop ([i 0]) (if (char=? (string-ref d i) #\)) (substring d (fx+ i 1) (string-length d)) (loop (fx+ i 1)))))
-
 ;; Every entry point runs inside a guard that turns an escaping Java
 ;; exception into a Scheme condition jolt can catch, carrying the Java
 ;; toString as its message.

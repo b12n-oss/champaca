@@ -195,7 +195,12 @@
 
 ;; --- per-instruction emission ---------------------------------------------------
 
-(defn- label [pc] (str "B" pc))
+(def ^:dynamic *method-tag*
+  "Class.name(desc) of the method being translated. Block labels carry it
+  so a Chez stack frame names its Java method (see getCallerClass)."
+  "")
+
+(defn- label [pc] (sym (str *method-tag* "#B" pc)))
 
 (defn desc->t
   "Stack type of a field or return descriptor: I J F D or A."
@@ -518,8 +523,15 @@
                        (label handler))))
           code))))
 
+(declare compile-method*)
+
 (defn compile-method
   "Scheme source for `(define |Cls.name(desc)| (lambda ...))`."
+  [cls method resolve]
+  (binding [*method-tag* (str (:name cls) "." (:name method) (:desc method))]
+    (compile-method* cls method resolve)))
+
+(defn- compile-method*
   [cls method resolve]
   (let [{:keys [max-stack max-locals code handlers]} (:code method)
         insns (decode code)
@@ -551,7 +563,14 @@
                    (sx "letrec"
                        (apply sx (for [[pc code] (sort-by key emitted)]
                                    (sx (label pc) (sx "lambda" "()" (if tramp? (guard-wrap code pc handlers) code)))))
-                       (if tramp? (sx "trampoline" (label 0)) (sx (label 0)))))]
+                       (if tramp?
+                         ;; an inline named loop, not the runtime's trampoline,
+                         ;; so a frame named for this method stays on the stack
+                         ;; while a block runs under guard (getCallerClass)
+                         (let [t (sym (str *method-tag* "#T"))]
+                           (sx "let" t (sx (sx "r" (sx (label 0))))
+                               (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))
+                         (sx (label 0)))))]
       (sx "define" (method-global (:name cls) (:name method) (:desc method))
           (sx "lambda" (apply sx (map #(str "l" %) params))
               ;; OPENLDK_BT: keep a shadow stack of Java frames for backtraces
