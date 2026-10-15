@@ -138,7 +138,10 @@
                   :iface [[(u2 (inc pc))] 5]
                   :indy [[(u2 (inc pc))] 5]
                   :multi [[(u2 (inc pc)) (b (+ pc 3))] 4]
-                  :wide (throw (ex-info "wide not in spike" {:pc pc}))
+                  :wide (let [[op2] (opcodes (b (inc pc))) idx (u2 (+ pc 2))]
+                          (if (= op2 :iinc)
+                            [[idx (s16 (b (+ pc 4)) (b (+ pc 5)))] 6]
+                            [[idx] 4]))
                   :tableswitch
                   (let [p (+ pc 1 (mod (- 3 (mod pc 4)) 4))
                         dflt (+ pc (i32 p)) lo (i32 (+ p 4)) hi (i32 (+ p 8))
@@ -151,7 +154,8 @@
                         targets (vec (for [k (range cnt)]
                                        [(i32 (+ p 8 (* 8 k))) (+ pc (i32 (+ p 12 (* 8 k))))]))]
                     [[dflt targets] (- (+ p 8 (* 8 cnt)) pc)])))]
-          (recur (+ pc len) (conj out {:pc pc :op op :args args :len len})))))))
+          (recur (+ pc len) (conj out {:pc pc :op (if (= op :wide) (first (opcodes (b (inc pc)))) op)
+                                       :args args :len len})))))))
 
 ;; --- control flow ------------------------------------------------------------
 
@@ -193,136 +197,237 @@
 
 (defn- label [pc] (str "B" pc))
 
+(defn desc->t
+  "Stack type of a field or return descriptor: I J F D or A."
+  [d]
+  (case (first d) (\B \C \S \Z \I) "I" \J "J" \F "F" \D "D" "A"))
+
+(defn- cat2? [t] (contains? #{"J" "D"} t))
+
+(def ^:private newarray-elem {4 "Z" 5 "C" 6 "F" 7 "D" 8 "B" 9 "S" 10 "I" 11 "J"})
+
+;; --- lambdas -----------------------------------------------------------------------
+;; LambdaMetafactory call sites are not run through the JDK's bootstrap (that
+;; needs MethodHandles and runtime class generation). The translator emits a
+;; closure instead and the linker makes one small class per functional
+;; interface whose SAM entry calls the closure stored in the object.
+
+(defn- convert
+  "Scheme expression converting v from stack type `from` to `to`, where
+  each is a descriptor. Boxes, unboxes or widens; refs pass through."
+  [from to v]
+  (let [prim? #(contains? #{"Z" "B" "C" "S" "I" "J" "F" "D"} %)]
+    (cond
+      (= from to) v
+      (and (prim? from) (prim? to))
+      (if (and (#{"F" "D"} to) (not (#{"F" "D"} from))) (sx "inexact" v) v)
+      (prim? from) (sx "jbox" (str-lit from) v)
+      (prim? to) (sx "junbox" (str-lit to) v)
+      :else v)))
+
+(defn- lambda-expr
+  [{:keys [cls resolve]} sam-name iface-desc captured-types captured bsm]
+  (let [cp (:cp cls)
+        [sam-mt impl-mh _inst-mt] (map cp (:args bsm))
+        iface (subs iface-desc 1 (dec (count iface-desc)))
+        sam-desc (:desc sam-mt)
+        {sam-args :args sam-ret :ret} (parse-desc sam-desc)
+        kind (:kind impl-mh)
+        {:keys [class name desc]} (cp (:ref-idx impl-mh))
+        {impl-args :args impl-ret :ret} (parse-desc desc)
+        ;; kinds: 5 virtual, 6 static, 7 special, 8 new, 9 interface
+        impl-params (if (#{5 7 9} kind) (cons (str "L" class ";") impl-args) impl-args)
+        params (map #(str "p" %) (range (count sam-args)))
+        cvars (map #(str "c" %) (range (count captured)))
+        actuals (concat cvars
+                        (map (fn [t p want] (convert t want p))
+                             sam-args params (drop (count captured) impl-params)))
+        call (case (int kind)
+               6 (do ((:ensure-loaded resolve) class)
+                     (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals))
+               7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
+               (5 9) (apply sx (sx "jvirt" (first actuals) (str-lit (str name desc))) actuals)
+               8 (do ((:ensure-loaded resolve) class)
+                     (sx "let" (sx (sx "o" (sx "jnew" (str-lit class))))
+                         (apply sx (method-global class name desc) "o" actuals) "o")))
+        ret-type (if (= kind 8) (str "L" class ";") impl-ret)
+        body (cond (= sam-ret "V") (sx "begin" call "(void)")
+                   (= ret-type "V") (sx "begin" call "#f")
+                   :else (convert ret-type sam-ret call))
+        ;; altMetafactory extras: flags, then optional markers and bridges
+        [flags & more] (map #(let [e (cp %)] (or (:value e) (:name e) (:desc e))) (drop 3 (:args bsm)))
+        flags (or flags 0)
+        [markers more] (if (pos? (bit-and flags 2)) [(take (first more) (rest more)) (drop (inc (first more)) more)] [[] more])
+        bridges (if (pos? (bit-and flags 4)) (take (first more) (rest more)) [])
+        ifaces (cond-> (into [iface] markers) (pos? (bit-and flags 1)) (conj "java/io/Serializable"))
+        lambda-class ((:lambda-class resolve) ifaces (cons (str sam-name sam-desc) (map #(str sam-name %) bridges)))]
+    (sx "let" (apply sx (map sx cvars captured))
+        (sx "jlambda" (str-lit lambda-class) (sx "lambda" (apply sx params) body)))))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
-  linker callbacks), :tramp? and :next-pc. Returns {:code text :succ {pc depth}}."
-  [ctx blk depth]
+  linker callbacks), :tramp? and :next-pc. entry is the compile-time stack at
+  block entry: a vector of types (I J F D A), one per operand-stack value.
+  Returns {:code text :succ {pc entry-stack}}."
+  [ctx blk entry]
   (let [{:keys [cls resolve tramp? next-pc]} ctx
         cp (:cp cls)
         this-class (:name cls)
-        d (volatile! depth)
+        st (volatile! entry)
         stmts (transient [])
         succ (volatile! {})
         s (fn [i] (str "s" i))
-        push! (fn [expr] (conj! stmts (sx "set!" (s @d) expr)) (vswap! d inc))
-        pop! (fn [] (vswap! d dec) (s @d))
+        push! (fn [expr t] (conj! stmts (sx "set!" (s (count @st)) expr)) (vswap! st conj t))
+        pop! (fn [] (let [i (dec (count @st))] (vswap! st pop) (s i)))
+        top-t (fn [] (peek @st))
         popn! (fn [n] (vec (reverse (repeatedly n pop!))))
         stmt! (fn [x] (conj! stmts x))
-        goto (fn [pc dep] (vswap! succ assoc pc dep) (if tramp? (label pc) (sx (label pc))))
+        goto (fn [pc] (vswap! succ assoc pc @st) (if tramp? (label pc) (sx (label pc))))
         init (fn [c] (when (not= c this-class) (stmt! (sx "jinit" (str-lit c)))))
-        bin (fn [f] (let [b (pop!) a (pop!)] (push! (f a b))))
-        un (fn [f] (push! (f (pop!))))
+        bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
+        un (fn [f t] (push! (f (pop!)) t))
+        ;; copy the top k values to below the m values under them (dup family)
+        shuffle! (fn [k m]
+                   (let [n (count @st)
+                         base (- n k m)
+                         items (subvec @st base)
+                         order (concat (range (- (count items) k) (count items)) (range (count items)))
+                         temps (map #(str "t" %) (range (count items)))]
+                     (stmt! (sx "let" (apply sx (map #(sx %1 (s (+ base %2))) temps (range)))
+                                (apply sx "begin" (map-indexed (fn [j src] (sx "set!" (s (+ base j)) (nth temps src))) order))))
+                     (vreset! st (into (subvec @st 0 base) (map items order)))))
         cmp0 {:ifeq "fx=" :ifne "fx<>" :iflt "fx<" :ifge "fx>=" :ifgt "fx>" :ifle "fx<="}
         cmp2 {:if_icmpeq "fx=" :if_icmpne "fx<>" :if_icmplt "fx<" :if_icmpge "fx>="
               :if_icmpgt "fx>" :if_icmple "fx<="}
-        terminal (volatile! nil)]
+        terminal (volatile! nil)
+        branch (fn [test target fall] (vreset! terminal (sx "if" test (goto target) (goto fall))))]
     (doseq [{:keys [op args pc len]} blk]
       (let [a0 (first args)]
         (case op
           :nop nil
-          :aconst_null (push! "#f")
+          :aconst_null (push! "#f" "A")
           (:iconst_m1 :iconst_0 :iconst_1 :iconst_2 :iconst_3 :iconst_4 :iconst_5)
           (push! (str ({:iconst_m1 -1 :iconst_0 0 :iconst_1 1 :iconst_2 2 :iconst_3 3
-                        :iconst_4 4 :iconst_5 5} op)))
-          (:lconst_0 :lconst_1) (push! (if (= op :lconst_0) "0" "1"))
-          (:fconst_0 :fconst_1 :fconst_2 :dconst_0 :dconst_1)
-          (push! ({:fconst_0 "0.0" :fconst_1 "1.0" :fconst_2 "2.0" :dconst_0 "0.0" :dconst_1 "1.0"} op))
-          (:bipush :sipush) (push! (str a0))
+                        :iconst_4 4 :iconst_5 5} op)) "I")
+          (:lconst_0 :lconst_1) (push! (if (= op :lconst_0) "0" "1") "J")
+          (:fconst_0 :fconst_1 :fconst_2) (push! ({:fconst_0 "0.0" :fconst_1 "1.0" :fconst_2 "2.0"} op) "F")
+          (:dconst_0 :dconst_1) (push! (if (= op :dconst_0) "0.0" "1.0") "D")
+          (:bipush :sipush) (push! (str a0) "I")
           (:ldc :ldc_w :ldc2_w)
           (let [e (cp a0)]
-            (push! (case (:tag e)
-                     (:int :long :float :double) (num-lit (:value e))
-                     :string (str-lit (:value e))
-                     (throw (ex-info "ldc constant not in spike" {:entry e})))))
-          (:iload :lload :fload :dload :aload) (push! (str "l" a0))
+            (case (:tag e)
+              :int (push! (num-lit (:value e)) "I")
+              :long (push! (num-lit (:value e)) "J")
+              :float (push! (num-lit (:value e)) "F")
+              :double (push! (num-lit (:value e)) "D")
+              :string (push! (sx "jstring-lit" (str-lit (:value e))) "A")
+              :class (push! (sx "jmirror-of" (str-lit (:name e))) "A")
+              (throw (ex-info "ldc constant not in spike" {:entry e}))))
+          :iload (push! (str "l" a0) "I")
+          :lload (push! (str "l" a0) "J")
+          :fload (push! (str "l" a0) "F")
+          :dload (push! (str "l" a0) "D")
+          :aload (push! (str "l" a0) "A")
           (:istore :lstore :fstore :dstore :astore) (stmt! (sx "set!" (str "l" a0) (pop!)))
           :iinc (stmt! (sx "set!" (str "l" a0) (sx "i32" (sx "fx+" (str "l" a0) (str (second args))))))
-          (:iaload :laload :faload :daload :aaload :baload :caload :saload)
-          (bin (fn [a i] (sx "jaload" a i)))
+          (:iaload :baload :caload :saload) (bin (fn [a i] (sx "jaload" a i)) "I")
+          :laload (bin (fn [a i] (sx "jaload" a i)) "J")
+          :faload (bin (fn [a i] (sx "jaload" a i)) "F")
+          :daload (bin (fn [a i] (sx "jaload" a i)) "D")
+          :aaload (bin (fn [a i] (sx "jaload" a i)) "A")
           (:iastore :lastore :fastore :dastore :aastore :bastore :castore :sastore)
           (let [[a i v] (popn! 3)]
-            (stmt! (sx "jastore" a i (case op :bastore (sx "i2b" v) :castore (sx "fxlogand" v "#xffff") v))))
+            (stmt! (sx "jastore" a i (case op :bastore (sx "i2b" v) :castore (sx "fxlogand" v "#xffff")
+                                       :sastore (sx "i2s" v) v))))
           :pop (pop!)
-          :dup (push! (s (dec @d)))
-          :dup_x1 (let [v1 (pop!) v2 (pop!)]
-                    (stmt! (sx "let" (sx (sx "t1" v1) (sx "t2" v2))
-                               (sx "set!" (s @d) "t1") (sx "set!" (s (inc @d)) "t2")
-                               (sx "set!" (s (+ @d 2)) "t1")))
-                    (vswap! d + 3))
-          :swap (let [v1 (pop!) v2 (pop!)]
+          :pop2 (if (cat2? (top-t)) (pop!) (do (pop!) (pop!)))
+          :dup (shuffle! 1 0)
+          :dup_x1 (shuffle! 1 1)
+          :dup_x2 (shuffle! 1 (if (cat2? (nth @st (- (count @st) 2))) 1 2))
+          :dup2 (shuffle! (if (cat2? (top-t)) 1 2) 0)
+          :dup2_x1 (shuffle! (if (cat2? (top-t)) 1 2) 1)
+          :dup2_x2 (let [k (if (cat2? (top-t)) 1 2)]
+                     (shuffle! k (if (cat2? (nth @st (- (count @st) k 1))) 1 2)))
+          :swap (let [t1 (top-t) v1 (pop!) t2 (top-t) v2 (pop!)]
                   (stmt! (sx "let" (sx (sx "t" v1)) (sx "set!" v1 v2) (sx "set!" v2 "t")))
-                  (vswap! d + 2))
-          :iadd (bin #(sx "i32" (sx "fx+" %1 %2)))
-          :isub (bin #(sx "i32" (sx "fx-" %1 %2)))
-          :imul (bin #(sx "i32" (sx "*" %1 %2)))
-          :idiv (bin #(sx "idiv" %1 %2))
-          :irem (bin #(sx "irem" %1 %2))
-          :ineg (un #(sx "i32" (sx "fx-" "0" %)))
-          :ishl (bin #(sx "ishl" %1 %2))
-          :ishr (bin #(sx "ishr" %1 %2))
-          :iushr (bin #(sx "iushr" %1 %2))
-          :iand (bin #(sx "fxlogand" %1 %2))
-          :ior (bin #(sx "fxlogor" %1 %2))
-          :ixor (bin #(sx "fxlogxor" %1 %2))
-          :ladd (bin #(sx "i64" (sx "+" %1 %2)))
-          :lsub (bin #(sx "i64" (sx "-" %1 %2)))
-          :lmul (bin #(sx "i64" (sx "*" %1 %2)))
-          :ldiv (bin #(sx "ldiv" %1 %2))
-          :lrem (bin #(sx "lrem" %1 %2))
-          :lneg (un #(sx "i64" (sx "-" %)))
-          :lshl (bin #(sx "lshl" %1 %2))
-          :lshr (bin #(sx "lshr" %1 %2))
-          :lushr (bin #(sx "lushr" %1 %2))
-          :land (bin #(sx "logand" %1 %2))
-          :lor (bin #(sx "logor" %1 %2))
-          :lxor (bin #(sx "logxor" %1 %2))
-          :lcmp (bin #(sx "lcmp" %1 %2))
+                  (vswap! st conj t1 t2))
+          :iadd (bin #(sx "i32" (sx "fx+" %1 %2)) "I")
+          :isub (bin #(sx "i32" (sx "fx-" %1 %2)) "I")
+          :imul (bin #(sx "i32" (sx "*" %1 %2)) "I")
+          :idiv (bin #(sx "idiv" %1 %2) "I")
+          :irem (bin #(sx "irem" %1 %2) "I")
+          :ineg (un #(sx "i32" (sx "fx-" "0" %)) "I")
+          :ishl (bin #(sx "ishl" %1 %2) "I")
+          :ishr (bin #(sx "ishr" %1 %2) "I")
+          :iushr (bin #(sx "iushr" %1 %2) "I")
+          :iand (bin #(sx "fxlogand" %1 %2) "I")
+          :ior (bin #(sx "fxlogor" %1 %2) "I")
+          :ixor (bin #(sx "fxlogxor" %1 %2) "I")
+          :ladd (bin #(sx "i64" (sx "+" %1 %2)) "J")
+          :lsub (bin #(sx "i64" (sx "-" %1 %2)) "J")
+          :lmul (bin #(sx "i64" (sx "*" %1 %2)) "J")
+          :ldiv (bin #(sx "ldiv" %1 %2) "J")
+          :lrem (bin #(sx "lrem" %1 %2) "J")
+          :lneg (un #(sx "i64" (sx "-" %)) "J")
+          :lshl (bin #(sx "lshl" %1 %2) "J")
+          :lshr (bin #(sx "lshr" %1 %2) "J")
+          :lushr (bin #(sx "lushr" %1 %2) "J")
+          :land (bin #(sx "logand" %1 %2) "J")
+          :lor (bin #(sx "logor" %1 %2) "J")
+          :lxor (bin #(sx "logxor" %1 %2) "J")
+          :lcmp (bin #(sx "lcmp" %1 %2) "I")
           (:dadd :dsub :dmul :ddiv)
-          (bin #(sx ({:dadd "fl+" :dsub "fl-" :dmul "fl*" :ddiv "fl/"} op) %1 %2))
+          (bin #(sx ({:dadd "fl+" :dsub "fl-" :dmul "fl*" :ddiv "fl/"} op) %1 %2) "D")
           (:fadd :fsub :fmul :fdiv)
-          (bin #(sx "f32" (sx ({:fadd "fl+" :fsub "fl-" :fmul "fl*" :fdiv "fl/"} op) %1 %2)))
-          :i2l nil
-          :l2i (un #(sx "i32" %))
-          :i2d (un #(sx "fixnum->flonum" %))
-          :l2d (un #(sx "inexact" %))
-          :i2f (un #(sx "f32" (sx "fixnum->flonum" %)))
-          :f2d nil
-          :d2f (un #(sx "f32" %))
-          :i2b (un #(sx "i2b" %))
-          :i2c (un #(sx "fxlogand" % "#xffff"))
-          :i2s (un #(sx "i2s" %))
+          (bin #(sx "f32" (sx ({:fadd "fl+" :fsub "fl-" :fmul "fl*" :fdiv "fl/"} op) %1 %2)) "F")
+          :drem (bin #(sx "jfrem" %1 %2) "D")
+          :frem (bin #(sx "f32" (sx "jfrem" %1 %2)) "F")
+          :dneg (un #(sx "fl*" "-1.0" %) "D")
+          :fneg (un #(sx "fl*" "-1.0" %) "F")
+          (:fcmpl :dcmpl) (bin #(sx "jfcmp" %1 %2 "-1") "I")
+          (:fcmpg :dcmpg) (bin #(sx "jfcmp" %1 %2 "1") "I")
+          :i2l (un identity "J")
+          :l2i (un #(sx "i32" %) "I")
+          :i2d (un #(sx "fixnum->flonum" %) "D")
+          :l2d (un #(sx "inexact" %) "D")
+          :i2f (un #(sx "f32" (sx "fixnum->flonum" %)) "F")
+          :l2f (un #(sx "f32" (sx "inexact" %)) "F")
+          :f2d (un identity "D")
+          :d2f (un #(sx "f32" %) "F")
+          (:f2i :d2i) (un #(sx "d2i" %) "I")
+          (:f2l :d2l) (un #(sx "d2l" %) "J")
+          :i2b (un #(sx "i2b" %) "I")
+          :i2c (un #(sx "fxlogand" % "#xffff") "I")
+          :i2s (un #(sx "i2s" %) "I")
           (:ifeq :ifne :iflt :ifge :ifgt :ifle)
-          (let [a (pop!)]
-            (vreset! terminal (sx "if" (sx (cmp0 op) a "0") (goto a0 @d) (goto (+ pc len) @d))))
+          (let [a (pop!)] (branch (sx (cmp0 op) a "0") a0 (+ pc len)))
           (:if_icmpeq :if_icmpne :if_icmplt :if_icmpge :if_icmpgt :if_icmple)
-          (let [b (pop!) a (pop!)]
-            (vreset! terminal (sx "if" (sx (cmp2 op) a b) (goto a0 @d) (goto (+ pc len) @d))))
+          (let [b (pop!) a (pop!)] (branch (sx (cmp2 op) a b) a0 (+ pc len)))
           (:if_acmpeq :if_acmpne)
           (let [b (pop!) a (pop!) t (sx "eq?" a b)]
-            (vreset! terminal (sx "if" (if (= op :if_acmpeq) t (sx "not" t)) (goto a0 @d) (goto (+ pc len) @d))))
+            (branch (if (= op :if_acmpeq) t (sx "not" t)) a0 (+ pc len)))
           (:ifnull :ifnonnull)
-          (let [a (pop!)]
-            (vreset! terminal (sx "if" (if (= op :ifnull) (sx "not" a) a) (goto a0 @d) (goto (+ pc len) @d))))
-          (:goto :goto_w) (vreset! terminal (goto a0 @d))
+          (let [a (pop!)] (branch (if (= op :ifnull) (sx "not" a) a) a0 (+ pc len)))
+          (:goto :goto_w) (vreset! terminal (goto a0))
           (:tableswitch :lookupswitch)
           (let [k (pop!) [dflt targets] args]
             (vreset! terminal
                      (apply sx "case" k
-                            (concat (for [[v t] targets] (sx (sx (str v)) (goto t @d)))
-                                    [(sx "else" (goto dflt @d))]))))
+                            (concat (for [[v t] targets] (sx (sx (str v)) (goto t)))
+                                    [(sx "else" (goto dflt))]))))
           (:ireturn :lreturn :freturn :dreturn :areturn) (vreset! terminal (pop!))
           :return (vreset! terminal "(void)")
           :athrow (vreset! terminal (sx "jathrow" (pop!)))
           (:monitorenter :monitorexit) (pop!) ; spike: single-threaded, monitors are no-ops
-          :getstatic (let [{:keys [class name]} (cp a0)
+          :getstatic (let [{:keys [class name desc]} (cp a0)
                            decl ((:resolve-static-field resolve) class name)]
-                       (init decl) (push! (static-global decl name)))
+                       (init decl) (push! (static-global decl name) (desc->t desc)))
           :putstatic (let [{:keys [class name]} (cp a0)
                            decl ((:resolve-static-field resolve) class name)]
                        (init decl) (stmt! (sx "set!" (static-global decl name) (pop!))))
-          :getfield (let [{:keys [class name]} (cp a0)
+          :getfield (let [{:keys [class name desc]} (cp a0)
                           idx ((:field-index resolve) class name)]
-                      (un #(sx "jslot" % (str idx))))
+                      (un #(sx "jslot" % (str idx)) (desc->t desc)))
           :putfield (let [{:keys [class name]} (cp a0)
                           idx ((:field-index resolve) class name)
                           v (pop!) o (pop!)]
@@ -334,7 +439,7 @@
                 recv (when-not (= op :invokestatic) (pop!))
                 call (case op
                        (:invokevirtual :invokeinterface)
-                       (do ((:ensure-loaded resolve) class)
+                       (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
                            (apply sx (sx "jvirt" recv (str-lit (str name desc))) recv argv))
                        :invokespecial
                        (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) recv argv)
@@ -342,40 +447,59 @@
                        (let [decl ((:resolve-method resolve) class name desc)]
                          (init decl)
                          (apply sx (method-global decl name desc) argv)))]
-            (if (= ret "V") (stmt! call) (push! call)))
+            (if (= ret "V") (stmt! call) (push! call (desc->t ret))))
           :invokedynamic
           (let [{:keys [bsm-idx name desc]} (cp a0)
-                {:keys [args]} (parse-desc desc)
+                {:keys [args ret]} (parse-desc desc)
                 bsm (nth (:bootstrap-methods cls) bsm-idx)
-                recipe (:value (cp (first (:args bsm))))
-                _ (when-not (and (= name "makeConcatWithConstants") recipe
-                                 (not (str/includes? recipe "\u0002")))
-                    (throw (ex-info "invokedynamic not in spike" {:name name :desc desc})))
-                argv (popn! (count args))
-                conv (map (fn [t v]
-                            (case t
-                              ("I" "S" "B" "J" "F" "D") (sx "number->string" v)
-                              "C" (sx "string" (sx "integer->char" v))
-                              "Z" (sx "jbool->string" v)
-                              (sx "jstring-of" v)))
-                          args argv)]
-            (push! (apply sx "jconcat" (str-lit recipe) conv)))
+                bsm-name (:name (cp (:ref-idx (cp (:ref-idx bsm)))))
+                argv (popn! (count args))]
+            (case bsm-name
+              "makeConcatWithConstants"
+              (let [recipe (:value (cp (first (:args bsm))))
+                    consts (map #(let [e (cp %)] (str-lit (str (:value e)))) (rest (:args bsm)))
+                    conv (map (fn [t v]
+                                (case t
+                                  ("I" "S" "B" "J") (sx "number->string" v)
+                                  ("F" "D") (sx "jdouble->string" v)
+                                  "C" (sx "string" (sx "integer->char" v))
+                                  "Z" (sx "jbool->string" v)
+                                  (sx "jstring-of" v)))
+                              args argv)]
+                (push! (sx "jconcat" (str-lit recipe) (apply sx "list" conv) (apply sx "list" consts)) "A"))
+              "bootstrap" ; java.lang.runtime.ObjectMethods: record toString/equals/hashCode
+              (let [[_rec names-idx & getters] (:args bsm)
+                    fields (for [g getters :let [{:keys [class name desc]} (cp (:ref-idx (cp g)))]]
+                             (sx "list" (str-lit name) (str ((:field-index resolve) class name)) (str-lit desc)))
+                    rec-class (:name (cp (first (:args bsm))))
+                    simple (last (str/split rec-class #"[/$]"))]
+                (push! (apply sx "jrecord-op" (str-lit name) (str-lit simple)
+                              (str "(list " (str/join " " fields) ")") argv)
+                       (desc->t ret)))
+              ("metafactory" "altMetafactory")
+              (push! (lambda-expr ctx name ret args argv bsm) "A")
+              (throw (ex-info (str "invokedynamic bootstrap not in spike: " bsm-name)
+                              {:bsm bsm-name :name name :class this-class}))))
           :new (let [c (:name (cp a0))]
                  ((:ensure-loaded resolve) c)
                  (init c)
-                 (push! (sx "jnew" (str-lit c))))
-          :newarray (un #(sx "jnewarray" (str-lit "prim") % (if (#{6 7} a0) "0.0" "0")))
-          :anewarray (un #(sx "jnewarray" (str-lit (:name (cp a0))) % "#f"))
-          :arraylength (un #(sx "jarraylength" %))
+                 (push! (sx "jnew" (str-lit c)) "A"))
+          :newarray (let [e (newarray-elem a0)]
+                      (un #(sx "jnewarray" (str-lit e) % (if (#{"F" "D"} e) "0.0" "0")) "A"))
+          :anewarray (let [c (:name (cp a0))
+                           e (if (str/starts-with? c "[") c (str "L" c ";"))]
+                       (un #(sx "jnewarray" (str-lit e) % "#f") "A"))
+          :multianewarray (let [c (:name (cp a0)) dims (popn! (second args))]
+                            (push! (sx "jmultiarray" (str-lit c) (apply sx "list" dims)) "A"))
+          :arraylength (un #(sx "jarraylength" %) "I")
           :checkcast (let [c (:name (cp a0))]
-                       (when-not (str/starts-with? c "[")
-                         ((:ensure-loaded resolve) c)
-                         (let [v (s (dec @d))] (stmt! (sx "set!" v (sx "jcheckcast" v (str-lit c)))))))
+                       (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
+                       (let [v (s (dec (count @st)))] (stmt! (sx "set!" v (sx "jcheckcast" v (str-lit c))))))
           :instanceof (let [c (:name (cp a0))]
-                        ((:ensure-loaded resolve) c)
-                        (un #(sx "if" (sx "jinstance?" % (str-lit c)) "1" "0")))
-          (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc})))))
-    (let [term (or @terminal (goto next-pc @d))]
+                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
+                        (un #(sx "if" (sx "jinstance?" % (str-lit c)) "1" "0") "I"))
+          (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))))
+    (let [term (or @terminal (goto next-pc))]
       {:code (str "(begin " (str/join " " (persistent! stmts)) " " term ")")
        :succ @succ})))
 
@@ -404,7 +528,7 @@
         next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
         ;; worklist over blocks: each is emitted once, at the stack depth its
         ;; first predecessor established (verified bytecode guarantees agreement)
-        emitted (loop [work (into [[0 0]] (map (fn [h] [(:handler h) 1]) handlers))
+        emitted (loop [work (into [[0 []]] (map (fn [h] [(:handler h) ["A"]]) handlers))
                        done {}]
                   (if-let [[pc dep] (first work)]
                     (if (contains? done pc)
@@ -423,10 +547,15 @@
         param-set (set params)
         bindings (concat (for [i (range max-locals) :when (not (param-set i))] (sx (str "l" i) "0"))
                          (for [i (range max-stack)] (sx (str "s" i) "0")))]
-    (sx "define" (method-global (:name cls) (:name method) (:desc method))
-        (sx "lambda" (apply sx (map #(str "l" %) params))
-            (sx "let" (apply sx bindings)
-                (sx "letrec"
-                    (apply sx (for [[pc code] (sort-by key emitted)]
-                                (sx (label pc) (sx "lambda" "()" (if tramp? (guard-wrap code pc handlers) code)))))
-                    (if tramp? (sx "trampoline" (label 0)) (sx (label 0)))))))))
+    (let [body (sx "let" (apply sx bindings)
+                   (sx "letrec"
+                       (apply sx (for [[pc code] (sort-by key emitted)]
+                                   (sx (label pc) (sx "lambda" "()" (if tramp? (guard-wrap code pc handlers) code)))))
+                       (if tramp? (sx "trampoline" (label 0)) (sx (label 0)))))]
+      (sx "define" (method-global (:name cls) (:name method) (:desc method))
+          (sx "lambda" (apply sx (map #(str "l" %) params))
+              ;; OPENLDK_BT: keep a shadow stack of Java frames for backtraces
+              (if (System/getenv "OPENLDK_BT")
+                (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                    body)
+                body))))))

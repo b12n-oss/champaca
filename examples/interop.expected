@@ -1,0 +1,6 @@
+1.4142135623730951
+101010
+[fig, pear, apple, banana]
+fig true
+{a=1, b=2, c=3}
+caught: java.lang.NumberFormatException: For input string: "nope"

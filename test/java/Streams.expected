@@ -1,0 +1,6 @@
+220
+alpha, bravo, delta
+[105, 105, 107, 105, 104]
+{4=[echo], 5=[delta, alpha, bravo], 7=[charlie]}
+Point[x=3, y=4] 25 true
+charlie

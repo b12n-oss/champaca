@@ -4,9 +4,16 @@
 ;;   long                         exact integer, wrapped to 64 bits
 ;;   float/double                 flonum (float rounded through ieee-single)
 ;;   null                         #f
-;;   String                       Chez string (spike shortcut, not java.lang.String)
 ;;   object                       jobj record: class + slot vector
+;;                                (java.lang.String is a real jobj too: value byte[] + coder)
 ;;   array                        jarr record: element descriptor + vector
+
+;; --- hooks into jolt ---------------------------------------------------------
+
+(define jit-hook #f)
+(define load-hook #f)
+(define (set-hooks! jit load) (set! jit-hook jit) (set! load-hook load))
+(define (jit! c m d) (jit-hook c m d))
 
 ;; --- numbers ---------------------------------------------------------------
 
@@ -33,28 +40,73 @@
 (define (lshl a s) (i64 (ash a (fxlogand s 63))))
 (define (lshr a s) (ash a (fx- 0 (fxlogand s 63))))
 (define (lushr a s) (i64 (ash (logand a #xffffffffffffffff) (fx- 0 (fxlogand s 63)))))
+(define (fx<> a b) (not (fx= a b)))
 (define (lcmp a b) (cond [(< a b) -1] [(> a b) 1] [else 0]))
+(define (i2b x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80))
+(define (i2s x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000))
+
+(define (jfcmp a b nan-result)
+  (cond [(or (nan? a) (nan? b)) nan-result] [(fl< a b) -1] [(fl> a b) 1] [else 0]))
+(define (jfrem a b) (if (or (nan? a) (nan? b) (fl= b 0.0) (infinite? a)) +nan.0
+                        (fl- a (fl* b (fltruncate (fl/ a b))))))
+(define (d2i x) (cond [(nan? x) 0] [(fl>= x 2147483647.0) 2147483647] [(fl<= x -2147483648.0) -2147483648]
+                      [else (exact (fltruncate x))]))
+(define (d2l x) (cond [(nan? x) 0] [(fl>= x 9223372036854775807.0) 9223372036854775807]
+                      [(fl<= x -9223372036854775808.0) -9223372036854775808] [else (exact (fltruncate x))]))
+(define (jdouble->string x)
+  ;; spike: Scheme formatting, not Double.toString's shortest-repr rules
+  (cond [(nan? x) "NaN"] [(infinite? x) (if (fl> x 0.0) "Infinity" "-Infinity")] [else (number->string x)]))
 
 ;; --- object model ------------------------------------------------------------
 
+;; kind is 'class, 'interface, 'array or 'prim. fields maps "Decl.name" to a
+;; slot index. vtable entries map "name(desc)" to the symbol whose top-level
+;; value is the method procedure, a JIT stub until first call.
 (define-record-type jclass
-  (fields name super interfaces template vtable (mutable state)))
+  (fields name super interfaces template vtable fields flags kind (mutable state) (mutable mirror)))
 (define-record-type jobj (fields cls slots))
 (define-record-type jarr (fields elem vec))
 
 (define classes (make-hashtable string-hash string=?))
 
-;; vtable entries are (key . symbol); the symbol's top-level value is the
-;; method procedure, which starts life as a JIT stub and is replaced in place.
-(define (register-class! name super interfaces template vtable-alist)
-  (let ([vt (make-hashtable string-hash string=?)])
-    (for-each (lambda (p) (hashtable-set! vt (car p) (cdr p))) vtable-alist)
-    (hashtable-set! classes name
-                    (make-jclass name super interfaces template vt 'loaded))))
+(define (alist->table al)
+  (let ([t (make-hashtable string-hash string=?)])
+    (for-each (lambda (p) (hashtable-set! t (car p) (cdr p))) al)
+    t))
 
+(define (register-class! name super interfaces template vtable-alist field-alist flags)
+  (hashtable-set! classes name
+                  (make-jclass name super interfaces template (alist->table vtable-alist)
+                               (alist->table field-alist) flags
+                               (if (fxpositive? (fxlogand flags #x200)) 'interface 'class)
+                               'loaded #f)))
+
+(define prim-names
+  '(("Z" . "boolean") ("B" . "byte") ("C" . "char") ("S" . "short") ("I" . "int")
+    ("J" . "long") ("F" . "float") ("D" . "double") ("V" . "void")))
+
+(define (prim-name? n) (exists (lambda (p) (string=? (cdr p) n)) prim-names))
+
+(define (pseudo-class! name kind)
+  (let ([c (make-jclass name (if (eq? kind 'array) "java/lang/Object" #f)
+                        (if (eq? kind 'array) '("java/lang/Cloneable" "java/io/Serializable") '())
+                        (vector) (make-hashtable string-hash string=?) (make-hashtable string-hash string=?)
+                        #x411 kind 'initialized #f)])
+    (hashtable-set! classes name c)
+    c))
+
+;; Classes load lazily: a miss asks jolt to load the classfile and register it.
 (define (find-class name)
   (or (hashtable-ref classes name #f)
-      (error 'openldk "class not registered" name)))
+      (cond
+        [(fx= 0 (string-length name)) (error 'openldk "empty class name")]
+        [(char=? (string-ref name 0) #\[) (pseudo-class! name 'array)]
+        [(prim-name? name) (pseudo-class! name 'prim)]
+        [else (load-hook name)
+              (or (hashtable-ref classes name #f) (error 'openldk "class not registered" name))])))
+
+(define (method-proc cname key)
+  (top-level-value (string->symbol (string-append cname "." key))))
 
 ;; <clinit> runs on first active use, superclass first.
 (define (jinit name)
@@ -69,45 +121,74 @@
   (let ([c (find-class name)])
     (make-jobj c (vector-copy (jclass-template c)))))
 
-(define (class-of x)
+(define (jfield-index cname fname)
+  (let loop ([c (find-class cname)])
+    (or (hashtable-ref (jclass-fields c) (string-append (jclass-name c) "." fname) #f)
+        (and (jclass-super c) (loop (find-class (jclass-super c))))
+        (error 'openldk "no such field" cname fname))))
+
+(define (class-name-of x)
   (cond [(jobj? x) (jclass-name (jobj-cls x))]
-        [(string? x) "java/lang/String"]
-        [else "java/lang/Object"]))
+        [(jarr? x) (string-append "[" (jarr-elem x))]
+        [else (error 'openldk "not a Java value" x)]))
+
+(define (class-of x) (find-class (class-name-of x)))
 
 (define (subclass? cname target)
   (and cname
        (or (string=? cname target)
-           (let ([c (hashtable-ref classes cname #f)])
-             (and c
-                  (or (subclass? (jclass-super c) target)
-                      (exists (lambda (i) (subclass? i target)) (jclass-interfaces c))))))))
+           (let ([c (find-class cname)])
+             (or (subclass? (jclass-super c) target)
+                 (exists (lambda (i) (subclass? i target)) (jclass-interfaces c)))))))
+
+;; elem descriptors: "I", "Ljava/lang/String;", "[I" ...
+(define (desc->class-name d)
+  (case (string-ref d 0)
+    [(#\L) (substring d 1 (fx- (string-length d) 1))]
+    [(#\[) d]
+    [else (cdr (assoc d prim-names))]))
+
+(define (ref-desc? d) (memv (string-ref d 0) '(#\L #\[)))
+
+(define (class-assignable? from to)
+  (cond [(prim-name? from) (string=? from to)]
+        [(string=? to "java/lang/Object") #t]
+        [(char=? (string-ref from 0) #\[)
+         (or (and (member to '("java/lang/Cloneable" "java/io/Serializable")) #t)
+             (and (char=? (string-ref to 0) #\[)
+                  (let ([fe (substring from 1 (string-length from))]
+                        [te (substring to 1 (string-length to))])
+                    (or (string=? fe te)
+                        (and (ref-desc? fe) (ref-desc? te)
+                             (class-assignable? (desc->class-name fe) (desc->class-name te)))))))]
+        [else (subclass? from to)]))
 
 (define (jinstance? x target)
-  (and x
-       (or (string=? target "java/lang/Object")
-           (cond [(jarr? x) #f]
-                 [(string? x) (string=? target "java/lang/String")]
-                 [else (subclass? (class-of x) target)]))))
+  (and (or (jobj? x) (jarr? x)) (class-assignable? (class-name-of x) target)))
 
 (define (nn x) (if x x (jthrow "java/lang/NullPointerException" #f)))
 
 (define (jcheckcast x target)
   (if (or (not x) (jinstance? x target))
       x
-      (jthrow "java/lang/ClassCastException" (string-append (class-of x) " cannot be cast to " target))))
+      (jthrow "java/lang/ClassCastException"
+              (string-append "class " (class-name-of x) " cannot be cast to class " target))))
 
 (define (jslot x i) (vector-ref (jobj-slots (nn x)) i))
 (define (jslot-set! x i v) (vector-set! (jobj-slots (nn x)) i v))
 
 ;; Virtual and interface dispatch: one hashtable probe on the receiver's class.
+;; Arrays dispatch through Object's vtable, except clone.
+(define (array-clone a) (make-jarr (jarr-elem a) (vector-copy (jarr-vec a))))
 (define (jvirt x key)
   (let ([x (nn x)])
-    (cond
-      [(jobj? x)
-       (let ([sym (hashtable-ref (jclass-vtable (jobj-cls x)) key #f)])
-         (if sym (top-level-value sym) (error 'openldk "no such method" (class-of x) key)))]
-      [(string? x) (string-method key)]
-      [else (error 'openldk "virtual call on unsupported value" x key)])))
+    (if (and (jarr? x) (string=? key "clone()Ljava/lang/Object;"))
+        array-clone
+        (let* ([c (if (jarr? x) (find-class "java/lang/Object") (jobj-cls x))]
+               [sym (hashtable-ref (jclass-vtable c) key #f)])
+          (if sym
+              (top-level-value sym)
+              (jthrow "java/lang/AbstractMethodError" (string-append (jclass-name c) "." key)))))))
 
 ;; --- arrays -------------------------------------------------------------------
 
@@ -116,27 +197,43 @@
       (jthrow "java/lang/NegativeArraySizeException" (number->string n))
       (make-jarr elem (make-vector n default))))
 
+(define (elem-default d)
+  (case (string-ref d 0) [(#\L #\[) #f] [(#\F #\D) 0.0] [else 0]))
+
+(define (jmultiarray desc dims)
+  ;; desc is the full array type, e.g. "[[I"
+  (let ([elem (substring desc 1 (string-length desc))])
+    (if (null? (cdr dims))
+        (jnewarray elem (car dims) (elem-default elem))
+        (let ([a (jnewarray elem (car dims) #f)])
+          (do ([i 0 (fx+ i 1)]) ((fx= i (car dims)) a)
+            (vector-set! (jarr-vec a) i (jmultiarray elem (cdr dims))))))))
+
+(define (bounds-error i v)
+  (jthrow "java/lang/ArrayIndexOutOfBoundsException"
+          (string-append "Index " (number->string i) " out of bounds for length "
+                         (number->string (vector-length v)))))
+
 (define (jaload a i)
   (let ([v (jarr-vec (nn a))])
-    (if (and (fx>= i 0) (fx< i (vector-length v)))
-        (vector-ref v i)
-        (jthrow "java/lang/ArrayIndexOutOfBoundsException" (number->string i)))))
+    (if (and (fx>= i 0) (fx< i (vector-length v))) (vector-ref v i) (bounds-error i v))))
 
 (define (jastore a i x)
   (let ([v (jarr-vec (nn a))])
-    (if (and (fx>= i 0) (fx< i (vector-length v)))
-        (vector-set! v i x)
-        (jthrow "java/lang/ArrayIndexOutOfBoundsException" (number->string i)))))
+    (if (and (fx>= i 0) (fx< i (vector-length v))) (vector-set! v i x) (bounds-error i v))))
 
 (define (jarraylength a) (vector-length (jarr-vec (nn a))))
+
+(define (scheme-list->jarray elem xs) (make-jarr elem (list->vector xs)))
 
 ;; --- exceptions ------------------------------------------------------------
 ;; A Java throw is a Scheme raise of the jobj. Catch clauses are guard
 ;; clauses that test jinstance?.
 
 (define (jthrow cname msg)
+  (jinit cname)
   (let ([e (jnew cname)])
-    (vector-set! (jobj-slots e) 0 msg)
+    ((method-proc cname "<init>(Ljava/lang/String;)V") e (and msg (jstring msg)))
     (raise e)))
 
 (define (jathrow x) (raise (nn x)))
@@ -148,96 +245,242 @@
     (if (procedure? r) (loop (r)) r)))
 
 ;; --- strings ----------------------------------------------------------------
+;; java.lang.String is the JDK's own class: value is a byte[] and coder is
+;; 0 (LATIN1) or 1 (UTF16, low byte first because StringUTF16.isBigEndian
+;; answers false).
 
+(define string-value-slot #f)
+(define string-coder-slot #f)
+(define (string-slots!)
+  (unless string-value-slot
+    (set! string-value-slot (jfield-index "java/lang/String" "value"))
+    (set! string-coder-slot (jfield-index "java/lang/String" "coder"))))
+
+(define (code-units s)
+  ;; Scheme string (code points) -> list of UTF-16 code units
+  (let loop ([cs (reverse (string->list s))] [acc '()])
+    (if (null? cs) acc
+        (let ([cp (char->integer (car cs))])
+          (if (fx> cp #xffff)
+              (let ([v (fx- cp #x10000)])
+                (loop (cdr cs) (cons (fx+ #xd800 (fxsrl v 10)) (cons (fx+ #xdc00 (fxlogand v #x3ff)) acc))))
+              (loop (cdr cs) (cons cp acc)))))))
+
+(define (jstring s)
+  (string-slots!)
+  (let* ([units (code-units s)]
+         [latin1? (for-all (lambda (u) (fx< u 256)) units)]
+         [bytes (if latin1?
+                    (map i2b units)
+                    (apply append (map (lambda (u) (list (i2b (fxlogand u #xff)) (i2b (fxsrl u 8)))) units)))]
+         [o (jnew "java/lang/String")])
+    (vector-set! (jobj-slots o) string-value-slot (make-jarr "B" (list->vector bytes)))
+    (vector-set! (jobj-slots o) string-coder-slot (if latin1? 0 1))
+    o))
+
+(define interned (make-hashtable string-hash string=?))
+(define (jstring-lit s)
+  (or (hashtable-ref interned s #f)
+      (let ([o (jstring s)]) (hashtable-set! interned s o) o)))
+
+(define (jstring->scheme o)
+  (string-slots!)
+  (let* ([v (jarr-vec (vector-ref (jobj-slots o) string-value-slot))]
+         [n (vector-length v)])
+    (if (eqv? 0 (vector-ref (jobj-slots o) string-coder-slot))
+        (let ([s (make-string n)])
+          (do ([i 0 (fx+ i 1)]) ((fx= i n) s)
+            (string-set! s i (integer->char (fxlogand (vector-ref v i) #xff)))))
+        (let loop ([i 0] [acc '()])
+          (if (fx>= i n)
+              (list->string (reverse acc))
+              (let ([u (fxlogor (fxlogand (vector-ref v i) #xff) (fxsll (fxlogand (vector-ref v (fx+ i 1)) #xff) 8))])
+                (if (and (fx>= u #xd800) (fx< u #xdc00) (fx< (fx+ i 2) n))
+                    (let ([lo (fxlogor (fxlogand (vector-ref v (fx+ i 2)) #xff)
+                                       (fxsll (fxlogand (vector-ref v (fx+ i 3)) #xff) 8))])
+                      (loop (fx+ i 4) (cons (integer->char (fx+ #x10000 (fxsll (fx- u #xd800) 10) (fx- lo #xdc00))) acc)))
+                    (loop (fx+ i 2) (cons (integer->char u) acc)))))))))
+
+;; any Java reference -> Scheme string, the way string concatenation sees it
 (define (jstring-of x)
   (cond [(not x) "null"]
-        [(string? x) x]
-        [else ((jvirt x "toString()Ljava/lang/String;") x)]))
+        [(and (jobj? x) (string=? (jclass-name (jobj-cls x)) "java/lang/String")) (jstring->scheme x)]
+        [else (let ([s ((jvirt x "toString()Ljava/lang/String;") x)]) (if s (jstring->scheme s) "null"))]))
 
 (define (jbool->string z) (if (eqv? z 0) "false" "true"))
 
-;; makeConcatWithConstants: \x1; in the recipe takes the next argument,
-;; already converted to a string by the generated code.
-(define (jconcat recipe . args)
+;; makeConcatWithConstants: \x1 takes the next argument (already a Scheme
+;; string), \x2 the next bootstrap constant.
+(define (jconcat recipe args consts)
   (let ([out (open-output-string)])
-    (let loop ([i 0] [args args])
+    (let loop ([i 0] [args args] [consts consts])
       (if (fx= i (string-length recipe))
-          (get-output-string out)
+          (jstring (get-output-string out))
           (let ([c (string-ref recipe i)])
-            (if (char=? c #\x1)
-                (begin (put-string out (car args)) (loop (fx+ i 1) (cdr args)))
-                (begin (put-char out c) (loop (fx+ i 1) args))))))))
+            (cond
+              [(char=? c #\x1) (put-string out (car args)) (loop (fx+ i 1) (cdr args) consts)]
+              [(char=? c #\x2) (put-string out (car consts)) (loop (fx+ i 1) args (cdr consts))]
+              [else (put-char out c) (loop (fx+ i 1) args consts)]))))))
 
-(define (string-method key)
-  (cond
-    [(string=? key "length()I") (lambda (s) (string-length s))]
-    [(string=? key "toString()Ljava/lang/String;") (lambda (s) s)]
-    [(string=? key "hashCode()I")
-     (lambda (s) (let loop ([i 0] [h 0])
-                   (if (fx= i (string-length s)) h
-                       (loop (fx+ i 1) (i32 (+ (* 31 h) (char->integer (string-ref s i))))))))]
-    [else (error 'openldk "String method not in spike" key)]))
+;; --- Class mirrors ---------------------------------------------------------------
 
-;; --- shimmed JDK classes ------------------------------------------------------
-;; Hand-written stand-ins. The codegen side lists the same classes in
-;; openldk-jolt.shims so it can lay out fields and vtables.
+(define mirror->class (make-weak-eq-hashtable))
 
-(define |java/lang/Object.<init>()V| (lambda (this) (void)))
-(define |java/lang/Object.toString()Ljava/lang/String;|
-  (lambda (this) (string-append (class-of this) "@" (number->string (eq-hashtable-hash this) 16))))
-(define (eq-hashtable-hash x) (logand (equal-hash x) #x7fffffff))
-(define |java/lang/Object.hashCode()I| (lambda (this) (eq-hashtable-hash this)))
+(define (jmirror c)
+  (or (jclass-mirror c)
+      (let ([m (jnew "java/lang/Class")])
+        (jclass-mirror-set! c m)
+        (eq-hashtable-set! mirror->class m c)
+        ;; fields the VM sets directly, without running Class's constructor
+        (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "primitive")
+                     (if (eq? (jclass-kind c) 'prim) 1 0))
+        (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "modifiers")
+                     (fxlogand (jclass-flags c) #xffff))
+        (when (eq? (jclass-kind c) 'array)
+          (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
+                       (jmirror (find-class (desc->class-name (substring (jclass-name c) 1 (string-length (jclass-name c))))))))
+        m)))
 
-(define |java/lang/Throwable.<init>()V| (lambda (this) (void)))
-(define |java/lang/Throwable.<init>(Ljava/lang/String;)V| (lambda (this m) (jslot-set! this 0 m)))
-(define |java/lang/Throwable.getMessage()Ljava/lang/String;| (lambda (this) (jslot this 0)))
-(define |java/lang/Throwable.toString()Ljava/lang/String;|
-  (lambda (this)
-    (let ([n (list->string (map (lambda (c) (if (char=? c #\/) #\. c)) (string->list (class-of this))))]
-          [m (jslot this 0)])
-      (if m (string-append n ": " m) n))))
+(define (jmirror-of name) (jmirror (find-class name)))
+(define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'openldk "not a mirror" m)))
 
-(define |java/io/PrintStream.println(Ljava/lang/String;)V|
-  (lambda (this s) (put-string (current-output-port) (jstring-of s)) (newline)))
-(define |java/io/PrintStream.println(Ljava/lang/Object;)V|
-  (lambda (this o) (put-string (current-output-port) (jstring-of o)) (newline)))
-(define |java/io/PrintStream.println(I)V|
-  (lambda (this i) (put-string (current-output-port) (number->string i)) (newline)))
-(define |java/io/PrintStream.println(J)V|
-  (lambda (this i) (put-string (current-output-port) (number->string i)) (newline)))
-(define |java/io/PrintStream.println(Z)V|
-  (lambda (this z) (put-string (current-output-port) (jbool->string z)) (newline)))
-(define |java/io/PrintStream.println(C)V|
-  (lambda (this c) (put-char (current-output-port) (integer->char c)) (newline)))
-(define |java/io/PrintStream.println()V|
-  (lambda (this) (newline)))
+;; --- identity hash ------------------------------------------------------------
 
-(define |java/lang/System:out| #f)
-(define |java/lang/System.<clinit>()V|
-  (lambda () (set! |java/lang/System:out| (jnew "java/io/PrintStream"))))
+(define id-hashes (make-weak-eq-hashtable))
+(define id-counter 0)
+(define (identity-hash x)
+  (if (not x) 0
+      (or (eq-hashtable-ref id-hashes x #f)
+          (begin (set! id-counter (fx+ id-counter 1))
+                 (let ([h (fxlogand (fx* id-counter 1103515245) #x7fffffff)])
+                   (eq-hashtable-set! id-hashes x h) h)))))
+
+;; --- native methods -------------------------------------------------------------
+;; Native methods are looked up by global name when their class registers.
+;; A missing one becomes a stub that fails loudly with its own name, so a run
+;; reports exactly which native it needed next.
+
+(define natives (make-hashtable string-hash string=?))
+(define (define-native! name proc) (hashtable-set! natives name proc))
+(define native-rules '())   ; list of (pred . make-proc) over the full name
+(define (define-native-rule! pred make) (set! native-rules (append native-rules (list (cons pred make)))))
+
+(define-record-type missing-native (fields name stack))
+
+(define (native-ref name)
+  (or (hashtable-ref natives name #f)
+      (let loop ([rs native-rules])
+        (cond [(null? rs) #f]
+              [((caar rs) name) ((cdar rs) name)]
+              [else (loop (cdr rs))]))
+      (lambda args (raise (make-missing-native name jstack)))))
 
 ;; --- entry --------------------------------------------------------------------
 
-;; Run Main.main(String[]) and report an uncaught Java exception the way the
-;; JVM does. Returns the process exit status.
-(define (run-main cname . args)
+(define (report-uncaught e)
+  (flush-output-port (current-output-port))
+  (let ([err (current-error-port)])
+    (cond
+      [(jobj? e)
+       (put-string err (string-append "Exception in thread \"main\" "
+                                      (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
+       (print-jstack e err)]
+      [(missing-native? e)
+       (put-string err (string-append "openldk: missing native " (missing-native-name e) "\n"))
+       (eq-hashtable-set! throw-stacks e (missing-native-stack e))
+       (print-jstack e err)]
+      [else
+       (put-string err "openldk: Scheme error: ")
+       (display-condition e err)
+       (newline err)])))
+
+;; Run thunk; report an escaping Java exception or Scheme error and return 1,
+;; otherwise return 0.
+(define (run-guarded thunk)
   (call/cc
    (lambda (k)
      (with-exception-handler
-      (lambda (e)
-        (if (jobj? e)
-            (begin
-              (flush-output-port (current-output-port))
-              (put-string (current-error-port)
-                          (string-append "Exception in thread \"main\" " (jstring-of e) "\n"))
-              (k 1))
-            (raise-continuable e)))
-      (lambda ()
-        (jinit cname)
-        ((top-level-value (string->symbol (string-append cname ".main([Ljava/lang/String;)V")))
-         (make-jarr "Ljava/lang/String;" (list->vector args)))
-        (flush-output-port (current-output-port))
-        0)))))
+      (lambda (e) (report-uncaught e) (k 1))
+      (lambda () (thunk) (flush-output-port (current-output-port)) 0)))))
 
-(define (i2b x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80))
-(define (i2s x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000))
+(define (run-main cname . args)
+  (run-guarded
+   (lambda ()
+     (jinit cname)
+     ((method-proc cname "main([Ljava/lang/String;)V")
+      (scheme-list->jarray "Ljava/lang/String;" (map jstring args))))))
+
+;; --- backtraces (OPENLDK_BT) ------------------------------------------------------
+(define jstack '())
+(define throw-stacks (make-weak-eq-hashtable))
+(define (print-jstack e port)
+  (let ([frames (eq-hashtable-ref throw-stacks e #f)])
+    (when frames
+      (let loop ([fs frames] [n 0])
+        (unless (or (null? fs) (fx= n 25))
+          (put-string port (string-append "\tat " (car fs) "\n"))
+          (loop (cdr fs) (fx+ n 1)))))))
+
+;; --- lambdas and boxing --------------------------------------------------------------
+
+(define (jlambda cname proc)
+  (let ([o (jnew cname)]) (vector-set! (jobj-slots o) 0 proc) o))
+(define |openldk/Lambda.invoke| (lambda (this . args) (apply (vector-ref (jobj-slots this) 0) args)))
+
+(define box-classes
+  '(("Z" "java/lang/Boolean" "booleanValue()Z") ("B" "java/lang/Byte" "byteValue()B")
+    ("C" "java/lang/Character" "charValue()C") ("S" "java/lang/Short" "shortValue()S")
+    ("I" "java/lang/Integer" "intValue()I") ("J" "java/lang/Long" "longValue()J")
+    ("F" "java/lang/Float" "floatValue()F") ("D" "java/lang/Double" "doubleValue()D")))
+(define (jbox t v)
+  (let ([e (assoc t box-classes)])
+    (jinit (cadr e))
+    ((method-proc (cadr e) (string-append "valueOf(" t ")L" (cadr e) ";")) v)))
+(define (junbox t v)
+  (let ([e (assoc t box-classes)])
+    ((jvirt v (caddr e)) v)))
+
+;; Overrides replace JDK methods that have bytecode, where running the real
+;; body would need machinery the spike lacks (reflection, method handles).
+(define overrides (make-hashtable string-hash string=?))
+(define (define-override! name proc) (hashtable-set! overrides name proc))
+(define (native-override name) (hashtable-ref overrides name #f))
+
+;; --- records (ObjectMethods.bootstrap) -----------------------------------------------
+;; fields: list of (name slot descriptor). Formulas follow ObjectMethods.
+
+(define (field-string v d)
+  (case (string-ref d 0)
+    [(#\Z) (jbool->string v)] [(#\C) (string (integer->char v))]
+    [(#\F #\D) (jdouble->string v)] [(#\L #\[) (jstring-of v)] [else (number->string v)]))
+(define (field-hash v d)
+  (case (string-ref d 0)
+    [(#\L #\[) (if v ((jvirt v "hashCode()I") v) 0)]
+    [(#\Z) (if (eqv? v 0) 1237 1231)]
+    [(#\J) (i32 (logxor v (ash (logand v #xffffffffffffffff) -32)))]
+    [(#\F #\D) (i32 (double->bits v))]
+    [else v]))
+(define (jrecord-op op simple fields this . rest)
+  (let ([get (lambda (o f) (vector-ref (jobj-slots o) (cadr f)))])
+    (cond
+      [(string=? op "toString")
+       (jstring (string-append simple "["
+                               (let loop ([fs fields] [acc ""])
+                                 (if (null? fs) acc
+                                     (loop (cdr fs)
+                                           (string-append acc (if (string=? acc "") "" ", ")
+                                                          (car (car fs)) "=" (field-string (get this (car fs)) (caddr (car fs)))))))
+                               "]"))]
+      [(string=? op "hashCode")
+       (fold-left (lambda (h f) (i32 (+ (* 31 h) (field-hash (get this f) (caddr f))))) 0 fields)]
+      [(string=? op "equals")
+       (let ([o (car rest)])
+         (if (and o (jobj? o) (eq? (jobj-cls o) (jobj-cls this))
+                  (for-all (lambda (f)
+                             (let ([a (get this f)] [b (get o f)])
+                               (if (memv (string-ref (caddr f) 0) '(#\L #\[))
+                                   (or (eq? a b) (and a (not (eqv? 0 ((jvirt a "equals(Ljava/lang/Object;)Z") a b)))))
+                                   (eqv? a b))))
+                           fields))
+             1 0))]
+      [else (error 'openldk "record op" op)])))

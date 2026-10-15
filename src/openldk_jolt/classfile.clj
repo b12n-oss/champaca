@@ -124,9 +124,13 @@
         name (:value (cp (u2 r)))
         desc (:value (cp (u2 r)))
         attrs (read-attributes r cp)
-        code (some #(when (= "Code" (:name %)) (parse-code (:info %) cp)) attrs)]
+        code (some #(when (= "Code" (:name %)) (parse-code (:info %) cp)) attrs)
+        const (some #(when (= "ConstantValue" (:name %))
+                       (let [[a b] (:info %)] (cp (+ (* a 256) b))))
+                    attrs)]
     (cond-> {:flags flags :name name :desc desc}
-      code (assoc :code code))))
+      code (assoc :code code)
+      const (assoc :constant const))))
 
 (def ACC-STATIC 0x0008)
 (def ACC-INTERFACE 0x0200)
@@ -134,6 +138,8 @@
 (def ACC-NATIVE 0x0100)
 
 (defn static? [m] (pos? (bit-and (:flags m) ACC-STATIC)))
+(defn native? [m] (pos? (bit-and (:flags m) ACC-NATIVE)))
+(defn interface? [c] (pos? (bit-and (:flags c) ACC-INTERFACE)))
 
 (defn parse
   "Parse the bytes of a class file into a map of :name :super :interfaces
