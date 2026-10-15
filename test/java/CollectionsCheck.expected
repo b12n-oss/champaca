@@ -1,0 +1,8 @@
+treemap "{a=1, b=2, c=[1, 2]}"
+max 9
+frequency 3
+join "a-b-c"
+contains true
+copyOf "[1, [2, 3], {k=v}]"
+putAll [1 true 2]
+array-still "[1, 2, 3]"

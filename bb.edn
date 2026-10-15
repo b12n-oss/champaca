@@ -20,7 +20,8 @@
                     ;; jolt programs calling Java, checked against expected output
                     examples [["interop" "jolt calling Java"] ["dynamic" "descriptor-free calls"]
                               ["varargs" "varargs and vectors as arrays"]
-                              ["jars" "a jar and other JDK modules"]]
+                              ["jars" "a jar and other JDK modules"]
+                              ["collections" "jolt collections as java.util and back"]]
                     ex-fails (doall
                               (for [[n what] examples
                                     :let [{:keys [out exit]} (shell {:out :string :continue true}

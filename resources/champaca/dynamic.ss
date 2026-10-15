@@ -69,6 +69,48 @@
 (define (array-elem d) (substring d 1 (string-length d)))
 (define (seq-arg? v) (or (pair? v) (null? v)))   ; a jolt vector, sent as a Scheme list
 
+;; --- collections bridge ----------------------------------------------------------------
+;; A jolt map, set or list arrives as a coll-arg (built by api.clj's ->arg):
+;; kind 'map with (key . value) pairs, 'set or 'list with its items. It fits a
+;; parameter its java.util class can be assigned to, and is copied into a fresh
+;; LinkedHashMap, LinkedHashSet or ArrayList, keeping jolt's order. Inside a
+;; collection every value is converted as an Object, and a nested vector
+;; becomes an ArrayList rather than an array.
+(define-record-type coll-arg (fields kind items))
+(define (make-jolt-map pairs) (make-coll-arg 'map pairs))
+(define (make-jolt-set items) (make-coll-arg 'set items))
+(define (make-jolt-list items) (make-coll-arg 'list items))
+(define (coll-class v)
+  (case (coll-arg-kind v)
+    [(map) "java/util/LinkedHashMap"] [(set) "java/util/LinkedHashSet"] [else "java/util/ArrayList"]))
+
+(define (new-java-coll cname)
+  (jinit cname)
+  (let ([o (jnew cname)]) ((method-proc cname "<init>()V") o) o))
+
+(define (java-list items)
+  (let ([l (new-java-coll "java/util/ArrayList")])
+    (for-each (lambda (x) ((jvirt l "add(Ljava/lang/Object;)Z") l (elem->java x))) items)
+    l))
+
+(define (coll->java v)
+  (let ([o (new-java-coll (coll-class v))])
+    (if (eq? (coll-arg-kind v) 'map)
+        (for-each (lambda (kv)
+                    ((jvirt o "put(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;")
+                     o (elem->java (car kv)) (elem->java (cdr kv))))
+                  (coll-arg-items v))
+        (for-each (lambda (x) ((jvirt o "add(Ljava/lang/Object;)Z") o (elem->java x)))
+                  (coll-arg-items v)))
+    o))
+
+;; a value inside a collection, or given to ->java
+(define (elem->java x)
+  (cond [(coll-arg? x) (coll->java x)]
+        [(seq-arg? x) (java-list x)]
+        [else (convert-arg x "Ljava/lang/Object;")]))
+(define (dyn->java x) (elem->java x))
+
 ;; the array type a vector becomes when nothing else says: int[], long[],
 ;; double[], String[], a nested array type, or Object[]
 (define (inferred-array-desc v)
@@ -97,7 +139,12 @@
              (and (for-all (lambda (c) c) costs)
                   (fx+ 1 (fold-left fxmax 0 costs))))
            (let ([t (ref-class d)])
-             (and t (class-assignable? (inferred-array-desc v) t) 6)))]
+             (and t (or (class-assignable? (inferred-array-desc v) t)
+                        (class-assignable? "java/util/ArrayList" t))
+                  6)))]
+      [(coll-arg? v)
+       (let ([t (ref-class d)] [from (coll-class v)])
+         (and t (class-assignable? from t) (if (string=? t from) 4 6)))]
       [(boolean? v) (if (char=? c0 #\Z) 0 (box-cost "java/lang/Boolean" d 1))]
       [(char? v) (case c0 [(#\C) 0] [(#\I) 2] [(#\J) 3] [else (box-cost "java/lang/Character" d 5)])]
       [(exact-int? v)
@@ -132,8 +179,12 @@
     (cond
       [(eq? v jolt-nil) #f]
       [(seq-arg? v)
-       (let ([e (array-elem (if (char=? c0 #\[) d (inferred-array-desc v)))])
-         (make-jarr e (list->vector (map (lambda (x) (convert-arg x e)) v))))]
+       (if (or (char=? c0 #\[) (class-assignable? (inferred-array-desc v) (ref-class d)))
+           (let ([e (array-elem (if (char=? c0 #\[) d (inferred-array-desc v)))])
+             (make-jarr e (list->vector (map (lambda (x) (convert-arg x e)) v))))
+           ;; List, Collection, Iterable: an ArrayList
+           (java-list v))]
+      [(coll-arg? v) (coll->java v)]
       [(java-value? v)
        (if (memv c0 '(#\L #\[)) v (junbox (string c0) v))]
       [(memv c0 '(#\I #\J #\S #\B)) (if (char? v) (char->integer v) v)]
@@ -343,5 +394,17 @@
 
 ;; arrays stay Java arrays across the boundary; ->clj copies one out
 (define (dyn-array? v) (jarr? v))
+(define (dyn-instance? v cname) (and (java-value? v) (jinstance? v cname)))
+;; a Collection's elements, or a Map's keys and values alternating, as Object[]
+(define (dyn-coll-array c) ((jvirt c "toArray()[Ljava/lang/Object;") c))
+(define (dyn-map-array m)
+  (let* ([es ((jvirt m "entrySet()Ljava/util/Set;") m)]
+         [it ((jvirt es "iterator()Ljava/util/Iterator;") es)])
+    (let loop ([acc '()])
+      (if (eqv? 0 ((jvirt it "hasNext()Z") it))
+          (make-jarr "Ljava/lang/Object;" (list->vector (reverse acc)))
+          (let ([e ((jvirt it "next()Ljava/lang/Object;") it)])
+            (loop (cons ((jvirt e "getValue()Ljava/lang/Object;") e)
+                        (cons ((jvirt e "getKey()Ljava/lang/Object;") e) acc))))))))
 (define (dyn-alength a) (vector-length (jarr-vec a)))
 (define (dyn-aref a i) (dyn-out (jarr-elem a) (vector-ref (jarr-vec a) i)))

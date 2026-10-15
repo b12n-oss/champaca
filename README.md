@@ -35,8 +35,18 @@ Java objects live in jolt's own heap as Chez records, so calling into Java is a 
 - **A jolt fn** passed where Java wants a single-method interface (`Comparator`, `Predicate`, `Function`, ...) becomes an implementation of it.
 - **Varargs** work the way javac does them: fixed-arity overloads first, then varargs methods with the trailing arguments packed into the array. So `(ldk/invoke-static "java.lang.String" "format" "%s: %.2f" "x" 2.5)` and `(ldk/invoke-static "java.util.List" "of" 1 2 3)` just work.
 - **A jolt vector** passed for an array parameter becomes a Java array of that element type. Where the parameter is only `Object`, the contents pick the type: `int[]`, `long[]`, `double[]`, `String[]`, nested arrays, or `Object[]`.
-- **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays stay Java arrays, and `->clj` copies one into a vector.
-- **Not handled:** jolt maps, sets and seqs aren't converted to `java.util` collections.
+- **jolt collections** go where Java wants a `Map`, `Set`, `List`, `Collection`, `Iterable` or plain `Object`. A map becomes a `LinkedHashMap`, a set a `LinkedHashSet`, and a seq an `ArrayList`, keeping jolt's order. A vector becomes an `ArrayList` too, unless the parameter is an array or plain `Object`, where it stays an array as above. The copy is deep, so a nested vector inside a collection is an `ArrayList`, and keywords become their names as strings. `(ldk/->java x)` does the same conversion by hand.
+- **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays and collections stay Java objects, so you can keep calling methods on them. `->clj` copies one into jolt data, deeply: arrays and lists to vectors, sets to sets, maps to maps.
+
+So a jolt map can go straight into a JSON library and come back:
+
+```clojure
+(def mapper (ldk/construct "com.fasterxml.jackson.databind.ObjectMapper"))
+(def json (ldk/invoke mapper "writeValueAsString" {:name "champaca" :tags ["a" "b"]}))
+;=> "{\"name\":\"champaca\",\"tags\":[\"a\",\"b\"]}"
+(ldk/->clj (ldk/invoke mapper "readValue" json (ldk/invoke-static "java.lang.Class" "forName" "java.util.Map")))
+;=> {"name" "champaca", "tags" ["a" "b"]}
+```
 
 `examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. `bb test` checks the outputs match, and also runs both Java programs on champaca.
 

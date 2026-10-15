@@ -72,9 +72,17 @@
 
 (defn- ->arg
   "jolt vectors go to Scheme as lists, which the runtime turns into a Java
-  array when the chosen parameter is an array (or a varargs tail)."
+  array when the chosen parameter is an array (or a varargs tail), or an
+  ArrayList for a List, Collection or Iterable. Maps, sets and other seqs are
+  tagged, to become a LinkedHashMap, LinkedHashSet or ArrayList, and keywords
+  become strings (their name, with any namespace)."
   [x]
-  (if (vector? x) (apply s/call "list" (map ->arg x)) x))
+  (cond (vector? x) (apply s/call "list" (map ->arg x))
+        (map? x) (s/call "make-jolt-map" (apply s/call "list" (map (fn [[k v]] (s/call "cons" (->arg k) (->arg v))) x)))
+        (set? x) (s/call "make-jolt-set" (apply s/call "list" (map ->arg x)))
+        (seq? x) (s/call "make-jolt-list" (apply s/call "list" (map ->arg x)))
+        (keyword? x) (subs (str x) 1)
+        :else x))
 
 ;; --- descriptor-free calls ---------------------------------------------------------
 ;; Class names may use dots or slashes. The overload is chosen from the
@@ -102,9 +110,24 @@
 (defn get-field [obj fname] (rethrow #(s/call "dyn-get-field" obj fname)))
 
 (defn ->clj
-  "Copy a Java array into a jolt vector, converting elements (strings,
-  boxed numbers) and nested arrays. Anything else is returned as is."
+  "Copy Java data into jolt data, deeply: an array or a List (any Collection)
+  becomes a vector, a Set a set, a Map a map, with strings and boxed numbers
+  converted. Anything else is returned as is."
   [x]
-  (if (s/call "dyn-array?" x)
+  (cond
+    (s/call "dyn-array?" x)
     (mapv #(->clj (s/call "dyn-aref" x %)) (range (s/call "dyn-alength" x)))
-    x))
+    (s/call "dyn-instance?" x "java/util/Map")
+    (let [a (s/call "dyn-map-array" x)]
+      (into {} (for [i (range 0 (s/call "dyn-alength" a) 2)]
+                 [(->clj (s/call "dyn-aref" a i)) (->clj (s/call "dyn-aref" a (inc i)))])))
+    (s/call "dyn-instance?" x "java/util/Set") (set (->clj (s/call "dyn-coll-array" x)))
+    (s/call "dyn-instance?" x "java/util/Collection") (->clj (s/call "dyn-coll-array" x))
+    :else x))
+
+(defn ->java
+  "Copy jolt data into Java collections, deeply: a map becomes a
+  LinkedHashMap, a set a LinkedHashSet, a vector or seq an ArrayList, and
+  strings, numbers and keywords (as strings) are converted as Objects."
+  [x]
+  (rethrow #(s/call "dyn->java" (->arg x))))
