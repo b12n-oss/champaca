@@ -2,8 +2,8 @@
   <title id="title">Champaca</title>
   <!-- A champaca seen from the side, drawn after plate 191 of Blanco's Flora
        de Filipinas: narrow saffron tepals that spread loosely from a green
-       cup and curl outward at the tips, two of them drooping, on a short
-       stem with one leaf. -->
+       cup and curl outward at the tips, the outer ones hanging low, on a
+       short stem with two leaves. -->
   <defs>
     <!-- one strap-shaped tepal pointing up from its base at 0,0; the tip
          curls right, and scale(-1 1) makes it curl left -->
@@ -25,23 +25,25 @@
     </linearGradient>
   </defs>
 
-  <!-- stem and leaf -->
+  <!-- stem and leaves -->
   <path d="M63 80 C62 95 59 110 54 124" fill="none" stroke="#8C7A55" stroke-width="3.2" stroke-linecap="round"/>
   <path d="M60.5 108 C70 102 84 103 95 111 C84 117 70 116 60.5 108 Z" fill="url(#leaf)" stroke="#3F6A2A" stroke-width="0.9" stroke-linejoin="round"/>
   <path d="M61.5 108 C72 107 82 108 93 111" fill="none" stroke="#3F6A2A" stroke-width="0.7" stroke-linecap="round" opacity="0.7"/>
+  <path d="M58.6 115 C50 108 38 108 28 113 C38 120 50 121 58.6 115 Z" fill="url(#leaf)" stroke="#3F6A2A" stroke-width="0.9" stroke-linejoin="round"/>
+  <path d="M57.6 115 C48 113 39 113 30 113" fill="none" stroke="#3F6A2A" stroke-width="0.7" stroke-linecap="round" opacity="0.7"/>
 
   <!-- the bloom, enlarged about its base so it fills the frame -->
   <g transform="translate(63 74) scale(1.28) translate(-63 -88)">
-  <!-- back tepals: long, saffron, at uneven angles; the outer two droop -->
+  <!-- back tepals: long, saffron, at uneven angles; the outer ones droop -->
   <g fill="url(#saffron)" stroke="#C25A08" stroke-width="0.9" stroke-linejoin="round">
-    <use href="#tepal" transform="translate(63 88) rotate(-104) scale(-0.78 0.78)"/>
-    <use href="#tepal" transform="translate(63 88) rotate(-64) scale(-0.98 0.98)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(-128) scale(-0.8 0.8)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(-84) scale(-0.96 0.96)"/>
     <use href="#tepal" transform="translate(63 88) rotate(-38) scale(-1.08 1.08)"/>
     <use href="#tepal" transform="translate(63 88) rotate(-14) scale(-1.02 1.02)"/>
     <use href="#tepal" transform="translate(63 88) rotate(11) scale(1.1)"/>
     <use href="#tepal" transform="translate(63 88) rotate(36) scale(1.04)"/>
-    <use href="#tepal" transform="translate(63 88) rotate(61) scale(0.94)"/>
-    <use href="#tepal" transform="translate(63 88) rotate(98) scale(0.74)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(80) scale(0.94)"/>
+    <use href="#tepal" transform="translate(63 88) rotate(124) scale(0.78)"/>
   </g>
   <!-- front tepals: shorter and paler -->
   <g fill="url(#gold)" stroke="#D27A0C" stroke-width="0.9" stroke-linejoin="round">
