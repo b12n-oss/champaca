@@ -102,6 +102,10 @@
   (eq-hashtable-set! throw-stacks this jstack)
   this)
 
+;; JEP 358's "Cannot invoke ... because ..." text needs the faulting bytecode;
+;; null is what HotSpot answers when it has none, so getMessage stays null
+(defnative "java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;" (this) #f)
+
 ;; --- Unsafe -------------------------------------------------------------------------
 ;; An object field offset is its slot index; an array offset is the element
 ;; index (base 0, scale 1). Static fields are not addressable yet.
