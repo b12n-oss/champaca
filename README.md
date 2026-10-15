@@ -7,7 +7,7 @@
 
 OpenLDK is Anthony Green's Java runtime written in Common Lisp. It translates JVM bytecode into Lisp and lets SBCL compile it to machine code. This project does the same thing on jolt. The translator is written in jolt's Clojure and emits Chez Scheme source, which `jolt.scheme/eval-string` compiles natively, one method at a time on first call.
 
-The classes are the JDK's own. They're read straight out of `$JAVA_HOME/jmods/java.base.jmod`, and the runtime boots them the way a JVM does: it builds the main thread, runs `Reference.<clinit>`, then runs `System.initPhase1()`. So `System.out.println` goes through the real `PrintStream`, `StreamEncoder` and UTF-8 encoder, and ends at a native `FileOutputStream.writeBytes`.
+The classes are the JDK's own. They're read straight out of `$JAVA_HOME/jmods`, `java.base` first and then whichever other module has the class, and the runtime boots them the way a JVM does: it builds the main thread, initializes `String` and `Reference`, then runs `System.initPhase1()`. So `System.out.println` goes through the real `PrintStream`, `StreamEncoder` and UTF-8 encoder, and ends at a native `FileOutputStream.writeBytes`.
 
 ## Calling Java from jolt
 
@@ -42,6 +42,19 @@ Java objects live in jolt's own heap as Chez records, so calling into Java is a 
 
 The descriptor-based functions (`call-static`, `new-object`, `call`, `implement`) are still there for exact control. A Java exception thrown out of any call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`.
 
+## Libraries from jars
+
+The classpath takes directories and jars, so a Java library loads straight from its jar:
+
+```clojure
+(ldk/init! {:classpath ["lib/commons-lang3-3.12.0.jar"]})
+(ldk/invoke-static "org.apache.commons.lang3.StringUtils" "capitalize" "champaca")  ;=> "Champaca"
+```
+
+From the command line it's a colon-separated list, as with `java -cp`: `jolt -M -m champaca.main classes:lib/gson-2.13.2.jar Main`. Two real libraries were checked this way against the JVM, with identical output: commons-lang3 3.12.0 (`StringUtils`) and gson 2.13.2 (parsing, `toJson` of a JSON tree, of a plain object and of a `Map`, `fromJson` into a class with no default constructor, pretty printing). They aren't in `bb test`, because they'd need the jars downloaded. `bb test` packs `test/jar` into `target/lib.jar` instead and runs `test/java/JarCheck.java` and `examples/jars.clj` against it.
+
+Classes outside `java.base` come from the other jmods: `java.sql`, `java.logging`, `jdk.unsupported` and so on. Modules are searched in name order and each one's zip is copied under `~/.cache/champaca/jmods/` the first time it's searched. A class from a module that sorts late, like `sun.misc.Unsafe` in `jdk.unsupported`, copies nearly all 69 of them (81 MB) on the first run.
+
 ## Reflection
 
 JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with method handles or with two VM natives, `invoke0` and `newInstance0`. It falls back to the natives while `java.lang.invoke` isn't initialized (it never is here) or when `jdk.reflect.useNativeAccessorOnly=true` (set here too). So the runtime supplies those natives, plus `Class.getDeclaredMethods0`, `getDeclaredFields0`, `getDeclaredConstructors0` and the rest, and builds real `java.lang.reflect` objects through their own constructors. Field access has no native path in JDK 25, so `Field.get`/`set` and the typed variants are overridden.
@@ -58,16 +71,16 @@ The first run builds a cache under `~/.cache/champaca/<key>/` and later runs loa
 | Streams | 1.45–1.61 s | 0.35 s |
 | `examples/interop.clj` | 1.08 s | 0.31 s |
 
-The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, and jolt's runtime version, so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
+The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
 Old cache directories aren't cleaned up, and generations aren't merged, so each extra file adds a little load time.
 
 ## Run it
 
-You need jolt (0.8.21 or later) and JDK 25 with `JAVA_HOME` set. The first run copies the zip inside `java.base.jmod` to `target/jdk/`.
+You need jolt (0.8.21 or later) and JDK 25 with `JAVA_HOME` set. The zip inside each jmod is copied, the first time a class is looked up in it, under `~/.cache/champaca/jmods/`.
 
 ```sh
-bb test                                               # every test/java program vs the JVM, plus examples/interop.clj
+bb test                                               # every test/java program vs the JVM, plus the examples/*.clj programs
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
 CHAMPACA_STATS=1 ...    # print classes loaded and methods compiled
@@ -82,10 +95,10 @@ CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Sche
 |---|---|
 | `src/champaca/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
 | `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
-| `src/champaca/main.clj` | loads classes from the classpath or the jmod, lays out fields, builds vtables (interface defaults included), boots the JDK |
+| `src/champaca/main.clj` | loads classes from the classpath (directories and jars) or the jmods, lays out fields, builds vtables (interface defaults included), boots the JDK |
 | `src/champaca/api.clj` | the jolt-facing API |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
-| `resources/champaca/natives.ss` | JDK native methods (83 named, plus pattern rules for `Unsafe`) |
+| `resources/champaca/natives.ss` | JDK native methods (115 named, plus pattern rules for `Unsafe`) and a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
 | `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, auto-wrapping jolt fns |
@@ -95,6 +108,9 @@ CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Sche
 - **Lambdas and records** skip their bootstrap methods. The translator spots `LambdaMetafactory` and `ObjectMethods` call sites and generates the class or method directly. Any other `invokedynamic` fails.
 - **Reflection skips some metadata.** Methods, fields, constructors, `invoke`, `newInstance` and field get/set work (`test/java/Reflect.java`). Annotations, generic signatures, inner-class info and checked-exception lists all come back empty. Field access ignores access control.
 - **One thread.** `Thread.start0` does nothing, and monitors are no-ops.
+- **No VarHandles.** `jdk.internal.util.ByteArray` and `ByteArrayLittleEndian`, which `DataInputStream` and the time-zone reader use, are overridden to read the bytes directly. Other VarHandle users fail with `AbstractMethodError`.
+- **No native libraries.** A JDK library load (`zip`, `net`) is a no-op, since its natives are Scheme code here. A Java library's own JNI code can't load.
+- **`sun.misc.Unsafe` doesn't warn.** `sun.misc.unsafe.memory.access` is `allow`, because the default `warn` finds its caller with `StackWalker`, which has no natives yet.
 - `float`/`double` to string uses Scheme formatting, not `Double.toString`.
 
 ## The name

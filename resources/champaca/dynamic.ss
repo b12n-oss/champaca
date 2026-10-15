@@ -284,7 +284,7 @@
 
 (define (dyn-new cname . args)
   (let* ([cname (slashes cname)]
-         [c (begin (jinit cname) (find-class cname))]
+         [c (begin (with-java-errors (lambda () (jinit cname))) (find-class cname))]
          [cands (filter (lambda (m) (and (string=? (cadr m) "<init>") (public? (cadddr m))))
                         (map (lambda (m) (list cname (car m) (cadr m) (caddr m))) (meta-methods c)))]
          [fixed (filter (lambda (m) (fx= (length (desc-args (caddr m))) (length args))) cands)]
@@ -319,9 +319,9 @@
                          (varargs-candidates cname name (length args) #t) args)]
          [pick (car chosen)] [args (cdr chosen)]
          [owner (car pick)] [desc (caddr pick)])
-    (jinit owner)
     (with-java-errors
      (lambda ()
+       (jinit owner)
        (dyn-out (desc-ret desc)
                 (apply (method-proc owner (string-append name desc)) (map convert-arg args (desc-args desc))))))))
 
@@ -329,7 +329,7 @@
   (let* ([cname (slashes cname)] [c (find-class cname)]
          [f (find (lambda (f) (and (string=? (car f) fname) (static-flag? (caddr f)))) (meta-fields c))])
     (unless f (api-fail (string-append "no static field " fname " in " cname)))
-    (jinit cname)
+    (with-java-errors (lambda () (jinit cname)))
     (dyn-out (cadr f) (top-level-value (string->symbol (string-append cname ":" fname))))))
 
 (define (dyn-get-field obj fname)

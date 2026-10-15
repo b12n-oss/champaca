@@ -65,42 +65,78 @@
   (or (get-in @state [:classes cname])
       (do (ensure-loaded! cname) (get-in @state [:classes cname]))))
 
-;; --- the JDK image ---------------------------------------------------------------
-;; A .jmod is a zip behind a 4-byte "JM" header. jolt's ZipFile shim wants a
-;; plain zip, so the zip part is copied once into target/jdk/.
+;; --- class bytes -----------------------------------------------------------------
+;; JDK classes come from $JAVA_HOME/jmods. A .jmod is a zip behind a 4-byte
+;; "JM" header, and jolt's ZipFile shim wants a plain zip, so each module's
+;; zip part is copied once, the first time a class is looked up in it, under
+;; the cache root. java.base is tried first, then the other modules in name
+;; order. User classes come from the classpath: directories and jars.
 
 (defn- java-home []
   (or (env "JAVA_HOME") (throw (ex-info "JAVA_HOME is not set" {}))))
 
-(defn- jdk-zip []
-  (or (:jdk-zip @state)
-      (let [jmod (io/file (java-home) "jmods" "java.base.jmod")
-            out (io/file "target" "jdk" "java.base.zip")]
+(defn- cache-root []
+  (io/file (or (env "CHAMPACA_CACHE_DIR") (str (env "HOME") "/.cache/champaca"))))
+
+(defn- jmods-dir []
+  (let [release (io/file (java-home) "release")]
+    (io/file (cache-root) "jmods"
+             (Long/toHexString (bit-and (hash [(java-home) (when (.exists release) (slurp release))])
+                                        0xffffffff)))))
+
+(defn- jmod-zip [module]
+  (or (get-in @state [:jmods module])
+      (let [out (io/file (jmods-dir) (str module ".zip"))]
         (when-not (.exists out)
-          (io/make-parents out)
-          (with-open [in (io/input-stream jmod)]
-            (.skip in 4)
-            (io/copy in out)))
+          ;; copied beside, then renamed, so a concurrent run never opens half
+          (let [tmp (io/file (str out ".tmp-" (System/nanoTime)))]
+            (io/make-parents tmp)
+            (with-open [in (io/input-stream (io/file (java-home) "jmods" (str module ".jmod")))]
+              (.skip in 4)
+              (io/copy in tmp))
+            (when-not (.renameTo tmp out) (.delete tmp))))
         (let [zf (ZipFile. (str out))]
-          (swap! state assoc :jdk-zip zf)
+          (swap! state assoc-in [:jmods module] zf)
           zf))))
 
+(defn- modules []
+  (or (:modules @state)
+      (let [names (->> (.listFiles (io/file (java-home) "jmods"))
+                       (map #(.getName %))
+                       (filter #(str/ends-with? % ".jmod"))
+                       (map #(subs % 0 (- (count %) 5)))
+                       (remove #{"java.base"})
+                       sort)
+            ms (vec (cons "java.base" names))]
+        (swap! state assoc :modules ms)
+        ms)))
+
+(defn- read-entry [zf entry-name]
+  (when-let [e (.getEntry zf entry-name)]
+    (with-open [in (.getInputStream zf e)] (.readAllBytes in))))
+
+(defn- jar [path]
+  (or (get-in @state [:jars path])
+      (let [zf (ZipFile. (str path))]
+        (swap! state assoc-in [:jars path] zf)
+        zf)))
+
 (defn- user-class-bytes [cname]
-  (some (fn [dir]
-          (let [f (io/file dir (str cname ".class"))]
-            (when (.exists f)
-              (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))
-        (:classpath @state)))
+  (let [rel (str cname ".class")]
+    (some (fn [entry]
+            (if (str/ends-with? (str entry) ".jar")
+              (read-entry (jar entry) rel)
+              (let [f (io/file entry rel)]
+                (when (.exists f)
+                  (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String [])))))))
+          (:classpath @state))))
+
+(defn- jdk-class-bytes [cname]
+  (let [rel (str "classes/" cname ".class")]
+    (some #(read-entry (jmod-zip %) rel) (modules))))
 
 (defn- class-bytes [cname]
-  (or (some (fn [dir]
-              (let [f (io/file dir (str cname ".class"))]
-                (when (.exists f)
-                  (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))
-            (:classpath @state))
-      (let [zf (jdk-zip)]
-        (when-let [e (.getEntry zf (str "classes/" cname ".class"))]
-          (with-open [in (.getInputStream zf e)] (.readAllBytes in))))))
+  (or (user-class-bytes cname) (jdk-class-bytes cname)))
 
 (defn- record!
   "Keep text for the boot cache when it belongs to a JDK class."
@@ -160,12 +196,13 @@
 (defn- normalize
   "Parse cname's classfile into the linker's class map."
   [cname]
-  (let [bytes (or (class-bytes cname)
+  (let [user (user-class-bytes cname)
+        bytes (or user (jdk-class-bytes cname)
                   (throw (ex-info (str "class not found: " cname) {:class cname})))
         c (cf/parse bytes)]
     {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
      ;; only JDK classes are cached; user classes change between runs
-     :origin (if (user-class-bytes cname) :user :jdk)
+     :origin (if user :user :jdk)
      :fields (mapv (fn [f] {:name (:name f) :desc (:desc f) :flags (:flags f)
                             :static (cf/static? f) :constant (:constant f)})
                    (:fields c))
@@ -310,10 +347,11 @@
   (when-not (= "off" (env "CHAMPACA_CACHE"))
     (let [jmod (io/file (java-home) "jmods" "java.base.jmod")
           release (io/file (java-home) "release")
+          ;; CHAMPACA_BT changes the generated code (shadow-stack wrappers that
+          ;; hide frame names from getCallerClass), so it gets its own cache
           key (hash [(when (.exists release) (slurp release)) (.length jmod) (.lastModified jmod)
-                     (translator-fingerprint) (img/runtime-version)])]
-      (io/file (or (env "CHAMPACA_CACHE_DIR") (str (env "HOME") "/.cache/champaca"))
-               (Long/toHexString (bit-and key 0xffffffff))))))
+                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT"))])]
+      (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
 
 (defn- strip-for-cache
   "The linker's class map for JDK classes only, without bytecode: methods
@@ -391,6 +429,10 @@
     (run! ensure-loaded! ["java/lang/Object" "java/lang/String" "java/lang/Class"])
     (let [status (s/eval-string
                   "(run-guarded (lambda ()
+                     ;; String.<clinit> sets COMPACT_STRINGS; before it runs,
+                     ;; hashCode takes the UTF-16 path on Latin-1 strings, and
+                     ;; initPhase1 would key the property map by those hashes
+                     (jinit \"java/lang/String\")
                      (jinit \"java/lang/System\")
                      (boot-threads!)
                      ;; the JVM initializes Reference before initPhase1; its <clinit>
@@ -435,6 +477,6 @@
 (defn -main [& argv]
   (let [[cp cname & args] argv]
     (when-not cname
-      (binding [*out* *err*] (println "usage: jolt -M -m champaca.main <classpath-dir[:dir...]> <MainClass> [args...]"))
+      (binding [*out* *err*] (println "usage: jolt -M -m champaca.main <classpath[:entry...] (dirs and jars)> <MainClass> [args...]"))
       (System/exit 2))
     (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args)))))

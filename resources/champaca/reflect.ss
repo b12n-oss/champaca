@@ -252,3 +252,36 @@
        (lambda (this obj v) (let-values ([(get set desc) (field-access this obj)]) (set v))))))
  '(("Boolean" . "Z") ("Byte" . "B") ("Char" . "C") ("Short" . "S")
    ("Int" . "I") ("Long" . "J") ("Float" . "F") ("Double" . "D")))
+
+;; --- java.lang.reflect.Array ----------------------------------------------------------
+;; Elements of primitive arrays are stored unboxed, so get boxes and set unboxes
+;; by the array's element descriptor.
+
+(define (class-name->desc n)
+  (cond [(char=? (string-ref n 0) #\[) n]
+        [(find (lambda (p) (string=? (cdr p) n)) prim-names) => car]
+        [else (string-append "L" n ";")]))
+
+(define (reflect-array a)
+  (if (jarr? (nn a)) a
+      (jthrow "java/lang/IllegalArgumentException" "Argument is not an array")))
+
+(defnative "java/lang/reflect/Array.getLength(Ljava/lang/Object;)I" (a)
+  (jarraylength (reflect-array a)))
+
+(defnative "java/lang/reflect/Array.newArray(Ljava/lang/Class;I)Ljava/lang/Object;" (cls n)
+  (let ([elem (class-name->desc (jclass-name (mirror-class (nn cls))))])
+    (jnewarray elem n (elem-default elem))))
+
+(defnative "java/lang/reflect/Array.multiNewArray(Ljava/lang/Class;[I)Ljava/lang/Object;" (cls dims)
+  (jmultiarray (string-append (make-string (jarraylength dims) #\[)
+                              (class-name->desc (jclass-name (mirror-class (nn cls)))))
+               (vector->list (jarr-vec dims))))
+
+(defnative "java/lang/reflect/Array.get(Ljava/lang/Object;I)Ljava/lang/Object;" (a i)
+  (let ([v (jaload (reflect-array a) i)] [e (jarr-elem a)])
+    (if (prim-desc? e) (jbox e v) v)))
+
+(defnative "java/lang/reflect/Array.set(Ljava/lang/Object;ILjava/lang/Object;)V" (a i v)
+  (let ([e (jarr-elem (reflect-array a))])
+    (jastore a i (if (prim-desc? e) (junbox e (nn v)) v))))

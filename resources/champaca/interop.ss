@@ -67,7 +67,7 @@
                (let ([r (apply f (map ldk-out arg-ds args))])
                  (if (char=? (string-ref ret-d 0) #\V) (void) (ldk-in ret-d r)))))))
 
-(define (ldk-to-string obj) (if (eq? obj jolt-nil) "null" (jstring-of obj)))
+(define (ldk-to-string obj) (if (eq? obj jolt-nil) "null" (with-java-errors (lambda () (jstring-of obj)))))
 (define (ldk-java-exception? e) (java-exception? e))
 (define (ldk-exception-message e) (java-exception-message e))
 (define (ldk-exception-object e) (java-exception-object e))

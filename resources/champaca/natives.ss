@@ -141,9 +141,22 @@
     [("B") (i2b u)] [("S") (i2s u)] [("C") (logand u #xffff)] [("Z") (logand u 1)]
     [("I") (i32 u)] [("J") (i64 u)] [else u]))
 
+;; Static fields: like HotSpot, the base is the class mirror. The offset is
+;; static-offset-tag plus the field's index in the class meta list, so it
+;; can't collide with an instance slot of the mirror itself.
+(define static-offset-tag #x100000)
+(define (static-symbol o off)
+  (and (fx>= off static-offset-tag)
+       (let ([c (eq-hashtable-ref mirror->class o #f)])
+         (and c
+              (let ([meta (list-ref (cadr (jclass-meta c)) (fx- off static-offset-tag))])
+                (jinit (jclass-name c))
+                (string->symbol (string-append (jclass-name c) ":" (car meta))))))))
+
 (define (unsafe-get o off t)
   (cond
     [(not o) (hashtable-ref native-memory off 0)]
+    [(and (jobj? o) (static-symbol o off)) => top-level-value]
     [(jobj? o) (vector-ref (jobj-slots o) off)]
     [else
      (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
@@ -155,6 +168,7 @@
 (define (unsafe-set! o off v t)
   (cond
     [(not o) (hashtable-set! native-memory off v)]
+    [(and (jobj? o) (static-symbol o off)) => (lambda (sym) (set-top-level-value! sym v))]
     [(jobj? o) (vector-set! (jobj-slots o) off v)]
     [else
      (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
@@ -182,6 +196,11 @@
 (defnative "jdk/internal/misc/Unsafe.storeFence()V" (this) (void))
 (defnative "jdk/internal/misc/Unsafe.objectFieldOffset1(Ljava/lang/Class;Ljava/lang/String;)J" (this c name)
   (jfield-index (jclass-name (mirror-class c)) (jstring->scheme name)))
+(define (field-mirror f) (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))
+(defnative "jdk/internal/misc/Unsafe.staticFieldBase0(Ljava/lang/reflect/Field;)Ljava/lang/Object;" (this f)
+  (field-mirror (nn f)))
+(defnative "jdk/internal/misc/Unsafe.staticFieldOffset0(Ljava/lang/reflect/Field;)J" (this f)
+  (fx+ static-offset-tag (jslot (nn f) (jfield-index "java/lang/reflect/Field" "slot"))))
 (defnative "jdk/internal/misc/Unsafe.ensureClassInitialized0(Ljava/lang/Class;)V" (this c)
   (jinit (jclass-name (mirror-class c))))
 (defnative "jdk/internal/misc/Unsafe.shouldBeInitialized0(Ljava/lang/Class;)Z" (this c)
@@ -251,7 +270,10 @@
      ("java.library.path" . "")
      ("jdk.debug" . "release")
      ;; reflection through invoke0/newInstance0 (reflect.ss), never method handles
-     ("jdk.reflect.useNativeAccessorOnly" . "true"))))
+     ("jdk.reflect.useNativeAccessorOnly" . "true")
+     ;; sun.misc.Unsafe's default "warn" finds its caller with StackWalker,
+     ;; which has no natives here; "allow" skips the stderr warning and the walk
+     ("sun.misc.unsafe.memory.access" . "allow"))))
 
 ;; os.version must parse as a version: CLDR's locale provider rejects "".
 ;; macOS reports the product version (as the JDK does), others the kernel's.
@@ -263,6 +285,23 @@
       (let ([l (get-line from-stdout)])
         (close-port from-stdout) (close-port from-stderr)
         (and (string? l) (positive? (string-length l)) l)))))
+;; TimeZone's default: TZ if set, else the zone /etc/localtime links to
+;; ("/var/db/timezone/zoneinfo/Asia/Bangkok" -> "Asia/Bangkok"), else GMT.
+(define (zone-after-zoneinfo path)
+  (let ([key "zoneinfo/"])
+    (let loop ([i 0])
+      (cond [(fx> (fx+ i (string-length key)) (string-length path)) #f]
+            [(string=? key (substring path i (fx+ i (string-length key))))
+             (substring path (fx+ i (string-length key)) (string-length path))]
+            [else (loop (fx+ i 1))]))))
+(defnative "java/util/TimeZone.getSystemTimeZoneID(Ljava/lang/String;)Ljava/lang/String;" (java-home)
+  (jstring (let ([tz (getenv "TZ")])
+             (if (and tz (positive? (string-length tz)))
+                 (if (char=? (string-ref tz 0) #\:) (substring tz 1 (string-length tz)) tz)
+                 (or (let ([l (first-line-of "readlink /etc/localtime 2>/dev/null")])
+                       (and l (zone-after-zoneinfo l)))
+                     "GMT")))))
+
 (define (os-version)
   (or (first-line-of "sw_vers -productVersion 2>/dev/null")
       (first-line-of "uname -r 2>/dev/null")
@@ -316,6 +355,73 @@
     (put-u8 port (fxlogand b #xff))
     (flush-output-port port)))
 
+;; --- file input -------------------------------------------------------------------
+;; FileInputStream reads through Chez binary ports kept in a table keyed by the
+;; int in FileDescriptor.fd; fds handed out here start at 3. fd 0 is stdin.
+
+(define open-files (make-eqv-hashtable))
+(define next-fd 3)
+
+(define (stream-fd this)
+  (jslot (jslot this (jfield-index "java/io/FileInputStream" "fd"))
+         (jfield-index "java/io/FileDescriptor" "fd")))
+(define (fd-port fd)
+  (cond [(hashtable-ref open-files fd #f)]
+        [(eqv? fd 0) (standard-input-port)]
+        [else (jthrow "java/io/IOException" "Stream Closed")]))
+(define (stream-port this) (fd-port (stream-fd this)))
+
+(defnative "java/io/FileInputStream.open0(Ljava/lang/String;)V" (this name)
+  (let ([p (jstring->scheme (nn name))])
+    (cond
+      [(not (file-exists? p))
+       (jthrow "java/io/FileNotFoundException" (string-append p " (No such file or directory)"))]
+      [(file-directory? p)
+       (jthrow "java/io/FileNotFoundException" (string-append p " (Is a directory)"))]
+      [else
+       (let ([fd next-fd])
+         (set! next-fd (fx+ next-fd 1))
+         (hashtable-set! open-files fd (open-file-input-port p))
+         (jslot-set! (jslot this (jfield-index "java/io/FileInputStream" "fd"))
+                     (jfield-index "java/io/FileDescriptor" "fd") fd))])))
+
+(defnative "java/io/FileInputStream.read0()I" (this)
+  (let ([b (get-u8 (stream-port this))]) (if (eof-object? b) -1 b)))
+
+(defnative "java/io/FileInputStream.readBytes([BII)I" (this bytes off len)
+  (if (fx= len 0)
+      0
+      (let ([bv (get-bytevector-n (stream-port this) len)])
+        (if (eof-object? bv)
+            -1
+            (let ([v (jarr-vec bytes)] [n (bytevector-length bv)])
+              (do ([i 0 (fx+ i 1)]) ((fx= i n) n)
+                (vector-set! v (fx+ off i) (i2b (bytevector-u8-ref bv i)))))))))
+
+(define (file-port? port) (and (port-has-port-length? port) (port-has-port-position? port)))
+
+(defnative "java/io/FileInputStream.available0()I" (this)
+  (let ([port (stream-port this)])
+    (if (file-port? port) (max 0 (- (port-length port) (port-position port))) 0)))
+(defnative "java/io/FileInputStream.skip0(J)J" (this n)
+  (let* ([port (stream-port this)] [pos (port-position port)]
+         [to (min (port-length port) (+ pos (max n 0)))])
+    (set-port-position! port to)
+    (- to pos)))
+(defnative "java/io/FileInputStream.length0()J" (this) (port-length (stream-port this)))
+(defnative "java/io/FileInputStream.position0()J" (this) (port-position (stream-port this)))
+(defnative "java/io/FileInputStream.isRegularFile0(Ljava/io/FileDescriptor;)Z" (this fdo)
+  (let ([port (hashtable-ref open-files (jslot fdo (jfield-index "java/io/FileDescriptor" "fd")) #f)])
+    (if (and port (file-port? port)) 1 0)))
+
+(defnative "java/io/FileDescriptor.close0()V" (this)
+  (let* ([i (jfield-index "java/io/FileDescriptor" "fd")] [fd (jslot this i)]
+         [port (hashtable-ref open-files fd #f)])
+    (when port
+      (close-port port)
+      (hashtable-delete! open-files fd))
+    (jslot-set! this i -1)))
+
 ;; --- signals: none are supported, which Terminator.setup tolerates ------------
 (defnative "jdk/internal/misc/Signal.findSignal0(Ljava/lang/String;)I" (name) -1)
 (defnative "jdk/internal/misc/Signal.handle0(IJ)J" (sig handler) 0)
@@ -356,6 +462,10 @@
 (defnative "java/lang/ref/Reference.refersTo0(Ljava/lang/Object;)Z" (this o)
   (if (eq? (jslot this (jfield-index "java/lang/ref/Reference" "referent")) o) 1 0))
 (defnative "java/lang/ref/Reference.clear0()V" (this)
+  (jslot-set! this (jfield-index "java/lang/ref/Reference" "referent") #f))
+(defnative "java/lang/ref/PhantomReference.refersTo0(Ljava/lang/Object;)Z" (this o)
+  (if (eq? (jslot this (jfield-index "java/lang/ref/Reference" "referent")) o) 1 0))
+(defnative "java/lang/ref/PhantomReference.clear0()V" (this)
   (jslot-set! this (jfield-index "java/lang/ref/Reference" "referent") #f))
 (defnative "java/lang/ref/Reference.waitForReferencePendingList()V" () (void))
 (defnative "java/lang/ref/Reference.getAndClearReferencePendingList()Ljava/lang/ref/Reference;" () #f)
@@ -417,3 +527,70 @@
   (let ([c (try-class (slashes (jstring->scheme name)))]) (and c (jmirror c))))
 (defnative "java/lang/ClassLoader.findLoadedClass0(Ljava/lang/String;)Ljava/lang/Class;" (this name)
   (let ([c (hashtable-ref classes (slashes (jstring->scheme name)) #f)]) (and c (jmirror c))))
+
+;; --- jdk.internal.util.ByteArray and ByteArrayLittleEndian -------------------------
+;; The JDK reads multi-byte values out of a byte[] through VarHandles
+;; (DataInputStream, ZoneInfoFile, ObjectInputStream), which this runtime does
+;; not have yet. These overrides read and write the bytes directly.
+
+(define (bytes-get a off n big?)
+  (let loop ([k 0] [acc 0])
+    (if (fx= k n)
+        acc
+        (loop (fx+ k 1)
+              (logior (ash acc 8) (fxlogand (jaload a (fx+ off (if big? k (fx- (fx- n k) 1)))) #xff))))))
+
+(define (bytes-set! a off n big? v)
+  ;; byte k counts from the least significant end
+  (do ([k 0 (fx+ k 1)]) ((fx= k n))
+    (jastore a (fx+ off (if big? (fx- (fx- n k) 1) k)) (i2b (logand (ash v (* -8 k)) #xff)))))
+
+(for-each
+ (lambda (cls+big)
+   (let ([cls (car cls+big)] [big? (cdr cls+big)])
+     (define (def name desc proc) (define-override! (string-append cls "." name desc) proc))
+     (def "getBoolean" "([BI)Z" (lambda (a i) (if (zero? (bytes-get a i 1 big?)) 0 1)))
+     (def "getChar" "([BI)C" (lambda (a i) (bytes-get a i 2 big?)))
+     (def "getShort" "([BI)S" (lambda (a i) (i2s (bytes-get a i 2 big?))))
+     (def "getUnsignedShort" "([BI)I" (lambda (a i) (bytes-get a i 2 big?)))
+     (def "getInt" "([BI)I" (lambda (a i) (i32 (bytes-get a i 4 big?))))
+     (def "getLong" "([BI)J" (lambda (a i) (i64 (bytes-get a i 8 big?))))
+     (def "getFloat" "([BI)F" (lambda (a i) (bits->float (i32 (bytes-get a i 4 big?)))))
+     (def "getFloatRaw" "([BI)F" (lambda (a i) (bits->float (i32 (bytes-get a i 4 big?)))))
+     (def "getDouble" "([BI)D" (lambda (a i) (bits->double (i64 (bytes-get a i 8 big?)))))
+     (def "getDoubleRaw" "([BI)D" (lambda (a i) (bits->double (i64 (bytes-get a i 8 big?)))))
+     (def "setBoolean" "([BIZ)V" (lambda (a i v) (bytes-set! a i 1 big? (if (eqv? v 0) 0 1))))
+     (def "setChar" "([BIC)V" (lambda (a i v) (bytes-set! a i 2 big? v)))
+     (def "setShort" "([BIS)V" (lambda (a i v) (bytes-set! a i 2 big? v)))
+     (def "setUnsignedShort" "([BII)V" (lambda (a i v) (bytes-set! a i 2 big? v)))
+     (def "setInt" "([BII)V" (lambda (a i v) (bytes-set! a i 4 big? v)))
+     (def "setLong" "([BIJ)V" (lambda (a i v) (bytes-set! a i 8 big? v)))
+     (def "setFloat" "([BIF)V" (lambda (a i v) (bytes-set! a i 4 big? (float->bits v))))
+     (def "setFloatRaw" "([BIF)V" (lambda (a i v) (bytes-set! a i 4 big? (float->bits v))))
+     (def "setDouble" "([BID)V" (lambda (a i v) (bytes-set! a i 8 big? (double->bits v))))
+     (def "setDoubleRaw" "([BID)V" (lambda (a i v) (bytes-set! a i 8 big? (double->bits v))))))
+ '(("jdk/internal/util/ByteArray" . #t) ("jdk/internal/util/ByteArrayLittleEndian" . #f)))
+
+;; --- native libraries and java.util.zip checksums ---------------------------------
+;; The JDK's own natives are the Scheme definitions in this file, so a JDK
+;; library ("zip", "net", "nio") has nothing left to load.
+(define-override! "jdk/internal/loader/BootLoader.loadLibrary(Ljava/lang/String;)V" (lambda (name) (void)))
+
+;; CRC-32 (IEEE, reflected, polynomial #xEDB88320); crc is a Java int.
+(define crc32-table
+  (let ([t (make-vector 256)])
+    (do ([n 0 (fx+ n 1)]) ((fx= n 256) t)
+      (vector-set! t n (let loop ([c n] [k 0])
+                         (if (fx= k 8) c
+                             (loop (if (fxodd? c) (fxlogxor #xEDB88320 (fxsrl c 1)) (fxsrl c 1)) (fx+ k 1))))))))
+(define (crc32-byte c b)
+  (fxlogxor (vector-ref crc32-table (fxlogand (fxlogxor c b) #xff)) (fxsrl c 8)))
+(define (crc32-bytes crc bytes off len)
+  (let ([v (jarr-vec bytes)])
+    (let loop ([i 0] [c (fxlogxor (fxlogand crc #xffffffff) #xffffffff)])
+      (if (fx= i len)
+          (i32 (fxlogxor c #xffffffff))
+          (loop (fx+ i 1) (crc32-byte c (fxlogand (vector-ref v (fx+ off i)) #xff)))))))
+(defnative "java/util/zip/CRC32.update(II)I" (crc b)
+  (i32 (fxlogxor (crc32-byte (fxlogxor (fxlogand crc #xffffffff) #xffffffff) (fxlogand b #xff)) #xffffffff)))
+(defnative "java/util/zip/CRC32.updateBytes0(I[BII)I" (crc bytes off len) (crc32-bytes crc bytes off len))

@@ -1,0 +1,8 @@
+sum 10
+fill [x x]
+grid [3 3]
+count 3
+unsafe 4
+level WARNING
+sql 0
+tokyo 32400000

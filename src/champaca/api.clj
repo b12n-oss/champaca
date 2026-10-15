@@ -30,7 +30,7 @@
            :else (throw e)))))
 
 (defn init!
-  "Boot the JDK. opts: {:classpath [\"dir\" ...]} for user classes."
+  "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user classes."
   ([] (init! {}))
   ([{:keys [classpath]}]
    (let [status (main/init! (or classpath []))]
@@ -61,7 +61,7 @@
   [iface mname desc f]
   (s/call "ldk-implement" (main/lambda-class [iface] [(str mname desc)]) desc f))
 
-(defn to-string [obj] (s/call "ldk-to-string" obj))
+(defn to-string [obj] (rethrow #(s/call "ldk-to-string" obj)))
 
 (defn save-cache!
   "Add whatever JDK code this process compiled since boot to the startup
