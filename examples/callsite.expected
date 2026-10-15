@@ -1,0 +1,9 @@
+max [7 5000000000 7.5 7 2.5]
+valueOf [42 x true 2.5 42 sb]
+toString [a [] b]
+format [a a-b-c 1+2 z]
+asList [[a, b] [c] [1, 2, 3] [1, mixed] [] [d, e, f]]
+construct [3 0 0 2]
+no fit [:lookup :lookup]
+nil [null null]
+cached sites true

@@ -50,6 +50,8 @@ So a jolt map can go straight into a JSON library and come back:
 
 `examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. `bb test` checks the outputs match, and also runs both Java programs on champaca.
 
+Choosing an overload means walking the class's methods and scoring each one, so a call remembers what it chose. The cache key is the class, the method name and the kind of each argument: a Java value's class, an integer's range (int, long or bigger), or the jolt type for the rest. A vector counts by its element kind, whatever its length. A vector mixing kinds isn't cached, and neither is a failed lookup. Once a call has been seen, `invoke` on `StringBuilder.length` takes 1.0 µs instead of 6.3 µs, which is close to the 0.85 µs of a `call` with its descriptor. `ArrayList.add` drops from 9.8 to 1.6 µs and `Math.max` from 4.4 to 1.3 µs. `examples/callsite.clj` runs one call site with arguments that need different overloads, and `CHAMPACA_CALL_CACHE=off` turns the cache off to compare.
+
 The descriptor-based functions (`call-static`, `new-object`, `call`, `implement`) are still there for exact control. A Java exception thrown out of any call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`.
 
 ## Libraries from jars
@@ -101,6 +103,7 @@ CHAMPACA_STATS=1 ...    # print classes loaded and methods compiled
 CHAMPACA_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
 CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
 CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss
+CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke-static and construct
 ```
 
 ## What's here
@@ -115,7 +118,7 @@ CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Sche
 | `resources/champaca/natives.ss` | JDK native methods (115 named, plus pattern rules for `Unsafe`) and a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
-| `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, auto-wrapping jolt fns |
+| `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, the call-site cache, auto-wrapping jolt fns |
 
 ## Shortcuts that real programs will hit
 

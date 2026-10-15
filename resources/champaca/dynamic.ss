@@ -331,50 +331,117 @@
 (define (more-specific? m1 m2)
   (for-all param-more-specific? (desc-args (caddr m1)) (desc-args (caddr m2))))
 
+;; --- call-site cache -----------------------------------------------------------------
+;; The overload choice depends on the arguments only through what `fit` looks
+;; at: a Java value's class, an integer's range, the kind of a jolt value. So
+;; (kind class name . arg-keys) names the choice, and a hit skips the candidate
+;; walk and the scoring. A vector's fit depends on its contents, so a call with
+;; one isn't cached. Failed lookups aren't cached, so they raise every time.
+;; The entry keeps the method's symbol, not its procedure: a method compiles on
+;; first call and its top-level value is replaced then.
+
+(define-record-type call-site (fields pick packed? mkey sym arg-ds ret-d))
+
+(define call-cache (make-hashtable equal-hash equal?))
+(define call-cache-on? (not (equal? (getenv "CHAMPACA_CALL_CACHE") "off")))
+(define call-cache-limit 4096)   ; cleared when full, so a polymorphic loop can't grow it unbounded
+(define (call-cache-size) (hashtable-size call-cache))
+(define (call-cache-clear!) (hashtable-clear! call-cache))
+
+(define (arg-key v)
+  (cond [(eq? v jolt-nil) 'nil]
+        [(java-value? v) (class-name-of v)]
+        [(string? v) 'string]
+        [(boolean? v) 'boolean]
+        [(char? v) 'char]
+        [(exact-int? v) (cond [(int-range? v) 'int] [(long-range? v) 'long] [else 'big])]
+        [(flonum? v) 'double]
+        [(coll-arg? v) (coll-arg-kind v)]
+        [(procedure? v) 'fn]
+        ;; a vector whose elements share one key fits like any other of that
+        ;; key, whatever its length; a mixed one isn't cached
+        [(null? v) 'empty-vector]
+        [(pair? v) (let ([k (arg-key (car v))])
+                     (and k (for-all (lambda (x) (equal? (arg-key x) k)) (cdr v)) (list 'vector k)))]
+        [else #f]))
+
+(define (args-key args)
+  (let loop ([as args] [acc '()])
+    (if (null? as)
+        (reverse acc)
+        (let ([k (arg-key (car as))]) (and k (loop (cdr as) (cons k acc)))))))
+
+;; site for kind/cname/name/args, with the arguments as the call sees them
+;; (varargs packed). sym-of: (owner mkey) -> the symbol to call, or #f.
+(define (site-for kind cname name args find sym-of)
+  (let* ([k (and call-cache-on? (args-key args))]
+         [key (and k (cons* kind cname name k))]
+         [hit (and key (hashtable-ref call-cache key #f))])
+    (if hit
+        (values hit (if (call-site-packed? hit) (pack-varargs (caddr (call-site-pick hit)) args) args))
+        (let* ([chosen (find)]
+               [pick (car chosen)] [desc (caddr pick)]
+               [mkey (string-append (cadr pick) desc)]
+               [site (make-call-site pick (not (eq? (cdr chosen) args)) mkey (sym-of (car pick) mkey)
+                                     (desc-args desc) (desc-ret desc))])
+          (when key
+            (when (fx>= (hashtable-size call-cache) call-cache-limit) (hashtable-clear! call-cache))
+            (hashtable-set! call-cache key site))
+          (values site (cdr chosen))))))
+
+(define (static-sym owner mkey) (string->symbol (string-append owner "." mkey)))
+
 ;; --- entry points --------------------------------------------------------------------
 
 (define (dyn-new cname . args)
-  (let* ([cname (slashes cname)]
-         [c (begin (with-java-errors (lambda () (jinit cname))) (find-class cname))]
-         [cands (filter (lambda (m) (and (string=? (cadr m) "<init>") (public? (cadddr m))))
-                        (map (lambda (m) (list cname (car m) (cadr m) (caddr m))) (meta-methods c)))]
-         [fixed (filter (lambda (m) (fx= (length (desc-args (caddr m))) (length args))) cands)]
-         [va (filter (lambda (m) (and (fxpositive? (fxlogand (cadddr m) #x80))
-                                      (fx<= (fx- (length (desc-args (caddr m))) 1) (length args)))) cands)]
-         [chosen (choose "new" cname "<init>" fixed va args)]
-         [pick (car chosen)] [args (cdr chosen)]
-         [desc (caddr pick)])
-    (with-java-errors
-     (lambda ()
-       (let ([o (jnew cname)])
-         (apply (method-proc cname (string-append "<init>" desc)) o (map convert-arg args (desc-args desc)))
-         o)))))
+  (let-values ([(site args)
+                (site-for 'new cname "<init>" args
+                          (lambda ()
+                            (let* ([cname (slashes cname)]
+                                   [c (begin (with-java-errors (lambda () (jinit cname))) (find-class cname))]
+                                   [cands (filter (lambda (m) (and (string=? (cadr m) "<init>") (public? (cadddr m))))
+                                                  (map (lambda (m) (list cname (car m) (cadr m) (caddr m))) (meta-methods c)))]
+                                   [fixed (filter (lambda (m) (fx= (length (desc-args (caddr m))) (length args))) cands)]
+                                   [va (filter (lambda (m) (and (fxpositive? (fxlogand (cadddr m) #x80))
+                                                                (fx<= (fx- (length (desc-args (caddr m))) 1) (length args)))) cands)])
+                              (choose "new" cname "<init>" fixed va args)))
+                          static-sym)])
+    (let ([owner (car (call-site-pick site))])
+      (with-java-errors
+       (lambda ()
+         (jinit owner)
+         (let ([o (jnew owner)])
+           (apply (top-level-value (call-site-sym site)) o (map convert-arg args (call-site-arg-ds site)))
+           o))))))
 
 (define (dyn-invoke obj name . args)
   (let* ([obj (if (string? obj) (jstring obj) obj)]
-         [cname (class-name-of (nn obj))]
-         [lookup (if (jarr? obj) "java/lang/Object" cname)]
-         [chosen (choose "invoke" lookup name (candidates lookup name (length args) #f)
-                         (varargs-candidates lookup name (length args) #f) args)]
-         [pick (car chosen)] [args (cdr chosen)]
-         [desc (caddr pick)])
-    (with-java-errors
-     (lambda ()
-       (dyn-out (desc-ret desc)
-                (apply (jvirt obj (string-append name desc)) obj (map convert-arg args (desc-args desc))))))))
+         [lookup (if (jarr? (nn obj)) "java/lang/Object" (class-name-of obj))])
+    (let-values ([(site args)
+                  (site-for 'virtual lookup name args
+                            (lambda ()
+                              (choose "invoke" lookup name (candidates lookup name (length args) #f)
+                                      (varargs-candidates lookup name (length args) #f) args))
+                            (lambda (owner mkey) #f))])
+      (with-java-errors
+       (lambda ()
+         (dyn-out (call-site-ret-d site)
+                  (apply (jvirt obj (call-site-mkey site)) obj (map convert-arg args (call-site-arg-ds site)))))))))
 
 (define (dyn-invoke-static cname name . args)
-  (let* ([cname (slashes cname)]
-         [_ (find-class cname)]
-         [chosen (choose "invoke-static" cname name (candidates cname name (length args) #t)
-                         (varargs-candidates cname name (length args) #t) args)]
-         [pick (car chosen)] [args (cdr chosen)]
-         [owner (car pick)] [desc (caddr pick)])
+  (let-values ([(site args)
+                (site-for 'static cname name args
+                          (lambda ()
+                            (let ([cname (slashes cname)])
+                              (find-class cname)
+                              (choose "invoke-static" cname name (candidates cname name (length args) #t)
+                                      (varargs-candidates cname name (length args) #t) args)))
+                          static-sym)])
     (with-java-errors
      (lambda ()
-       (jinit owner)
-       (dyn-out (desc-ret desc)
-                (apply (method-proc owner (string-append name desc)) (map convert-arg args (desc-args desc))))))))
+       (jinit (car (call-site-pick site)))
+       (dyn-out (call-site-ret-d site)
+                (apply (top-level-value (call-site-sym site)) (map convert-arg args (call-site-arg-ds site))))))))
 
 (define (dyn-get-static cname fname)
   (let* ([cname (slashes cname)] [c (find-class cname)]
