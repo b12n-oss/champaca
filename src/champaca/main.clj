@@ -1,31 +1,31 @@
-(ns openldk-jolt.main
+(ns champaca.main
   "Class loading, linking and the JIT hook, plus the command-line entry.
 
   Classes come from the user classpath first, then from the JDK's own
   java.base.jmod. Loading a class registers it with the Scheme runtime and
   defines every method as a stub; the first call to a stub calls back into
   jit!, which translates that one method and redefines the global in place.
-  Native methods are bound by name from resources/openldk_jolt/natives.ss.
+  Native methods are bound by name from resources/champaca/natives.ss.
   That mirrors OpenLDK, which also compiles each method on first call."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.scheme :as s]
-            [openldk-jolt.classfile :as cf]
-            [openldk-jolt.codegen :as cg]
+            [champaca.classfile :as cf]
+            [champaca.codegen :as cg]
             [jolt.image :as img])
   (:import [java.util.zip ZipFile]))
 
 (defonce ^:private state (atom {:classpath [] :classes {} :jitted 0}))
 
 (defn- env [k] (System/getenv k))
-(defn- trace? [] (some? (env "OPENLDK_TRACE")))
+(defn- trace? [] (some? (env "CHAMPACA_TRACE")))
 
-;; OPENLDK_PROF: exclusive (self) time per phase. A nested phase's time is
+;; CHAMPACA_PROF: exclusive (self) time per phase. A nested phase's time is
 ;; charged to it and taken out of its parent.
 (def ^:private prof-stack (volatile! []))
 
 (defn- timed [k f]
-  (if-not (env "OPENLDK_PROF")
+  (if-not (env "CHAMPACA_PROF")
     (f)
     (let [t0 (System/nanoTime)]
       (vswap! prof-stack conj 0)
@@ -42,7 +42,7 @@
   (let [p (:prof @state) ms #(/ (Math/round (/ % 1e4)) 100.0)
         accounted (reduce + (vals p))]
     (binding [*out* *err*]
-      (println (str "openldk prof (" label ", cache " (name (or (:cache @state) :off)) "): wall " (ms wall-ns) " ms"))
+      (println (str "champaca prof (" label ", cache " (name (or (:cache @state) :off)) "): wall " (ms wall-ns) " ms"))
       (doseq [[k v] (sort-by (comp - val) p)] (println (str "  " (name k) " " (ms v) " ms")))
       (println (str "  java+runtime (rest) " (ms (- wall-ns accounted)) " ms")))))
 
@@ -251,15 +251,15 @@
 (defn lambda-class
   "The synthetic class implementing ifaces for lambdas whose abstract
   method keys (\"name(desc)\", the SAM plus any bridges) are sam-keys.
-  Slot 0 holds the closure; every SAM key maps to openldk/Lambda.invoke,
+  Slot 0 holds the closure; every SAM key maps to champaca/Lambda.invoke,
   which calls it."
   [ifaces sam-keys]
-  (let [n (str "openldk/Lambda$" (str/replace (first ifaces) "/" "$") "$" (Math/abs (hash [ifaces sam-keys])))]
+  (let [n (str "champaca/Lambda$" (str/replace (first ifaces) "/" "$") "$" (Math/abs (hash [ifaces sam-keys])))]
     (when-not (get-in @state [:classes n])
       (run! ensure-loaded! ifaces)
       (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011
                   :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
-            linked (reduce #(assoc-in %1 [:vtable %2] "openldk/Lambda.invoke") (link info) sam-keys)]
+            linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
         (swap! state assoc-in [:classes n] linked)
         (let [text (registration-text linked)]
           (record! :jdk text) ; pure data, safe to cache whoever asked
@@ -290,7 +290,7 @@
 (defn- stats []
   (let [{:keys [classes jitted]} @state]
     (binding [*out* *err*]
-      (println (str "openldk: " (count classes) " classes loaded, " jitted " methods compiled")))))
+      (println (str "champaca: " (count classes) " classes loaded, " jitted " methods compiled")))))
 
 ;; --- boot cache ---------------------------------------------------------------------
 ;; Modeled on Clojure's RT.load: one compiled unit per input, used only when
@@ -302,17 +302,17 @@
 
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
-                        ["openldk_jolt/runtime.ss" "openldk_jolt/natives.ss" "openldk_jolt/reflect.ss"
-                         "openldk_jolt/codegen.clj" "openldk_jolt/main.clj"
-                         "openldk_jolt/classfile.clj"]))))
+                        ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss"
+                         "champaca/codegen.clj" "champaca/main.clj"
+                         "champaca/classfile.clj"]))))
 
 (defn- cache-dir []
-  (when-not (= "off" (env "OPENLDK_CACHE"))
+  (when-not (= "off" (env "CHAMPACA_CACHE"))
     (let [jmod (io/file (java-home) "jmods" "java.base.jmod")
           release (io/file (java-home) "release")
           key (hash [(when (.exists release) (slurp release)) (.length jmod) (.lastModified jmod)
                      (translator-fingerprint) (img/runtime-version)])]
-      (io/file (or (env "OPENLDK_CACHE_DIR") (str (env "HOME") "/.cache/openldk-jolt"))
+      (io/file (or (env "CHAMPACA_CACHE_DIR") (str (env "HOME") "/.cache/champaca"))
                (Long/toHexString (bit-and key 0xffffffff))))))
 
 (defn- strip-for-cache
@@ -378,9 +378,9 @@
   main. Uses the boot cache when it is valid and writes it when it is not.
   Returns 0 on success."
   []
-  (scheme! (slurp (io/resource "openldk_jolt/runtime.ss")))
-  (scheme! (slurp (io/resource "openldk_jolt/natives.ss")))
-  (scheme! (slurp (io/resource "openldk_jolt/reflect.ss")))
+  (scheme! (slurp (io/resource "champaca/runtime.ss")))
+  (scheme! (slurp (io/resource "champaca/natives.ss")))
+  (scheme! (slurp (io/resource "champaca/reflect.ss")))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
@@ -420,11 +420,11 @@
   [classpath cname args]
   (let [t0 (System/nanoTime)
         status (init! classpath)
-        _ (when (env "OPENLDK_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
-    (when (env "OPENLDK_STATS") (binding [*out* *err*] (print "after initPhase1: ")) (stats))
+        _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
+    (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after initPhase1: ")) (stats))
     (if (zero? status)
       (let [status (apply s/call "run-main" cname args)]
-        (when (env "OPENLDK_STATS") (stats))
+        (when (env "CHAMPACA_STATS") (stats))
         (save-generation!)
         status)
       status)))
@@ -432,6 +432,6 @@
 (defn -main [& argv]
   (let [[cp cname & args] argv]
     (when-not cname
-      (binding [*out* *err*] (println "usage: jolt -M -m openldk-jolt.main <classpath-dir[:dir...]> <MainClass> [args...]"))
+      (binding [*out* *err*] (println "usage: jolt -M -m champaca.main <classpath-dir[:dir...]> <MainClass> [args...]"))
       (System/exit 2))
     (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args)))))

@@ -1,4 +1,4 @@
-(ns openldk-jolt.codegen
+(ns champaca.codegen
   "Translate one method's bytecode into Chez Scheme source text.
 
   Shape of the output: locals are l0..lN and operand-stack slots are s0..sM,
@@ -573,8 +573,8 @@
                          (sx (label 0)))))]
       (sx "define" (method-global (:name cls) (:name method) (:desc method))
           (sx "lambda" (apply sx (map #(str "l" %) params))
-              ;; OPENLDK_BT: keep a shadow stack of Java frames for backtraces
-              (if (System/getenv "OPENLDK_BT")
+              ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+              (if (System/getenv "CHAMPACA_BT")
                 (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
                     body)
                 body))))))

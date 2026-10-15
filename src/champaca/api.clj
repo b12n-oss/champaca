@@ -1,4 +1,4 @@
-(ns openldk-jolt.api
+(ns champaca.api
   "Call Java from jolt, in-process. Same surface as jolt-openldk's
   net.b12n.jolt.openldk (init!, call-static, new-object, call, implement),
   but with no SBCL and no wire protocol: Java objects live in jolt's own
@@ -8,7 +8,7 @@
   its JVM descriptor, as in jolt-openldk."
   (:require [clojure.java.io :as io]
             [jolt.scheme :as s]
-            [openldk-jolt.main :as main]))
+            [champaca.main :as main]))
 
 (defonce ^:private interop-loaded (atom false))
 (defonce ^:private dynamic-loaded (atom false))
@@ -23,10 +23,10 @@
            (throw (ex-info (s/call "ldk-exception-message" e)
                            {:java/exception (s/call "ldk-exception-object" e)}))
            (and @dynamic-loaded (s/call "ldk-api-error?" e))
-           (throw (ex-info (s/call "ldk-api-error-message" e) {:openldk/error :lookup}))
+           (throw (ex-info (s/call "ldk-api-error-message" e) {:champaca/error :lookup}))
            ;; the runtime's own records; jolt wraps real Chez errors itself
            (s/call "ldk-missing-native?" e)
-           (throw (ex-info (s/call "ldk-condition-message" e) {:openldk/error :missing-native}))
+           (throw (ex-info (s/call "ldk-condition-message" e) {:champaca/error :missing-native}))
            :else (throw e)))))
 
 (defn init!
@@ -36,10 +36,10 @@
    (let [status (main/init! (or classpath []))]
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
-     (s/eval-string (slurp (io/resource "openldk_jolt/interop.ss")))
+     (s/eval-string (slurp (io/resource "champaca/interop.ss")))
      (reset! interop-loaded true))
    (when-not @dynamic-loaded
-     (s/eval-string (slurp (io/resource "openldk_jolt/dynamic.ss")))
+     (s/eval-string (slurp (io/resource "champaca/dynamic.ss")))
      (s/call "set-lambda-class-hook!" (fn [iface sam-key] (main/lambda-class [iface] [sam-key])))
      (reset! dynamic-loaded true))
    :ok))
@@ -78,7 +78,7 @@
 
 ;; --- descriptor-free calls ---------------------------------------------------------
 ;; Class names may use dots or slashes. The overload is chosen from the
-;; runtime types of the arguments (see resources/openldk_jolt/dynamic.ss),
+;; runtime types of the arguments (see resources/champaca/dynamic.ss),
 ;; a jolt fn passed for a single-method interface is wrapped as one, and
 ;; boxed results come back as jolt numbers, booleans and chars.
 

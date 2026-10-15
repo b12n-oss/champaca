@@ -1,4 +1,4 @@
-(ns openldk-jolt.classfile
+(ns champaca.classfile
   "Parse a JVM .class file into plain data. Spike scope: the constant pool,
   fields, methods, the Code attribute and BootstrapMethods. Everything else
   is skipped by length."

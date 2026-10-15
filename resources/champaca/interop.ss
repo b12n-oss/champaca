@@ -75,7 +75,7 @@
 ;; any other condition reaching jolt (a missing native, a runtime bug) gets
 ;; a readable message instead of crossing as an opaque object
 (define (ldk-condition-message e)
-  (cond [(missing-native? e) (string-append "openldk: missing native " (missing-native-name e))]
+  (cond [(missing-native? e) (string-append "champaca: missing native " (missing-native-name e))]
         [(condition? e) (call-with-string-output-port (lambda (p) (display-condition e p)))]
         [else (format "~s" e)]))
 (define (ldk-missing-native? e) (missing-native? e))

@@ -1,4 +1,4 @@
-;; openldk-jolt runtime: the Chez Scheme half. Generated method bodies call
+;; champaca runtime: the Chez Scheme half. Generated method bodies call
 ;; into these. Java values map to Scheme as:
 ;;   int/short/byte/char/boolean  fixnum (booleans are 0/1, as in bytecode)
 ;;   long                         exact integer, wrapped to 64 bits
@@ -101,11 +101,11 @@
 (define (find-class name)
   (or (hashtable-ref classes name #f)
       (cond
-        [(fx= 0 (string-length name)) (error 'openldk "empty class name")]
+        [(fx= 0 (string-length name)) (error 'champaca "empty class name")]
         [(char=? (string-ref name 0) #\[) (pseudo-class! name 'array)]
         [(prim-name? name) (pseudo-class! name 'prim)]
         [else (load-hook name)
-              (or (hashtable-ref classes name #f) (error 'openldk "class not registered" name))])))
+              (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
 (define (method-proc cname key)
   (top-level-value (string->symbol (string-append cname "." key))))
@@ -127,12 +127,12 @@
   (let loop ([c (find-class cname)])
     (or (hashtable-ref (jclass-fields c) (string-append (jclass-name c) "." fname) #f)
         (and (jclass-super c) (loop (find-class (jclass-super c))))
-        (error 'openldk "no such field" cname fname))))
+        (error 'champaca "no such field" cname fname))))
 
 (define (class-name-of x)
   (cond [(jobj? x) (jclass-name (jobj-cls x))]
         [(jarr? x) (string-append "[" (jarr-elem x))]
-        [else (error 'openldk "not a Java value" x)]))
+        [else (error 'champaca "not a Java value" x)]))
 
 (define (class-of x) (find-class (class-name-of x)))
 
@@ -364,7 +364,7 @@
                      (hashtable-keys mirror->class))))
 
 (define (jmirror-of name) (jmirror (find-class name)))
-(define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'openldk "not a mirror" m)))
+(define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'champaca "not a mirror" m)))
 
 ;; --- identity hash ------------------------------------------------------------
 
@@ -408,11 +408,11 @@
                                       (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
        (print-jstack e err)]
       [(missing-native? e)
-       (put-string err (string-append "openldk: missing native " (missing-native-name e) "\n"))
+       (put-string err (string-append "champaca: missing native " (missing-native-name e) "\n"))
        (eq-hashtable-set! throw-stacks e (missing-native-stack e))
        (print-jstack e err)]
       [else
-       (put-string err "openldk: Scheme error: ")
+       (put-string err "champaca: Scheme error: ")
        (display-condition e err)
        (newline err)])))
 
@@ -432,7 +432,7 @@
      ((method-proc cname "main([Ljava/lang/String;)V")
       (scheme-list->jarray "Ljava/lang/String;" (map jstring args))))))
 
-;; --- backtraces (OPENLDK_BT) ------------------------------------------------------
+;; --- backtraces (CHAMPACA_BT) ------------------------------------------------------
 (define jstack '())
 (define throw-stacks (make-weak-eq-hashtable))
 (define (print-jstack e port)
@@ -447,7 +447,7 @@
 
 (define (jlambda cname proc)
   (let ([o (jnew cname)]) (vector-set! (jobj-slots o) 0 proc) o))
-(define |openldk/Lambda.invoke| (lambda (this . args) (apply (vector-ref (jobj-slots this) 0) args)))
+(define |champaca/Lambda.invoke| (lambda (this . args) (apply (vector-ref (jobj-slots this) 0) args)))
 
 (define box-classes
   '(("Z" "java/lang/Boolean" "booleanValue()Z") ("B" "java/lang/Byte" "byteValue()B")
@@ -505,7 +505,7 @@
                                    (eqv? a b))))
                            fields))
              1 0))]
-      [else (error 'openldk "record op" op)])))
+      [else (error 'champaca "record op" op)])))
 
 ;; Registration text is one-shot data plumbing (define a class, its statics,
 ;; a stub per method). Chez's interpreter runs it far cheaper than compile.

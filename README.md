@@ -1,4 +1,6 @@
-# openldk-jolt
+# champaca
+
+Champaca (จำปา) is a Thai flowering tree, known for its fragrance. This project grows Java libraries inside [jolt](https://github.com/jolt-lang/jolt).
 
 > [!WARNING]
 > **Spike.** This checks whether [OpenLDK](https://github.com/atgreen/openldk) can be rebuilt in [jolt](https://github.com/jolt-lang/jolt). It runs real JDK code, but only along the paths the tests exercise.
@@ -12,7 +14,7 @@ The classes are the JDK's own. They're read straight out of `$JAVA_HOME/jmods/ja
 Java objects live in jolt's own heap as Chez records, so calling into Java is a plain procedure call. There's no second runtime and no wire protocol. Methods are found by name, and the overload is chosen from the argument values, the way `javac` picks one at a call site:
 
 ```clojure
-(require '[openldk-jolt.api :as ldk])
+(require '[champaca.api :as ldk])
 
 (ldk/init!)
 
@@ -36,7 +38,7 @@ Java objects live in jolt's own heap as Chez records, so calling into Java is a 
 - **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays stay Java arrays, and `->clj` copies one into a vector.
 - **Not handled:** jolt maps, sets and seqs aren't converted to `java.util` collections.
 
-`examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. `bb test` checks the outputs match, and also runs both Java programs on openldk-jolt.
+`examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. `bb test` checks the outputs match, and also runs both Java programs on champaca.
 
 The descriptor-based functions (`call-static`, `new-object`, `call`, `implement`) are still there for exact control. A Java exception thrown out of any call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`.
 
@@ -44,11 +46,11 @@ The descriptor-based functions (`call-static`, `new-object`, `call`, `implement`
 
 JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with method handles or with two VM natives, `invoke0` and `newInstance0`. It falls back to the natives while `java.lang.invoke` isn't initialized (it never is here) or when `jdk.reflect.useNativeAccessorOnly=true` (set here too). So the runtime supplies those natives, plus `Class.getDeclaredMethods0`, `getDeclaredFields0`, `getDeclaredConstructors0` and the rest, and builds real `java.lang.reflect` objects through their own constructors. Field access has no native path in JDK 25, so `Field.get`/`set` and the typed variants are overridden.
 
-`Reflection.getCallerClass` walks the Chez continuation. A translated method is a top-level `define` named `Class.name(desc)`, and its blocks and trampoline loop carry that name too, so each frame says which Java method it belongs to. Nothing is recorded on ordinary calls. Under `OPENLDK_BT` the shadow stack answers instead, because its wrapper hides frame names.
+`Reflection.getCallerClass` walks the Chez continuation. A translated method is a top-level `define` named `Class.name(desc)`, and its blocks and trampoline loop carry that name too, so each frame says which Java method it belongs to. Nothing is recorded on ordinary calls. Under `CHAMPACA_BT` the shadow stack answers instead, because its wrapper hides frame names.
 
 ## Startup cache
 
-The first run builds a cache under `~/.cache/openldk-jolt/<key>/` and later runs load it. Booting the JDK compiles about 340 methods. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation. Measured on macOS arm64:
+The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles about 340 methods. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation. Measured on macOS arm64:
 
 | Program | No cache | Warm cache |
 |---|---|---|
@@ -56,7 +58,7 @@ The first run builds a cache under `~/.cache/openldk-jolt/<key>/` and later runs
 | Streams | 1.45–1.61 s | 0.35 s |
 | `examples/interop.clj` | 1.08 s | 0.31 s |
 
-The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, and jolt's runtime version, so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `OPENLDK_CACHE=off` disables it and `OPENLDK_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
+The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, and jolt's runtime version, so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
 Old cache directories aren't cleaned up, and generations aren't merged, so each extra file adds a little load time.
 
@@ -66,27 +68,27 @@ You need jolt (0.8.21 or later) and JDK 25 with `JAVA_HOME` set. The first run c
 
 ```sh
 bb test                                               # every test/java program vs the JVM, plus examples/interop.clj
-jolt -M -m openldk-jolt.main target/classes Streams   # after bb test has compiled the classes
-OPENLDK_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
-OPENLDK_STATS=1 ...    # print classes loaded and methods compiled
-OPENLDK_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
-OPENLDK_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
-OPENLDK_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss
+jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
+CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
+CHAMPACA_STATS=1 ...    # print classes loaded and methods compiled
+CHAMPACA_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
+CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
+CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss
 ```
 
 ## What's here
 
 | File | Job |
 |---|---|
-| `src/openldk_jolt/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
-| `src/openldk_jolt/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
-| `src/openldk_jolt/main.clj` | loads classes from the classpath or the jmod, lays out fields, builds vtables (interface defaults included), boots the JDK |
-| `src/openldk_jolt/api.clj` | the jolt-facing API |
-| `resources/openldk_jolt/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
-| `resources/openldk_jolt/natives.ss` | JDK native methods (83 named, plus pattern rules for `Unsafe`) |
-| `resources/openldk_jolt/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
-| `resources/openldk_jolt/interop.ss` | the conversions and entry points behind `api.clj` |
-| `resources/openldk_jolt/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, auto-wrapping jolt fns |
+| `src/champaca/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
+| `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
+| `src/champaca/main.clj` | loads classes from the classpath or the jmod, lays out fields, builds vtables (interface defaults included), boots the JDK |
+| `src/champaca/api.clj` | the jolt-facing API |
+| `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
+| `resources/champaca/natives.ss` | JDK native methods (83 named, plus pattern rules for `Unsafe`) |
+| `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
+| `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
+| `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, auto-wrapping jolt fns |
 
 ## Shortcuts that real programs will hit
 

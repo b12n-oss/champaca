@@ -2,7 +2,7 @@
 ;; into the varargs array; a jolt vector passed for an array parameter
 ;; becomes a Java array of the parameter's element type.
 ;;   jolt -M examples/varargs.clj
-(require '[openldk-jolt.api :as ldk])
+(require '[champaca.api :as ldk])
 
 (ldk/init!)
 

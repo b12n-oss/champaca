@@ -1,7 +1,7 @@
 ;; Calling Java from jolt without JVM descriptors. Overloads are chosen from
 ;; the argument values, the way javac chooses at a call site.
 ;;   jolt -M examples/dynamic.clj
-(require '[openldk-jolt.api :as ldk])
+(require '[champaca.api :as ldk])
 
 (ldk/init!)
 

@@ -1,6 +1,6 @@
-;; Calling Java from jolt through openldk-jolt. Run from the repo root:
+;; Calling Java from jolt through champaca. Run from the repo root:
 ;;   jolt -M examples/interop.clj
-(require '[openldk-jolt.api :as ldk])
+(require '[champaca.api :as ldk])
 
 (ldk/init!)
 

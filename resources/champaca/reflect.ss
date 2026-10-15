@@ -131,7 +131,7 @@
                                               (string=? p (substring cls 0 (string-length p)))))))
 
 ;; Java frames, innermost first, one entry per method activation. Under
-;; OPENLDK_BT the shadow stack (jstack) is exact, and its fluid-let wrapper
+;; CHAMPACA_BT the shadow stack (jstack) is exact, and its fluid-let wrapper
 ;; hides frame names from the continuation walk, so it wins when present.
 (define (java-frames)
   (if (pair? jstack)
@@ -146,7 +146,7 @@
 
 ;; The JVM answers the caller of the method that called getCallerClass,
 ;; skipping reflection's own frames.
-(define caller-debug? (getenv "OPENLDK_CALLER_DEBUG"))
+(define caller-debug? (getenv "CHAMPACA_CALLER_DEBUG"))
 (defnative "jdk/internal/reflect/Reflection.getCallerClass()Ljava/lang/Class;" ()
   (let ([fs (java-frames)])
     (when caller-debug?
