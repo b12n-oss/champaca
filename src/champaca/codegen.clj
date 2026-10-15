@@ -211,6 +211,17 @@
 
 (def ^:private newarray-elem {4 "Z" 5 "C" 6 "F" 7 "D" 8 "B" 9 "S" 10 "I" 11 "J"})
 
+;; VarHandle's signature-polymorphic access methods (the native ones in
+;; java.lang.invoke.VarHandle); a call site's descriptor is not a real method
+(def ^:private varhandle-modes
+  #{"get" "set" "getVolatile" "setVolatile" "getOpaque" "setOpaque" "getAcquire" "setRelease"
+    "compareAndSet" "compareAndExchange" "compareAndExchangeAcquire" "compareAndExchangeRelease"
+    "weakCompareAndSetPlain" "weakCompareAndSet" "weakCompareAndSetAcquire" "weakCompareAndSetRelease"
+    "getAndSet" "getAndSetAcquire" "getAndSetRelease" "getAndAdd" "getAndAddAcquire" "getAndAddRelease"
+    "getAndBitwiseOr" "getAndBitwiseOrAcquire" "getAndBitwiseOrRelease"
+    "getAndBitwiseAnd" "getAndBitwiseAndAcquire" "getAndBitwiseAndRelease"
+    "getAndBitwiseXor" "getAndBitwiseXorAcquire" "getAndBitwiseXorRelease"})
+
 ;; --- lambdas -----------------------------------------------------------------------
 ;; LambdaMetafactory call sites are not run through the JDK's bootstrap (that
 ;; needs MethodHandles and runtime class generation). The translator emits a
@@ -444,8 +455,11 @@
                 recv (when-not (= op :invokestatic) (pop!))
                 call (case op
                        (:invokevirtual :invokeinterface)
-                       (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
-                           (apply sx (sx "jvirt" recv (str-lit (str name desc))) recv argv))
+                       (if (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
+                         ;; signature-polymorphic: the runtime decodes the call site
+                         (apply sx "vh-call" recv (str-lit name) argv)
+                         (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
+                             (apply sx (sx "jvirt" recv (str-lit (str name desc))) recv argv)))
                        :invokespecial
                        (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) recv argv)
                        :invokestatic

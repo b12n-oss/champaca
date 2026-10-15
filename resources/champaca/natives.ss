@@ -594,3 +594,121 @@
 (defnative "java/util/zip/CRC32.update(II)I" (crc b)
   (i32 (fxlogxor (crc32-byte (fxlogxor (fxlogand crc #xffffffff) #xffffffff) (fxlogand b #xff)) #xffffffff)))
 (defnative "java/util/zip/CRC32.updateBytes0(I[BII)I" (crc bytes off len) (crc32-bytes crc bytes off len))
+
+;; --- VarHandles -------------------------------------------------------------------
+;; A VarHandle is a bare java/lang/invoke/VarHandle object (allocated, never
+;; constructed, so instanceof and checkcast work) mapped to what it points
+;; at. Codegen sends every signature-polymorphic call on VarHandle to vh-call
+;; with the access mode's name, so one procedure serves get, set,
+;; compareAndSet, getAndAdd and the rest. Memory-ordering suffixes (Volatile,
+;; Acquire, Release, Opaque, Plain) don't matter on one thread.
+;;
+;; kind   coordinates      a                      b
+;; field  (obj)            slot index             -
+;; static ()               the static's symbol    class to initialize
+;; array  (array index)    -                      -
+;; view   (byte[] index)   width in bytes         big-endian?
+
+(define-record-type vh-target (fields kind a b type))
+(define vh-targets (make-weak-eq-hashtable))
+
+(define (make-vh kind a b type)
+  (let ([vh (jnew "java/lang/invoke/VarHandle")])
+    (eq-hashtable-set! vh-targets vh (make-vh-target kind a b type))
+    vh))
+
+(define (view-decode t u)
+  (case t [("S") (i2s u)] [("I") (i32 u)] [("J") (i64 u)]
+          [("F") (bits->float (i32 u))] [("D") (bits->double (i64 u))] [else u]))
+(define (view-encode t v)
+  (case t [("F") (float->bits v)] [("D") (double->bits v)] [else v]))
+
+;; getter and setter over one access's coordinates
+(define (vh-access t coords)
+  (case (vh-target-kind t)
+    [(field)
+     (let ([o (nn (car coords))] [i (vh-target-a t)])
+       (values (lambda () (vector-ref (jobj-slots o) i))
+               (lambda (v) (vector-set! (jobj-slots o) i v))))]
+    [(static)
+     (let ([sym (vh-target-a t)])
+       (jinit (vh-target-b t))
+       (values (lambda () (top-level-value sym)) (lambda (v) (set-top-level-value! sym v))))]
+    [(array)
+     (let ([a (car coords)] [i (cadr coords)])
+       (values (lambda () (jaload a i)) (lambda (v) (jastore a i v))))]
+    [(view)
+     (let ([a (car coords)] [i (cadr coords)] [n (vh-target-a t)] [big? (vh-target-b t)] [ty (vh-target-type t)])
+       (values (lambda () (view-decode ty (bytes-get a i n big?)))
+               (lambda (v) (bytes-set! a i n big? (view-encode ty v)))))]))
+
+(define (wrap-as t v)
+  (case t [("I") (i32 v)] [("J") (i64 v)] [("S") (i2s v)] [("B") (i2b v)] [("C") (logand v #xffff)] [else v]))
+
+(define (vh-call vh mode . args)
+  (let* ([t (or (eq-hashtable-ref vh-targets (nn vh) #f)
+                (jthrow "java/lang/UnsupportedOperationException" (string-append "VarHandle." mode)))]
+         [ty (vh-target-type t)]
+         [n (case (vh-target-kind t) [(field) 1] [(static) 0] [else 2])]
+         [vals (list-tail args n)]
+         [has? (lambda (p) (starts? mode p))])
+    (let-values ([(get set) (vh-access t (list-head args n))])
+      (define (update f) (let ([old (get)]) (set (wrap-as ty (f old))) old))
+      (cond
+        [(or (has? "compareAndSet") (has? "weakCompareAndSet"))
+         (if (eqv? (get) (car vals)) (begin (set (cadr vals)) 1) 0)]
+        [(has? "compareAndExchange")
+         (let ([old (get)]) (when (eqv? old (car vals)) (set (cadr vals))) old)]
+        [(has? "getAndSet") (let ([old (get)]) (set (car vals)) old)]
+        [(has? "getAndAdd") (update (lambda (old) (+ old (car vals))))]
+        [(has? "getAndBitwiseOr") (update (lambda (old) (logior old (car vals))))]
+        [(has? "getAndBitwiseAnd") (update (lambda (old) (logand old (car vals))))]
+        [(has? "getAndBitwiseXor") (update (lambda (old) (logxor old (car vals))))]
+        [(has? "get") (get)]
+        [(has? "set") (set (car vals))]
+        [else (jthrow "java/lang/UnsupportedOperationException" (string-append "VarHandle." mode))]))))
+
+;; the field named fname in class c or a superclass: (declaring-class . meta)
+(define (find-field c fname static?)
+  (let loop ([c c])
+    (and c
+         (let ([m (find (lambda (f) (and (string=? (car f) fname)
+                                         (eq? static? (static-flag? (caddr f)))))
+                        (cadr (jclass-meta c)))])
+           (if m (cons c m) (and (jclass-super c) (loop (find-class (jclass-super c)))))))))
+
+(define (field-vh recv name type static?)
+  (let* ([c (mirror-class (nn recv))] [fname (jstring->scheme (nn name))]
+         [hit (find-field c fname static?)])
+    (unless hit
+      ;; the JDK's MemberName text: "no such field: pkg.Cls.name/type/getField"
+      (let ([dots (lambda (n) (list->string (map (lambda (ch) (if (char=? ch #\/) #\. ch)) (string->list n))))])
+        (jthrow "java/lang/NoSuchFieldException"
+                (string-append "no such field: " (dots (jclass-name c)) "." fname "/"
+                               (dots (jclass-name (mirror-class (nn type))))
+                               (if static? "/getStatic" "/getField")))))
+    (let ([dc (car hit)] [desc (cadr (cdr hit))])
+      (if static?
+          (make-vh 'static (string->symbol (string-append (jclass-name dc) ":" fname)) (jclass-name dc) desc)
+          (make-vh 'field (jfield-index (jclass-name dc) fname) #f desc)))))
+
+(define-override! "java/lang/invoke/MethodHandles$Lookup.findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
+  (lambda (this recv name type) (field-vh recv name type #f)))
+(define-override! "java/lang/invoke/MethodHandles$Lookup.findStaticVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
+  (lambda (this recv name type) (field-vh recv name type #t)))
+
+(define (array-class-elem cls)
+  (let ([n (jclass-name (mirror-class (nn cls)))])
+    (unless (char=? (string-ref n 0) #\[)
+      (jthrow "java/lang/IllegalArgumentException" (string-append "not an array class: " n)))
+    (substring n 1 (string-length n))))
+
+(define-override! "java/lang/invoke/MethodHandles.arrayElementVarHandle(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
+  (lambda (cls) (make-vh 'array #f #f (array-class-elem cls))))
+(define-override! "java/lang/invoke/MethodHandles.byteArrayViewVarHandle(Ljava/lang/Class;Ljava/nio/ByteOrder;)Ljava/lang/invoke/VarHandle;"
+  (lambda (cls order)
+    (let ([e (array-class-elem cls)]
+          [big? (string=? "BIG_ENDIAN" (jstring->scheme (jslot (nn order) (jfield-index "java/nio/ByteOrder" "name"))))])
+      (unless (member e '("S" "C" "I" "J" "F" "D"))
+        (jthrow "java/lang/UnsupportedOperationException" (string-append "not a view type: " e)))
+      (make-vh 'view (type-size e) big? e))))
