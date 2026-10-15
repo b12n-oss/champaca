@@ -128,7 +128,6 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 - **VarHandles, not MethodHandles.** `findVarHandle`, `findStaticVarHandle`, `arrayElementVarHandle` and `byteArrayViewVarHandle` return handles that every access mode works on (`test/java/VarHandleCheck.java`), so `java.util.concurrent.atomic` and `ConcurrentHashMap` run. Memory-ordering modes all act the same, since there's one thread. The coordinate combinators (`insertCoordinates` and friends), `byteBufferViewVarHandle` and `MethodHandle.invoke` don't exist.
 - **No native libraries.** A JDK library load (`zip`, `net`) is a no-op, since its natives are Scheme code here. A Java library's own JNI code can't load.
 - **`sun.misc.Unsafe` doesn't warn.** `sun.misc.unsafe.memory.access` is `allow`, because the default `warn` finds its caller with `StackWalker`, which has no natives yet.
-- `float`/`double` to string uses Scheme formatting, not `Double.toString`.
 
 ## The name
 

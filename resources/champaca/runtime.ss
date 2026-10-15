@@ -53,9 +53,14 @@
                       [else (exact (fltruncate x))]))
 (define (d2l x) (cond [(nan? x) 0] [(fl>= x 9223372036854775807.0) 9223372036854775807]
                       [(fl<= x -9223372036854775808.0) -9223372036854775808] [else (exact (fltruncate x))]))
+;; String concatenation and record toString format a double or float with the
+;; JDK's own Double.toString / Float.toString ("1.0E10", and 0.1f is "0.1").
 (define (jdouble->string x)
-  ;; spike: Scheme formatting, not Double.toString's shortest-repr rules
-  (cond [(nan? x) "NaN"] [(infinite? x) (if (fl> x 0.0) "Infinity" "-Infinity")] [else (number->string x)]))
+  (jinit "java/lang/Double")
+  (jstring->scheme ((method-proc "java/lang/Double" "toString(D)Ljava/lang/String;") x)))
+(define (jfloat->string x)
+  (jinit "java/lang/Float")
+  (jstring->scheme ((method-proc "java/lang/Float" "toString(F)Ljava/lang/String;") x)))
 
 ;; --- object model ------------------------------------------------------------
 
@@ -481,7 +486,7 @@
 (define (field-string v d)
   (case (string-ref d 0)
     [(#\Z) (jbool->string v)] [(#\C) (string (integer->char v))]
-    [(#\F #\D) (jdouble->string v)] [(#\L #\[) (jstring-of v)] [else (number->string v)]))
+    [(#\F) (jfloat->string v)] [(#\D) (jdouble->string v)] [(#\L #\[) (jstring-of v)] [else (number->string v)]))
 (define (field-hash v d)
   (case (string-ref d 0)
     [(#\L #\[) (if v ((jvirt v "hashCode()I") v) 0)]
