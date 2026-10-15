@@ -19,6 +19,9 @@
   (try (f)
        (catch :default e
          (cond
+           ;; System.exit from Java ends the process, as on a JVM
+           (s/call "java-halt?" e)
+           (System/exit (s/call "java-halt-status" e))
            (s/call "ldk-java-exception?" e)
            (throw (ex-info (s/call "ldk-exception-message" e)
                            {:java/exception (s/call "ldk-exception-object" e)}))

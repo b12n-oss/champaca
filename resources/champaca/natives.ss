@@ -29,6 +29,8 @@
 ;; --- java.lang.System ------------------------------------------------------------
 
 (define (now-nanos) (let ([t (current-time 'time-utc)]) (+ (* (time-second t) 1000000000) (time-nanosecond t))))
+(defnative "java/lang/Shutdown.beforeHalt()V" () (void))
+(defnative "java/lang/Shutdown.halt0(I)V" (status) (raise (make-java-halt status)))
 (defnative "java/lang/System.currentTimeMillis()J" () (quotient (now-nanos) 1000000))
 (defnative "java/lang/System.nanoTime()J" ()
   (let ([t (current-time 'time-monotonic)]) (+ (* (time-second t) 1000000000) (time-nanosecond t))))

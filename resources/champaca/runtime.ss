@@ -417,11 +417,19 @@
 
 ;; Run thunk; report an escaping Java exception or Scheme error and return 1,
 ;; otherwise return 0.
+;; System.exit ends in Shutdown.halt0, which raises this so the status
+;; reaches whoever started the Java code: run-main returns it, and api.clj
+;; exits the process with it, as a JVM would.
+(define-record-type java-halt (fields status))
+
 (define (run-guarded thunk)
   (call/cc
    (lambda (k)
      (with-exception-handler
-      (lambda (e) (report-uncaught e) (k 1))
+      (lambda (e)
+        (if (java-halt? e)
+            (begin (flush-output-port (current-output-port)) (k (java-halt-status e)))
+            (begin (report-uncaught e) (k 1))))
       (lambda () (thunk) (flush-output-port (current-output-port)) 0)))))
 
 (define (run-main cname . args)
