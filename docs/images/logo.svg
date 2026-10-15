@@ -3,7 +3,7 @@
   <!-- A champaca seen from the side, drawn after plate 191 of Blanco's Flora
        de Filipinas: narrow saffron tepals that spread loosely from a green
        cup and curl outward at the tips, the outer ones hanging low, on a
-       short stem with two leaves. -->
+       short stem. -->
   <defs>
     <!-- one strap-shaped tepal pointing up from its base at 0,0; the tip
          curls right, and scale(-1 1) makes it curl left -->
@@ -19,18 +19,10 @@
       <stop offset="0.55" stop-color="#FFB838"/>
       <stop offset="1" stop-color="#F38A18"/>
     </linearGradient>
-    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#8DB45A"/>
-      <stop offset="1" stop-color="#4F7F35"/>
-    </linearGradient>
   </defs>
 
-  <!-- stem and leaves -->
+  <!-- stem -->
   <path d="M63 80 C62 95 59 110 54 124" fill="none" stroke="#8C7A55" stroke-width="3.2" stroke-linecap="round"/>
-  <path d="M60.5 108 C70 102 84 103 95 111 C84 117 70 116 60.5 108 Z" fill="url(#leaf)" stroke="#3F6A2A" stroke-width="0.9" stroke-linejoin="round"/>
-  <path d="M61.5 108 C72 107 82 108 93 111" fill="none" stroke="#3F6A2A" stroke-width="0.7" stroke-linecap="round" opacity="0.7"/>
-  <path d="M58.6 115 C50 108 38 108 28 113 C38 120 50 121 58.6 115 Z" fill="url(#leaf)" stroke="#3F6A2A" stroke-width="0.9" stroke-linejoin="round"/>
-  <path d="M57.6 115 C48 113 39 113 30 113" fill="none" stroke="#3F6A2A" stroke-width="0.7" stroke-linecap="round" opacity="0.7"/>
 
   <!-- the bloom, enlarged about its base so it fills the frame -->
   <g transform="translate(63 74) scale(1.28) translate(-63 -88)">
