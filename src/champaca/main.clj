@@ -449,6 +449,23 @@
   (.delete (io/file src))
   (img/dump! (str img) (strip-for-cache (:classes @state))))
 
+(defn- delete-tree! [f] (doseq [x (reverse (file-seq f))] (.delete x)))
+
+;; A key directory is left behind whenever its key changes (a translator edit,
+;; a JDK update), so writing a new one removes siblings no run has loaded for a
+;; week: a hit touches its directory. Other live keys (CHAMPACA_BT, a second
+;; JDK) stay as long as something uses them. jmods/ and jolt/ never match.
+(def ^:private stale-ms (* 7 24 60 60 1000))
+
+(defn- prune-cache-root! [keep]
+  (let [cutoff (- (System/currentTimeMillis) stale-ms)]
+    (doseq [d (.listFiles (.getParentFile keep))
+            :when (and (.isDirectory d)
+                       (re-matches #"[0-9a-f]{1,8}(\.tmp-\d+)?" (.getName d))
+                       (not= (.getName d) (.getName keep))
+                       (< (.lastModified d) cutoff))]
+      (delete-tree! d))))
+
 (defn- write-cache!
   "Compile the recorded boot forms to boot.so and save the class table to
   state.img, in a temp dir renamed into place so readers never see half."
@@ -456,9 +473,10 @@
   (let [tmp (io/file (str dir ".tmp-" (System/nanoTime)))]
     (.mkdirs tmp)
     (compile-and-dump! forms (io/file tmp "boot.ss") (io/file tmp "boot.so") (io/file tmp "state.img"))
-    (when-not (.renameTo tmp dir)
+    (if (.renameTo tmp dir)
+      (prune-cache-root! dir)
       ;; another run won the race; ours is redundant
-      (doseq [f (reverse (file-seq tmp))] (.delete f)))))
+      (delete-tree! tmp))))
 
 (defn- extras [dir]
   (sort-by #(.getName %) (filter #(re-matches #"extra-\d+\.so" (.getName %)) (.listFiles dir))))
@@ -468,6 +486,7 @@
   [dir]
   (let [so (io/file dir "boot.so") img-file (io/file dir "state.img")]
     (when (and dir (.exists so) (.exists img-file))
+      (.setLastModified dir (System/currentTimeMillis))   ; keeps it from being pruned
       (let [classes (timed :cache-read-state #(img/read-image (str img-file)))]
         (swap! state assoc :classes classes)
         (timed :cache-load-code #(do (s/call "load" (str so))

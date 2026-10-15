@@ -527,9 +527,15 @@
       (let ([x (read p)])
         (if (eof-object? x) r (loop (interpret x)))))))
 
-;; compile-file announces itself on stdout, which belongs to the Java program
+;; compile-file announces itself on stdout, which belongs to the Java program.
+;; The cache's code carries no inspector information (free-variable names,
+;; source): it nearly doubled boot.so (12.1 MB -> 6.8 MB without) and the time
+;; to load it. Procedure names stay, and getCallerClass reads those. (Turning
+;; it off for run-time JIT compiles saved nothing measurable.)
 (define (quiet-compile-file in out)
-  (parameterize ([current-output-port (open-output-string)]) (compile-file in out)))
+  (parameterize ([current-output-port (open-output-string)]
+                 [generate-inspector-information #f])
+    (compile-file in out)))
 
 ;; One compiled procedure makes every method stub, so registration text (and
 ;; the boot cache built from it) carries a call per method, not a lambda.

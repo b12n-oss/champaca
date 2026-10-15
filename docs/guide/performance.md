@@ -6,15 +6,15 @@ All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`
 
 ## The startup cache
 
-Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` and the class table as a jolt image, `state.img`. Later runs load both and skip all of that.
+Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (6.8 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
 
 | Program | Cache off | Warm cache |
 |---|---|---|
-| `Hello` | 1.21 s | 0.42 s |
-| `Streams` | 1.75 s | 0.51 s |
-| `examples/interop.clj` | 1.33 s | 0.47 s |
+| `Hello` | 1.24 s | 0.40 s |
+| `Streams` | 1.81 s | 0.46 s |
+| `examples/interop.clj` | 1.38 s | 0.43 to 0.52 s |
 
-Each is three runs, which agreed to within 0.02 s, and the warm column uses a cache with no extra generations (see Upkeep).
+Each is three runs, and the warm column uses a cache that only that program has filled (see Upkeep).
 
 ### What's in it, and what isn't
 
@@ -35,7 +35,9 @@ CHAMPACA_CACHE_DIR=/tmp/ldk jolt -M -m champaca.main classes Main  # keep it som
 
 ### Upkeep
 
-Nothing cleans up after it yet. Old directories from earlier keys stay on disk, and generations are never merged. Each `extra-<n>.so` adds to load time, and it adds up faster than you'd guess: one `bb test` from an empty cache leaves 14 generations, and after it a warm `Hello` takes 0.77 to 0.79 s instead of 0.42 s. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jmods/` and `jolt/` beside them unless you mean it: they hold the module index with its copied zips, and the pinned jolt build.
+Every generation loads on every run, whether the program needs that code or not, and the cost follows the amount of code rather than the number of files: merging 14 generations into one file changed nothing measurable. One `bb test` from an empty cache leaves 14 generations (15 MB), and after it a warm `Hello` takes 0.60 s instead of 0.40 s. Loading a generation only when a class in it is first needed would fix that, and doesn't exist yet.
+
+Old key directories are cleaned up when a new cache is written: any sibling directory no run has loaded for 7 days goes, along with leftovers from an interrupted write. A cache hit marks its directory as used, so another key still in use, such as the `CHAMPACA_BT` one, stays as long as something runs with it every week. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jmods/` and `jolt/` beside them unless you mean it: they hold the module index with its copied zips, and the pinned jolt build.
 
 ## The call-site cache
 
