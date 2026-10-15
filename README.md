@@ -9,6 +9,8 @@ OpenLDK is Anthony Green's Java runtime written in Common Lisp. It translates JV
 
 The classes are the JDK's own. They're read straight out of `$JAVA_HOME/jmods`, `java.base` first and then whichever other module has the class, and the runtime boots them the way a JVM does: it builds the main thread, initializes `String` and `Reference`, then runs `System.initPhase1()`. So `System.out.println` goes through the real `PrintStream`, `StreamEncoder` and UTF-8 encoder, and ends at a native `FileOutputStream.writeBytes`.
 
+The [guides](docs/guide/README.md) cover all of this in more depth: getting started, calling Java, data conversion, jars, running Java programs, performance, debugging, how it works, and what's missing.
+
 ## Calling Java from jolt
 
 Java objects live in jolt's own heap as Chez records, so calling into Java is a plain procedure call. There's no second runtime and no wire protocol. Methods are found by name, and the overload is chosen from the argument values, the way `javac` picks one at a call site:
@@ -75,17 +77,17 @@ JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with meth
 
 ## Startup cache
 
-The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles about 340 methods. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation. Measured on macOS arm64:
+The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 362 methods from 201 classes. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation. Measured on macOS arm64:
 
 | Program | No cache | Warm cache |
 |---|---|---|
-| Hello | 0.95 s | 0.29 s |
-| Streams | 1.45–1.61 s | 0.35 s |
-| `examples/interop.clj` | 1.08 s | 0.31 s |
+| Hello | 1.21 s | 0.42 s |
+| Streams | 1.75 s | 0.51 s |
+| `examples/interop.clj` | 1.33 s | 0.47 s |
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
-Old cache directories aren't cleaned up, and generations aren't merged, so each extra file adds a little load time.
+Old cache directories aren't cleaned up, and generations aren't merged, so each extra file adds load time: one `bb test` from an empty cache leaves 14 generations, and after it a warm Hello takes 0.78 s instead of 0.42 s.
 
 ## Run it
 
