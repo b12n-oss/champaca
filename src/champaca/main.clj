@@ -249,8 +249,10 @@
     {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
      ;; only JDK classes are cached; user classes change between runs
      :origin (if user :user :jdk)
-     :fields (mapv (fn [f] {:name (:name f) :desc (:desc f) :flags (:flags f)
-                            :static (cf/static? f) :constant (:constant f)})
+     :reflection (:reflection c)
+     :fields (mapv (fn [f] (merge {:name (:name f) :desc (:desc f) :flags (:flags f)
+                                   :static (cf/static? f) :constant (:constant f)}
+                                  (select-keys f [:signature :annotations])))
                    (:fields c))
      :methods (mapv (fn [m] (assoc m
                                    :native (cf/native? m)
@@ -291,7 +293,14 @@
     (:int :long :float :double) (cg/num-lit value)
     :string (cg/sx "jstring-lit" (cg/str-lit value))))
 
-(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags]}]
+;; A reflection attribute as a Scheme literal: a Signature string, raw
+;; annotation bytes, or #f when the classfile has none.
+(defn- refl-lit [v]
+  (cond (nil? v) "#f"
+        (string? v) (cg/str-lit v)
+        :else (str "#vu8" (apply cg/sx (map str v)))))
+
+(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags reflection]}]
   (str/join
    "\n"
    (concat
@@ -301,9 +310,29 @@
             (str "'" (apply cg/sx (for [[k g] (sort vtable)] (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))))
             (str "'" (apply cg/sx (for [[k i] (sort layout)] (str "(" (cg/str-lit k) " . " i ")"))))
             (str flags)
-            ;; declared members, in classfile order, for reflection
-            (str "'" (cg/sx (apply cg/sx (for [m methods] (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m)))))
-                            (apply cg/sx (for [f fields] (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))))))))]
+            ;; declared members, in classfile order, for reflection:
+            ;; methods (name desc flags signature annotations param-annotations
+            ;; annotation-default), fields (name desc flags signature
+            ;; annotations), then the class's own (signature annotations inner
+            ;; enclosing-method)
+            (str "'" (cg/sx (apply cg/sx (for [m methods]
+                                           (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m))
+                                                  (refl-lit (:signature m)) (refl-lit (:annotations m))
+                                                  (refl-lit (:param-annotations m)) (refl-lit (:annotation-default m)))))
+                            (apply cg/sx (for [f fields]
+                                           (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))
+                                                  (refl-lit (:signature f)) (refl-lit (:annotations f)))))
+                            (let [{:keys [inner enclosing-method]} reflection]
+                              (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
+                                     ;; (outer simple-name flags): InnerClasses' entry for this class
+                                     (if inner
+                                       (cg/sx (refl-lit (:outer inner)) (refl-lit (:simple-name inner)) (str (:flags inner)))
+                                       "#f")
+                                     ;; (class name desc): EnclosingMethod
+                                     (if enclosing-method
+                                       (cg/sx (refl-lit (:class enclosing-method)) (refl-lit (:name enclosing-method))
+                                              (refl-lit (:desc enclosing-method)))
+                                       "#f"))))))]
     (for [f fields :when (:static f)]
       (cg/sx "define" (cg/static-global name (:name f))
              (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))
@@ -469,6 +498,15 @@
   (scheme! (slurp (io/resource "champaca/natives.ss")))
   (scheme! (slurp (io/resource "champaca/reflect.ss")))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
+  ;; annotation instances: a synthetic class implementing the annotation
+  ;; interface, its element keys "name()desc" joined by |
+  (s/call "set-annotation-class-hook!" (fn [iface keys]
+                                         (lambda-class [iface] (if (= "" keys) [] (str/split keys #"\|")))))
+  ;; ConstantPool natives (annotations): a constant's value, or a class's name
+  (s/call "set-cp-hook!" (fn [cname i]
+                           (let [e (get (:cp (parsed cname)) i)]
+                             (or (:value e) (:name e)
+                                 (throw (ex-info "no such constant" {:class cname :index i}))))))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
     (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))

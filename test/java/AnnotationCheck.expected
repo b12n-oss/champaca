@@ -1,0 +1,15 @@
+box 3 1099511627776 0.5 false c RED String [a, b] [1, 2] i Info
+none 7 1099511627776 0.5 true c GREEN Object [] [1, 2] d Info | 1 false
+none 7 1099511627776 0.5 false c GREEN Object [] [1, 2] d Info
+none 7 1099511627776 0.5 false z GREEN Object [] [1, 2] d Info
+none 7 1099511627776 0.5 false c GREEN Object [] [9] d Info 0
+7 true null
+1
+java.util.Map<java.lang.String, java.util.List<java.lang.Integer>>
+java.util.List<U> [T, U] [U]
+java.util.ArrayList<T> [java.lang.Comparable<AnnotationCheck$Box<T>>]
+T [java.lang.Comparable<T>]
+Box AnnotationCheck$Box AnnotationCheck true static
+private static |  AnnotationCheck
+Local true main true [] main
+AnnotationCheck null false

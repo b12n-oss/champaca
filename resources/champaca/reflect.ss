@@ -12,6 +12,19 @@
 
 (define (meta-methods c) (car (jclass-meta c)))
 (define (meta-fields c) (cadr (jclass-meta c)))
+;; the class's own (signature annotations); pseudo-classes have none
+(define (meta-class-refl c)
+  (let ([m (jclass-meta c)]) (if (pair? (cddr m)) (caddr m) '(#f #f))))
+
+;; Reflection attributes as the JDK's constructors take them: a Signature as a
+;; String, raw annotation bytes as a fresh byte[] (the bytes are stored
+;; unsigned), #f for none. Member entries carry them after (name desc flags).
+(define (refl-string x) (and x (jstring-lit x)))
+(define (refl-bytes bv)
+  (and bv (let* ([n (bytevector-length bv)] [v (make-vector n)])
+            (do ([i 0 (fx+ i 1)]) ((fx= i n) (make-jarr "B" v))
+              (vector-set! v i (bytevector-s8-ref bv i))))))
+(define (member-attr m i) (and (fx> (length m) i) (list-ref m i)))
 
 (define (desc->mirror d) (jmirror-of (desc->class-name d)))
 (define (mirror-array ds)
@@ -41,7 +54,9 @@
                (construct "java/lang/reflect/Method"
                           "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B[B)V"
                           this (jstring-lit name) (mirror-array (desc-args desc)) (desc->mirror (desc-ret desc))
-                          (no-classes) (fxlogand flags #xffff) (car im) #f #f #f #f)))
+                          (no-classes) (fxlogand flags #xffff) (car im)
+                          (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4))
+                          (refl-bytes (member-attr m 5)) (refl-bytes (member-attr m 6)))))
            (indexed-members (meta-methods c)
                             (lambda (m) (and (not (char=? (string-ref (car m) 0) #\<))
                                              (or (eqv? public-only 0) (public? (caddr m)))))))))))
@@ -54,7 +69,8 @@
              (let* ([m (cdr im)] [desc (cadr m)] [flags (caddr m)])
                (construct "java/lang/reflect/Constructor"
                           "(Ljava/lang/Class;[Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B)V"
-                          this (mirror-array (desc-args desc)) (no-classes) (fxlogand flags #xffff) (car im) #f #f #f)))
+                          this (mirror-array (desc-args desc)) (no-classes) (fxlogand flags #xffff) (car im)
+                          (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4)) (refl-bytes (member-attr m 5)))))
            (indexed-members (meta-methods c)
                             (lambda (m) (and (string=? (car m) "<init>")
                                              (or (eqv? public-only 0) (public? (caddr m)))))))))))
@@ -69,19 +85,52 @@
                           "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;IZILjava/lang/String;[B)V"
                           this (jstring-lit (car f)) (desc->mirror (cadr f)) (fxlogand flags #xffff)
                           (if (and (static-flag? flags) (fxpositive? (fxlogand flags #x10))) 1 0)
-                          (car im) #f #f)))
+                          (car im) (refl-string (member-attr f 3)) (refl-bytes (member-attr f 4)))))
            (indexed-members (meta-fields c)
                             (lambda (f) (or (eqv? public-only 0) (public? (caddr f))))))))))
 
 (defnative "java/lang/Class.getInterfaces0()[Ljava/lang/Class;" (this)
   (make-jarr "Ljava/lang/Class;" (list->vector (map jmirror-of (jclass-interfaces (mirror-class this))))))
-(defnative "java/lang/Class.getDeclaringClass0()Ljava/lang/Class;" (this) #f)
-(defnative "java/lang/Class.getSimpleBinaryName0()Ljava/lang/String;" (this) #f)
-(defnative "java/lang/Class.getEnclosingMethod0()[Ljava/lang/Object;" (this) #f)
-(defnative "java/lang/Class.getGenericSignature0()Ljava/lang/String;" (this) #f)
-(defnative "java/lang/Class.getRawAnnotations()[B" (this) #f)
+;; nesting, from the class's meta: inner is (outer simple-name flags) and
+;; enclosing is (class name desc), either #f
+(define (class-inner c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 2) (caddr r))))
+(define (class-enclosing c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 3) (cadddr r))))
+(defnative "java/lang/Class.getDeclaringClass0()Ljava/lang/Class;" (this)
+  (let ([inner (class-inner (mirror-class this))])
+    (and inner (car inner) (jmirror-of (car inner)))))
+(defnative "java/lang/Class.getSimpleBinaryName0()Ljava/lang/String;" (this)
+  (let ([inner (class-inner (mirror-class this))])
+    (and inner (cadr inner) (jstring-lit (cadr inner)))))
+(defnative "java/lang/Class.getEnclosingMethod0()[Ljava/lang/Object;" (this)
+  (let ([e (class-enclosing (mirror-class this))])
+    (and e (make-jarr "Ljava/lang/Object;"
+                      (vector (jmirror-of (car e)) (refl-string (cadr e)) (refl-string (caddr e)))))))
+(defnative "java/lang/Class.getGenericSignature0()Ljava/lang/String;" (this)
+  (refl-string (car (meta-class-refl (mirror-class this)))))
+(defnative "java/lang/Class.getRawAnnotations()[B" (this)
+  (refl-bytes (cadr (meta-class-refl (mirror-class this)))))
 (defnative "java/lang/Class.getRawTypeAnnotations()[B" (this) #f)
-(defnative "java/lang/Class.getConstantPool()Ljdk/internal/reflect/ConstantPool;" (this) #f)
+;; The constant pool that AnnotationParser reads names and values from. Its oop
+;; is the class mirror; entries come from the parsed classfile through a jolt
+;; callback (set-cp-hook!), which answers the entry's value (a String's text,
+;; a number) or a Class entry's name.
+(define cp-hook #f)
+(define (set-cp-hook! f) (set! cp-hook f))
+(defnative "java/lang/Class.getConstantPool()Ljdk/internal/reflect/ConstantPool;" (this)
+  (let ([cp (jnew "jdk/internal/reflect/ConstantPool")])
+    (jslot-set! cp (jfield-index "jdk/internal/reflect/ConstantPool" "constantPoolOop") this)
+    cp))
+(define (cp-value oop i) (cp-hook (jclass-name (mirror-class (nn oop))) i))
+(defnative "jdk/internal/reflect/ConstantPool.getUTF8At0(Ljava/lang/Object;I)Ljava/lang/String;" (this oop i)
+  (jstring (cp-value oop i)))
+(defnative "jdk/internal/reflect/ConstantPool.getStringAt0(Ljava/lang/Object;I)Ljava/lang/String;" (this oop i)
+  (jstring (cp-value oop i)))
+(defnative "jdk/internal/reflect/ConstantPool.getIntAt0(Ljava/lang/Object;I)I" (this oop i) (cp-value oop i))
+(defnative "jdk/internal/reflect/ConstantPool.getLongAt0(Ljava/lang/Object;I)J" (this oop i) (cp-value oop i))
+(defnative "jdk/internal/reflect/ConstantPool.getFloatAt0(Ljava/lang/Object;I)F" (this oop i) (cp-value oop i))
+(defnative "jdk/internal/reflect/ConstantPool.getDoubleAt0(Ljava/lang/Object;I)D" (this oop i) (cp-value oop i))
+(defnative "jdk/internal/reflect/ConstantPool.getClassAt0(Ljava/lang/Object;I)Ljava/lang/Class;" (this oop i)
+  (jmirror-of (cp-value oop i)))
 (defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this) (no-classes))
 (defnative "java/lang/Class.getNestHost0()Ljava/lang/Class;" (this) this)
 (defnative "java/lang/Class.getPermittedSubclasses0()[Ljava/lang/Class;" (this) #f)
@@ -285,3 +334,52 @@
 (defnative "java/lang/reflect/Array.set(Ljava/lang/Object;ILjava/lang/Object;)V" (a i v)
   (let ([e (jarr-elem (reflect-array a))])
     (jastore a i (if (prim-desc? e) (junbox e (nn v)) v))))
+
+;; --- annotation instances ---------------------------------------------------------
+;; The JDK builds an annotation with java.lang.reflect.Proxy, which generates a
+;; class at run time. Here annotationForMap makes a synthetic class implementing
+;; the annotation interface instead (from the lambda-class machinery, through
+;; set-annotation-class-hook!), points each element method at a procedure that
+;; reads the member map, and keeps that map and the annotation type beside the
+;; instance. toString, equals and hashCode are Object's.
+
+(define annotation-class-hook #f)
+(define (set-annotation-class-hook! f) (set! annotation-class-hook f))
+(define annotation-state (make-weak-eq-hashtable))
+
+(define (annotation-member self name ret)
+  (let* ([st (eq-hashtable-ref annotation-state self #f)]
+         [m (car st)]
+         [v ((jvirt m "get(Ljava/lang/Object;)Ljava/lang/Object;") m (jstring name))])
+    (cond [(jarr? v) (array-clone v)]  ; the JDK hands out a copy of an array member
+          [(prim-desc? ret) (junbox ret v)]
+          [else v])))
+
+;; one procedure per element key "name()desc", shared by every annotation type
+(define (annotation-proc-symbol key)
+  (let ([sym (string->symbol (string-append "champaca/Annotation." key))])
+    (unless (top-level-bound? sym)
+      (let* ([paren (let find ([i 0]) (if (char=? (string-ref key i) #\() i (find (fx+ i 1))))]
+             [name (substring key 0 paren)]
+             [ret (substring key (fx+ paren 2) (string-length key))])
+        (set-top-level-value! sym (lambda (self) (annotation-member self name ret)))))
+    sym))
+
+(define-override! "sun/reflect/annotation/AnnotationParser.annotationForMap(Ljava/lang/Class;Ljava/util/Map;)Ljava/lang/annotation/Annotation;"
+  (lambda (type values)
+    (let* ([iface (mirror-class (nn type))]
+           [keys (map (lambda (m) (string-append (car m) (cadr m)))
+                      (filter (lambda (m) (and (fxpositive? (fxlogand (caddr m) #x400))
+                                               (not (static-flag? (caddr m)))))
+                              (meta-methods iface)))]
+           [cname (annotation-class-hook (jclass-name iface)
+                                         (fold-left (lambda (acc k) (if (string=? acc "") k (string-append acc "|" k)))
+                                                    "" keys))]
+           [c (find-class cname)]
+           [o (jnew cname)])
+      (for-each (lambda (k) (hashtable-set! (jclass-vtable c) k (annotation-proc-symbol k))) keys)
+      (let ([at (string->symbol "champaca/Annotation.annotationType")])
+        (set-top-level-value! at (lambda (self) (cdr (eq-hashtable-ref annotation-state self #f))))
+        (hashtable-set! (jclass-vtable c) "annotationType()Ljava/lang/Class;" at))
+      (eq-hashtable-set! annotation-state o (cons values type))
+      o)))

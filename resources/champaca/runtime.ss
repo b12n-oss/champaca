@@ -340,8 +340,13 @@
         m)))
 
 ;; Class.getModifiers: access flags minus ACC_SUPER (0x20), which shares its
-;; bit with Modifier.SYNCHRONIZED; the JVM masks it off the same way.
-(define (class-modifiers c) (fxlogand (jclass-flags c) #x761f))
+;; bit with Modifier.SYNCHRONIZED; the JVM masks it off the same way. A member
+;; class answers the flags from its own InnerClasses entry instead, which is
+;; where static, private and protected live (the class's meta, reflect.ss).
+(define (class-modifiers c)
+  (let* ([m (jclass-meta c)]
+         [inner (and (pair? (cddr m)) (fx> (length (caddr m)) 2) (caddr (caddr m)))])
+    (fxlogand (if inner (caddr inner) (jclass-flags c)) #x761f)))
 
 ;; Every class lives in one unnamed module, as in OpenLDK: Class.getModule()
 ;; must not be null (resource bundles, getResourceAsStream), and an unnamed

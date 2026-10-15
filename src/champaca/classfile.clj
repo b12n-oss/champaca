@@ -119,6 +119,52 @@
     (vec (repeatedly (u2 r)
                      (fn [] {:ref-idx (u2 r) :args (vec (repeatedly (u2 r) #(u2 r)))})))))
 
+(defn- attr-bytes
+  "The raw bytes of the attribute named n, for the JDK's own parsers
+  (AnnotationParser, the generics parser) to read."
+  [attrs n]
+  (some #(when (= n (:name %)) (vec (:info %))) attrs))
+
+(defn- signature [attrs cp]
+  (some #(when (= "Signature" (:name %))
+           (let [[a b] (:info %)] (:value (cp (+ (* a 256) b)))))
+        attrs))
+
+(defn- reflection-attrs
+  "Signature and annotation attributes, as reflection hands them to Field,
+  Method, Constructor and Class."
+  [attrs cp]
+  (let [sig (signature attrs cp)
+        ann (attr-bytes attrs "RuntimeVisibleAnnotations")
+        pann (attr-bytes attrs "RuntimeVisibleParameterAnnotations")
+        adef (attr-bytes attrs "AnnotationDefault")]
+    (cond-> {}
+      sig (assoc :signature sig)
+      ann (assoc :annotations ann)
+      pann (assoc :param-annotations pann)
+      adef (assoc :annotation-default adef))))
+
+(defn- u2s [info] (map (fn [[a b]] (+ (* a 256) b)) (partition 2 info)))
+
+(defn- nesting
+  "This class's own InnerClasses entry, {:outer :simple-name :flags} (outer and
+  simple name nil for local and anonymous classes), and its EnclosingMethod,
+  {:class :name :desc} (name and desc nil outside a method)."
+  [attrs cp this]
+  (let [inner (some #(when (= "InnerClasses" (:name %))
+                       (some (fn [[ci oi ni fl]]
+                               (when (= this (:name (cp ci)))
+                                 {:outer (when (pos? oi) (:name (cp oi)))
+                                  :simple-name (when (pos? ni) (:value (cp ni)))
+                                  :flags fl}))
+                             (partition 4 (rest (u2s (:info %))))))
+                    attrs)
+        encl (some #(when (= "EnclosingMethod" (:name %))
+                      (let [[ci mi] (u2s (:info %)) nat (when (pos? mi) (cp mi))]
+                        {:class (:name (cp ci)) :name (:name nat) :desc (:desc nat)}))
+                   attrs)]
+    (cond-> {} inner (assoc :inner inner) encl (assoc :enclosing-method encl))))
+
 (defn- read-member [r cp]
   (let [flags (u2 r)
         name (:value (cp (u2 r)))
@@ -128,7 +174,7 @@
         const (some #(when (= "ConstantValue" (:name %))
                        (let [[a b] (:info %)] (cp (+ (* a 256) b))))
                     attrs)]
-    (cond-> {:flags flags :name name :desc desc}
+    (cond-> (merge {:flags flags :name name :desc desc} (reflection-attrs attrs cp))
       code (assoc :code code)
       const (assoc :constant const))))
 
@@ -160,6 +206,7 @@
         attrs (read-attributes r cp)]
     {:name this :flags flags :super super :interfaces interfaces
      :fields fields :methods methods :cp cp
+     :reflection (merge (reflection-attrs attrs cp) (nesting attrs cp this))
      :bootstrap-methods (some #(when (= "BootstrapMethods" (:name %))
                                  (parse-bootstrap-methods (:info %)))
                               attrs)}))
