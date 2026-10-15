@@ -51,3 +51,10 @@
   (s/call "ldk-implement" (main/lambda-class [iface] [(str mname desc)]) desc f))
 
 (defn to-string [obj] (s/call "ldk-to-string" obj))
+
+(defn save-cache!
+  "Add whatever JDK code this process compiled since boot to the startup
+  cache, so the next process loads it instead of compiling it. Call it
+  before exit; it is cheap when nothing new was compiled."
+  []
+  (main/save-generation!))

@@ -484,3 +484,23 @@
                            fields))
              1 0))]
       [else (error 'openldk "record op" op)])))
+
+;; Registration text is one-shot data plumbing (define a class, its statics,
+;; a stub per method). Chez's interpreter runs it far cheaper than compile.
+(define (interpret-string s)
+  (let ([p (open-input-string s)])
+    (let loop ([r (void)])
+      (let ([x (read p)])
+        (if (eof-object? x) r (loop (interpret x)))))))
+
+;; compile-file announces itself on stdout, which belongs to the Java program
+(define (quiet-compile-file in out)
+  (parameterize ([current-output-port (open-output-string)]) (compile-file in out)))
+
+;; One compiled procedure makes every method stub, so registration text (and
+;; the boot cache built from it) carries a call per method, not a lambda.
+(define (method-stub cname mname desc sym)
+  (or (native-override (string-append cname "." mname desc))
+      (lambda args
+        (jit! cname mname desc)
+        (apply (top-level-value sym) args))))

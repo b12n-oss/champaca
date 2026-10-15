@@ -26,3 +26,5 @@
 (try
   (ldk/call-static "java/lang/Integer" "parseInt" "(Ljava/lang/String;)I" "nope")
   (catch Exception e (println "caught:" (ex-message e))))
+
+(ldk/save-cache!)

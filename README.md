@@ -31,6 +31,20 @@ Java objects live in jolt's own heap as Chez records, so calling into Java is a 
 
 Strings, `nil` and booleans convert at the boundary using the descriptor. Any other Java object crosses as itself. A Java exception thrown out of a call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`. See `examples/interop.clj`.
 
+## Startup cache
+
+The first run builds a cache under `~/.cache/openldk-jolt/<key>/` and later runs load it. Booting the JDK compiles about 340 methods. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation. Measured on macOS arm64:
+
+| Program | No cache | Warm cache |
+|---|---|---|
+| Hello | 0.95 s | 0.29 s |
+| Streams | 1.40 s (cold run, includes writing the cache) | 0.35 s |
+| `examples/interop.clj` | 1.08 s | 0.31 s |
+
+The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, and jolt's runtime version, so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `OPENLDK_CACHE=off` disables it and `OPENLDK_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
+
+Old cache directories aren't cleaned up, and generations aren't merged, so each extra file adds a little load time.
+
 ## Run it
 
 You need jolt (0.8.21 or later) and JDK 25 with `JAVA_HOME` set. The first run copies the zip inside `java.base.jmod` to `target/jdk/`.
@@ -40,6 +54,7 @@ bb test                                               # every test/java program 
 jolt -M -m openldk-jolt.main target/classes Streams   # after bb test has compiled the classes
 OPENLDK_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
 OPENLDK_STATS=1 ...    # print classes loaded and methods compiled
+OPENLDK_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
 OPENLDK_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss
 ```
 
@@ -60,7 +75,6 @@ OPENLDK_TRACE=1 ...    # log each compiled method, and write the generated Schem
 - **Lambdas and records** skip their bootstrap methods. The translator spots `LambdaMetafactory` and `ObjectMethods` call sites and generates the class or method directly. Any other `invokedynamic` fails.
 - **No reflection.** `Method.invoke` and friends aren't there. `Class.getEnumConstantsShared` is overridden to call `values()` directly, because `EnumMap` needs it.
 - **One thread.** `Thread.start0` does nothing, and monitors are no-ops.
-- **Startup is slow.** Every run recompiles the roughly 340 JDK methods that boot needs, so Hello takes about 1.5 s.
 - `float`/`double` to string uses Scheme formatting, not `Double.toString`.
 
 ## License
