@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/images/logo.svg" alt="Champaca logo: a champaca flower seen from the side, narrow saffron and golden tepals curling outward and drooping from a green cup on a short stem" width="160"></p>
 
-# Champaca
+<h1 align="center">Champaca</h1>
 
 > [!WARNING]
 > **Spike.** This checks whether [OpenLDK](https://github.com/atgreen/openldk) can be rebuilt in [jolt](https://github.com/jolt-lang/jolt). It runs real JDK code, but only along the paths the tests exercise.
