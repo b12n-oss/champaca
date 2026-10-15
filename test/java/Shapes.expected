@@ -1,0 +1,5 @@
+shape#1 area=6
+square(4)#2 area=16
+skipped square(9)#3: 81
+total=22 created=3
+caught ArithmeticException

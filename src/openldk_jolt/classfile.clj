@@ -1,0 +1,163 @@
+(ns openldk-jolt.classfile
+  "Parse a JVM .class file into plain data. Spike scope: the constant pool,
+  fields, methods, the Code attribute and BootstrapMethods. Everything else
+  is skipped by length."
+  (:require [jolt.scheme :as s]))
+
+(s/eval-string
+ "(define (ldk-s64 . bs)
+    (let loop ([bs bs] [acc 0])
+      (if (null? bs)
+          (if (>= acc #x8000000000000000) (- acc #x10000000000000000) acc)
+          (loop (cdr bs) (+ (* acc 256) (car bs))))))
+  (define (ldk-bits->f32 b)
+    (let ([v (make-bytevector 4)])
+      (bytevector-u32-set! v 0 b (endianness big))
+      (bytevector-ieee-single-ref v 0 (endianness big))))
+  (define (ldk-bits->f64 b)
+    (let ([v (make-bytevector 8)])
+      (bytevector-u64-set! v 0 (logand b #xffffffffffffffff) (endianness big))
+      (bytevector-ieee-double-ref v 0 (endianness big))))")
+
+(defn- reader [^bytes bs]
+  (let [pos (volatile! 0)]
+    {:bytes bs
+     :pos pos
+     :u1 (fn [] (let [b (bit-and (aget bs @pos) 0xff)] (vswap! pos inc) b))}))
+
+(defn- u1 [r] ((:u1 r)))
+(defn- u2 [r] (let [a (u1 r) b (u1 r)] (+ (* a 256) b)))
+(defn- u4 [r] (let [a (u2 r) b (u2 r)] (+ (* a 65536) b)))
+(defn- s4 [r] (let [v (u4 r)] (if (>= v 2147483648) (- v 4294967296) v)))
+(defn- take-bytes [r n] (vec (repeatedly n #(u1 r))))
+
+(defn- decode-mutf8
+  "Modified UTF-8 to a string. Supplementary characters arrive as surrogate
+  pairs; the spike leaves them as two code units."
+  [bs]
+  (loop [i 0 out (StringBuilder.)]
+    (if (>= i (count bs))
+      (str out)
+      (let [b (nth bs i)]
+        (cond
+          (< b 0x80) (recur (inc i) (.append out (char b)))
+          (< b 0xe0) (recur (+ i 2)
+                            (.append out (char (+ (* (bit-and b 0x1f) 64)
+                                                  (bit-and (nth bs (inc i)) 0x3f)))))
+          :else (recur (+ i 3)
+                       (.append out (char (+ (* (bit-and b 0x0f) 4096)
+                                             (* (bit-and (nth bs (inc i)) 0x3f) 64)
+                                             (bit-and (nth bs (+ i 2)) 0x3f))))))))))
+
+(defn- read-cp-entry [r]
+  (let [tag (u1 r)]
+    (case (int tag)
+      1 {:tag :utf8 :value (decode-mutf8 (take-bytes r (u2 r)))}
+      3 {:tag :int :value (s4 r)}
+      4 {:tag :float :value (s/call "ldk-bits->f32" (u4 r))}
+      5 {:tag :long :value (apply s/call "ldk-s64" (take-bytes r 8))}
+      6 {:tag :double :value (s/call "ldk-bits->f64" (apply s/call "ldk-s64" (take-bytes r 8)))}
+      7 {:tag :class :name-idx (u2 r)}
+      8 {:tag :string :idx (u2 r)}
+      9 {:tag :fieldref :class-idx (u2 r) :nat-idx (u2 r)}
+      10 {:tag :methodref :class-idx (u2 r) :nat-idx (u2 r)}
+      11 {:tag :imethodref :class-idx (u2 r) :nat-idx (u2 r)}
+      12 {:tag :nat :name-idx (u2 r) :desc-idx (u2 r)}
+      15 {:tag :methodhandle :kind (u1 r) :ref-idx (u2 r)}
+      16 {:tag :methodtype :desc-idx (u2 r)}
+      17 {:tag :dynamic :bsm-idx (u2 r) :nat-idx (u2 r)}
+      18 {:tag :indy :bsm-idx (u2 r) :nat-idx (u2 r)}
+      19 {:tag :module :name-idx (u2 r)}
+      20 {:tag :package :name-idx (u2 r)}
+      (throw (ex-info "bad constant pool tag" {:tag tag})))))
+
+(defn- read-constant-pool [r]
+  (let [n (u2 r)]
+    (loop [i 1 cp {}]
+      (if (>= i n)
+        cp
+        (let [e (read-cp-entry r)]
+          (recur (if (#{:long :double} (:tag e)) (+ i 2) (inc i)) (assoc cp i e)))))))
+
+(defn- resolve-cp
+  "Replace index fields with the strings and maps they point at, so later
+  passes never chase indices."
+  [cp]
+  (let [utf (fn [i] (:value (cp i)))
+        cls (fn [i] (utf (:name-idx (cp i))))
+        nat (fn [i] (let [e (cp i)] {:name (utf (:name-idx e)) :desc (utf (:desc-idx e))}))]
+    (into {}
+          (map (fn [[i e]]
+                 [i (case (:tag e)
+                      :class {:tag :class :name (cls i)}
+                      :string {:tag :string :value (utf (:idx e))}
+                      (:fieldref :methodref :imethodref)
+                      (merge {:tag (:tag e) :class (cls (:class-idx e))} (nat (:nat-idx e)))
+                      :nat (assoc (nat i) :tag :nat)
+                      :methodtype {:tag :methodtype :desc (utf (:desc-idx e))}
+                      (:indy :dynamic) (merge {:tag (:tag e) :bsm-idx (:bsm-idx e)} (nat (:nat-idx e)))
+                      e)]))
+          cp)))
+
+(defn- read-attributes [r cp]
+  (vec (repeatedly (u2 r)
+                   (fn [] {:name (:value (cp (u2 r)))
+                           :info (take-bytes r (u4 r))}))))
+
+(defn- parse-code [info cp]
+  (let [r (reader (byte-array (map unchecked-byte info)))
+        max-stack (u2 r)
+        max-locals (u2 r)
+        code (take-bytes r (u4 r))
+        handlers (vec (repeatedly (u2 r)
+                                  (fn [] {:start (u2 r) :end (u2 r) :handler (u2 r)
+                                          :type (let [i (u2 r)] (when (pos? i) (:name (cp i))))})))]
+    {:max-stack max-stack :max-locals max-locals :code code :handlers handlers}))
+
+(defn- parse-bootstrap-methods [info]
+  (let [r (reader (byte-array (map unchecked-byte info)))]
+    (vec (repeatedly (u2 r)
+                     (fn [] {:ref-idx (u2 r) :args (vec (repeatedly (u2 r) #(u2 r)))})))))
+
+(defn- read-member [r cp]
+  (let [flags (u2 r)
+        name (:value (cp (u2 r)))
+        desc (:value (cp (u2 r)))
+        attrs (read-attributes r cp)
+        code (some #(when (= "Code" (:name %)) (parse-code (:info %) cp)) attrs)]
+    (cond-> {:flags flags :name name :desc desc}
+      code (assoc :code code))))
+
+(def ACC-STATIC 0x0008)
+(def ACC-INTERFACE 0x0200)
+(def ACC-ABSTRACT 0x0400)
+(def ACC-NATIVE 0x0100)
+
+(defn static? [m] (pos? (bit-and (:flags m) ACC-STATIC)))
+
+(defn parse
+  "Parse the bytes of a class file into a map of :name :super :interfaces
+  :fields :methods :cp :bootstrap-methods."
+  [^bytes bs]
+  (let [r (reader bs)
+        magic (u4 r)
+        _ (when-not (= magic 0xCAFEBABE) (throw (ex-info "not a class file" {:magic magic})))
+        _minor (u2 r)
+        _major (u2 r)
+        cp (resolve-cp (read-constant-pool r))
+        flags (u2 r)
+        this (:name (cp (u2 r)))
+        super (let [i (u2 r)] (when (pos? i) (:name (cp i))))
+        interfaces (vec (repeatedly (u2 r) #(:name (cp (u2 r)))))
+        fields (vec (repeatedly (u2 r) #(read-member r cp)))
+        methods (vec (repeatedly (u2 r) #(read-member r cp)))
+        attrs (read-attributes r cp)]
+    {:name this :flags flags :super super :interfaces interfaces
+     :fields fields :methods methods :cp cp
+     :bootstrap-methods (some #(when (= "BootstrapMethods" (:name %))
+                                 (parse-bootstrap-methods (:info %)))
+                              attrs)}))
+
+(defn parse-file [path]
+  (parse (java.nio.file.Files/readAllBytes
+          (java.nio.file.Paths/get path (into-array String [])))))
