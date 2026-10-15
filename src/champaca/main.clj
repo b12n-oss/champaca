@@ -325,16 +325,22 @@
                  (dissoc :parsed)
                  (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))])))
 
+(defn- compile-and-dump!
+  "Compile forms to so through the scratch source file src, then save the
+  JDK class table to img."
+  [forms src so img]
+  (spit src (apply str (interpose "\n" forms)))
+  (s/call "quiet-compile-file" (str src) (str so))
+  (.delete (io/file src))
+  (img/dump! (str img) (strip-for-cache (:classes @state))))
+
 (defn- write-cache!
   "Compile the recorded boot forms to boot.so and save the class table to
   state.img, in a temp dir renamed into place so readers never see half."
   [dir forms]
   (let [tmp (io/file (str dir ".tmp-" (System/nanoTime)))]
     (.mkdirs tmp)
-    (spit (io/file tmp "boot.ss") (apply str (interpose "\n" forms)))
-    (s/call "quiet-compile-file" (str (io/file tmp "boot.ss")) (str (io/file tmp "boot.so")))
-    (.delete (io/file tmp "boot.ss"))
-    (img/dump! (str (io/file tmp "state.img")) (strip-for-cache (:classes @state)))
+    (compile-and-dump! forms (io/file tmp "boot.ss") (io/file tmp "boot.so") (io/file tmp "state.img"))
     (when-not (.renameTo tmp dir)
       ;; another run won the race; ours is redundant
       (doseq [f (reverse (file-seq tmp))] (.delete f)))))
@@ -365,10 +371,7 @@
             so (io/file dir (str "extra-" stamp ".so"))
             so-tmp (io/file dir (str "extra-" stamp ".so.tmp"))
             img-tmp (io/file dir (str "state.img.tmp-" stamp))]
-        (spit src (apply str (interpose "\n" forms)))
-        (s/call "quiet-compile-file" (str src) (str so-tmp))
-        (.delete src)
-        (img/dump! (str img-tmp) (strip-for-cache (:classes @state)))
+        (compile-and-dump! forms src so-tmp img-tmp)
         (.renameTo so-tmp so)
         (.renameTo img-tmp (io/file dir "state.img"))
         (vreset! (:recording @state) [])))))

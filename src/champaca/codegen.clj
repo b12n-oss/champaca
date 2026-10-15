@@ -564,7 +564,7 @@
                        (apply sx (for [[pc code] (sort-by key emitted)]
                                    (sx (label pc) (sx "lambda" "()" (if tramp? (guard-wrap code pc handlers) code)))))
                        (if tramp?
-                         ;; an inline named loop, not the runtime's trampoline,
+                         ;; an inline named loop rather than a shared helper,
                          ;; so a frame named for this method stays on the stack
                          ;; while a block runs under guard (getCallerClass)
                          (let [t (sym (str *method-tag* "#T"))]

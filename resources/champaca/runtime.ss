@@ -240,12 +240,6 @@
 
 (define (jathrow x) (raise (nn x)))
 
-;; Trampoline used by methods with exception handlers: a block returns the
-;; next block (a procedure) or the method's result (never a procedure).
-(define (trampoline b)
-  (let loop ([r (b)])
-    (if (procedure? r) (loop (r)) r)))
-
 ;; --- strings ----------------------------------------------------------------
 ;; java.lang.String is the JDK's own class: value is a byte[] and coder is
 ;; 0 (LATIN1) or 1 (UTF16, low byte first because StringUTF16.isBigEndian
