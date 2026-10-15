@@ -18,7 +18,6 @@
 (define lambda-class-hook #f)   ; set from jolt: (iface sam-key) -> class name
 (define (set-lambda-class-hook! f) (set! lambda-class-hook f))
 
-(define (slashes s) (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list s))))
 
 (define (exact-int? v) (and (number? v) (exact? v) (integer? v)))
 (define (int-range? v) (and (exact-int? v) (<= -2147483648 v 2147483647)))
@@ -67,10 +66,38 @@
 (define (string-split-paren key)
   (let loop ([i 0]) (if (char=? (string-ref key i) #\() (list (substring key 0 i)) (loop (fx+ i 1)))))
 
+(define (array-elem d) (substring d 1 (string-length d)))
+(define (seq-arg? v) (or (pair? v) (null? v)))   ; a jolt vector, sent as a Scheme list
+
+;; the array type a vector becomes when nothing else says: int[], long[],
+;; double[], String[], a nested array type, or Object[]
+(define (inferred-array-desc v)
+  (cond
+    [(null? v) "[Ljava/lang/Object;"]
+    [(for-all int-range? v) "[I"]
+    [(for-all exact-int? v) "[J"]
+    [(for-all flonum? v) "[D"]
+    [(for-all string? v) "[Ljava/lang/String;"]
+    [(for-all seq-arg? v)
+     (let ([inner (map inferred-array-desc v)])
+       (if (for-all (lambda (d) (string=? d (car inner))) inner)
+           (string-append "[" (car inner))
+           "[Ljava/lang/Object;"))]
+    [else "[Ljava/lang/Object;"]))
+
 (define (fit v d)
   (let ([c0 (string-ref d 0)])
     (cond
       [(eq? v jolt-nil) (and (ref-class d) 0)]
+      ;; vector -> array: every element must fit the component type. Where
+      ;; the parameter is Object-like, the array type comes from the contents.
+      [(seq-arg? v)
+       (if (char=? c0 #\[)
+           (let ([costs (map (lambda (e) (fit e (array-elem d))) v)])
+             (and (for-all (lambda (c) c) costs)
+                  (fx+ 1 (fold-left fxmax 0 costs))))
+           (let ([t (ref-class d)])
+             (and t (class-assignable? (inferred-array-desc v) t) 6)))]
       [(boolean? v) (if (char=? c0 #\Z) 0 (box-cost "java/lang/Boolean" d 1))]
       [(char? v) (case c0 [(#\C) 0] [(#\I) 2] [(#\J) 3] [else (box-cost "java/lang/Character" d 5)])]
       [(exact-int? v)
@@ -104,6 +131,9 @@
   (let ([c0 (string-ref d 0)])
     (cond
       [(eq? v jolt-nil) #f]
+      [(seq-arg? v)
+       (let ([e (array-elem (if (char=? c0 #\[) d (inferred-array-desc v)))])
+         (make-jarr e (list->vector (map (lambda (x) (convert-arg x e)) v))))]
       [(java-value? v)
        (if (memv c0 '(#\L #\[)) v (junbox (string c0) v))]
       [(memv c0 '(#\I #\J #\S #\B)) (if (char? v) (char->integer v) v)]
@@ -158,6 +188,14 @@
 ;; all (owner name desc flags) for name with n args, most-derived first,
 ;; one per descriptor; bridges and synthetics skipped
 (define (candidates cname name n static?)
+  (candidates-where cname name static? (lambda (np flags) (fx= np n))))
+
+;; varargs methods (ACC_VARARGS) that n arguments can reach by packing
+(define (varargs-candidates cname name n static?)
+  (candidates-where cname name static?
+                    (lambda (np flags) (and (fxpositive? (fxlogand flags #x80)) (fx<= (fx- np 1) n)))))
+
+(define (candidates-where cname name static? arity-ok?)
   (let loop ([todo (list cname)] [seen '()] [acc '()])
     (if (null? todo)
         (reverse acc)
@@ -172,7 +210,7 @@
                       (fold-left
                        (lambda (acc m)
                          (if (and (string=? (car m) name)
-                                  (fx= (length (desc-args (cadr m))) n)
+                                  (arity-ok? (length (desc-args (cadr m))) (caddr m))
                                   (eq? static? (static-flag? (caddr m)))
                                   (public? (caddr m)) ; jolt calls from outside the class
                                   (fxzero? (fxlogand (caddr m) #x1040))
@@ -192,23 +230,42 @@
 (define (describe-candidates cands)
   (apply string-append (map (lambda (c) (string-append "\n  " (car c) "." (cadr c) (caddr c))) cands)))
 
-(define (choose who cname name cands args)
-  (let ([scored (filter car (map (lambda (c) (cons (score (caddr c) args) c)) cands))])
-    (when (null? scored)
-      (api-fail
-             (string-append "no " name " in " cname " fits " (number->string (length args)) " argument(s)"
-                            (if (null? cands) " (no method of that name and arity)"
-                                (string-append "; candidates:" (describe-candidates cands))))))
-    (let* ([best (fold-left min (caar scored) (map car scored))]
-           [tied (filter (lambda (s) (fx= (car s) best)) scored)]
-           ;; JLS 15.12.2.5: among equal fits, the most specific method wins
-           ;; (String.valueOf(null) is valueOf(char[]), not valueOf(Object))
-           [winners (let ([ms (filter (lambda (s) (for-all (lambda (o) (more-specific? (cdr s) (cdr o))) tied)) tied)])
-                      (if (null? ms) tied ms))])
-      (when (> (length winners) 1)
-        (api-fail (string-append "ambiguous call to " cname "." name ":"
-                                       (describe-candidates (map cdr winners)))))
-      (cdar winners))))
+(define (best-of cname name scored)
+  ;; scored: list of (score candidate . args). Lowest score wins; ties go to
+  ;; the most specific method (JLS 15.12.2.5), e.g. String.valueOf(null) is
+  ;; valueOf(char[]), not valueOf(Object).
+  (let* ([best (fold-left min (caar scored) (map car scored))]
+         [tied (filter (lambda (s) (fx= (car s) best)) scored)]
+         [winners (let ([ms (filter (lambda (s) (for-all (lambda (o) (more-specific? (cadr s) (cadr o))) tied)) tied)])
+                    (if (null? ms) tied ms))])
+    (when (> (length winners) 1)
+      (api-fail (string-append "ambiguous call to " cname "." name ":"
+                               (describe-candidates (map cadr winners)))))
+    (cdar winners)))
+
+;; args packed for a varargs call: the trailing ones become one list (array)
+(define (pack-varargs desc args)
+  (let ([np (length (desc-args desc))])
+    (append (list-head args (fx- np 1)) (list (list-tail args (fx- np 1))))))
+
+;; Overload resolution in javac's order: fixed arity first (JLS phases 1
+;; and 2, scored together), and varargs only when nothing fixed fits (phase 3).
+;; Returns (candidate . effective-args).
+(define (choose who cname name fixed varargs args)
+  (let ([scored (filter car (map (lambda (c) (cons (score (caddr c) args) (cons c args))) fixed))])
+    (if (pair? scored)
+        (best-of cname name scored)
+        (let ([vscored (filter car (map (lambda (c)
+                                          (let ([packed (pack-varargs (caddr c) args)])
+                                            (cons (score (caddr c) packed) (cons c packed))))
+                                        varargs))])
+          (when (null? vscored)
+            (let ([all (append fixed varargs)])
+              (api-fail
+               (string-append "no " name " in " cname " fits " (number->string (length args)) " argument(s)"
+                              (if (null? all) " (no method of that name and arity)"
+                                  (string-append "; candidates:" (describe-candidates all)))))))
+          (best-of cname name vscored)))))
 
 ;; m1 is at least as specific as m2: each parameter type of m1 converts to
 ;; m2's by subtyping or primitive widening
@@ -230,8 +287,11 @@
          [c (begin (jinit cname) (find-class cname))]
          [cands (filter (lambda (m) (and (string=? (cadr m) "<init>") (public? (cadddr m))))
                         (map (lambda (m) (list cname (car m) (cadr m) (caddr m))) (meta-methods c)))]
-         [cands (filter (lambda (m) (fx= (length (desc-args (caddr m))) (length args))) cands)]
-         [pick (choose "new" cname "<init>" cands args)]
+         [fixed (filter (lambda (m) (fx= (length (desc-args (caddr m))) (length args))) cands)]
+         [va (filter (lambda (m) (and (fxpositive? (fxlogand (cadddr m) #x80))
+                                      (fx<= (fx- (length (desc-args (caddr m))) 1) (length args)))) cands)]
+         [chosen (choose "new" cname "<init>" fixed va args)]
+         [pick (car chosen)] [args (cdr chosen)]
          [desc (caddr pick)])
     (with-java-errors
      (lambda ()
@@ -243,7 +303,9 @@
   (let* ([obj (if (string? obj) (jstring obj) obj)]
          [cname (class-name-of (nn obj))]
          [lookup (if (jarr? obj) "java/lang/Object" cname)]
-         [pick (choose "invoke" lookup name (candidates lookup name (length args) #f) args)]
+         [chosen (choose "invoke" lookup name (candidates lookup name (length args) #f)
+                         (varargs-candidates lookup name (length args) #f) args)]
+         [pick (car chosen)] [args (cdr chosen)]
          [desc (caddr pick)])
     (with-java-errors
      (lambda ()
@@ -253,7 +315,9 @@
 (define (dyn-invoke-static cname name . args)
   (let* ([cname (slashes cname)]
          [_ (find-class cname)]
-         [pick (choose "invoke-static" cname name (candidates cname name (length args) #t) args)]
+         [chosen (choose "invoke-static" cname name (candidates cname name (length args) #t)
+                         (varargs-candidates cname name (length args) #t) args)]
+         [pick (car chosen)] [args (cdr chosen)]
          [owner (car pick)] [desc (caddr pick)])
     (jinit owner)
     (with-java-errors

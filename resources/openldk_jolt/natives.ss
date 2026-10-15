@@ -114,11 +114,67 @@
   (let ([a native-next]) (set! native-next (+ native-next 8)) (hashtable-set! native-memory a init) a))
 
 (define unsafe-prefix "jdk/internal/misc/Unsafe.")
-(define (unsafe-vec o) (if (jarr? o) (jarr-vec o) (jobj-slots (nn o))))
-(define (unsafe-get o off) (if o (vector-ref (unsafe-vec o) off) (hashtable-ref native-memory off 0)))
-(define (unsafe-set! o off v) (if o (vector-set! (unsafe-vec o) off v) (hashtable-set! native-memory off v)))
-(defnative "jdk/internal/misc/Unsafe.arrayBaseOffset0(Ljava/lang/Class;)I" (this c) 0)
-(defnative "jdk/internal/misc/Unsafe.arrayIndexScale0(Ljava/lang/Class;)I" (this c) 1)
+;; Arrays are byte-addressed like a real heap: base offset 16, scale by
+;; element size (references count 4), little-endian. An access whose width
+;; differs from the element size (getLongUnaligned over a byte[], as
+;; ArraysSupport.vectorizedMismatch does) is assembled byte by byte.
+;; Objects keep slot-index offsets from objectFieldOffset.
+
+(define array-base 16)
+(define (type-size t) (case t [("Z" "B") 1] [("C" "S") 2] [("I" "F") 4] [("J" "D") 8] [else 4]))
+(define (elem-type a) (let ([e (jarr-elem a)]) (if (memv (string-ref e 0) '(#\L #\[)) "L" e)))
+
+(define (byte-of a bpos)
+  (let* ([se (type-size (elem-type a))]
+         [e (vector-ref (jarr-vec a) (quotient bpos se))])
+    (logand (ash (logand e (- (ash 1 (* 8 se)) 1)) (- (* 8 (remainder bpos se)))) #xff)))
+
+(define (set-byte! a bpos b)
+  (let* ([t (elem-type a)] [se (type-size t)] [i (quotient bpos se)] [sh (* 8 (remainder bpos se))]
+         [mask (- (ash 1 (* 8 se)) 1)]
+         [old (logand (vector-ref (jarr-vec a) i) mask)]
+         [new (logior (logand old (lognot (ash #xff sh))) (ash b sh))])
+    (vector-set! (jarr-vec a) i (signed-as t new))))
+
+(define (signed-as t u)
+  (case t
+    [("B") (i2b u)] [("S") (i2s u)] [("C") (logand u #xffff)] [("Z") (logand u 1)]
+    [("I") (i32 u)] [("J") (i64 u)] [else u]))
+
+(define (unsafe-get o off t)
+  (cond
+    [(not o) (hashtable-ref native-memory off 0)]
+    [(jobj? o) (vector-ref (jobj-slots o) off)]
+    [else
+     (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
+       (if (and (= se st) (zero? (remainder b se)) (or (string=? t et) (string=? et "L") (string=? t "L")))
+           (vector-ref (jarr-vec o) (quotient b se))
+           (let loop ([k (- st 1)] [acc 0])
+             (if (< k 0) (signed-as t acc) (loop (- k 1) (logior (ash acc 8) (byte-of o (+ b k))))))))]))
+
+(define (unsafe-set! o off v t)
+  (cond
+    [(not o) (hashtable-set! native-memory off v)]
+    [(jobj? o) (vector-set! (jobj-slots o) off v)]
+    [else
+     (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
+       (if (and (= se st) (zero? (remainder b se)) (or (string=? t et) (string=? et "L") (string=? t "L")))
+           (vector-set! (jarr-vec o) (quotient b se) v)
+           (do ([k 0 (+ k 1)]) ((= k st))
+             (set-byte! o (+ b k) (logand (ash v (* -8 k)) #xff)))))]))
+
+;; the value type an Unsafe accessor works in, from its name
+(define (unsafe-type n)
+  (let loop ([ts '(("Reference" . "L") ("Boolean" . "Z") ("Byte" . "B") ("Short" . "S") ("Char" . "C")
+                   ("Int" . "I") ("Long" . "J") ("Float" . "F") ("Double" . "D"))])
+    (cond [(null? ts) "L"]
+          [(string-search (caar ts) n) (cdar ts)]
+          [else (loop (cdr ts))])))
+
+(defnative "jdk/internal/misc/Unsafe.arrayBaseOffset0(Ljava/lang/Class;)I" (this c) array-base)
+(defnative "jdk/internal/misc/Unsafe.arrayIndexScale0(Ljava/lang/Class;)I" (this c)
+  (let ([n (jclass-name (mirror-class c))])
+    (type-size (let ([e (substring n 1 (string-length n))]) (if (memv (string-ref e 0) '(#\L #\[)) "L" e)))))
 (defnative "jdk/internal/misc/Unsafe.addressSize0()I" (this) 8)
 (defnative "jdk/internal/misc/Unsafe.pageSize()I" (this) 4096)
 (defnative "jdk/internal/misc/Unsafe.fullFence()V" (this) (void))
@@ -139,19 +195,20 @@
 ;; get<T>[Volatile](Object, long) / put<T>[Volatile](Object, long, T)
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "get") (string-search "(Ljava/lang/Object;J)" n)))
-  (lambda (n) (lambda (this o off) (unsafe-get o off))))
+  (lambda (n) (let ([t (unsafe-type (method-part n))]) (lambda (this o off) (unsafe-get o off t)))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "put") (string-search "(Ljava/lang/Object;J" n)))
-  (lambda (n) (lambda (this o off v) (unsafe-set! o off v))))
+  (lambda (n) (let ([t (unsafe-type (method-part n))]) (lambda (this o off v) (unsafe-set! o off v t)))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "compareAndSet")))
-  (lambda (n) (lambda (this o off expect new)
-                (if (eqv? (unsafe-get o off) expect) (begin (unsafe-set! o off new) 1) 0))))
+  (lambda (n) (let ([t (unsafe-type (method-part n))])
+                (lambda (this o off expect new)
+                  (if (eqv? (unsafe-get o off t) expect) (begin (unsafe-set! o off new t) 1) 0)))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "compareAndExchange")))
   (lambda (n) (lambda (this o off expect new)
-                (let ([old (unsafe-get o off)])
-                  (when (eqv? old expect) (unsafe-set! o off new))
+                (let* ([t (unsafe-type (method-part n))] [old (unsafe-get o off t)])
+                  (when (eqv? old expect) (unsafe-set! o off new t))
                   old))))
 
 (define (string-search needle hay)
@@ -196,6 +253,21 @@
      ;; reflection through invoke0/newInstance0 (reflect.ss), never method handles
      ("jdk.reflect.useNativeAccessorOnly" . "true"))))
 
+;; os.version must parse as a version: CLDR's locale provider rejects "".
+;; macOS reports the product version (as the JDK does), others the kernel's.
+(define (first-line-of cmd)
+  (guard (e [#t #f])
+    (let-values ([(to-stdin from-stdout from-stderr pid)
+                  (open-process-ports cmd (buffer-mode block) (native-transcoder))])
+      (close-port to-stdin)
+      (let ([l (get-line from-stdout)])
+        (close-port from-stdout) (close-port from-stderr)
+        (and (string? l) (positive? (string-length l)) l)))))
+(define (os-version)
+  (or (first-line-of "sw_vers -productVersion 2>/dev/null")
+      (first-line-of "uname -r 2>/dev/null")
+      "0.0"))
+
 (defnative "jdk/internal/util/SystemProps$Raw.platformProperties()[Ljava/lang/String;" ()
   (let* ([ndx (lambda (f) (top-level-value (string->symbol (string-append "jdk/internal/util/SystemProps$Raw:" f))))]
          [v (make-vector (ndx "FIXED_LENGTH") #f)]
@@ -209,7 +281,7 @@
     (set "_stderr_encoding_NDX" "UTF-8")
     (set "_os_name_NDX" "Mac OS X")
     (set "_os_arch_NDX" "aarch64")
-    (set "_os_version_NDX" "")
+    (set "_os_version_NDX" (os-version))
     (set "_java_io_tmpdir_NDX" "/tmp")
     (set "_user_dir_NDX" (current-directory))
     (set "_user_home_NDX" (or (getenv "HOME") "/"))
@@ -292,3 +364,56 @@
 ;; --- overrides of Java-coded methods ----------------------------------------------
 
 ;; (none yet: Class.getEnumConstantsShared used to be one, before reflect.ss)
+
+;; --- java.io.UnixFileSystem: the read-only queries --------------------------------
+;; Enough for code that probes the file system (locale providers, resource
+;; lookups). Writes, permissions and listing are not here yet.
+
+(define (file-path f) (jstring->scheme (jslot f (jfield-index "java/io/File" "path"))))
+
+(defnative "java/io/UnixFileSystem.canonicalize0(Ljava/lang/String;)Ljava/lang/String;" (this p)
+  ;; spike: no symlink resolution; the JDK has already made the path absolute
+  p)
+(defnative "java/io/UnixFileSystem.getBooleanAttributes0(Ljava/io/File;)I" (this f)
+  (let ([p (file-path f)])
+    (if (file-exists? p)
+        (fxlogor 1
+                 (if (file-regular? p) 2 0)
+                 (if (file-directory? p) 4 0))
+        0)))
+(defnative "java/io/UnixFileSystem.checkAccess0(Ljava/io/File;I)Z" (this f access)
+  (if (file-exists? (file-path f)) 1 0))
+(defnative "java/io/UnixFileSystem.getLastModifiedTime0(Ljava/io/File;)J" (this f)
+  (let ([p (file-path f)])
+    (if (file-exists? p)
+        (let ([t (file-modification-time p)]) (+ (* (time-second t) 1000) (quotient (time-nanosecond t) 1000000)))
+        0)))
+(defnative "java/io/UnixFileSystem.getLength0(Ljava/io/File;)J" (this f)
+  (let ([p (file-path f)])
+    (if (file-regular? p) (call-with-port (open-file-input-port p) port-length) 0)))
+(defnative "java/io/UnixFileSystem.list0(Ljava/io/File;)[Ljava/lang/String;" (this f)
+  (let ([p (file-path f)])
+    (and (file-directory? p)
+         (make-jarr "Ljava/lang/String;" (list->vector (map jstring (directory-list p)))))))
+
+;; --- modules and class loaders --------------------------------------------------
+;; One flat class space: module wiring is recorded nowhere, and every loader
+;; sees the same classes (user classpath, then java.base).
+
+(defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (void))
+(defnative "jdk/internal/loader/BootLoader.getSystemPackageNames()[Ljava/lang/String;" ()
+  (make-jarr "Ljava/lang/String;" (vector)))
+(defnative "jdk/internal/loader/BootLoader.getSystemPackageLocation(Ljava/lang/String;)Ljava/lang/String;" (n) #f)
+(defnative "java/lang/Module.defineModule0(Ljava/lang/Module;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V"
+  (m open? version location pns) (void))
+(defnative "java/lang/Module.addReads0(Ljava/lang/Module;Ljava/lang/Module;)V" (from to) (void))
+(defnative "java/lang/Module.addExports0(Ljava/lang/Module;Ljava/lang/String;Ljava/lang/Module;)V" (from pn to) (void))
+(defnative "java/lang/Module.addExportsToAll0(Ljava/lang/Module;Ljava/lang/String;)V" (from pn) (void))
+(defnative "java/lang/Module.addExportsToAllUnnamed0(Ljava/lang/Module;Ljava/lang/String;)V" (from pn) (void))
+
+(define (try-class n)
+  (guard (e [(not (jobj? e)) #f]) (find-class n)))
+(defnative "java/lang/ClassLoader.findBootstrapClass(Ljava/lang/String;)Ljava/lang/Class;" (name)
+  (let ([c (try-class (slashes (jstring->scheme name)))]) (and c (jmirror c))))
+(defnative "java/lang/ClassLoader.findLoadedClass0(Ljava/lang/String;)Ljava/lang/Class;" (this name)
+  (let ([c (hashtable-ref classes (slashes (jstring->scheme name)) #f)]) (and c (jmirror c))))

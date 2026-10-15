@@ -24,6 +24,9 @@
                            {:java/exception (s/call "ldk-exception-object" e)}))
            (and @dynamic-loaded (s/call "ldk-api-error?" e))
            (throw (ex-info (s/call "ldk-api-error-message" e) {:openldk/error :lookup}))
+           ;; the runtime's own records; jolt wraps real Chez errors itself
+           (s/call "ldk-missing-native?" e)
+           (throw (ex-info (s/call "ldk-condition-message" e) {:openldk/error :missing-native}))
            :else (throw e)))))
 
 (defn init!
@@ -67,6 +70,12 @@
   []
   (main/save-generation!))
 
+(defn- ->arg
+  "jolt vectors go to Scheme as lists, which the runtime turns into a Java
+  array when the chosen parameter is an array (or a varargs tail)."
+  [x]
+  (if (vector? x) (apply s/call "list" (map ->arg x)) x))
+
 ;; --- descriptor-free calls ---------------------------------------------------------
 ;; Class names may use dots or slashes. The overload is chosen from the
 ;; runtime types of the arguments (see resources/openldk_jolt/dynamic.ss),
@@ -76,18 +85,18 @@
 (defn construct
   "Construct cls with the constructor that fits args."
   [cls & args]
-  (rethrow #(apply s/call "dyn-new" cls args)))
+  (rethrow #(apply s/call "dyn-new" cls (map ->arg args))))
 
 (defn invoke
   "Call the instance method mname on obj (a Java object, or a jolt string
   as java.lang.String) with the overload that fits args."
   [obj mname & args]
-  (rethrow #(apply s/call "dyn-invoke" obj mname args)))
+  (rethrow #(apply s/call "dyn-invoke" obj mname (map ->arg args))))
 
 (defn invoke-static
   "Call the static method mname of cls with the overload that fits args."
   [cls mname & args]
-  (rethrow #(apply s/call "dyn-invoke-static" cls mname args)))
+  (rethrow #(apply s/call "dyn-invoke-static" cls mname (map ->arg args))))
 
 (defn get-static [cls fname] (rethrow #(s/call "dyn-get-static" cls fname)))
 (defn get-field [obj fname] (rethrow #(s/call "dyn-get-field" obj fname)))

@@ -71,3 +71,11 @@
 (define (ldk-java-exception? e) (java-exception? e))
 (define (ldk-exception-message e) (java-exception-message e))
 (define (ldk-exception-object e) (java-exception-object e))
+
+;; any other condition reaching jolt (a missing native, a runtime bug) gets
+;; a readable message instead of crossing as an opaque object
+(define (ldk-condition-message e)
+  (cond [(missing-native? e) (string-append "openldk: missing native " (missing-native-name e))]
+        [(condition? e) (call-with-string-output-port (lambda (p) (display-condition e p)))]
+        [else (format "~s" e)]))
+(define (ldk-missing-native? e) (missing-native? e))

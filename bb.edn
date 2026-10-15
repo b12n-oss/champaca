@@ -13,15 +13,17 @@
                                                                  "jolt -M -m openldk-jolt.main target/classes" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
-                    interop (let [{:keys [out exit]} (shell {:out :string :continue true} "jolt -M examples/interop.clj")
-                                  ok (and (zero? exit) (= out (slurp "examples/interop.expected")))]
-                              (println (if ok "PASS" "FAIL") "examples/interop.clj (jolt calling Java)")
-                              (when-not ok "interop"))
-                    dynamic (let [{:keys [out exit]} (shell {:out :string :continue true} "jolt -M examples/dynamic.clj")
-                                  ok (and (zero? exit) (= out (slurp "examples/dynamic.expected")))]
-                              (println (if ok "PASS" "FAIL") "examples/dynamic.clj (descriptor-free calls)")
-                              (when-not ok "dynamic"))
-                    fails (remove nil? (conj fails interop dynamic))
-                    mains (conj mains "interop" "dynamic")]
+                    ;; jolt programs calling Java, checked against expected output
+                    examples [["interop" "jolt calling Java"] ["dynamic" "descriptor-free calls"]
+                              ["varargs" "varargs and vectors as arrays"]]
+                    ex-fails (doall
+                              (for [[n what] examples
+                                    :let [{:keys [out exit]} (shell {:out :string :continue true}
+                                                                    (str "jolt -M examples/" n ".clj"))
+                                          ok (and (zero? exit) (= out (slurp (str "examples/" n ".expected"))))]]
+                                (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
+                                    (when-not ok n))))
+                    fails (remove nil? (concat fails ex-fails))
+                    mains (concat mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}}}

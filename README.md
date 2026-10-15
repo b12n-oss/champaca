@@ -31,10 +31,12 @@ Java objects live in jolt's own heap as Chez records, so calling into Java is a 
 - **`construct`, `invoke`, `invoke-static`, `get-static`, `get-field`.** Class names take dots or slashes, and a jolt string can be the target of `invoke`.
 - **Overloads** go to the best fit: exact primitive, then widening, then boxing, then a supertype. Ties go to the most specific method (JLS 15.12.2.5), so `String.valueOf(nil)` picks `valueOf(char[])` and throws an NPE, just like Java. Only public members count. A call that fits nothing, or two methods equally, throws an `ex-info` listing the candidates.
 - **A jolt fn** passed where Java wants a single-method interface (`Comparator`, `Predicate`, `Function`, ...) becomes an implementation of it.
+- **Varargs** work the way javac does them: fixed-arity overloads first, then varargs methods with the trailing arguments packed into the array. So `(ldk/invoke-static "java.lang.String" "format" "%s: %.2f" "x" 2.5)` and `(ldk/invoke-static "java.util.List" "of" 1 2 3)` just work.
+- **A jolt vector** passed for an array parameter becomes a Java array of that element type. Where the parameter is only `Object`, the contents pick the type: `int[]`, `long[]`, `double[]`, `String[]`, nested arrays, or `Object[]`.
 - **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays stay Java arrays, and `->clj` copies one into a vector.
-- **Not handled:** varargs methods (`String.format`, `List.of(a, b, c)`) need their array built by hand, and jolt collections aren't converted to Java ones.
+- **Not handled:** jolt maps, sets and seqs aren't converted to `java.util` collections.
 
-`examples/dynamic.clj` makes 20 calls and `test/java/DynamicCheck.java` makes the same ones on the JVM. `bb test` checks the outputs match.
+`examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. `bb test` checks the outputs match, and also runs both Java programs on openldk-jolt.
 
 The descriptor-based functions (`call-static`, `new-object`, `call`, `implement`) are still there for exact control. A Java exception thrown out of any call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`.
 

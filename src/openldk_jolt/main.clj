@@ -396,7 +396,8 @@
                      ;; AccessibleObject.<clinit> installs langReflectAccess, which
                      ;; ReflectionFactory needs (OpenLDK %initialize-system-phase1)
                      (jinit \"java/lang/reflect/AccessibleObject\")
-                     ((method-proc \"java/lang/System\" \"initPhase1()V\"))))")]
+                     ((method-proc \"java/lang/System\" \"initPhase1()V\"))
+                     (install-unnamed-module!)))")]
       (when-let [rec (:recording @state)]
         (when (and (not hit?) (zero? status))
           (timed :cache-write #(write-cache! dir @rec)))

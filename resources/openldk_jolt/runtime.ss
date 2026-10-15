@@ -338,6 +338,8 @@
                      (if (eq? (jclass-kind c) 'prim) 1 0))
         (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "modifiers")
                      (class-modifiers c))
+        (when unnamed-module
+          (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "module") unnamed-module))
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
                        (jmirror (find-class (desc->class-name (substring (jclass-name c) 1 (string-length (jclass-name c))))))))
@@ -346,6 +348,20 @@
 ;; Class.getModifiers: access flags minus ACC_SUPER (0x20), which shares its
 ;; bit with Modifier.SYNCHRONIZED; the JVM masks it off the same way.
 (define (class-modifiers c) (fxlogand (jclass-flags c) #x761f))
+
+;; Every class lives in one unnamed module, as in OpenLDK: Class.getModule()
+;; must not be null (resource bundles, getResourceAsStream), and an unnamed
+;; module skips module access checks. Created after initPhase1, then set on
+;; the mirrors made before it existed.
+(define unnamed-module #f)
+(define (install-unnamed-module!)
+  (jinit "java/lang/Module")
+  (let ([m (jnew "java/lang/Module")]
+        [slot (jfield-index "java/lang/Class" "module")])
+    ((method-proc "java/lang/Module" "<init>(Ljava/lang/ClassLoader;)V") m #f)
+    (set! unnamed-module m)
+    (vector-for-each (lambda (mirror) (vector-set! (jobj-slots mirror) slot m))
+                     (hashtable-keys mirror->class))))
 
 (define (jmirror-of name) (jmirror (find-class name)))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'openldk "not a mirror" m)))
@@ -510,6 +526,9 @@
       (lambda args
         (jit! cname mname desc)
         (apply (top-level-value sym) args))))
+
+;; "java.lang.String" -> "java/lang/String"
+(define (slashes s) (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list s))))
 
 ;; --- descriptors ----------------------------------------------------------------------
 
