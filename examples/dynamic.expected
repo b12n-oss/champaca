@@ -1,0 +1,20 @@
+max-int 7
+max-mixed 7.5
+max-long 5000000000
+abs 4 2.5
+valueOf 42|true|x
+parseInt 124
+builder ab1c2.5true
+remove-index a
+remove-object true
+list [c]
+map-get 2
+sorted [fig, pear, kiwi, banana]
+removeIf true
+after [fig, pear, banana]
+stream [FIG, PEAR, BANANA]
+upper HELLO
+charAt b
+split 3
+MAX_VALUE 2147483647
+caught java.lang.NumberFormatException: For input string: "x"

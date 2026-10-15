@@ -17,7 +17,11 @@
                                   ok (and (zero? exit) (= out (slurp "examples/interop.expected")))]
                               (println (if ok "PASS" "FAIL") "examples/interop.clj (jolt calling Java)")
                               (when-not ok "interop"))
-                    fails (remove nil? (conj fails interop))
-                    mains (conj mains "interop")]
+                    dynamic (let [{:keys [out exit]} (shell {:out :string :continue true} "jolt -M examples/dynamic.clj")
+                                  ok (and (zero? exit) (= out (slurp "examples/dynamic.expected")))]
+                              (println (if ok "PASS" "FAIL") "examples/dynamic.clj (descriptor-free calls)")
+                              (when-not ok "dynamic"))
+                    fails (remove nil? (conj fails interop dynamic))
+                    mains (conj mains "interop" "dynamic")]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}}}

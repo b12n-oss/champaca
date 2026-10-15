@@ -9,27 +9,34 @@ The classes are the JDK's own. They're read straight out of `$JAVA_HOME/jmods/ja
 
 ## Calling Java from jolt
 
-Java objects live in jolt's own heap as Chez records, so calling into Java is a plain procedure call. There's no second runtime and no wire protocol. The API mirrors [jolt-openldk](https://github.com/jlt-commons/jolt-openldk)'s:
+Java objects live in jolt's own heap as Chez records, so calling into Java is a plain procedure call. There's no second runtime and no wire protocol. Methods are found by name, and the overload is chosen from the argument values, the way `javac` picks one at a call site:
 
 ```clojure
 (require '[openldk-jolt.api :as ldk])
 
 (ldk/init!)
 
-(ldk/call-static "java/lang/Math" "sqrt" "(D)D" 2)              ;=> 1.4142135623730951
+(ldk/invoke-static "java.lang.Math" "max" 3 7.5)                 ;=> 7.5
 
-(let [xs (ldk/new-object "java/util/ArrayList" "()V")]
-  (doseq [w ["pear" "fig" "apple"]]
-    (ldk/call xs "add" "(Ljava/lang/Object;)Z" w))
-  ;; a jolt fn as a java.util.Comparator, called back from Collections.sort
-  (ldk/call-static "java/util/Collections" "sort" "(Ljava/util/List;Ljava/util/Comparator;)V"
-                   xs (ldk/implement "java/util/Comparator" "compare"
-                                     "(Ljava/lang/Object;Ljava/lang/Object;)I"
-                                     (fn [a b] (compare (count a) (count b)))))
-  (ldk/to-string xs))                                            ;=> "[fig, pear, apple]"
+(let [xs (ldk/construct "java.util.ArrayList")]
+  (doseq [w ["pear" "fig" "apple" "kiwi"]] (ldk/invoke xs "add" w))
+  (ldk/invoke xs "sort" (fn [a b] (compare (count a) (count b))))  ; a jolt fn as a Comparator
+  (ldk/invoke xs "remove" 0)                                     ;=> "fig"   (remove(int))
+  (ldk/invoke xs "get" 0)                                        ;=> "pear"
+  (ldk/to-string xs))                                            ;=> "[pear, kiwi, apple]"
+
+(ldk/->clj (ldk/invoke "a,b,c" "split" ","))                     ;=> ["a" "b" "c"]
 ```
 
-Strings, `nil` and booleans convert at the boundary using the descriptor. Any other Java object crosses as itself. A Java exception thrown out of a call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`. See `examples/interop.clj`.
+- **`construct`, `invoke`, `invoke-static`, `get-static`, `get-field`.** Class names take dots or slashes, and a jolt string can be the target of `invoke`.
+- **Overloads** go to the best fit: exact primitive, then widening, then boxing, then a supertype. Ties go to the most specific method (JLS 15.12.2.5), so `String.valueOf(nil)` picks `valueOf(char[])` and throws an NPE, just like Java. Only public members count. A call that fits nothing, or two methods equally, throws an `ex-info` listing the candidates.
+- **A jolt fn** passed where Java wants a single-method interface (`Comparator`, `Predicate`, `Function`, ...) becomes an implementation of it.
+- **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays stay Java arrays, and `->clj` copies one into a vector.
+- **Not handled:** varargs methods (`String.format`, `List.of(a, b, c)`) need their array built by hand, and jolt collections aren't converted to Java ones.
+
+`examples/dynamic.clj` makes 20 calls and `test/java/DynamicCheck.java` makes the same ones on the JVM. `bb test` checks the outputs match.
+
+The descriptor-based functions (`call-static`, `new-object`, `call`, `implement`) are still there for exact control. A Java exception thrown out of any call surfaces as an `ex-info` whose message is the exception's `toString`, and the object itself sits under `:java/exception`.
 
 ## Reflection
 
@@ -77,6 +84,7 @@ OPENLDK_TRACE=1 ...    # log each compiled method, and write the generated Schem
 | `resources/openldk_jolt/natives.ss` | JDK native methods (83 named, plus pattern rules for `Unsafe`) |
 | `resources/openldk_jolt/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
 | `resources/openldk_jolt/interop.ss` | the conversions and entry points behind `api.clj` |
+| `resources/openldk_jolt/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, auto-wrapping jolt fns |
 
 ## Shortcuts that real programs will hit
 

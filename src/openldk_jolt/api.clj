@@ -11,16 +11,20 @@
             [openldk-jolt.main :as main]))
 
 (defonce ^:private interop-loaded (atom false))
+(defonce ^:private dynamic-loaded (atom false))
 
 (defn- rethrow
   "Turn the runtime's java-exception condition into an ex-info."
   [f]
   (try (f)
        (catch :default e
-         (if (s/call "ldk-java-exception?" e)
+         (cond
+           (s/call "ldk-java-exception?" e)
            (throw (ex-info (s/call "ldk-exception-message" e)
                            {:java/exception (s/call "ldk-exception-object" e)}))
-           (throw e)))))
+           (and @dynamic-loaded (s/call "ldk-api-error?" e))
+           (throw (ex-info (s/call "ldk-api-error-message" e) {:openldk/error :lookup}))
+           :else (throw e)))))
 
 (defn init!
   "Boot the JDK. opts: {:classpath [\"dir\" ...]} for user classes."
@@ -31,6 +35,10 @@
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "openldk_jolt/interop.ss")))
      (reset! interop-loaded true))
+   (when-not @dynamic-loaded
+     (s/eval-string (slurp (io/resource "openldk_jolt/dynamic.ss")))
+     (s/call "set-lambda-class-hook!" (fn [iface sam-key] (main/lambda-class [iface] [sam-key])))
+     (reset! dynamic-loaded true))
    :ok))
 
 (defn call-static [cls mname desc & args]
@@ -58,3 +66,36 @@
   before exit; it is cheap when nothing new was compiled."
   []
   (main/save-generation!))
+
+;; --- descriptor-free calls ---------------------------------------------------------
+;; Class names may use dots or slashes. The overload is chosen from the
+;; runtime types of the arguments (see resources/openldk_jolt/dynamic.ss),
+;; a jolt fn passed for a single-method interface is wrapped as one, and
+;; boxed results come back as jolt numbers, booleans and chars.
+
+(defn construct
+  "Construct cls with the constructor that fits args."
+  [cls & args]
+  (rethrow #(apply s/call "dyn-new" cls args)))
+
+(defn invoke
+  "Call the instance method mname on obj (a Java object, or a jolt string
+  as java.lang.String) with the overload that fits args."
+  [obj mname & args]
+  (rethrow #(apply s/call "dyn-invoke" obj mname args)))
+
+(defn invoke-static
+  "Call the static method mname of cls with the overload that fits args."
+  [cls mname & args]
+  (rethrow #(apply s/call "dyn-invoke-static" cls mname args)))
+
+(defn get-static [cls fname] (rethrow #(s/call "dyn-get-static" cls fname)))
+(defn get-field [obj fname] (rethrow #(s/call "dyn-get-field" obj fname)))
+
+(defn ->clj
+  "Copy a Java array into a jolt vector, converting elements (strings,
+  boxed numbers) and nested arrays. Anything else is returned as is."
+  [x]
+  (if (s/call "dyn-array?" x)
+    (mapv #(->clj (s/call "dyn-aref" x %)) (range (s/call "dyn-alength" x)))
+    x))
