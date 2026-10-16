@@ -655,7 +655,10 @@
   "Compile the recorded boot forms to boot.so and save the class table to
   state.img, in a temp dir renamed into place so readers never see half."
   [dir forms]
-  (let [tmp (io/file (str dir ".tmp-" (System/nanoTime)))]
+  ;; boot! may have started the temp dir, with runtime.so already in it
+  (let [pre (:cache-tmp @state)
+        tmp (if (and pre (.exists (io/file pre "runtime.so"))) pre (io/file (str dir ".tmp-" (System/nanoTime))))]
+    (swap! state dissoc :cache-tmp)
     (.mkdirs tmp)
     (let [src (io/file tmp "boot.ss")]
       (spit src (str/join "\n" (map :text forms)))
@@ -663,13 +666,11 @@
       (.delete src))
     ;; the runtime itself, so a warm start loads it compiled rather than
     ;; compiling its source again (about 130 ms)
-    (let [pre (:runtime-so @state)]
-      (if (and pre (.exists pre) (.renameTo pre (io/file tmp "runtime.so")))
-        (swap! state dissoc :runtime-so)
+    (when-not (.exists (io/file tmp "runtime.so"))
         (let [src (io/file tmp "runtime.ss")]
           (spit src (str/join "\n" (map #(slurp (io/resource %)) runtime-files)))
           (timed :cache-write-runtime #(s/call "quiet-compile-file" (str src) (str (io/file tmp "runtime.so"))))
-          (.delete src))))
+          (.delete src)))
     (timed :cache-write-state #(dump-classes! (io/file tmp "state.img")))
     ;; a directory missing a file (a crash mid-write, a load that failed) would
     ;; block the rename forever, so it goes first
@@ -745,9 +746,12 @@
         ;; a cold start writes runtime.so into the cache anyway, so compile it
         ;; first and load it, rather than evaluating the source and compiling
         ;; it again for the cache (write-cache! moves this file into place)
-        (let [f (io/file (str dir ".runtime-" (System/nanoTime) ".so"))
-              src (io/file (str f ".ss"))]
-          (io/make-parents f)
+        ;; inside the temp dir write-cache! will fill and rename, so a run
+        ;; that dies first leaves it where prune-cache-root! looks
+        (let [tmp (io/file (str dir ".tmp-" (System/nanoTime) (rand-int 1000000)))
+              f (io/file tmp "runtime.so")
+              src (io/file tmp "runtime.ss")]
+          (.mkdirs tmp)
           (spit src (str/join "\n" (map #(slurp (io/resource %)) runtime-files)))
           (timed :runtime-compile
                  #(s/eval-string (str "(parameterize ([current-output-port (open-output-string)]"
@@ -755,7 +759,7 @@
                                       " (compile-file " (pr-str (str src)) " " (pr-str (str f)) "))")))
           (.delete src)
           (timed :runtime-load #(s/call "load" (str f)))
-          (swap! state assoc :runtime-so f))
+          (swap! state assoc :cache-tmp tmp))
         (doseq [f runtime-files] (scheme! (slurp (io/resource f)))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   ;; annotation instances: a synthetic class implementing the annotation
