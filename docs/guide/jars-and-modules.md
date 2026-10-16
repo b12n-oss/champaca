@@ -53,6 +53,8 @@ The JDK's own classes come from `$JAVA_HOME/jmods`, the same files `jlink` build
 
 A jmod is a zip file behind a 4-byte header, so it can't be opened as a zip directly. On its first run champaca reads the zip directory at the end of each of the 69 jmods in JDK 25 and builds an index from package to module (876 packages). It saves the index as `~/.cache/champaca/jmods/<jdk>/packages.edn`. After that a class lookup goes straight to the module that holds its package. The zip inside that one module gets copied out, once, beside the index. `bb test` touches four modules and copies 20 MB.
 
+Builds disagree on where a jmod's zip offsets count from. The JDK's `jmod` tool counts them from the end of the header, but 30 of the 84 jmods in GraalVM CE 25.0.1 count them from the start of the file. Champaca takes whichever base puts the zip directory where its end record says it is, and copies the zip out from that same point, so both kinds work.
+
 There's no module system on top of that: no `module-info` checks and no export rules. Every class sits in one unnamed module and can see every other.
 
 ## `sun.misc.Unsafe`

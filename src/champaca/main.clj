@@ -85,6 +85,8 @@
              (Long/toHexString (bit-and (hash [(java-home) (when (.exists release) (slurp release))])
                                         0xffffffff)))))
 
+(declare jmod-zip-base)
+
 (defn- jmod-zip [module]
   (or (get-in @state [:jmods module])
       (let [out (io/file (jmods-dir) (str module ".zip"))]
@@ -92,18 +94,20 @@
           ;; copied beside, then renamed, so a concurrent run never opens half
           (let [tmp (io/file (str out ".tmp-" (System/nanoTime)))]
             (io/make-parents tmp)
-            (with-open [in (io/input-stream (io/file (java-home) "jmods" (str module ".jmod")))]
-              (.skip in 4)
-              (io/copy in tmp))
+            (let [jm (io/file (java-home) "jmods" (str module ".jmod"))]
+              (with-open [in (io/input-stream jm)]
+                ;; from where its offsets count, so they hold in the copy
+                (.skip in (jmod-zip-base jm))
+                (io/copy in tmp)))
             (when-not (.renameTo tmp out) (.delete tmp))))
         (let [zf (ZipFile. (str out))]
           (swap! state assoc-in [:jmods module] zf)
           zf))))
 
 ;; Which module holds a package comes from each jmod's zip central directory,
-;; read in place (4 bytes in, behind the header) so no module is copied just
-;; to be searched. jlink writes no zip comment, so the end-of-directory
-;; record is the file's last 22 bytes. The index is saved beside the copies.
+;; read in place so no module is copied just to be searched. jlink writes no
+;; zip comment, so the end-of-directory record is the file's last 22 bytes.
+;; The index is saved beside the copies.
 
 (defn- le16 [b i] (bit-or (bit-and (aget b i) 0xff) (bit-shift-left (bit-and (aget b (inc i)) 0xff) 8)))
 (defn- le32 [b i] (bit-or (le16 b i) (bit-shift-left (le16 b (+ i 2)) 16)))
@@ -120,14 +124,30 @@
             (if (neg? r) (throw (ex-info "short read" {:file (str f) :offset off :wanted n})) (recur (+ got r))))
           b)))))
 
+(defn- jmod-eocd [f]
+  (let [eocd (read-at f (- (.length f) 22) 22)]
+    (when-not (= 0x06054b50 (le32 eocd 0))
+      (throw (ex-info "jmod has no plain end-of-directory record" {:file (str f)})))
+    eocd))
+
+;; A jmod is a 4-byte header and then a zip. The JDK's jmod tool counts the
+;; zip's offsets from the end of the header, but not every build does: 30 of
+;; GraalVM CE 25.0.1's 84 jmods count them from the start of the file. The
+;; base is whichever puts the central directory's signature at its offset.
+(defn- jmod-zip-base [f]
+  (let [off (le32 (jmod-eocd f) 16)
+        cd-at? (fn [base] (= 0x02014b50 (le32 (read-at f (+ base off) 4) 0)))]
+    (cond (cd-at? 4) 4
+          (cd-at? 0) 0
+          :else (throw (ex-info "jmod's central directory is not where its end record says"
+                                {:file (str f) :offset off})))))
+
 (defn- jmod-packages
   "The packages with classes in one jmod, as \"java/util/zip\"."
   [f]
-  (let [eocd (read-at f (- (.length f) 22) 22)
-        _ (when-not (= 0x06054b50 (le32 eocd 0))
-            (throw (ex-info "jmod has no plain end-of-directory record" {:file (str f)})))
+  (let [eocd (jmod-eocd f)
         size (le32 eocd 12)
-        cd (read-at f (+ 4 (le32 eocd 16)) size)]
+        cd (read-at f (+ (jmod-zip-base f) (le32 eocd 16)) size)]
     (loop [i 0 acc (transient #{})]
       (if (>= i size)
         (persistent! acc)
