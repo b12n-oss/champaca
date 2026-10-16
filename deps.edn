@@ -3,4 +3,4 @@
  ;; The jolt `bb test` runs on: upstream main past v0.8.22, for FileInputStream.skip
  ;; as a seek (jolt-lang/jolt#1375). `bb jolt` builds it. Drop once a release has it.
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                 :git/sha "9eb0b9b34aa229ca1403a1fce4472f39a26d2818"}}
+                 :git/sha "ff7a37e89c8ca2115ccfd960907cfa5c498f9084"}}
