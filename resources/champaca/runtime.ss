@@ -58,7 +58,7 @@
 (define (jdouble->string x)
   (jinit "java/lang/Double")
   (jstring->scheme ((method-proc "java/lang/Double" "toString(D)Ljava/lang/String;") x)))
-(define (jfloat->string x)
+(define (java-float->string x)
   (jinit "java/lang/Float")
   (jstring->scheme ((method-proc "java/lang/Float" "toString(F)Ljava/lang/String;") x)))
 
@@ -67,8 +67,12 @@
 ;; kind is 'class, 'interface, 'array or 'prim. fields maps "Decl.name" to a
 ;; slot index. vtable entries map "name(desc)" to the symbol whose top-level
 ;; value is the method procedure, a JIT stub until first call.
-(define-record-type jclass
-  (fields name super interfaces template vtable fields flags kind meta (mutable state) (mutable mirror)))
+;; jolt's own Scheme defines jclass? and jclass-name (and other names these
+;; files used to redefine, breaking jolt's float printing and Java interop
+;; once champaca loaded), so this record spells its predicate and name
+;; accessor differently. examples/jolt-after-init.clj checks jolt still works.
+(define-record-type (jclass make-jclass ldk-jclass?)
+  (fields (immutable name jclass-cname) super interfaces template vtable fields flags kind meta (mutable state) (mutable mirror)))
 (define-record-type jobj (fields cls slots))
 (define-record-type jarr (fields elem vec))
 
@@ -130,12 +134,12 @@
 
 (define (jfield-index cname fname)
   (let loop ([c (find-class cname)])
-    (or (hashtable-ref (jclass-fields c) (string-append (jclass-name c) "." fname) #f)
+    (or (hashtable-ref (jclass-fields c) (string-append (jclass-cname c) "." fname) #f)
         (and (jclass-super c) (loop (find-class (jclass-super c))))
         (error 'champaca "no such field" cname fname))))
 
 (define (class-name-of x)
-  (cond [(jobj? x) (jclass-name (jobj-cls x))]
+  (cond [(jobj? x) (jclass-cname (jobj-cls x))]
         [(jarr? x) (string-append "[" (jarr-elem x))]
         [else (error 'champaca "not a Java value" x)]))
 
@@ -195,7 +199,7 @@
                [sym (hashtable-ref (jclass-vtable c) key #f)])
           (if sym
               (top-level-value sym)
-              (jthrow "java/lang/AbstractMethodError" (string-append (jclass-name c) "." key)))))))
+              (jthrow "java/lang/AbstractMethodError" (string-append (jclass-cname c) "." key)))))))
 
 ;; --- arrays -------------------------------------------------------------------
 
@@ -305,7 +309,7 @@
 ;; any Java reference -> Scheme string, the way string concatenation sees it
 (define (jstring-of x)
   (cond [(not x) "null"]
-        [(and (jobj? x) (string=? (jclass-name (jobj-cls x)) "java/lang/String")) (jstring->scheme x)]
+        [(and (jobj? x) (string=? (jclass-cname (jobj-cls x)) "java/lang/String")) (jstring->scheme x)]
         [else (let ([s ((jvirt x "toString()Ljava/lang/String;") x)]) (if s (jstring->scheme s) "null"))]))
 
 (define (jbool->string z) (if (eqv? z 0) "false" "true"))
@@ -341,7 +345,7 @@
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "module") unnamed-module))
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
-                       (jmirror (find-class (desc->class-name (substring (jclass-name c) 1 (string-length (jclass-name c))))))))
+                       (jmirror (find-class (desc->class-name (substring (jclass-cname c) 1 (string-length (jclass-cname c))))))))
         m)))
 
 ;; Class.getModifiers: access flags minus ACC_SUPER (0x20), which shares its
@@ -486,7 +490,7 @@
 (define (field-string v d)
   (case (string-ref d 0)
     [(#\Z) (jbool->string v)] [(#\C) (string (integer->char v))]
-    [(#\F) (jfloat->string v)] [(#\D) (jdouble->string v)] [(#\L #\[) (jstring-of v)] [else (number->string v)]))
+    [(#\F) (java-float->string v)] [(#\D) (jdouble->string v)] [(#\L #\[) (jstring-of v)] [else (number->string v)]))
 (define (field-hash v d)
   (case (string-ref d 0)
     [(#\L #\[) (if v ((jvirt v "hashCode()I") v) 0)]

@@ -480,7 +480,7 @@
                     conv (map (fn [t v]
                                 (case t
                                   ("I" "S" "B" "J") (sx "number->string" v)
-                                  "F" (sx "jfloat->string" v)
+                                  "F" (sx "java-float->string" v)
                                   "D" (sx "jdouble->string" v)
                                   "C" (sx "string" (sx "integer->char" v))
                                   "Z" (sx "jbool->string" v)

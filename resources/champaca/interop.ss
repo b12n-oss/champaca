@@ -16,7 +16,7 @@
        [(#\L #\[) (if (string? v) (jstring v) v)]
        [else v])]))
 
-(define (java-string? v) (and (jobj? v) (string=? (jclass-name (jobj-cls v)) "java/lang/String")))
+(define (java-string? v) (and (jobj? v) (string=? (jclass-cname (jobj-cls v)) "java/lang/String")))
 
 (define (ldk-out d v)
   (case (string-ref d 0)

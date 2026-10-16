@@ -120,7 +120,7 @@
   (let ([cp (jnew "jdk/internal/reflect/ConstantPool")])
     (jslot-set! cp (jfield-index "jdk/internal/reflect/ConstantPool" "constantPoolOop") this)
     cp))
-(define (cp-value oop i) (cp-hook (jclass-name (mirror-class (nn oop))) i))
+(define (cp-value oop i) (cp-hook (jclass-cname (mirror-class (nn oop))) i))
 (defnative "jdk/internal/reflect/ConstantPool.getUTF8At0(Ljava/lang/Object;I)Ljava/lang/String;" (this oop i)
   (jstring (cp-value oop i)))
 (defnative "jdk/internal/reflect/ConstantPool.getStringAt0(Ljava/lang/Object;I)Ljava/lang/String;" (this oop i)
@@ -211,7 +211,7 @@
 
 (define (prim-desc? d) (not (memv (string-ref d 0) '(#\L #\[))))
 
-(define (reflect-args ptypes args)
+(define (reflect-arg-list ptypes args)
   (let ([argv (if args (vector->list (jarr-vec args)) '())])
     (unless (fx= (length argv) (length ptypes))
       (jthrow "java/lang/IllegalArgumentException"
@@ -236,9 +236,9 @@
 (defnative "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
   (m obj args)
   (let-values ([(c meta) (reflected-member "java/lang/reflect/Method" m)])
-    (let* ([cname (jclass-name c)] [desc (cadr meta)] [key (string-append (car meta) desc)]
+    (let* ([cname (jclass-cname c)] [desc (cadr meta)] [key (string-append (car meta) desc)]
            [static? (static-flag? (caddr meta))]
-           [argv (reflect-args (desc-args desc) args)]
+           [argv (reflect-arg-list (desc-args desc) args)]
            [ret (desc-ret desc)])
       (when static? (jinit cname))
       (let ([r (invoke-wrapped
@@ -251,9 +251,9 @@
 (defnative "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;"
   (ctor args)
   (let-values ([(c meta) (reflected-member "java/lang/reflect/Constructor" ctor)])
-    (let ([cname (jclass-name c)] [desc (cadr meta)])
+    (let ([cname (jclass-cname c)] [desc (cadr meta)])
       (jinit cname)
-      (let ([argv (reflect-args (desc-args desc) args)])
+      (let ([argv (reflect-arg-list (desc-args desc) args)])
         (invoke-wrapped
          (lambda ()
            (let ([o (jnew cname)])
@@ -267,7 +267,7 @@
   (let* ([c (mirror-class (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))]
          [slot (jslot f (jfield-index "java/lang/reflect/Field" "slot"))]
          [meta (list-ref (meta-fields c) slot)]
-         [cname (jclass-name c)] [name (car meta)] [desc (cadr meta)])
+         [cname (jclass-cname c)] [name (car meta)] [desc (cadr meta)])
     (if (static-flag? (caddr meta))
         (let ([sym (string->symbol (string-append cname ":" name))])
           (jinit cname)
@@ -319,12 +319,12 @@
   (jarraylength (reflect-array a)))
 
 (defnative "java/lang/reflect/Array.newArray(Ljava/lang/Class;I)Ljava/lang/Object;" (cls n)
-  (let ([elem (class-name->desc (jclass-name (mirror-class (nn cls))))])
+  (let ([elem (class-name->desc (jclass-cname (mirror-class (nn cls))))])
     (jnewarray elem n (elem-default elem))))
 
 (defnative "java/lang/reflect/Array.multiNewArray(Ljava/lang/Class;[I)Ljava/lang/Object;" (cls dims)
   (jmultiarray (string-append (make-string (jarraylength dims) #\[)
-                              (class-name->desc (jclass-name (mirror-class (nn cls)))))
+                              (class-name->desc (jclass-cname (mirror-class (nn cls)))))
                (vector->list (jarr-vec dims))))
 
 (defnative "java/lang/reflect/Array.get(Ljava/lang/Object;I)Ljava/lang/Object;" (a i)
@@ -372,7 +372,7 @@
                       (filter (lambda (m) (and (fxpositive? (fxlogand (caddr m) #x400))
                                                (not (static-flag? (caddr m)))))
                               (meta-methods iface)))]
-           [cname (annotation-class-hook (jclass-name iface)
+           [cname (annotation-class-hook (jclass-cname iface)
                                          (fold-left (lambda (acc k) (if (string=? acc "") k (string-append acc "|" k)))
                                                     "" keys))]
            [c (find-class cname)]

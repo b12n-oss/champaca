@@ -66,14 +66,14 @@
   (let ([c (mirror-class this)])
     (and (jclass-super c) (not (eq? (jclass-kind c) 'interface)) (jmirror-of (jclass-super c)))))
 (defnative "java/lang/Class.initClassName()Ljava/lang/String;" (this)
-  (let* ([n (jclass-name (mirror-class this))]
+  (let* ([n (jclass-cname (mirror-class this))]
          [s (jstring (list->string (map (lambda (c) (if (char=? c #\/) #\. c)) (string->list n))))])
     (jslot-set! this (jfield-index "java/lang/Class" "name") s)
     s))
 (defnative "java/lang/Class.isInstance(Ljava/lang/Object;)Z" (this x)
-  (if (jinstance? x (jclass-name (mirror-class this))) 1 0))
+  (if (jinstance? x (jclass-cname (mirror-class this))) 1 0))
 (defnative "java/lang/Class.isAssignableFrom(Ljava/lang/Class;)Z" (this other)
-  (if (class-assignable? (jclass-name (mirror-class other)) (jclass-name (mirror-class this))) 1 0))
+  (if (class-assignable? (jclass-cname (mirror-class other)) (jclass-cname (mirror-class this))) 1 0))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   (let* ([n (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list (jstring->scheme name))))]
@@ -156,8 +156,8 @@
        (let ([c (eq-hashtable-ref mirror->class o #f)])
          (and c
               (let ([meta (list-ref (cadr (jclass-meta c)) (fx- off static-offset-tag))])
-                (jinit (jclass-name c))
-                (string->symbol (string-append (jclass-name c) ":" (car meta))))))))
+                (jinit (jclass-cname c))
+                (string->symbol (string-append (jclass-cname c) ":" (car meta))))))))
 
 (define (unsafe-get o off t)
   (cond
@@ -193,7 +193,7 @@
 
 (defnative "jdk/internal/misc/Unsafe.arrayBaseOffset0(Ljava/lang/Class;)I" (this c) array-base)
 (defnative "jdk/internal/misc/Unsafe.arrayIndexScale0(Ljava/lang/Class;)I" (this c)
-  (let ([n (jclass-name (mirror-class c))])
+  (let ([n (jclass-cname (mirror-class c))])
     (type-size (let ([e (substring n 1 (string-length n))]) (if (memv (string-ref e 0) '(#\L #\[)) "L" e)))))
 (defnative "jdk/internal/misc/Unsafe.addressSize0()I" (this) 8)
 (defnative "jdk/internal/misc/Unsafe.pageSize()I" (this) 4096)
@@ -201,18 +201,18 @@
 (defnative "jdk/internal/misc/Unsafe.loadFence()V" (this) (void))
 (defnative "jdk/internal/misc/Unsafe.storeFence()V" (this) (void))
 (defnative "jdk/internal/misc/Unsafe.objectFieldOffset1(Ljava/lang/Class;Ljava/lang/String;)J" (this c name)
-  (jfield-index (jclass-name (mirror-class c)) (jstring->scheme name)))
+  (jfield-index (jclass-cname (mirror-class c)) (jstring->scheme name)))
 (define (field-mirror f) (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))
 (defnative "jdk/internal/misc/Unsafe.staticFieldBase0(Ljava/lang/reflect/Field;)Ljava/lang/Object;" (this f)
   (field-mirror (nn f)))
 (defnative "jdk/internal/misc/Unsafe.staticFieldOffset0(Ljava/lang/reflect/Field;)J" (this f)
   (fx+ static-offset-tag (jslot (nn f) (jfield-index "java/lang/reflect/Field" "slot"))))
 (defnative "jdk/internal/misc/Unsafe.ensureClassInitialized0(Ljava/lang/Class;)V" (this c)
-  (jinit (jclass-name (mirror-class c))))
+  (jinit (jclass-cname (mirror-class c))))
 (defnative "jdk/internal/misc/Unsafe.shouldBeInitialized0(Ljava/lang/Class;)Z" (this c)
   (if (eq? (jclass-state (mirror-class c)) 'loaded) 1 0))
 (defnative "jdk/internal/misc/Unsafe.allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;" (this c)
-  (jnew (jclass-name (mirror-class c))))
+  (jnew (jclass-cname (mirror-class c))))
 
 (define (starts? s p) (and (fx>= (string-length s) (string-length p)) (string=? p (substring s 0 (string-length p)))))
 (define (method-part n) (substring n (string-length unsafe-prefix) (string-length n)))
@@ -404,11 +404,11 @@
               (do ([i 0 (fx+ i 1)]) ((fx= i n) n)
                 (vector-set! v (fx+ off i) (i2b (bytevector-u8-ref bv i)))))))))
 
-(define (file-port? port) (and (port-has-port-length? port) (port-has-port-position? port)))
+(define (seekable-port? port) (and (port-has-port-length? port) (port-has-port-position? port)))
 
 (defnative "java/io/FileInputStream.available0()I" (this)
   (let ([port (stream-port this)])
-    (if (file-port? port) (max 0 (- (port-length port) (port-position port))) 0)))
+    (if (seekable-port? port) (max 0 (- (port-length port) (port-position port))) 0)))
 (defnative "java/io/FileInputStream.skip0(J)J" (this n)
   (let* ([port (stream-port this)] [pos (port-position port)]
          [to (min (port-length port) (+ pos (max n 0)))])
@@ -418,7 +418,7 @@
 (defnative "java/io/FileInputStream.position0()J" (this) (port-position (stream-port this)))
 (defnative "java/io/FileInputStream.isRegularFile0(Ljava/io/FileDescriptor;)Z" (this fdo)
   (let ([port (hashtable-ref open-files (jslot fdo (jfield-index "java/io/FileDescriptor" "fd")) #f)])
-    (if (and port (file-port? port)) 1 0)))
+    (if (and port (seekable-port? port)) 1 0)))
 
 (defnative "java/io/FileDescriptor.close0()V" (this)
   (let* ([i (jfield-index "java/io/FileDescriptor" "fd")] [fd (jslot this i)]
@@ -690,13 +690,13 @@
       ;; the JDK's MemberName text: "no such field: pkg.Cls.name/type/getField"
       (let ([dots (lambda (n) (list->string (map (lambda (ch) (if (char=? ch #\/) #\. ch)) (string->list n))))])
         (jthrow "java/lang/NoSuchFieldException"
-                (string-append "no such field: " (dots (jclass-name c)) "." fname "/"
-                               (dots (jclass-name (mirror-class (nn type))))
+                (string-append "no such field: " (dots (jclass-cname c)) "." fname "/"
+                               (dots (jclass-cname (mirror-class (nn type))))
                                (if static? "/getStatic" "/getField")))))
     (let ([dc (car hit)] [desc (cadr (cdr hit))])
       (if static?
-          (make-vh 'static (string->symbol (string-append (jclass-name dc) ":" fname)) (jclass-name dc) desc)
-          (make-vh 'field (jfield-index (jclass-name dc) fname) #f desc)))))
+          (make-vh 'static (string->symbol (string-append (jclass-cname dc) ":" fname)) (jclass-cname dc) desc)
+          (make-vh 'field (jfield-index (jclass-cname dc) fname) #f desc)))))
 
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
   (lambda (this recv name type) (field-vh recv name type #f)))
@@ -704,7 +704,7 @@
   (lambda (this recv name type) (field-vh recv name type #t)))
 
 (define (array-class-elem cls)
-  (let ([n (jclass-name (mirror-class (nn cls)))])
+  (let ([n (jclass-cname (mirror-class (nn cls)))])
     (unless (char=? (string-ref n 0) #\[)
       (jthrow "java/lang/IllegalArgumentException" (string-append "not an array class: " n)))
     (substring n 1 (string-length n))))
