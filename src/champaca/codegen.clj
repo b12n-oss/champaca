@@ -564,9 +564,11 @@
                          (apply sx "mh-call" recv (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
-                             (if-let [decl (and (= op :invokevirtual) ((:direct-target resolve) class name desc))]
+                             (if-let [decl ((:direct-target resolve) class name desc)]
                                ;; nothing can override it: call it directly,
-                               ;; after the null check dispatch would do
+                               ;; after the null check dispatch would do. For
+                               ;; invokeinterface that is a private interface
+                               ;; method, which javac calls this way
                                (apply sx (callee decl name desc)
                                       (sx "let" (sx (sx "r" recv)) (sx "if" "r" "r" (sx "nn" "r"))) argv)
                                (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc)))) recv argv))))

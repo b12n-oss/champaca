@@ -285,6 +285,29 @@
           (recur (concat (rest todo) (:interfaces (class-info i))) (conj seen i) (conj out i)))
         out))))
 
+(defn- iface-methods
+  "[interface method] for every instance method the interfaces ifaces
+  declare, private ones aside, grouped by name and descriptor."
+  [ifaces]
+  (group-by (fn [[_ m]] (str (:name m) (:desc m)))
+            (for [i (distinct ifaces)
+                  m (:methods (class-info i))
+                  :when (and (:virtual m) (zero? (bit-and (:flags m) 0x0002)))]
+              [i m])))
+
+(defn- max-specific
+  "Of cands, the [interface method] pairs declaring one method, the
+  interface JVM selection picks (JVMS 5.4.3.3): of the declarations no other
+  declaring interface extends, the one with a body, when exactly one has.
+  nil otherwise."
+  [cands]
+  (let [maximal (if (next cands)
+                  (let [extends? (fn [j i] (some #{i} (rest (ancestry j))))]
+                    (remove (fn [[i _]] (some (fn [[j _]] (and (not= i j) (extends? j i))) cands)) cands))
+                  cands)
+        concrete (filter (fn [[_ m]] (:code m)) maximal)]
+    (when (= 1 (count concrete)) (ffirst concrete))))
+
 (defn- resolve-static-field [cname fname]
   (or (some (fn [c] (when (some #(and (:static %) (= fname (:name %))) (:fields (class-info c))) c))
             (ancestry cname))
@@ -308,6 +331,8 @@
                                  (:methods (class-info c))))
         supers (take-while some? (iterate #(:super (class-info %)) cname))]
     (or (some #(when (has? % false) %) supers)
+        (max-specific (get (iface-methods (filter #(cf/interface? (class-info %)) (ancestry cname)))
+                           (str mname desc)))
         (some #(when (has? % true) %) (ancestry cname))
         (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
@@ -333,9 +358,9 @@
         {:cls p :method (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))}))))
 
 (defn- direct-target
-  "The class whose cname.mname(desc) an invokevirtual always reaches, or nil:
-  the method it resolves to is private or final, or its class is final, so no
-  override can be picked at run time."
+  "The class whose cname.mname(desc) an invokevirtual or invokeinterface
+  always reaches, or nil: the method it resolves to is private or final, or
+  its class is final, so no override can be picked at run time."
   [cname mname desc]
   (when-not (str/starts-with? cname "[")
     ;; a method only an interface declares, without a body, doesn't resolve
@@ -398,17 +423,29 @@
         layout (into (or (:layout sup) {})
                      (map-indexed (fn [i f] [(str (:name info) "." (:name f)) (+ base i)]) own))
         template (into (or (:template sup) []) (map #(cg/default-value (:desc %)) own))
-        vtable (into (or (:vtable sup) {})
+        ;; the superclass's entries for methods some class declares; the
+        ;; defaults it picked are picked again below, since this class may
+        ;; implement a more specific interface
+        vtable (into (into {} (remove (fn [[_ g]] (cf/interface? (class-info (subs g 0 (str/index-of g ".")))))
+                                      (:vtable sup)))
                      (for [m (:methods info)
                            :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
                        [(str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))]))
-        defaults (for [i (rest (ancestry-of-unlinked info))
-                       :let [ii (class-info i)]
-                       :when (cf/interface? ii)
-                       m (:methods ii)
-                       :when (and (:virtual m) (:code m))]
+        defaults (for [[k cands] (iface-methods (filter #(cf/interface? (class-info %))
+                                                        (rest (ancestry-of-unlinked info))))
+                       :when (not (contains? vtable k))
+                       :let [i (max-specific cands)]
+                       :when i]
+                   [k (str i "." k)])
+        vtable (into vtable defaults)
+        ;; an interface's private methods aren't inherited and pick no
+        ;; default, but javac calls them with invokeinterface on the
+        ;; receiver, which dispatches through this vtable
+        privates (for [i (filter #(cf/interface? (class-info %)) (rest (ancestry-of-unlinked info)))
+                       m (:methods (class-info i))
+                       :when (and (:virtual m) (:code m) (pos? (bit-and (:flags m) 0x0002)))]
                    [(str (:name m) (:desc m)) (str i "." (:name m) (:desc m))])
-        vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable defaults)]
+        vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable privates)]
     (assoc info :layout layout :template template :vtable vtable)))
 
 (defn- ancestry-of-unlinked
