@@ -138,10 +138,55 @@ public class MonitorCheck {
             + " " + m.vint + " " + c4 + c5 + " holds " + holds + " " + lock.isLocked();
     }
 
+    // new of a class whose initializer failed, casts of arrays, a clone of
+    // a locked object, and a static field through a VarHandle
+    static class BadNew {
+        static int v = init();
+        static int init() { throw new IllegalStateException("clinit"); }
+    }
+    static class Box implements Cloneable {
+        int v = 1;
+        public Box clone() { try { return (Box) super.clone(); } catch (CloneNotSupportedException e) { throw new RuntimeException(e); } }
+    }
+    static volatile int staticCounter;
+    static final java.lang.invoke.VarHandle STATIC_COUNTER;
+    static {
+        try {
+            STATIC_COUNTER = java.lang.invoke.MethodHandles.lookup().findStaticVarHandle(MonitorCheck.class, "staticCounter", int.class);
+        } catch (ReflectiveOperationException e) { throw new RuntimeException(e); }
+    }
+    static Object[] asObjects(Object x) { return (Object[]) x; }
+    static Cloneable asCloneable(Object x) { return (Cloneable) x; }
+
+    static String more() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 2; i++) {
+            try { new BadNew(); sb.append("made "); }
+            catch (ExceptionInInitializerError e) { sb.append("EIIE "); }
+            catch (NoClassDefFoundError e) { sb.append("NCDFE "); }
+        }
+        Object[] xs = { new String[1], new int[1], new Object[0], "s", new Integer[2][2] };
+        for (Object x : xs) {
+            try { asObjects(x); sb.append("o"); } catch (ClassCastException e) { sb.append("x"); }
+            try { asCloneable(x); sb.append("c "); } catch (ClassCastException e) { sb.append("- "); }
+        }
+        Box b = new Box();
+        synchronized (b) {
+            Box c = b.clone();
+            sb.append(Thread.holdsLock(b)).append(' ').append(Thread.holdsLock(c)).append(' ').append(c.v);
+            synchronized (c) { sb.append(' ').append(Thread.holdsLock(c)); }
+        }
+        for (int i = 0; i < 5; i++) STATIC_COUNTER.getAndAdd(2);
+        boolean ok = STATIC_COUNTER.compareAndSet(10, 11), no = STATIC_COUNTER.compareAndSet(10, 12);
+        sb.append(' ').append(staticCounter).append(' ').append(ok).append(no);
+        return sb.toString();
+    }
+
     public static void main(String[] args) throws Exception {
         System.out.println(monitors());
         System.out.println(casts());
         System.out.println(inits());
         System.out.println(atomics());
+        System.out.println(more());
     }
 }
