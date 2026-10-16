@@ -1,0 +1,51 @@
+type (int,int)int MethodHandle(int,int)int
+max 9
+max via invoke 4
+twice abab
+widen 7
+counter 12
+concat foobar (String,String)String
+size 3
+greet sub special base
+ctor type (String)StringBuilder
+built zyx
+as CharSequence seq (String)CharSequence
+no-arg ctor []
+static field 40
+field changed
+unreflect SHOUT
+unreflectConstructor Point[x=1, y=2]
+unreflectGetter changed
+bindTo hello, world (String)String
+insertArguments 50 70
+dropArguments yzyz (int,Object,String)String
+constant always
+identity 17
+filterReturnValue 6
+guardWithTest (empty) abab
+permuteArguments ba haha
+explicitCastArguments 6 (Object,int)Object
+invokeWithArguments 12 ab
+varargs 6 collector true
+missing method: NoSuchMethodException
+missing field: NoSuchFieldException
+thrown through: For input string: "x1"
+findClass Point lookupClass Point
+dynamicInvoker one two
+describe null
+describe int 7
+describe big int 500
+describe empty string
+describe string 4
+describe diagonal point 3
+describe point 1,2
+describe int array 4
+describe color 2
+describe other Double
+area 13.0 9.0
+mood angry
+mood envious
+mood calm BLUE
+token red token
+token other color GREEN
+token word hi

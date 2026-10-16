@@ -461,7 +461,7 @@
 
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
-                        ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss"
+                        ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss"
                          "champaca/codegen.clj" "champaca/main.clj"
                          "champaca/classfile.clj"]))))
 
@@ -567,6 +567,7 @@
   (scheme! (slurp (io/resource "champaca/runtime.ss")))
   (scheme! (slurp (io/resource "champaca/natives.ss")))
   (scheme! (slurp (io/resource "champaca/reflect.ss")))
+  (scheme! (slurp (io/resource "champaca/handles.ss")))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |

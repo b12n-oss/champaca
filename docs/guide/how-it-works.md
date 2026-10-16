@@ -33,7 +33,7 @@ Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot
 
 Exception handlers need one change to that shape. A Scheme `guard` around a block would also cover every block that block tail-calls into, which is wrong for Java's exception ranges. So a method with an exception table runs as a trampoline instead: each block returns the next block rather than calling it, a small loop calls whatever comes back, and the `guard` around a block covers only that block. A Java `throw` is Scheme's `raise` of the exception object itself, and a handler's `guard` clause checks the raised object's class.
 
-Some instructions get special treatment. `invokedynamic` with `LambdaMetafactory` or `ObjectMethods` (lambdas and records) and string concatenation's `makeConcatWithConstants` are compiled directly, with no bootstrap method run. VarHandle access modes become calls into the runtime's own VarHandle table.
+Some instructions get special treatment. `invokedynamic` with `LambdaMetafactory` or `ObjectMethods` (lambdas and records), string concatenation's `makeConcatWithConstants`, and the `typeSwitch` and `enumSwitch` behind pattern switches are compiled directly, with no bootstrap method run. VarHandle access modes become calls into the runtime's own VarHandle table, and `invokeExact` and `invoke` on a method handle into its handle table ([Method handles](#method-handles)).
 
 ## Values
 
@@ -64,6 +64,14 @@ After that, `System.out.println` goes through the JDK's own `PrintStream`, `Stre
 One global lock (the GIL, in `natives.ss`) lets one thread at a time run Java code, so the class table, the JIT and the runtime's own hashtables need no locks of their own. A thread gives it up whenever it blocks: entering a monitor another thread holds, `wait`, `sleep`, `LockSupport.park`, or a class another thread is still initializing. Generated code also checks at every backward branch whether some thread is waiting for the lock, and after a thousand such checks the running thread lets it go first. A monitor lives in a weak table keyed by its object, with an owner, a count and a wait set. The values the runtime keeps in globals for the running thread (the current `java.lang.Thread`, the `CHAMPACA_BT` shadow stack) are saved and restored as the lock changes hands.
 
 When `main` returns, `champaca.main` waits for the other non-daemon threads and then calls `Shutdown.shutdown()`, which runs the shutdown hooks, as the `java` launcher does.
+
+## Method handles
+
+The JDK builds a method handle from a `MemberName` the VM resolves and a `LambdaForm` it compiles to a hidden class, and neither exists here. So `handles.ss` replaces the layer above them. A method handle is a bare `MethodHandle` object, allocated without running a constructor, whose `type` field holds a real `MethodType`. A weak table maps it to a Scheme procedure and the descriptor that procedure takes. The `Lookup.find*` and `unreflect*` methods, `asType`, `bindTo`, `invokeWithArguments` and the common `MethodHandles` combinators are overridden to build and combine those. Everything else in `java.lang.invoke`, `MethodType` included, is the JDK's own code.
+
+A call to `invokeExact` or `invoke` carries the call site's descriptor, and the runtime converts each argument and the result between that descriptor and the handle's: boxing, unboxing and primitive widening. When the two match, which is the usual case, nothing is converted.
+
+A pattern switch compiles to a call that walks its case labels in order (`jswitch-index`), since a label is only a class, a string, an integer or an enum constant. An `invokedynamic` with any other bootstrap runs that bootstrap on its first call: a `Lookup` on the calling class, the call's name and `MethodType`, then the static arguments, which codegen writes out as data. The runtime keeps the `CallSite` it returns for that call site. A `ConstantCallSite`'s target is kept directly, and any other kind is asked for its current target on each call, so `MutableCallSite.setTarget` takes effect. An `ldc` of a method handle, a method type or a dynamic constant resolves the same way, once per site.
 
 ## Calls from jolt
 

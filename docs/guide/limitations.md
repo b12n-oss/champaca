@@ -1,6 +1,6 @@
 # Limitations
 
-Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the four checked libraries (commons-lang3, gson, jsoup, Jackson) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
+Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the six checked libraries (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
 
 ## Threads take turns
 
@@ -10,7 +10,11 @@ Some details follow from that. A thread that loops without calling anything give
 
 ## `invokedynamic` and method handles
 
-Lambdas and records work because the translator recognises their bootstrap methods (`LambdaMetafactory`, `ObjectMethods`) and generates the class or method directly, and string concatenation is compiled the same way. Any other bootstrap method fails with `invokedynamic bootstrap not in spike`. `MethodHandle.invoke`, `invokeExact` and the `Lookup.find*` methods for methods aren't there either. VarHandles are: `findVarHandle`, `findStaticVarHandle`, `arrayElementVarHandle` and `byteArrayViewVarHandle` all work, with every access mode, which is what `java.util.concurrent.atomic` and `ConcurrentHashMap` need. Their coordinate combinators and `byteBufferViewVarHandle` are missing.
+Both work, with a few gaps. The bootstraps javac emits are compiled directly: lambdas, records, string concatenation and pattern switches. Any other bootstrap method runs for real, once per call site ([how-it-works](how-it-works.md#method-handles)).
+
+Method handles come from the `Lookup.find*` and `unreflect*` methods, and `invokeExact`, `invoke`, `invokeWithArguments`, `asType`, `bindTo` and eight combinators work on them: `constant`, `identity`, `insertArguments`, `dropArguments`, `filterReturnValue`, `guardWithTest`, `permuteArguments` and `explicitCastArguments`. The others (`filterArguments`, `foldArguments`, `catchException`, the loop builders and so on) still run the JDK's own code, which fails on these handles, usually with an `AbstractMethodError` for `MethodHandle.rebind`. `invokeExact` doesn't check that the call matches the handle's type exactly. It converts the arguments as `invoke` would, so a call the JVM rejects with `WrongMethodTypeException` runs here. `explicitCastArguments` converts the way `asType` does, so it won't narrow a `long` to an `int` as the JVM's does. Lookups don't check access either. `Lookup.defineHiddenClass` throws a `NullPointerException`, and a pattern switch label that javac builds from a dynamic constant other than a primitive class or an enum constant fails to translate.
+
+VarHandles work too: `findVarHandle`, `findStaticVarHandle`, `arrayElementVarHandle` and `byteArrayViewVarHandle`, with every access mode, which is what `java.util.concurrent.atomic` and `ConcurrentHashMap` need. Their coordinate combinators and `byteBufferViewVarHandle` are missing.
 
 ## Reflection
 
@@ -37,6 +41,7 @@ The startup cache makes boot quick, but generated code hasn't been tuned at all:
 ## Other gaps
 
 - File I/O covers what the tests reach. Writes, permissions and symlink handling in `java.io` and `java.nio` are thin.
+- `MessageDigest` and the rest of `java.security` can't start yet. Loading the security properties opens a `java.nio.file` path, and the native filesystem behind it isn't there (Guava's `Hashing.sha256()` stops at `UnixNativeDispatcher.init`).
 - `sun.misc.Unsafe` runs with `sun.misc.unsafe.memory.access=allow`, because the default warning finds its caller through `StackWalker`, which has no natives yet.
 - No `module-info` checks and no export rules: every class sits in one unnamed module.
 - Stack traces under `CHAMPACA_BT` name methods by descriptor and have no line numbers.

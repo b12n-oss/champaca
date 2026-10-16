@@ -222,6 +222,21 @@
   (jinit (jclass-cname (mirror-class c))))
 (defnative "jdk/internal/misc/Unsafe.shouldBeInitialized0(Ljava/lang/Class;)Z" (this c)
   (if (eq? (jclass-state (mirror-class c)) 'initialized) 0 1))
+;; between two Java arrays only (ByteBuffer.put of one heap buffer into
+;; another); whole elements when the types and alignment allow, else bytes.
+;; The source is read in full before writing, so overlap is safe.
+(defnative "jdk/internal/misc/Unsafe.copyMemory0(Ljava/lang/Object;JLjava/lang/Object;JJ)V" (this src soff dst doff n)
+  (unless (and (jarr? src) (jarr? dst))
+    (jthrow "java/lang/UnsupportedOperationException" "Unsafe.copyMemory outside Java arrays"))
+  (let* ([sb (- soff array-base)] [db (- doff array-base)]
+         [et (elem-type src)] [se (type-size et)])
+    (if (and (string=? et (elem-type dst)) (zero? (remainder sb se)) (zero? (remainder db se)) (zero? (remainder n se)))
+        (let ([tmp (vector-copy (jarr-vec src))] [k (quotient n se)] [si (quotient sb se)] [di (quotient db se)])
+          (do ([i 0 (fx+ i 1)]) ((fx= i k))
+            (vector-set! (jarr-vec dst) (fx+ di i) (vector-ref tmp (fx+ si i)))))
+        (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (byte-of src (+ sb i)) acc))))])
+          (let loop ([i 0] [bs bytes])
+            (unless (null? bs) (set-byte! dst (+ db i) (car bs)) (loop (+ i 1) (cdr bs))))))))
 (defnative "jdk/internal/misc/Unsafe.allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;" (this c)
   (jnew (jclass-cname (mirror-class c))))
 
@@ -950,6 +965,18 @@
 (defnative "java/util/zip/CRC32.update(II)I" (crc b)
   (i32 (fxlogxor (crc32-byte (fxlogxor (fxlogand crc #xffffffff) #xffffffff) (fxlogand b #xff)) #xffffffff)))
 (defnative "java/util/zip/CRC32.updateBytes0(I[BII)I" (crc bytes off len) (crc32-bytes crc bytes off len))
+
+;; Adler-32: two sums mod 65521, b in the high half; adler is a Java int.
+(define (adler32-bytes adler bytes off len)
+  (let ([v (jarr-vec bytes)])
+    (let loop ([i 0] [a (fxlogand adler #xffff)] [b (fxlogand (fxsrl (fxlogand adler #xffffffff) 16) #xffff)])
+      (if (fx= i len)
+          (i32 (fxlogor (fxsll b 16) a))
+          (let ([a (fxmodulo (fx+ a (fxlogand (vector-ref v (fx+ off i)) #xff)) 65521)])
+            (loop (fx+ i 1) a (fxmodulo (fx+ b a) 65521)))))))
+(defnative "java/util/zip/Adler32.update(II)I" (adler b)
+  (adler32-bytes adler (make-jarr "B" (vector b)) 0 1))
+(defnative "java/util/zip/Adler32.updateBytes(I[BII)I" (adler bytes off len) (adler32-bytes adler bytes off len))
 
 ;; --- VarHandles -------------------------------------------------------------------
 ;; A VarHandle is a bare java/lang/invoke/VarHandle object (allocated, never

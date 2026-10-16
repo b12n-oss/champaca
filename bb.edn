@@ -42,6 +42,8 @@
                     _ (shell "jar cf target/lib.jar -C target/lib-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
                     _ (apply shell "javac -cp target/lib.jar -d target/classes" srcs)
+                    ;; IndyCheck calls bootstraps of its own, which javac can't emit
+                    _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     mains (->> (fs/glob "test/java" "*.expected")
                                (map (fn [p] (str/replace (fs/file-name p) ".expected" "")))
                                sort)

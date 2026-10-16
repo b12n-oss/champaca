@@ -280,6 +280,66 @@
     (sx "let" (apply sx (map sx cvars captured))
         (sx "jlambda" (str-lit lambda-class) (sx "lambda" (apply sx params) body)))))
 
+;; --- bootstrap constants -------------------------------------------------------------
+;; A constant-pool entry as a datum the runtime (handles.ss) turns into a Java
+;; object: the static arguments of a bootstrap method, and the method handle,
+;; method type and dynamic constants an ldc can load.
+
+(defn- const-datum [cls i]
+  (let [cp (:cp cls)
+        e (cp i)]
+    (case (:tag e)
+      :int (sx "int" (num-lit (:value e)))
+      :long (sx "long" (num-lit (:value e)))
+      :float (sx "float" (num-lit (:value e)))
+      :double (sx "double" (num-lit (:value e)))
+      :string (sx "string" (str-lit (:value e)))
+      :class (sx "class" (str-lit (:name e)))
+      :methodtype (sx "methodtype" (str-lit (:desc e)))
+      :methodhandle (let [{:keys [class name desc]} (cp (:ref-idx e))]
+                      (sx "mh" (str (:kind e)) (str-lit class) (str-lit name) (str-lit desc)))
+      :dynamic (let [bsm (nth (:bootstrap-methods cls) (:bsm-idx e))]
+                 (sx "condy" (str-lit (:name e)) (str-lit (:desc e))
+                     (const-datum cls (:ref-idx bsm))
+                     (apply sx (map #(const-datum cls %) (:args bsm)))))
+      (throw (ex-info "bootstrap constant not in spike" {:entry e :class (:name cls)})))))
+
+;; --- pattern switches -----------------------------------------------------------------
+;; typeSwitch and enumSwitch labels as a quoted list for the runtime's
+;; jswitch-index (handles.ss): Class constants, Strings (enum constant names
+;; under enumSwitch), Integers, and two dynamic constants javac makes:
+;; ConstantBootstraps.primitiveClass for a primitive pattern, and an EnumDesc
+;; for a qualified enum constant (`case Color.RED`) in a switch on another type.
+
+(defn- condy
+  "A dynamic constant's bootstrap method name and static argument indexes."
+  [cls e]
+  (let [cp (:cp cls)
+        bsm (nth (:bootstrap-methods cls) (:bsm-idx e))]
+    [(:name (cp (:ref-idx (cp (:ref-idx bsm))))) (:args bsm)]))
+
+(defn- switch-labels [cls enum? arg-idxs]
+  (let [cp (:cp cls)
+        label (fn [i]
+                (let [e (cp i)]
+                  (case (:tag e)
+                    :class (sx "class" (str-lit (:name e)))
+                    :string (sx (if enum? "name" "string") (str-lit (:value e)))
+                    :int (sx "int" (str (:value e)))
+                    :dynamic (let [[bsm-name [mh & args]] (condy cls e)]
+                               (cond
+                                 (= bsm-name "primitiveClass") (sx "prim" (str-lit (:name e)))
+                                 ;; a qualified enum constant: EnumDesc.of(ClassDesc.of(binary name), constant name)
+                                 (and (= bsm-name "invoke") (= "of" (:name (cp (:ref-idx (cp mh)))))
+                                      (= "java/lang/Enum$EnumDesc" (:class (cp (:ref-idx (cp mh))))))
+                                 (let [[_ [_ cname]] (condy cls (cp (first args)))]
+                                   (sx "enum" (str-lit (str/replace (:value (cp cname)) "." "/"))
+                                       (str-lit (:value (cp (second args))))))
+                                 :else (throw (ex-info (str "switch label not in spike: condy " bsm-name)
+                                                       {:class (:name cls)}))))
+                    (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))]
+    (str "'" (apply sx (map label arg-idxs)))))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
   linker callbacks), :tramp? and :next-pc. entry is the compile-time stack at
@@ -344,6 +404,12 @@
               :double (push! (num-lit (:value e)) "D")
               :string (push! (sx "jstring-lit" (str-lit (:value e))) "A")
               :class (push! (sx "jmirror-of" (str-lit (:name e))) "A")
+              (:methodtype :methodhandle :dynamic)
+              (let [d (if (= :dynamic (:tag e)) (:desc e) "Ljava/lang/Object;")]
+                ;; resolved once per site, keyed by the literal's identity
+                (push! (sx "jconst-at" (str-lit (str *method-tag* "@" pc)) (str-lit this-class)
+                           (str "'" (const-datum cls a0)) (str-lit d))
+                       (desc->t d)))
               (throw (ex-info "ldc constant not in spike" {:entry e}))))
           :iload (push! (str "l" a0) "I")
           :lload (push! (str "l" a0) "J")
@@ -462,9 +528,13 @@
                 recv (when-not (= op :invokestatic) (pop!))
                 call (case op
                        (:invokevirtual :invokeinterface)
-                       (if (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
+                       (cond
+                         (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
                          ;; signature-polymorphic: the runtime decodes the call site
                          (apply sx "vh-call" recv (str-lit name) argv)
+                         (and (= class "java/lang/invoke/MethodHandle") (#{"invokeExact" "invoke"} name))
+                         (apply sx "mh-call" recv (str-lit desc) argv)
+                         :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
                              (apply sx (sx "jvirt" recv (str-lit (str name desc))) recv argv)))
                        :invokespecial
@@ -505,8 +575,14 @@
                        (desc->t ret)))
               ("metafactory" "altMetafactory")
               (push! (lambda-expr ctx name ret args argv bsm) "A")
-              (throw (ex-info (str "invokedynamic bootstrap not in spike: " bsm-name)
-                              {:bsm bsm-name :name name :class this-class}))))
+              ("typeSwitch" "enumSwitch") ; java.lang.runtime.SwitchBootstraps: pattern switches
+              (push! (sx "jswitch-index" (first argv) (second argv) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm))) "I")
+              ;; any other bootstrap runs for real, once per call site (handles.ss)
+              (let [call (apply sx "indy-call" (str-lit (str *method-tag* "@" pc)) (str-lit this-class)
+                                (str "'" (sx (const-datum cls (:ref-idx bsm))
+                                             (apply sx (map #(const-datum cls %) (:args bsm)))))
+                                (str-lit name) (str-lit desc) argv)]
+                (if (= ret "V") (stmt! call) (push! call (desc->t ret))))))
           :new (let [c (:name (cp a0))]
                  ((:ensure-loaded resolve) c)
                  (init c)

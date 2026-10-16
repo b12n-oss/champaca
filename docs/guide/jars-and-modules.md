@@ -17,7 +17,7 @@ Pass the whole classpath on the first `init!`. A second call does nothing, so it
 
 ### A real library
 
-Four libraries have been run this way and checked against the JVM, with identical output:
+Six libraries have been run this way and checked against the JVM, with identical output:
 
 | Library | What was exercised |
 |---|---|
@@ -25,6 +25,8 @@ Four libraries have been run this way and checked against the JVM, with identica
 | gson 2.13.2 | parsing, `toJson` of a tree, a plain object and a `Map`, `fromJson` into a class with no default constructor, pretty printing |
 | jsoup 1.18.1 | parsing HTML, CSS selectors, absolute URLs, `Jsoup.clean` with a safelist |
 | Jackson 2.20 | `readTree`, `writeValueAsString` of maps and annotated classes, `@JsonProperty`, `@JsonIgnore`, `readValue` into a bean with a `List<Point>` property, indented output |
+| Caffeine 3.2.2 | size, weight, write- and access-based eviction against a fake clock, removal listeners, refresh, `getAll`, async and loading caches, stats |
+| Guava 33.4.8 | CRC32C, CRC32, Adler-32, Murmur3 and FarmHash hashing, a Bloom filter, immutable multimaps, `Joiner`, `Splitter` |
 
 They aren't part of `bb test`, since that would mean downloading the jars. If you have them in `~/.m2`:
 
