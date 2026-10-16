@@ -2,11 +2,13 @@
   "Translate one method's bytecode into Chez Scheme source text.
 
   Shape of the output: locals are l0..lN and operand-stack slots are s0..sM,
-  all mutable Scheme variables. Each basic block is a letrec-bound thunk and a
-  jump is a tail call, which Chez compiles to a direct jump. A method with an
-  exception table switches to trampoline mode instead: blocks return the next
-  block rather than calling it, so a guard wrapped around a block covers that
-  block and nothing it jumps to."
+  each store binding a fresh variable in a let. Each basic block is a
+  letrec-bound procedure over the live locals and its entry stack, and a jump
+  is a tail call, which Chez compiles to a direct jump. A method with an
+  exception table groups its blocks into regions, one per list of covering
+  handlers. Jumps inside a region are tail calls too. A jump out of a covered
+  region returns a thunk to the method's trampoline, so the handler installed
+  on entry to the region (jtry) covers the region and nothing past it."
   (:require [clojure.string :as str]))
 
 ;; --- text helpers ------------------------------------------------------------
@@ -341,48 +343,41 @@
     (str "'" (apply sx (map label arg-idxs)))))
 
 (defn- render-steps
-  "A block's steps and its terminal expression as Scheme. Nested lets when
-  mutable? is false: every store or push binds a fresh variable, shadowing
-  the old one, so Chez can keep values in registers (an assigned variable is
-  boxed even when no closure captures it). set! on method-wide variables
-  otherwise, which the exception-handler trampoline needs."
-  [steps term mutable?]
-  (if mutable?
-    (str "(begin "
-         (str/join " " (for [[k a b] steps]
-                         (case k
-                           :bind (sx "set!" a b)
-                           :pbind (let [temps (map #(str "t" %) (range (count a)))]
-                                    (sx "let" (apply sx (map (fn [t [_ e]] (sx t e)) temps a))
-                                        (apply sx "begin" (map (fn [t [v _]] (sx "set!" v t)) temps a))))
-                           :do a)))
-         " " term ")")
-    (reduce (fn [inner [k a b]]
-              (case k
-                :bind (sx "let" (sx (sx a b)) inner)
-                :pbind (sx "let" (apply sx (map (fn [[v e]] (sx v e)) a)) inner)
-                :do (sx "begin" a inner)))
-            term
-            (reverse steps))))
+  "A block's steps and its terminal expression as nested lets: every store or
+  push binds a fresh variable, shadowing the old one, so Chez can keep values
+  in registers (an assigned variable is boxed even when no closure captures
+  it). A :set step assigns one of the few method-wide locals an exception
+  handler has to see (compile-method*)."
+  [steps term]
+  (reduce (fn [inner [k a b]]
+            (case k
+              :bind (sx "let" (sx (sx a b)) inner)
+              :set (sx "begin" (sx "set!" a b) inner)
+              :pbind (sx "let" (apply sx (map (fn [[v e]] (sx v e)) a)) inner)
+              :do (sx "begin" a inner)))
+          term
+          (reverse steps)))
 
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
-  linker callbacks), :tramp? and :next-pc. entry is the compile-time stack at
+  linker callbacks), :next-pc, :live (the locals a jump passes), :boxed (the
+  method-wide locals) and :jump (target pc and argument list -> the jump's
+  code). entry is the compile-time stack at
   block entry: a vector of types (I J F D A), one per operand-stack value.
   Returns {:code text :succ {pc entry-stack}}."
   [ctx blk entry]
-  (let [{:keys [cls resolve tramp? next-pc live]} ctx
+  (let [{:keys [cls resolve next-pc live boxed jump]} ctx
         cp (:cp cls)
         this-class (:name cls)
         st (volatile! entry)
         ;; steps, in order: [:bind var expr], [:pbind [[var expr] ...]] (one
-        ;; parallel binding) or [:do expr]. A method without exception handlers
-        ;; renders them as nested lets, so nothing is assigned; one with
-        ;; handlers as set! on method-wide variables (render-steps)
+        ;; parallel binding), [:set var expr] or [:do expr], rendered as nested
+        ;; lets (render-steps)
         stmts (transient [])
         succ (volatile! {})
         s (fn [i] (str "s" i))
         bind! (fn [v expr] (conj! stmts [:bind v expr]))
+        store! (fn [i expr] (conj! stmts [(if (boxed i) :set :bind) (str "l" i) expr]))
         push! (fn [expr t] (bind! (s (count @st)) expr) (vswap! st conj t))
         pop! (fn [] (let [i (dec (count @st))] (vswap! st pop) (s i)))
         top-t (fn [] (peek @st))
@@ -394,9 +389,7 @@
         goto (fn [pc]
                (vswap! succ assoc pc @st)
                ;; a jump passes the live locals and the stack as arguments
-               (let [j (if tramp?
-                         (label pc)
-                         (apply sx (label pc) (concat (map #(str "l" %) live) (map s (range (count @st))))))]
+               (let [j (jump pc (concat (map #(str "l" %) live) (map s (range (count @st)))))]
                  (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
         init (fn [c] (when (not= c this-class) (stmt! (sx "jinit-sym" (str "'" (sym c))))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
@@ -448,8 +441,8 @@
           :fload (push! (str "l" a0) "F")
           :dload (push! (str "l" a0) "D")
           :aload (push! (str "l" a0) "A")
-          (:istore :lstore :fstore :dstore :astore) (bind! (str "l" a0) (pop!))
-          :iinc (bind! (str "l" a0) (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
+          (:istore :lstore :fstore :dstore :astore) (store! a0 (pop!))
+          :iinc (store! a0 (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
           (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i)) "I")
           :laload (bin (fn [a i] (sx "array-ref" a i)) "J")
           :faload (bin (fn [a i] (sx "array-ref" a i)) "F")
@@ -641,30 +634,46 @@
                         (un #(sx "if" (sx "jinstance?" % (str-lit c)) "1" "0") "I"))
           (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))))
     (let [term (or @terminal (goto next-pc))]
-      {:code (render-steps (persistent! stmts) term tramp?)
+      {:code (render-steps (persistent! stmts) term)
        :succ @succ})))
 
-(defn- guard-wrap
-  "Wrap a block's code in one guard whose clauses follow the exception table
-  order, for every handler whose range covers the block."
-  [code pc handlers]
-  (let [covering (filter #(and (<= (:start %) pc) (< pc (:end %))) handlers)]
-    (if (empty? covering)
-      code
-      (sx "guard"
-          (apply sx "e"
-                 (concat
-                  (for [{:keys [type handler]} covering]
-                    (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
-                        (sx "set!" "s0" "e")
-                        (label handler)))
-                  ;; no handler here: raise again from this guard. Without
-                  ;; this clause guard re-raises in the thrower's dynamic
-                  ;; context, re-entering any dynamic-wind on the way, so a
-                  ;; synchronized method between them would take its monitor
-                  ;; again.
-                  [(sx "else" (sx "raise" "e"))]))
-          code))))
+(defn- entry-label [pc] (sym (str *method-tag* "#E" pc)))
+
+(defn- covering
+  "Indices of the handlers whose range covers pc, in exception table order."
+  [handlers pc]
+  (vec (keep-indexed (fn [i {:keys [start end]}] (when (and (<= start pc) (< pc end)) i)) handlers)))
+
+(def ^:private load-ops #{:iload :lload :fload :dload :aload :iinc})
+(def ^:private store-ops #{:istore :lstore :fstore :dstore :astore :iinc})
+
+(defn- boxed-locals
+  "The locals some handler reads on entry that the code it covers assigns.
+  A handler sees a local's value at the throw, which only a method-wide
+  variable holds: every other local keeps the value it had when the guarded
+  region was entered, so the guard passes that on."
+  [blks handlers cover]
+  (let [use-def (into {} (for [[pc blk] blks]
+                           [pc (reduce (fn [[u d] {:keys [op args]}]
+                                         (let [i (first args)]
+                                           [(if (and (load-ops op) (not (d i))) (conj u i) u)
+                                            (if (store-ops op) (conj d i) d)]))
+                                       [#{} #{}] blk)]))
+        ;; live-in = use + (normal successors' live-in - def) + every covering
+        ;; handler's live-in, which a throw before the def reaches
+        live-in (loop [li (zipmap (keys blks) (repeat #{}))]
+                  (let [li' (into {} (for [[pc [u d]] use-def]
+                                       [pc (-> u
+                                               (into (remove d) (mapcat li (successors (peek (blks pc)))))
+                                               (into (mapcat #(li (:handler (nth handlers %))) (cover pc))))]))]
+                    (if (= li li') li (recur li'))))]
+    (set (for [[i {:keys [handler]}] (map-indexed vector handlers)
+               :let [assigned (into #{} (comp (filter (fn [[pc _]] (some #{i} (cover pc))))
+                                              (mapcat (fn [[_ [_ d]]] d)))
+                                    use-def)]
+               l (live-in handler)
+               :when (assigned l)]
+           l))))
 
 (declare compile-method*)
 
@@ -676,10 +685,9 @@
 
 (defn- compile-method*
   [cls method resolve]
-  (let [{:keys [max-stack max-locals code handlers]} (:code method)
+  (let [{:keys [code handlers]} (:code method)
         insns (decode code)
         blks (blocks insns handlers)
-        tramp? (boolean (seq handlers))
         ;; inline-cache cells, one per virtual call site, made once per method
         ics (volatile! 0)
         ic! (fn [] (str "ic" (dec (vswap! ics inc))))
@@ -691,13 +699,30 @@
                    (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
                    out))
         param-set (set params)
+        cover (into {} (map (fn [pc] [pc (covering handlers pc)]) (keys blks)))
+        boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})
         ;; the locals a jump has to carry: the parameters and every slot the
-        ;; method loads or stores
-        live (vec (sort (into param-set
-                              (for [{:keys [op args]} insns
-                                    :when (#{:iload :lload :fload :dload :aload
-                                             :istore :lstore :fstore :dstore :astore :iinc} op)]
-                                (first args)))))
+        ;; method loads or stores, less the boxed ones, which stay method-wide
+        live (vec (sort (remove boxed
+                                (into param-set
+                                      (for [{:keys [op args]} insns
+                                            :when (or (load-ops op) (store-ops op))]
+                                        (first args))))))
+        ;; covered blocks entered from outside their region, each needing a
+        ;; guarded entry (entry-label)
+        entered (volatile! (sorted-set))
+        enter (fn [pc] (if (seq (cover pc))
+                         (do (vswap! entered conj pc) (entry-label pc))
+                         (label pc)))
+        ;; a jump inside a region is a tail call. One out of an uncovered
+        ;; block is a tail call too, into the target's guarded entry when it
+        ;; has one; one out of a covered region has to leave its guard first,
+        ;; so it returns a thunk to the trampoline
+        jump (fn [from]
+               (fn [pc args]
+                 (cond (= (cover from) (cover pc)) (apply sx (label pc) args)
+                       (empty? (cover from)) (apply sx (enter pc) args)
+                       :else (sx "lambda" "()" (apply sx (enter pc) args)))))
         ;; worklist over blocks: each is emitted once, at the stack depth its
         ;; first predecessor established (verified bytecode guarantees agreement)
         emitted (loop [work (into [[0 []]] (map (fn [h] [(:handler h) ["A"]]) handlers))
@@ -705,32 +730,45 @@
                   (if-let [[pc dep] (first work)]
                     (if (contains? done pc)
                       (recur (rest work) done)
-                      (let [{:keys [code succ]} (emit-block {:cls cls :resolve resolve :tramp? tramp?
-                                                             :next-pc (next-pc pc) :live live :ic! ic!}
+                      (let [{:keys [code succ]} (emit-block {:cls cls :resolve resolve :next-pc (next-pc pc)
+                                                             :live live :boxed boxed :jump (jump pc) :ic! ic!}
                                                             (blks pc) dep)]
                         (recur (concat (rest work) succ) (assoc done pc [dep code]))))
                     done))
-        bindings (concat (for [i (range max-locals) :when (not (param-set i))] (sx (str "l" i) "0"))
-                         (for [i (range max-stack)] (sx (str "s" i) "0")))]
-    (let [body* (if tramp?
-                  (sx "let" (apply sx bindings)
-                   (sx "letrec"
-                       (apply sx (for [[pc [_ code]] (sort-by key emitted)]
-                                   (sx (label pc) (sx "lambda" "()" (guard-wrap code pc handlers)))))
-                         ;; an inline named loop rather than a shared helper,
-                         ;; so a frame named for this method stays on the stack
-                         ;; while a block runs under guard (getCallerClass)
-                         (let [t (sym (str *method-tag* "#T"))]
-                           (sx "let" t (sx (sx "r" (sx (label 0))))
-                               (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))))
-                  ;; each block takes the live locals and its entry stack
-                  (sx "letrec"
-                      (apply sx (for [[pc [dep code]] (sort-by key emitted)]
-                                  (sx (label pc)
-                                      (sx "lambda" (apply sx (concat (map #(str "l" %) live)
-                                                                     (map #(str "s" %) (range (count dep)))))
-                                          code))))
-                      (apply sx (label 0) (map #(if (param-set %) (str "l" %) "0") live))))
+        args-of (fn [dep] (concat (map #(str "l" %) live) (map #(str "s" %) (range (count dep)))))
+        ;; each block takes the live locals and its entry stack
+        block-defs (for [[pc [dep code]] (sort-by key emitted)]
+                     (sx (label pc) (sx "lambda" (apply sx (args-of dep)) code)))
+        ;; the first block, called with the parameters
+        start (apply sx (enter 0) (map #(if (param-set %) (str "l" %) "0") live))
+        ;; a guarded entry: one handler for the region (jtry), whose clauses
+        ;; follow the exception table order and pass the handler the exception
+        ;; and the locals as the region got them. Building one can enter a
+        ;; handler's region, so this runs until no new entry turns up.
+        entry-defs (loop [out [] done #{}]
+                     (if-let [pc (first (remove done @entered))]
+                       (let [as (args-of (first (emitted pc)))
+                             clauses (doall
+                                      (for [i (cover pc)
+                                            :let [{:keys [type handler]} (nth handlers i)]]
+                                        (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
+                                            (apply sx (enter handler) (concat (map #(str "l" %) live) ["e"])))))]
+                         (recur (conj out (sx (entry-label pc)
+                                              (sx "lambda" (apply sx as)
+                                                  (sx "jtry" "e" (apply sx clauses)
+                                                      (apply sx (label pc) as)))))
+                                (conj done pc)))
+                       out))]
+    (let [body* (if (seq handlers)
+                  (sx "let" (apply sx (for [i (sort boxed) :when (not (param-set i))] (sx (str "l" i) "0")))
+                      (sx "letrec" (apply sx (concat block-defs entry-defs))
+                          ;; an inline named loop rather than a shared helper,
+                          ;; so a frame named for this method stays on the stack
+                          ;; while a block runs under its region's handler (getCallerClass)
+                          (let [t (sym (str *method-tag* "#T"))]
+                            (sx "let" t (sx (sx "r" start))
+                                (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))))
+                  (sx "letrec" (apply sx block-defs) start))
           ;; ACC_SYNCHRONIZED: the monitor of this, or of the class for a
           ;; static method, held for the call and released however it ends.
           ;; dynamic-wind rather than guard: an exception leaves through a

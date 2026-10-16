@@ -38,6 +38,26 @@
 (define-syntax wrap-long
   (syntax-rules ()
     [(_ e) (let ([y e]) (if (fixnum? y) y (i64 y)))]))
+;; A guarded region of a Java method. The handler goes straight onto Chez's
+;; (per-thread) handler stack, under a one-shot continuation: guard takes a full
+;; call/cc and reads the continuation marks, about twice the cost. A clause whose
+;; test holds escapes and returns (lambda () next) for the method's trampoline.
+;; With no clause for it the exception goes on to the next handler from right
+;; where it was raised, so nothing between is unwound and wound again.
+(define-syntax jtry
+  (syntax-rules ()
+    [(_ e ([test next] ...) body)
+     (call/1cc
+      (lambda (k)
+        (let* ([old (#%$current-handler-stack)]
+               [new (cons (lambda (e)
+                            (cond [test (k (lambda () next))] ...
+                                  [else (raise-continuable e)]))
+                          old)])
+          (dynamic-wind
+           (lambda () (#%$current-handler-stack new))
+           (lambda () body)
+           (lambda () (#%$current-handler-stack old))))))]))
 ;; int shifts: a and the result are ints, so fixnums. ishl first drops the bits
 ;; that would leave the low 32, so the shift can't overflow a fixnum.
 (define-syntax int-shl
@@ -365,7 +385,7 @@
 (define (scheme-list->jarray elem xs) (make-jarr elem (list->vector xs)))
 
 ;; --- exceptions ------------------------------------------------------------
-;; A Java throw is a Scheme raise of the jobj. Catch clauses are guard
+;; A Java throw is a Scheme raise of the jobj. Catch clauses are jtry
 ;; clauses that test jinstance?.
 
 (define (jthrow cname msg)
