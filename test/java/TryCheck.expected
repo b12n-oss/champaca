@@ -10,4 +10,8 @@ counter 4 caught 2 held false
 2187
 1000
 caught at 3 sum 3 three / abf[outer five]
+propagated five
+10 2 1.5
+a.c!.a..c! exits 7
+100001
 main caught java.lang.IllegalStateException five

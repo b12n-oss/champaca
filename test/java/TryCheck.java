@@ -177,6 +177,67 @@ public class TryCheck {
         return out[0];
     }
 
+    // after a region is left, a throw of the same type must not land in its
+    // handler
+    static void leaveThenThrow() {
+        try { boom(5); } catch (IllegalStateException e) { }
+        boom(5);
+    }
+
+    static String leave() {
+        try {
+            leaveThenThrow();
+            return "swallowed";
+        } catch (IllegalStateException e) {
+            return "propagated " + e.getMessage();
+        }
+    }
+
+    // parameters, a long among them, assigned in the try and read in the handler
+    static String params(long a, int b, double c) {
+        try {
+            a = a * 2; b = b + 1; c = c / 2;
+            boom(3);
+            return "none";
+        } catch (IllegalArgumentException e) {
+            return a + " " + b + " " + c;
+        }
+    }
+
+    // a finally that javac copies onto break, continue and the normal path,
+    // and a switch inside the try
+    static String finallyPaths() {
+        StringBuilder sb = new StringBuilder();
+        int exits = 0;
+        for (int i = 0; i < 8; i++) {
+            try {
+                switch (i % 4) {
+                    case 0: sb.append('a'); break;
+                    case 1: if (i > 4) break; continue;
+                    case 2: sb.append('c'); boom(3); break;
+                    default: if (i == 7) return sb + " exits " + exits;
+                }
+                sb.append('.');
+            } catch (IllegalArgumentException e) {
+                sb.append('!');
+            } finally {
+                exits++;
+            }
+        }
+        return sb + " end " + exits;
+    }
+
+    // many normal exits from a region, then a catch: the handler stack has to
+    // come back on the normal path too
+    static int normalExits() {
+        int n = 0;
+        for (int i = 0; i < 100000; i++) {
+            try { n += boom(1); } catch (IllegalArgumentException e) { n = -1; }
+        }
+        try { boom(3); } catch (IllegalArgumentException e) { n++; }
+        return n;
+    }
+
     public static void main(String[] args) throws Exception {
         System.out.println(loopThrows());
         System.out.println(setBefore(3) + " | " + setBefore(4));
@@ -190,6 +251,10 @@ public class TryCheck {
         System.out.println(wideLocal());
         System.out.println(manyCatches());
         System.out.println(onThread());
+        System.out.println(leave());
+        System.out.println(params(5, 1, 3.0));
+        System.out.println(finallyPaths());
+        System.out.println(normalExits());
         try {
             boom(5);
         } catch (RuntimeException e) {
