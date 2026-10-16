@@ -238,11 +238,20 @@
 (define (mem-byte-set! o off b)
   (if o (set-byte! o (- off array-base) b) (foreign-set! 'unsigned-8 off 0 b)))
 (defnative "jdk/internal/misc/Unsafe.copyMemory0(Ljava/lang/Object;JLjava/lang/Object;JJ)V" (this src soff dst doff n)
-  (if (and (jarr? src) (jarr? dst))
-      (copy-array-memory src soff dst doff n)
-      (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])
-        (let loop ([i 0] [bs bytes])
-          (unless (null? bs) (mem-byte-set! dst (+ doff i) (car bs)) (loop (+ i 1) (cdr bs)))))))
+  (cond
+    [(and (jarr? src) (jarr? dst)) (copy-array-memory src soff dst doff n)]
+    ;; native memory and a byte[], the shape every file and channel read and
+    ;; write takes: one element per byte, no intermediate list
+    [(and (not src) (jarr? dst) (string=? (elem-type dst) "B"))
+     (let ([v (jarr-vec dst)] [d (- doff array-base)])
+       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ d i) (foreign-ref 'integer-8 soff i))))]
+    [(and (jarr? src) (not dst) (string=? (elem-type src) "B"))
+     (let ([v (jarr-vec src)] [s (- soff array-base)])
+       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (foreign-set! 'integer-8 doff i (vector-ref v (fx+ s i)))))]
+    [else
+     (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])
+       (let loop ([i 0] [bs bytes])
+         (unless (null? bs) (mem-byte-set! dst (+ doff i) (car bs)) (loop (+ i 1) (cdr bs)))))]))
 ;; the same, reversing the bytes of each elem-size element
 (defnative "jdk/internal/misc/Unsafe.copySwapMemory0(Ljava/lang/Object;JLjava/lang/Object;JJJ)V" (this src soff dst doff n es)
   (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])

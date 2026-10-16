@@ -1,6 +1,6 @@
 # Limitations
 
-Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the six checked libraries (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
+Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the seven checked libraries (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
 
 ## Threads take turns
 
@@ -40,8 +40,11 @@ The startup cache makes boot quick, but generated code hasn't been tuned at all:
 
 ## Other gaps
 
-- File I/O covers what the tests reach. Writes, permissions and symlink handling in `java.io` and `java.nio` are thin.
-- `MessageDigest` and the rest of `java.security` can't start yet. Loading the security properties opens a `java.nio.file` path, and the native filesystem behind it isn't there (Guava's `Hashing.sha256()` stops at `UnixNativeDispatcher.init`).
+- `java.nio.file` needs macOS. The file natives read `struct stat`, `struct dirent` and `struct flock` at macOS's offsets, and on any other system `UnixNativeDispatcher.init` throws `UnsupportedOperationException` instead of guessing. `java.io` streams and `RandomAccessFile` don't depend on those layouts and work anywhere libc does. Everything built on `java.nio.file`, `MessageDigest` included, works on macOS only.
+- `Files.getFileStore` and the other mount queries have no natives yet.
+- `available()` on a pipe or a terminal is 0, where the JVM asks the kernel how much is waiting.
+- `Unsafe.copyMemory` between native memory and a `float[]` or `double[]` fails, since those arrays hold Scheme flonums rather than bytes.
+- Resources from the JDK's own modules can be read as streams but have no URL: `getResource` answers `file:` and `jar:` URLs for the classpath only.
 - `sun.misc.Unsafe` runs with `sun.misc.unsafe.memory.access=allow`, because the default warning finds its caller through `StackWalker`, which has no natives yet.
 - No `module-info` checks and no export rules: every class sits in one unnamed module.
 - Stack traces under `CHAMPACA_BT` name methods by descriptor and have no line numbers.

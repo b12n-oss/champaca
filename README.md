@@ -65,7 +65,7 @@ The classpath takes directories and jars, so a Java library loads straight from 
 (ldk/invoke-static "org.apache.commons.lang3.StringUtils" "capitalize" "champaca")  ;=> "Champaca"
 ```
 
-From the command line it's a colon-separated list, as with `java -cp`: `jolt -M -m champaca.main classes:lib/gson-2.13.2.jar Main`. Six real libraries were checked this way against the JVM, with identical output: commons-lang3 3.12.0 (`StringUtils`), gson 2.13.2 (parsing, `toJson` of a JSON tree, of a plain object and of a `Map`, `fromJson` into a class with no default constructor, pretty printing) jsoup 1.18.1 (parsing HTML, CSS selectors, absolute URLs, `Jsoup.clean` with a safelist), Jackson 2.20 (`readTree`, `writeValueAsString` of maps and annotated classes, `@JsonProperty` and `@JsonIgnore`, `readValue` into a bean with a `List<Point>` property, indented output), Caffeine 3.2.2 (size, weight and time-based eviction against a fake clock, refresh, loading and async caches, stats) and Guava 33.4.8 (CRC32C, CRC32, Adler-32, Murmur3 and FarmHash hashing, a Bloom filter, immutable multimaps, `Joiner` and `Splitter`). Caffeine and Guava both build objects through method handles. They aren't in `bb test`, because they'd need the jars downloaded. `bb test` packs `test/jar` into `target/lib.jar` instead and runs `test/java/JarCheck.java` and `examples/jars.clj` against it.
+From the command line it's a colon-separated list, as with `java -cp`: `jolt -M -m champaca.main classes:lib/gson-2.13.2.jar Main`. Seven real libraries were checked this way against the JVM, with identical output: commons-lang3 3.12.0 (`StringUtils`), gson 2.13.2 (parsing, `toJson` of a JSON tree, of a plain object and of a `Map`, `fromJson` into a class with no default constructor, pretty printing) jsoup 1.18.1 (parsing HTML, CSS selectors, absolute URLs, `Jsoup.clean` with a safelist), Jackson 2.20 (`readTree`, `writeValueAsString` of maps and annotated classes, `@JsonProperty` and `@JsonIgnore`, `readValue` into a bean with a `List<Point>` property, indented output), Caffeine 3.2.2 (size, weight and time-based eviction against a fake clock, refresh, loading and async caches, stats) Guava 33.4.8 (CRC32C, CRC32, Adler-32, Murmur3, FarmHash, SHA-256, SHA-512 and MD5 hashing, a Bloom filter, immutable multimaps, `Joiner` and `Splitter`) and SLF4J 2.0.16 with `slf4j-simple` (logging through the provider `ServiceLoader` finds in its jar). Caffeine and Guava both build objects through method handles. They aren't in `bb test`, because they'd need the jars downloaded. `bb test` packs `test/jar` into `target/lib.jar` instead and runs `test/java/JarCheck.java` and `examples/jars.clj` against it.
 
 Classes outside `java.base` come from the other jmods: `java.sql`, `java.logging`, `jdk.unsupported` and so on. The first run reads each jmod's zip directory in place to build a package-to-module index (876 packages across JDK 25's 69 modules), and saves it as `~/.cache/champaca/jmods/<jdk>/packages.edn`. A class lookup goes straight to its module, and only a module that's actually used gets its zip copied there. `bb test` copies 4 of them, 20 MB.
 
@@ -77,13 +77,13 @@ JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with meth
 
 ## Startup cache
 
-The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 362 methods from 201 classes. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation, and a run loads only the parts of those generations it reaches. Measured on macOS arm64, median of five runs:
+The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 362 methods from 201 classes. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`), and keeps the runtime's own Scheme compiled beside them (`runtime.so`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation, and a run loads only the parts of those generations it reaches. Measured on macOS arm64, median of five runs:
 
 | Program | No cache | Warm cache | Warm, after a full `bb test` |
 |---|---|---|---|
-| Hello | 1.21 s | 0.36 s | 0.42 s |
-| Streams | 1.73 s | 0.42 s | 0.46 s |
-| `examples/interop.clj` | 1.32 s | 0.40 s | 0.46 s |
+| Hello | 1.31 s | 0.33 s | 0.42 s |
+| Streams | 1.96 s | 0.39 s | 0.48 s |
+| `examples/interop.clj` | 1.47 s | 0.37 s | 0.47 s |
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
@@ -117,9 +117,10 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 | `src/champaca/main.clj` | loads classes from the classpath (directories and jars) or the jmods, lays out fields, builds vtables (interface defaults included), boots the JDK |
 | `src/champaca/api.clj` | the jolt-facing API |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
-| `resources/champaca/natives.ss` | JDK native methods (129 named, plus pattern rules for `Unsafe`) and a few overrides |
+| `resources/champaca/natives.ss` | JDK native methods (121 named, plus pattern rules for `Unsafe`), resources, a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
 | `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
+| `resources/champaca/files.ss` | file, channel and zlib natives (129) through libc, `UnsafeConstants` |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
 | `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, the call-site cache, auto-wrapping jolt fns |
 
@@ -130,7 +131,8 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 - **Threads take turns.** Each Java thread is a real thread, and `synchronized`, `wait`/`notify`, `sleep`, `interrupt`, executors and `CompletableFuture` all work (`test/java/ThreadCheck.java`), but one global lock lets only one of them run Java code at a time. So threads give correct results and no speedup. Virtual threads aren't supported.
 - **Method handles cover the common calls.** The `Lookup.find*` and `unreflect*` methods, `invokeExact`, `invoke`, `invokeWithArguments`, `asType`, `bindTo` and eight of the `MethodHandles` combinators work (`test/java/MethodHandleCheck.java`), which is what Caffeine and Guava use. The rest of the combinators don't, `invokeExact` doesn't insist on an exact type match, and lookups skip access checks.
 - **VarHandles work for fields and arrays.** `findVarHandle`, `findStaticVarHandle`, `arrayElementVarHandle` and `byteArrayViewVarHandle` return handles that every access mode works on (`test/java/VarHandleCheck.java`), so `java.util.concurrent.atomic` and `ConcurrentHashMap` run. Memory-ordering modes all act the same, which is safe while one thread runs Java at a time. The coordinate combinators (`insertCoordinates` and friends) and `byteBufferViewVarHandle` don't exist.
-- **No native libraries.** A JDK library load (`zip`, `net`) is a no-op, since its natives are Scheme code here. A Java library's own JNI code can't load.
+- **Files go through libc, read at macOS's offsets.** `java.io`, `java.nio.file`, `FileChannel` (locks and memory maps included) and `java.util.zip` call libc and zlib through Chez's foreign interface, on real file descriptors (`test/java/FilesCheck.java`). `struct stat` and its relatives are read where macOS puts them, so on another system `java.nio.file` stops with an `UnsupportedOperationException` at its first use, while `java.io` streams still work.
+- **No native libraries.** A JDK library load (`zip`, `net`) is a no-op, since its natives are Scheme code (or libc calls) here. A Java library's own JNI code can't load.
 - **`sun.misc.Unsafe` doesn't warn.** `sun.misc.unsafe.memory.access` is `allow`, because the default `warn` finds its caller with `StackWalker`, which has no natives yet.
 
 ## The name

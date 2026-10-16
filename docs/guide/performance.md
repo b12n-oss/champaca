@@ -6,15 +6,15 @@ All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`
 
 ## The startup cache
 
-Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (6.8 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
+Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (6.8 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The runtime's own Scheme (`runtime.ss`, `natives.ss` and the rest) is compiled into the same directory as `runtime.so`, which loads in about 8 ms where compiling the source took about 130 ms on every start. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
 
 | Program | Cache off | Warm cache | Warm, after a full `bb test` |
 |---|---|---|---|
-| `Hello` | 1.27 s | 0.41 s | 0.47 s |
-| `Streams` | 1.90 s | 0.47 s | 0.52 s |
-| `examples/interop.clj` | 1.41 s | 0.45 s | 0.52 s |
+| `Hello` | 1.31 s | 0.33 s | 0.42 s |
+| `Streams` | 1.96 s | 0.39 s | 0.48 s |
+| `examples/interop.clj` | 1.47 s | 0.37 s | 0.47 s |
 
-Each is the median of five runs, measured after method handles went in. The warm column uses a cache that only that program has filled, and the last one a cache that all 27 tests have added to (see Generations). Thread support and the method handle runtime each added about 20 ms to every start.
+Each is the median of five runs, measured after file support went in. The warm column uses a cache that only that program has filled, and the last one a cache that all 29 tests have added to (see Generations). Before the runtime was cached compiled, the warm column read 0.41, 0.47 and 0.45 s.
 
 ### What's in it, and what isn't
 
@@ -104,4 +104,10 @@ Thread support adds two things to every program, threaded or not: a monitor look
 
 A method handle call goes through the runtime's handle table rather than straight to the method. In a loop of a million calls to a static `add(int, int)`, a direct call took 12 ns, `invokeExact` 117 ns, and `invoke` with boxed `Object` arguments about 1.35 µs, most of that in boxing through `Integer.valueOf` and unboxing through a virtual call. Linking a call site with a bootstrap of its own happens once, on its first call.
 
-Every run also evaluates `handles.ss` from source at startup, like the rest of the runtime, which added about 20 ms to a warm start: `Hello` went from 0.38 s to 0.40 s, median of nine runs each.
+Evaluating `handles.ss` from source added about 20 ms to every start when method handles went in. Since then the warm path loads the runtime compiled (`runtime.so`, above), so that cost is now paid only on a cold start or with the cache off.
+
+### What file access costs
+
+File natives call libc through Chez's foreign interface, so a read or write is one libc call plus copying between a Java `byte[]` (a Scheme vector of fixnums) and native memory, in 4 KB pieces for `java.io`. Writing a 4 MB file with `Files.write` took about 180 ms and reading it back with `Files.readAllBytes` about 145 ms, against 7 ms and 1 ms on the JVM. Reading the same file a byte at a time through a `BufferedInputStream` took 2.1 s against 37 ms: that loop is all generated code, which is the slow part ([The generated code](#the-generated-code)).
+
+`files.ss` is the largest runtime file, and evaluating it took about 40 ms per start before the compiled runtime made that a one-time cost.

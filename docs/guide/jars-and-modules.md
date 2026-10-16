@@ -17,7 +17,7 @@ Pass the whole classpath on the first `init!`. A second call does nothing, so it
 
 ### A real library
 
-Six libraries have been run this way and checked against the JVM, with identical output:
+Seven libraries have been run this way and checked against the JVM, with identical output:
 
 | Library | What was exercised |
 |---|---|
@@ -26,7 +26,8 @@ Six libraries have been run this way and checked against the JVM, with identical
 | jsoup 1.18.1 | parsing HTML, CSS selectors, absolute URLs, `Jsoup.clean` with a safelist |
 | Jackson 2.20 | `readTree`, `writeValueAsString` of maps and annotated classes, `@JsonProperty`, `@JsonIgnore`, `readValue` into a bean with a `List<Point>` property, indented output |
 | Caffeine 3.2.2 | size, weight, write- and access-based eviction against a fake clock, removal listeners, refresh, `getAll`, async and loading caches, stats |
-| Guava 33.4.8 | CRC32C, CRC32, Adler-32, Murmur3 and FarmHash hashing, a Bloom filter, immutable multimaps, `Joiner`, `Splitter` |
+| Guava 33.4.8 | CRC32C, CRC32, Adler-32, Murmur3, FarmHash, SHA-256, SHA-512 and MD5 hashing, a Bloom filter, immutable multimaps, `Joiner`, `Splitter` |
+| SLF4J 2.0.16 with `slf4j-simple` | logging through the provider `ServiceLoader` finds in `slf4j-simple`'s jar |
 
 They aren't part of `bb test`, since that would mean downloading the jars. If you have them in `~/.m2`:
 
@@ -43,6 +44,12 @@ They aren't part of `bb test`, since that would mean downloading the jars. If yo
 ```
 
 Champaca doesn't resolve Maven coordinates, so a library's dependencies have to be listed too, as Jackson's three jars are here.
+
+### Resources
+
+A jar's other files are reachable the way Java code expects. `getResourceAsStream` reads them, `getResource` gives a `jar:` URL (a `file:` URL for a directory on the classpath) that opens like any other, and `ServiceLoader` finds the providers listed under `META-INF/services`. That last one is how SLF4J 2 finds its logging backend: without it, SLF4J prints "No SLF4J providers were found" and logs nothing. `test/java/JarCheck.java` loads a service, a properties file and a URL from `test/jar`.
+
+Resources inside the JDK's own modules, such as the ICU data the JDK uses for Unicode normalization, can be read as streams but have no URL.
 
 ## JDK modules
 
