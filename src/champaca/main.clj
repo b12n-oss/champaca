@@ -311,8 +311,46 @@
         (some #(when (has? % true) %) (ancestry cname))
         (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
+(declare parsed overridden?)
+
+(defn- inline-candidate
+  "The parsed class and method decl.mname(desc), for codegen to inline into a
+  method of caller-cname, or nil. Only a method in the caller's own class or
+  in the JDK qualifies: a compiled method is cached with its own class, and a
+  copy of another user class's code would outlive a change to that class.
+  The JDK can't change under a cache, which is keyed by it. A method the
+  runtime overrides never qualifies."
+  [caller-cname decl mname desc]
+  (let [info (class-info decl)
+        im (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods info)))]
+    ;; the class map answers most of it without reading the class file again
+    (when (and im (:code im) (<= (or (:code-len im) 0) cg/leaf-limit)
+               (or (= decl caller-cname) (= :jdk (:origin info)))
+               (not (overridden? decl im)))
+      ;; only a class already parsed in this run: reading one again from
+      ;; its jmod costs a warm start more than the inlining saves
+      (when-let [p (if (= decl caller-cname) (parsed decl) (:parsed info))]
+        {:cls p :method (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))}))))
+
+(defn- direct-target
+  "The class whose cname.mname(desc) an invokevirtual always reaches, or nil:
+  the method it resolves to is private or final, or its class is final, so no
+  override can be picked at run time."
+  [cname mname desc]
+  (when-not (str/starts-with? cname "[")
+    ;; a method only an interface declares, without a body, doesn't resolve
+    ;; here; dispatch handles it
+    (when-let [decl (try (resolve-method cname mname desc) (catch Exception _ nil))]
+     (let [m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods (class-info decl))))]
+      (when (and m (not (cf/static? m))
+                 (or (pos? (bit-and (:flags m) 0x0012))
+                     (pos? (bit-and (:flags (class-info cname)) 0x0010))))
+        decl)))))
+
 (def ^:private resolver
   {:ensure-loaded #(ensure-loaded! %)
+   :inline-candidate inline-candidate
+   :direct-target direct-target
    :resolve-static-field resolve-static-field
    :field-index field-index
    :resolve-method resolve-method
@@ -337,6 +375,9 @@
                    (:fields c))
      :methods (mapv (fn [m] (assoc m
                                    :native (cf/native? m)
+                                   ;; kept in the startup cache, which drops
+                                   ;; the bytecode: inlining checks it first
+                                   :code-len (some-> (:code m) :code count)
                                    :virtual (not (or (cf/static? m) (str/starts-with? (:name m) "<")))))
                     (:methods c))}))
 

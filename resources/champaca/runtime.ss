@@ -409,21 +409,25 @@
   (syntax-rules () [(_ x i) (let ([o x]) (if o (vector-ref (jobj-slots o) i) (nn o)))]))
 (define-syntax field-set!
   (syntax-rules () [(_ x i v) (let ([o x]) (if o (vector-set! (jobj-slots o) i v) (nn o)))]))
+;; jarr-vec is always a vector and the index has just been checked against
+;; it, so the vector access itself can skip Chez's checks (#3%): safe code
+;; checks the type and bounds again, which more than doubles a byte loop.
 (define-syntax array-ref
   (syntax-rules ()
     [(_ a i) (let ([arr a] [j i])
                (if arr
                    (let ([v (jarr-vec arr)])
-                     (if (and (fx>= j 0) (fx< j (vector-length v))) (vector-ref v j) (bounds-error j v)))
+                     (if (fx< -1 j (#3%vector-length v)) (#3%vector-ref v j) (bounds-error j v)))
                    (nn arr)))]))
 (define-syntax array-set!
   (syntax-rules ()
     [(_ a i x) (let ([arr a] [j i])
                  (if arr
                      (let ([v (jarr-vec arr)])
-                       (if (and (fx>= j 0) (fx< j (vector-length v))) (vector-set! v j x) (bounds-error j v)))
+                       (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v)))
                      (nn arr)))]))
-(define-syntax array-length (syntax-rules () [(_ a) (vector-length (jarr-vec (nn a)))]))
+(define-syntax array-length
+  (syntax-rules () [(_ a) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (nn arr)))]))
 (define-syntax wrap-byte (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80)]))
 (define-syntax wrap-short (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000)]))
 

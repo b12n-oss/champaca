@@ -367,6 +367,9 @@
   Returns {:code text :succ {pc entry-stack}}."
   [ctx blk entry]
   (let [{:keys [cls resolve next-pc live boxed jump]} ctx
+        ;; what a direct call names: the callee inlined into this method when
+        ;; it is a small leaf (compile-method), else its top-level definition
+        callee (fn [decl name desc] (or ((:inline! ctx) decl name desc) (method-global decl name desc)))
         cp (:cp cls)
         this-class (:name cls)
         st (volatile! entry)
@@ -561,14 +564,24 @@
                          (apply sx "mh-call" recv (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
-                             (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc)))) recv argv)))
+                             (if-let [decl (and (= op :invokevirtual) ((:direct-target resolve) class name desc))]
+                               ;; nothing can override it: call it directly,
+                               ;; after the null check dispatch would do
+                               (apply sx (callee decl name desc)
+                                      (sx "let" (sx (sx "r" recv)) (sx "if" "r" "r" (sx "nn" "r"))) argv)
+                               (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc)))) recv argv))))
                        :invokespecial
-                       (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) recv argv)
+                       (let [decl ((:resolve-method resolve) class name desc)]
+                         ;; Object's constructor does nothing
+                         (when-not (and (= decl "java/lang/Object") (= name "<init>"))
+                           (apply sx (callee decl name desc) recv argv)))
                        :invokestatic
                        (let [decl ((:resolve-method resolve) class name desc)]
                          (init decl)
-                         (apply sx (method-global decl name desc) argv)))]
-            (if (= ret "V") (stmt! call) (push! call (desc->t ret))))
+                         (apply sx (callee decl name desc) argv)))]
+            (cond (nil? call) nil
+                  (= ret "V") (stmt! call)
+                  :else (push! call (desc->t ret))))
           :invokedynamic
           (let [{:keys [bsm-idx name desc]} (cp a0)
                 {:keys [args ret]} (parse-desc desc)
@@ -676,20 +689,75 @@
 
 (declare compile-method*)
 
+(def leaf-limit
+  "Bytecode bytes in the largest method inlined into its callers."
+  40)
+
+(defn- leaf?
+  "Whether method is small enough to inline: no calls but Object's empty
+  constructor, no backward branches, no exception handlers, not synchronized
+  or native. A leaf never shows on the stack while other code runs, so
+  inlining it hides nothing from getCallerClass."
+  [cls method]
+  (let [{:keys [code handlers]} (:code method)
+        cp (:cp cls)]
+    (and code (empty? handlers) (<= (count code) leaf-limit)
+         (zero? (bit-and (:flags method) 0x0120))
+         (every? (fn [{:keys [op args pc] :as i}]
+                   (and (not (#{:invokevirtual :invokeinterface :invokestatic :invokedynamic
+                                :monitorenter :monitorexit :jsr :ret} op))
+                        (or (not= op :invokespecial)
+                            (let [{:keys [class name]} (cp (first args))]
+                              (and (= class "java/lang/Object") (= name "<init>"))))
+                        (every? #(> % pc) (successors i))))
+                 (decode code)))))
+
 (defn compile-method
-  "Scheme source for `(define |Cls.name(desc)| (lambda ...))`."
+  "Scheme source for `(define |Cls.name(desc)| (lambda ...))`. A small leaf
+  method it calls directly (invokestatic, invokespecial, or invokevirtual
+  that nothing can override) is compiled into it as a let-bound procedure,
+  which Chez calls directly or inlines."
   [cls method resolve]
-  (binding [*method-tag* (str (:name cls) "." (:name method) (:desc method))]
-    (compile-method* cls method resolve)))
+  (let [tag (str (:name cls) "." (:name method) (:desc method))
+        ;; inline-cache cells, one per site that needs one, made once per
+        ;; method and shared with the methods inlined into it
+        ics (volatile! 0)
+        ic! (fn [] (str "ic" (dec (vswap! ics inc))))
+        inlined (volatile! {})          ; callee tag -> label, or false
+        defs (volatile! [])             ; [label lambda-text], in order
+        bt? (System/getenv "CHAMPACA_BT")
+        inline! (fn [decl name desc]
+                  (when-not bt?
+                    (let [ctag (str decl "." name desc)]
+                      (if (contains? @inlined ctag)
+                        (get @inlined ctag)
+                        (let [{c :cls m :method} ((:inline-candidate resolve) (:name cls) decl name desc)
+                              lbl (when (and m (leaf? c m))
+                                    ;; a callee that fails to translate (a
+                                    ;; class missing at run time, say) stays
+                                    ;; a plain call, so it fails only if called
+                                    (when-let [text (try (binding [*method-tag* ctag]
+                                                           (compile-method* c m resolve ic! (constantly nil)))
+                                                         (catch Exception _ nil))]
+                                      (let [l (sym (str tag "#I:" ctag))]
+                                        (vswap! defs conj [l text])
+                                        l)))]
+                          (vswap! inlined assoc ctag (or lbl false))
+                          lbl)))))
+        f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
+        f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
+    (sx "define" (method-global (:name cls) (:name method) (:desc method))
+        (if (pos? @ics)
+          (sx "let" (apply sx (for [i (range @ics)] (sx (str "ic" i) "(cons #f #f)"))) f)
+          f))))
 
 (defn- compile-method*
-  [cls method resolve]
+  "The method as a lambda. ic! names a fresh inline-cache cell, inline! the
+  inlined procedure for a direct callee or nil."
+  [cls method resolve ic! inline!]
   (let [{:keys [code handlers]} (:code method)
         insns (decode code)
         blks (blocks insns handlers)
-        ;; inline-cache cells, one per virtual call site, made once per method
-        ics (volatile! 0)
-        ic! (fn [] (str "ic" (dec (vswap! ics inc))))
         next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
         {:keys [args]} (parse-desc (:desc method))
         arg-types (if (pos? (bit-and (:flags method) 0x0008)) args (cons "L" args))
@@ -730,7 +798,7 @@
                     (if (contains? done pc)
                       (recur (rest work) done)
                       (let [{:keys [code succ]} (emit-block {:cls cls :resolve resolve :next-pc (next-pc pc)
-                                                             :live live :boxed boxed :jump (jump pc) :ic! ic!}
+                                                             :live live :boxed boxed :jump (jump pc) :ic! ic! :inline! inline!}
                                                             (blks pc) dep)]
                         (recur (concat (rest work) succ) (assoc done pc [dep code]))))
                     done))
@@ -791,13 +859,9 @@
                            (sx "lambda" "()" body*)
                            (sx "lambda" "()" (sx "jmonitor-exit" "lock")))))
                  body*)]
-      (sx "define" (method-global (:name cls) (:name method) (:desc method))
-          (let [f (sx "lambda" (apply sx (map #(str "l" %) params))
-                      ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
-                      (if (System/getenv "CHAMPACA_BT")
-                        (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
-                            body)
-                        body))]
-            (if (pos? @ics)
-              (sx "let" (apply sx (for [i (range @ics)] (sx (str "ic" i) "(cons #f #f)"))) f)
-              f))))))
+      (sx "lambda" (apply sx (map #(str "l" %) params))
+          ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+          (if (System/getenv "CHAMPACA_BT")
+            (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                body)
+            body)))))

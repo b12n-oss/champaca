@@ -1,0 +1,11 @@
+[main, Config.<clinit>, scaled 15]
+42 42 7
+caught neg -1
+div / by zero
+5 40 4
+7 3 4
+121
+npe-final npe-final-no-this npe-final-class npe-string
+10 11 -1 7 9223372036854775807 10 ok cce thrown aioobe aioobe-set aioobe aioobe-set aioobe aioobe-set npe-get npe-set npe-length args-first 7 top 1 false
+5 e false true true false
+302 n é 中
