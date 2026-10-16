@@ -10,11 +10,11 @@ Booting the JDK means parsing classes, translating their methods to Scheme and c
 
 | Program | Cache off | Warm cache | Warm, after a full `bb test` |
 |---|---|---|---|
-| `Hello` | 1.21 s | 0.36 s | 0.42 s |
-| `Streams` | 1.73 s | 0.42 s | 0.46 s |
-| `examples/interop.clj` | 1.32 s | 0.40 s | 0.46 s |
+| `Hello` | 1.27 s | 0.41 s | 0.47 s |
+| `Streams` | 1.90 s | 0.47 s | 0.52 s |
+| `examples/interop.clj` | 1.41 s | 0.45 s | 0.52 s |
 
-Each is the median of five runs. The warm column uses a cache that only that program has filled, and the last one a cache that all 21 tests have added to (see Generations).
+Each is the median of five runs, measured after method handles went in. The warm column uses a cache that only that program has filled, and the last one a cache that all 27 tests have added to (see Generations). Thread support and the method handle runtime each added about 20 ms to every start.
 
 ### What's in it, and what isn't
 
@@ -26,7 +26,7 @@ When a run compiles JDK methods the cache didn't have, `champaca.main` appends t
 
 `boot.so` loads whole on every run, since boot needs all of it. A generation doesn't. It's written one unit at a time, each unit being either one class's registration (its vtable and method stubs) or one compiled method body, and `state.img` records where each unit sits. A later run starts with none of them loaded. When something first needs a class from a generation, its unit loads, its superclass and interfaces first. The first call to one of its methods then loads that method's body rather than compiling it again. `CHAMPACA_STATS=1` counts the units a run loaded.
 
-Before this, every run loaded every generation, and the cost followed the amount of code. A full `bb test` from an empty cache leaves 14 generations, and a warm `Hello` on that cache took 0.58 s instead of 0.37 s. It now takes 0.42 s and loads 85 units. Most of the 60 ms left is `state.img`, which still holds every class any run has loaded (775 KB against 250 KB, 73 ms to read against 25 ms).
+Before this, every run loaded every generation, and the cost followed the amount of code. A full `bb test` from an empty cache leaves 14 generations, and a warm `Hello` on that cache took 0.58 s instead of 0.37 s. Right after the change it took 0.42 s and loaded 85 units. Most of the 60 ms left is `state.img`, which still holds every class any run has loaded (775 KB against 250 KB, 73 ms to read against 25 ms).
 
 Class registrations turned out to be most of a generation's code: 9.4 MB of the 14.7 MB that `bb test` wrote, with method bodies the rest. So loading only the bodies lazily would have saved 40 ms.
 
