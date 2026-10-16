@@ -139,14 +139,17 @@
 ;; in classfile order; reflection reads it and a member's slot is its index.
 ;; A vtable is keyed by symbols, "name(desc)" interned, so a call looks its
 ;; method up with eq? rather than hashing a string each time.
-(define (alist->symbol-table al)
-  (let ([t (make-eq-hashtable)])
-    (for-each (lambda (p) (eq-hashtable-set! t (string->symbol (car p)) (cdr p))) al)
-    t))
-
+;; vtable-alist holds the changes to the superclass's vtable: a new or
+;; overriding entry, or (key . #f) for one this class drops.
 (define (register-class! name super interfaces template vtable-alist field-alist flags meta)
   (hashtable-set! classes name
-                  (make-jclass name super interfaces template (alist->symbol-table vtable-alist)
+                  (make-jclass name super interfaces template
+                               (let ([t (if super (hashtable-copy (jclass-vtable (find-class super)) #t) (make-eq-hashtable))])
+                                 (for-each (lambda (p)
+                                             (let ([k (string->symbol (car p))])
+                                               (if (cdr p) (eq-hashtable-set! t k (cdr p)) (eq-hashtable-delete! t k))))
+                                           vtable-alist)
+                                 t)
                                (alist->table field-alist) flags
                                (if (fxpositive? (fxlogand flags #x200)) 'interface 'class)
                                meta 'loaded #f)))
@@ -798,6 +801,19 @@
                   (apply (top-level-value sym) args))])
         (eq-hashtable-set! stub-procs p #t)
         p)))
+
+;; A class's method definitions from one form: ms holds (name desc symbol
+;; native?) per method. One top-level define per method made compiling the
+;; startup cache most of a cold start, Chez's cost per top-level form being
+;; far above that of a quoted list.
+(define (define-methods! cname ms)
+  (for-each (lambda (m)
+              (let ([mname (car m)] [desc (cadr m)] [sym (caddr m)])
+                (define-top-level-value sym
+                  (if (cadddr m)
+                      (native-ref (string-append cname "." mname desc))
+                      (method-stub cname mname desc sym)))))
+            ms))
 
 ;; "java.lang.String" -> "java/lang/String"
 (define (slashes s) (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list s))))

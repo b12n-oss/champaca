@@ -386,10 +386,10 @@
 (defn- normalize
   "Parse cname's classfile into the linker's class map."
   [cname]
-  (let [user (user-class-bytes cname)
-        bytes (or user (jdk-class-bytes cname)
+  (let [user (timed :class-bytes #(user-class-bytes cname))
+        bytes (or user (timed :class-bytes #(jdk-class-bytes cname))
                   (throw (ex-info (str "class not found: " cname) {:class cname})))
-        c (cf/parse bytes)]
+        c (timed :cf-parse #(cf/parse bytes))]
     {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
      ;; only JDK classes are cached; user classes change between runs
      :origin (if user :user :jdk)
@@ -473,7 +473,14 @@
     [(cg/sx "register-class!" (cg/str-lit name) (if super (cg/str-lit super) "#f")
             (str "'" (apply cg/sx (map cg/str-lit interfaces)))
             (apply cg/sx "vector" template)
-            (str "'" (apply cg/sx (for [[k g] (sort vtable)] (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))))
+            ;; the vtable as changes to the superclass's: printing every
+            ;; inherited entry made it a third of the startup cache's source
+            (str "'" (apply cg/sx (let [sup-vt (when super (:vtable (class-info super)))]
+                                    (concat
+                                     (for [[k g] (sort vtable) :when (not= g (get sup-vt k))]
+                                       (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))
+                                     (for [k (sort (keys sup-vt)) :when (not (contains? vtable k))]
+                                       (str "(" (cg/str-lit k) " . #f)"))))))
             (str "'" (apply cg/sx (for [[k i] (sort layout)] (str "(" (cg/str-lit k) " . " i ")"))))
             (str flags)
             ;; declared members, in classfile order, for reflection:
@@ -502,16 +509,16 @@
     (for [f fields :when (:static f)]
       (cg/sx "define" (cg/static-global name (:name f))
              (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))
-    (for [m methods
-          :let [g (cg/method-global name (:name m) (:desc m))]
-          :when (or (:native m) (:code m) (overridden? name m))]
-      (if (:native m)
-        (cg/sx "define" g (cg/sx "native-ref" (cg/str-lit (str name "." (:name m) (:desc m)))))
-        ;; method-stub returns a runtime override when natives.ss has one,
-        ;; else a closure that JIT-compiles the method on first call
-        (cg/sx "define" g
-               (cg/sx "method-stub" (cg/str-lit name) (cg/str-lit (:name m)) (cg/str-lit (:desc m))
-                      (str "'" g))))))))
+    ;; every method's definition from one form: a native's from natives.ss,
+    ;; any other's from method-stub, which returns a runtime override when
+    ;; natives.ss has one, else a closure that JIT-compiles the method on
+    ;; first call
+    [(cg/sx "define-methods!" (cg/str-lit name)
+            (str "'" (apply cg/sx (for [m methods
+                                        :when (or (:native m) (:code m) (overridden? name m))]
+                                    (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m))
+                                           (cg/method-global name (:name m) (:desc m))
+                                           (if (:native m) "#t" "#f"))))))])))
 
 (defn ensure-loaded! [cname]
   (cond
@@ -652,15 +659,18 @@
     (.mkdirs tmp)
     (let [src (io/file tmp "boot.ss")]
       (spit src (str/join "\n" (map :text forms)))
-      (s/call "quiet-compile-file" (str src) (str (io/file tmp "boot.so")))
+      (timed :cache-write-boot #(s/call "quiet-compile-file" (str src) (str (io/file tmp "boot.so"))))
       (.delete src))
     ;; the runtime itself, so a warm start loads it compiled rather than
     ;; compiling its source again (about 130 ms)
-    (let [src (io/file tmp "runtime.ss")]
-      (spit src (str/join "\n" (map #(slurp (io/resource %)) runtime-files)))
-      (s/call "quiet-compile-file" (str src) (str (io/file tmp "runtime.so")))
-      (.delete src))
-    (dump-classes! (io/file tmp "state.img"))
+    (let [pre (:runtime-so @state)]
+      (if (and pre (.exists pre) (.renameTo pre (io/file tmp "runtime.so")))
+        (swap! state dissoc :runtime-so)
+        (let [src (io/file tmp "runtime.ss")]
+          (spit src (str/join "\n" (map #(slurp (io/resource %)) runtime-files)))
+          (timed :cache-write-runtime #(s/call "quiet-compile-file" (str src) (str (io/file tmp "runtime.so"))))
+          (.delete src))))
+    (timed :cache-write-state #(dump-classes! (io/file tmp "state.img")))
     ;; a directory missing a file (a crash mid-write, a load that failed) would
     ;; block the rename forever, so it goes first
     (when (and (.exists dir) (not-every? #(.exists (io/file dir %)) ["boot.so" "state.img" "runtime.so"]))
@@ -731,7 +741,22 @@
                           (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
                           (delete-tree! dir)
                           false)))
-      (doseq [f runtime-files] (scheme! (slurp (io/resource f))))))
+      (if dir
+        ;; a cold start writes runtime.so into the cache anyway, so compile it
+        ;; first and load it, rather than evaluating the source and compiling
+        ;; it again for the cache (write-cache! moves this file into place)
+        (let [f (io/file (str dir ".runtime-" (System/nanoTime) ".so"))
+              src (io/file (str f ".ss"))]
+          (io/make-parents f)
+          (spit src (str/join "\n" (map #(slurp (io/resource %)) runtime-files)))
+          (timed :runtime-compile
+                 #(s/eval-string (str "(parameterize ([current-output-port (open-output-string)]"
+                                      " [generate-inspector-information #f])"
+                                      " (compile-file " (pr-str (str src)) " " (pr-str (str f)) "))")))
+          (.delete src)
+          (timed :runtime-load #(s/call "load" (str f)))
+          (swap! state assoc :runtime-so f))
+        (doseq [f runtime-files] (scheme! (slurp (io/resource f)))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |

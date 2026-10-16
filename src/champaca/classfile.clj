@@ -17,19 +17,57 @@
   (define (ldk-bits->f64 b)
     (let ([v (make-bytevector 8)])
       (bytevector-u64-set! v 0 (logand b #xffffffffffffffff) (endianness big))
-      (bytevector-ieee-double-ref v 0 (endianness big))))")
+      (bytevector-ieee-double-ref v 0 (endianness big))))
+  ;; a jolt byte array is a record around a bytevector (natives.ss reads it
+  ;; the same way)
+  (define (ldk-bytevector-of a) (if (bytevector? a) a ((record-accessor (record-rtd a) 0) a)))
+  ;; the n bytes at start as a string when they are all ASCII other than NUL,
+  ;; which modified UTF-8 encodes as itself; #f otherwise
+  (define (ldk-ascii-at bv start n)
+    (let ([end (fx+ start n)])
+      (let loop ([i start])
+        (if (fx= i end)
+            (let ([s (make-string n)])
+              (do ([j 0 (fx+ j 1)]) ((fx= j n) s)
+                (string-set! s j (integer->char (bytevector-u8-ref bv (fx+ start j))))))
+            (let ([b (bytevector-u8-ref bv i)])
+              (and (fx< 0 b 128) (loop (fx+ i 1))))))))")
 
-(defn- reader [^bytes bs]
-  (let [pos (volatile! 0)]
-    {:bytes bs
-     :pos pos
-     :u1 (fn [] (let [b (bit-and (aget bs @pos) 0xff)] (vswap! pos inc) b))}))
+;; resolved once: a call through s/call looks the name up every time, about
+;; ten times the cost of the call itself
+(def ^:private bytevector-of (s/proc "ldk-bytevector-of"))
+(def ^:private ascii-at (s/proc "ldk-ascii-at"))
 
-(defn- u1 [r] ((:u1 r)))
-(defn- u2 [r] (let [a (u1 r) b (u1 r)] (+ (* a 256) b)))
+(defn- reader
+  "A cursor over a byte array, or over a vector of unsigned bytes (an
+  attribute's body, read again in place)."
+  [bs]
+  (if (vector? bs)
+    {:at (fn [i] (nth bs i)) :pos (volatile! 0)}
+    {:at (fn [i] (bit-and (aget ^bytes bs i) 0xff)) :pos (volatile! 0) :bv (bytevector-of bs)}))
+
+(declare decode-mutf8 take-bytes)
+
+(defn- utf8-at
+  "The constant-pool string of n bytes at the cursor: in Scheme when it is
+  plain ASCII, the common case and many times faster than decoding here."
+  [r n]
+  (let [p (:pos r) start @p]
+    (or (when-let [bv (:bv r)]
+          (when-let [s (ascii-at bv start n)]
+            (vreset! p (+ start n))
+            s))
+        (decode-mutf8 (take-bytes r n)))))
+
+(defn- u1 [r] (let [p (:pos r) i @p] (vreset! p (inc i)) ((:at r) i)))
+(defn- u2 [r] (let [p (:pos r) i @p at (:at r)] (vreset! p (+ i 2)) (+ (* (at i) 256) (at (inc i)))))
 (defn- u4 [r] (let [a (u2 r) b (u2 r)] (+ (* a 65536) b)))
 (defn- s4 [r] (let [v (u4 r)] (if (>= v 2147483648) (- v 4294967296) v)))
-(defn- take-bytes [r n] (vec (repeatedly n #(u1 r))))
+(defn- take-bytes [r n]
+  (let [p (:pos r) start @p end (+ start n) at (:at r)]
+    (vreset! p end)
+    (loop [i start acc (transient [])]
+      (if (< i end) (recur (inc i) (conj! acc (at i))) (persistent! acc)))))
 
 (defn- decode-mutf8
   "Modified UTF-8 to a string. Supplementary characters arrive as surrogate
@@ -52,7 +90,7 @@
 (defn- read-cp-entry [r]
   (let [tag (u1 r)]
     (case (int tag)
-      1 {:tag :utf8 :value (decode-mutf8 (take-bytes r (u2 r)))}
+      1 {:tag :utf8 :value (utf8-at r (u2 r))}
       3 {:tag :int :value (s4 r)}
       4 {:tag :float :value (s/call "ldk-bits->f32" (u4 r))}
       5 {:tag :long :value (apply s/call "ldk-s64" (take-bytes r 8))}
@@ -105,7 +143,7 @@
                            :info (take-bytes r (u4 r))}))))
 
 (defn- parse-code [info cp]
-  (let [r (reader (byte-array (map unchecked-byte info)))
+  (let [r (reader info)
         max-stack (u2 r)
         max-locals (u2 r)
         code (take-bytes r (u4 r))
@@ -115,7 +153,7 @@
     {:max-stack max-stack :max-locals max-locals :code code :handlers handlers}))
 
 (defn- parse-bootstrap-methods [info]
-  (let [r (reader (byte-array (map unchecked-byte info)))]
+  (let [r (reader info)]
     (vec (repeatedly (u2 r)
                      (fn [] {:ref-idx (u2 r) :args (vec (repeatedly (u2 r) #(u2 r)))})))))
 
