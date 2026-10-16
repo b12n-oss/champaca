@@ -206,6 +206,29 @@
 (defn- class-bytes [cname]
   (or (user-class-bytes cname) (jdk-class-bytes cname)))
 
+(defn- user-resource-bytes [path]
+  (some (fn [entry]
+          (if (str/ends-with? (str entry) ".jar")
+            (read-entry (jar entry) path)
+            (let [f (io/file entry path)]
+              (when (.isFile f)
+                (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String [])))))))
+        (:classpath @state)))
+
+(defn- jdk-resource-bytes
+  "path from the module owning the nearest enclosing package. The index
+  lists packages with classes, and a resource directory (ICU's data, say)
+  may have none of its own."
+  [path]
+  (loop [dir (some->> (str/last-index-of path "/") (subs path 0))]
+    (when dir
+      (if-let [module (get (package-modules) dir)]
+        (read-entry (jmod-zip module) (str "classes/" path))
+        (recur (some->> (str/last-index-of dir "/") (subs dir 0)))))))
+
+(defn- resource-bytes [path]
+  (or (user-resource-bytes path) (jdk-resource-bytes path)))
+
 (defn- record!
   "Keep text for the startup cache when it belongs to a JDK class. unit says
   what the text defines: [cname] a class's registration, [cname key] one
@@ -289,6 +312,13 @@
                                    :virtual (not (or (cf/static? m) (str/starts-with? (:name m) "<")))))
                     (:methods c))}))
 
+(defn- overridden?
+  "Whether the runtime overrides cname's method m. An abstract method with an
+  override (VarHandle.withInvokeExactBehavior, natives.ss) gets a vtable entry
+  and a stub like a method with code."
+  [cname m]
+  (boolean (s/call "native-override" (str cname "." (:name m) (:desc m)))))
+
 (defn- link
   "Compute field layout, slot template and vtable from the (already linked)
   superclass, then fill vtable gaps with interface default methods."
@@ -301,7 +331,7 @@
         template (into (or (:template sup) []) (map #(cg/default-value (:desc %)) own))
         vtable (into (or (:vtable sup) {})
                      (for [m (:methods info)
-                           :when (and (:virtual m) (or (:code m) (:native m)))]
+                           :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
                        [(str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))]))
         defaults (for [i (rest (ancestry-of-unlinked info))
                        :let [ii (class-info i)]
@@ -368,7 +398,7 @@
              (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))
     (for [m methods
           :let [g (cg/method-global name (:name m) (:desc m))]
-          :when (or (:native m) (:code m))]
+          :when (or (:native m) (:code m) (overridden? name m))]
       (if (:native m)
         (cg/sx "define" g (cg/sx "native-ref" (cg/str-lit (str name "." (:name m) (:desc m)))))
         ;; method-stub returns a runtime override when natives.ss has one,
@@ -461,7 +491,7 @@
 
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
-                        ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss"
+                        ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"
                          "champaca/codegen.clj" "champaca/main.clj"
                          "champaca/classfile.clj"]))))
 
@@ -568,12 +598,14 @@
   (scheme! (slurp (io/resource "champaca/natives.ss")))
   (scheme! (slurp (io/resource "champaca/reflect.ss")))
   (scheme! (slurp (io/resource "champaca/handles.ss")))
+  (scheme! (slurp (io/resource "champaca/files.ss")))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
   (s/call "set-annotation-class-hook!" (fn [iface keys]
                                          (lambda-class [iface] (if (= "" keys) [] (str/split keys #"\|")))))
   ;; ConstantPool natives (annotations): a constant's value, or a class's name
+  (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false)))
   (s/call "set-cp-hook!" (fn [cname i]
                            (let [e (get (:cp (parsed cname)) i)]
                              (or (:value e) (:name e)

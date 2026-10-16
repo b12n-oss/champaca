@@ -1,0 +1,38 @@
+temp dir true empty true
+io lines [hello, !, more]
+w.txt line 0|line 1|line 2|
+File length 13 isFile true canRead true canWrite true
+mkdirs true again false isDirectory true
+createNewFile true again false
+renameTo true old exists false new exists true
+setLastModified true lastModified 1000000000000
+list [a, io.txt, w.txt]
+delete non-empty dir false file true gone true
+raf 42 7 length 17 pointer 4
+raf truncated 4
+readString alpha|beta|gamma|
+readAllLines [alpha, beta, gamma]
+lines with a 3
+appended size 23 bytes 23
+newBufferedReader buffered
+newInputStream [1, 2, 3, 4, 5]
+exists true notExists true isRegularFile true isDirectory false isReadable true
+attrs size 23 dir false regular true mtime 2017-07-14T02:40:00Z
+permissions rw-r-----
+copied buffered
+walk [, y, y/moved.txt, y/z, y/z/leaf.txt]
+glob *.txt [buf.txt, io.txt, nio.txt, w.txt]
+find .txt 6
+symlink true target name nio.txt same file true real path matches true not same false
+canonical through link nio.txt
+channel read 3456 direct 789 size 6 position 6
+mismatch -1 0
+NoSuchFileException missing
+FileAlreadyExistsException
+DirectoryNotEmptyException
+FileNotFoundException
+deleteIfExists false true
+temp file true true
+sha-256 d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592
+md5 9e107d9d372bb6826bd81d3542a419d6
+cleaned true

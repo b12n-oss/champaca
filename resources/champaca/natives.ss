@@ -119,12 +119,28 @@
 ;; An object field offset is its slot index; an array offset is the element
 ;; index (base 0, scale 1). Static fields are not addressable yet.
 
-;; Off-heap words that Unsafe reaches with a null base and an absolute
-;; address (Thread's next-id counter, for one). Addresses are table keys.
+;; Unsafe with a null base and an absolute address reaches native memory.
+;; Real memory comes from malloc (allocateMemory0) and is what libc calls get
+;; pointers into (files.ss). A few words made during boot, Thread's next-id
+;; counter for one, live in a table at small fake addresses instead: boot's
+;; heap is saved in the startup cache, and a malloc address saved there would
+;; point at nothing in the next process. So boot must not allocateMemory.
 (define native-memory (make-eqv-hashtable))
 (define native-next 4096)
+(define native-fake-limit #x100000)
 (define (native-alloc! init)
   (let ([a native-next]) (set! native-next (+ native-next 8)) (hashtable-set! native-memory a init) a))
+(define (fake-address? a) (< a native-fake-limit))
+
+(define (foreign-type t)
+  (case t
+    [("B") 'integer-8] [("Z") 'unsigned-8] [("S") 'integer-16] [("C") 'unsigned-16]
+    [("I") 'integer-32] [("J") 'integer-64] [("F") 'single-float] [("D") 'double-float]
+    [else (error 'champaca "no off-heap references" t)]))
+(define (native-get a t)
+  (if (fake-address? a) (hashtable-ref native-memory a 0) (foreign-ref (foreign-type t) a 0)))
+(define (native-set! a v t)
+  (if (fake-address? a) (hashtable-set! native-memory a v) (foreign-set! (foreign-type t) a 0 v)))
 
 (define unsafe-prefix "jdk/internal/misc/Unsafe.")
 ;; Arrays are byte-addressed like a real heap: base offset 16, scale by
@@ -168,7 +184,7 @@
 
 (define (unsafe-get o off t)
   (cond
-    [(not o) (hashtable-ref native-memory off 0)]
+    [(not o) (native-get off t)]
     [(and (jobj? o) (static-symbol o off)) => top-level-value]
     [(jobj? o) (vector-ref (jobj-slots o) off)]
     [else
@@ -180,7 +196,7 @@
 
 (define (unsafe-set! o off v t)
   (cond
-    [(not o) (hashtable-set! native-memory off v)]
+    [(not o) (native-set! off v t)]
     [(and (jobj? o) (static-symbol o off)) => (lambda (sym) (set-top-level-value! sym v))]
     [(jobj? o) (vector-set! (jobj-slots o) off v)]
     [else
@@ -222,12 +238,32 @@
   (jinit (jclass-cname (mirror-class c))))
 (defnative "jdk/internal/misc/Unsafe.shouldBeInitialized0(Ljava/lang/Class;)Z" (this c)
   (if (eq? (jclass-state (mirror-class c)) 'initialized) 0 1))
-;; between two Java arrays only (ByteBuffer.put of one heap buffer into
-;; another); whole elements when the types and alignment allow, else bytes.
-;; The source is read in full before writing, so overlap is safe.
+;; between Java arrays and native memory (a null base), in any mix: whole
+;; elements when two arrays' types and alignment allow, else bytes. The source
+;; is read in full before writing, so overlap is safe.
+(define (mem-byte o off)
+  (if o (byte-of o (- off array-base)) (foreign-ref 'unsigned-8 off 0)))
+(define (mem-byte-set! o off b)
+  (if o (set-byte! o (- off array-base) b) (foreign-set! 'unsigned-8 off 0 b)))
 (defnative "jdk/internal/misc/Unsafe.copyMemory0(Ljava/lang/Object;JLjava/lang/Object;JJ)V" (this src soff dst doff n)
-  (unless (and (jarr? src) (jarr? dst))
-    (jthrow "java/lang/UnsupportedOperationException" "Unsafe.copyMemory outside Java arrays"))
+  (if (and (jarr? src) (jarr? dst))
+      (copy-array-memory src soff dst doff n)
+      (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])
+        (let loop ([i 0] [bs bytes])
+          (unless (null? bs) (mem-byte-set! dst (+ doff i) (car bs)) (loop (+ i 1) (cdr bs)))))))
+;; the same, reversing the bytes of each elem-size element
+(defnative "jdk/internal/misc/Unsafe.copySwapMemory0(Ljava/lang/Object;JLjava/lang/Object;JJJ)V" (this src soff dst doff n es)
+  (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])
+    (let loop ([i 0] [bs bytes])
+      (unless (null? bs)
+        (let ([elem (list-head bs es)])
+          (do ([k 0 (+ k 1)] [b (reverse elem) (cdr b)]) ((= k es)) (mem-byte-set! dst (+ doff i k) (car b)))
+          (loop (+ i es) (list-tail bs es)))))))
+(defnative "jdk/internal/misc/Unsafe.allocateMemory0(J)J" (this n) (foreign-alloc (max n 1)))
+(defnative "jdk/internal/misc/Unsafe.freeMemory0(J)V" (this a) (unless (eqv? a 0) (foreign-free a)))
+(defnative "jdk/internal/misc/Unsafe.setMemory0(Ljava/lang/Object;JJB)V" (this o off n b)
+  (do ([i 0 (+ i 1)]) ((= i n)) (mem-byte-set! o (+ off i) (fxlogand b #xff))))
+(define (copy-array-memory src soff dst doff n)
   (let* ([sb (- soff array-base)] [db (- doff array-base)]
          [et (elem-type src)] [se (type-size et)])
     (if (and (string=? et (elem-type dst)) (zero? (remainder sb se)) (zero? (remainder db se)) (zero? (remainder n se)))
@@ -371,89 +407,20 @@
 (define stdout-bin (standard-output-port))
 (define stderr-bin (standard-error-port))
 
-(defnative "java/io/FileOutputStream.writeBytes([BIIZ)V" (this bytes off len append)
-  (let* ([fdo (jslot this (jfield-index "java/io/FileOutputStream" "fd"))]
-         [fd (jslot fdo (jfield-index "java/io/FileDescriptor" "fd"))]
-         [port (if (eqv? fd 2) stderr-bin stdout-bin)]
-         [v (jarr-vec bytes)]
-         [bv (make-bytevector len)])
+;; fds 1 and 2 go through Chez's ports, which jolt's own output shares, so
+;; the two interleave in order. FileOutputStream's natives are in files.ss.
+(define (console-write-bytes fd bytes off len)
+  (let ([port (if (eqv? fd 2) stderr-bin stdout-bin)]
+        [v (jarr-vec bytes)]
+        [bv (make-bytevector len)])
     (do ([i 0 (fx+ i 1)]) ((fx= i len)) (bytevector-u8-set! bv i (fxlogand (vector-ref v (fx+ off i)) #xff)))
     (flush-output-port (current-output-port))
     (put-bytevector port bv)
     (flush-output-port port)))
-(defnative "java/io/FileOutputStream.write(IZ)V" (this b append)
-  (let* ([fdo (jslot this (jfield-index "java/io/FileOutputStream" "fd"))]
-         [fd (jslot fdo (jfield-index "java/io/FileDescriptor" "fd"))]
-         [port (if (eqv? fd 2) stderr-bin stdout-bin)])
+(define (console-write-byte fd b)
+  (let ([port (if (eqv? fd 2) stderr-bin stdout-bin)])
     (put-u8 port (fxlogand b #xff))
     (flush-output-port port)))
-
-;; --- file input -------------------------------------------------------------------
-;; FileInputStream reads through Chez binary ports kept in a table keyed by the
-;; int in FileDescriptor.fd; fds handed out here start at 3. fd 0 is stdin.
-
-(define open-files (make-eqv-hashtable))
-(define next-fd 3)
-
-(define (stream-fd this)
-  (jslot (jslot this (jfield-index "java/io/FileInputStream" "fd"))
-         (jfield-index "java/io/FileDescriptor" "fd")))
-(define (fd-port fd)
-  (cond [(hashtable-ref open-files fd #f)]
-        [(eqv? fd 0) (standard-input-port)]
-        [else (jthrow "java/io/IOException" "Stream Closed")]))
-(define (stream-port this) (fd-port (stream-fd this)))
-
-(defnative "java/io/FileInputStream.open0(Ljava/lang/String;)V" (this name)
-  (let ([p (jstring->scheme (nn name))])
-    (cond
-      [(not (file-exists? p))
-       (jthrow "java/io/FileNotFoundException" (string-append p " (No such file or directory)"))]
-      [(file-directory? p)
-       (jthrow "java/io/FileNotFoundException" (string-append p " (Is a directory)"))]
-      [else
-       (let ([fd next-fd])
-         (set! next-fd (fx+ next-fd 1))
-         (hashtable-set! open-files fd (open-file-input-port p))
-         (jslot-set! (jslot this (jfield-index "java/io/FileInputStream" "fd"))
-                     (jfield-index "java/io/FileDescriptor" "fd") fd))])))
-
-(defnative "java/io/FileInputStream.read0()I" (this)
-  (let ([b (get-u8 (stream-port this))]) (if (eof-object? b) -1 b)))
-
-(defnative "java/io/FileInputStream.readBytes([BII)I" (this bytes off len)
-  (if (fx= len 0)
-      0
-      (let ([bv (get-bytevector-n (stream-port this) len)])
-        (if (eof-object? bv)
-            -1
-            (let ([v (jarr-vec bytes)] [n (bytevector-length bv)])
-              (do ([i 0 (fx+ i 1)]) ((fx= i n) n)
-                (vector-set! v (fx+ off i) (i2b (bytevector-u8-ref bv i)))))))))
-
-(define (seekable-port? port) (and (port-has-port-length? port) (port-has-port-position? port)))
-
-(defnative "java/io/FileInputStream.available0()I" (this)
-  (let ([port (stream-port this)])
-    (if (seekable-port? port) (max 0 (- (port-length port) (port-position port))) 0)))
-(defnative "java/io/FileInputStream.skip0(J)J" (this n)
-  (let* ([port (stream-port this)] [pos (port-position port)]
-         [to (min (port-length port) (+ pos (max n 0)))])
-    (set-port-position! port to)
-    (- to pos)))
-(defnative "java/io/FileInputStream.length0()J" (this) (port-length (stream-port this)))
-(defnative "java/io/FileInputStream.position0()J" (this) (port-position (stream-port this)))
-(defnative "java/io/FileInputStream.isRegularFile0(Ljava/io/FileDescriptor;)Z" (this fdo)
-  (let ([port (hashtable-ref open-files (jslot fdo (jfield-index "java/io/FileDescriptor" "fd")) #f)])
-    (if (and port (seekable-port? port)) 1 0)))
-
-(defnative "java/io/FileDescriptor.close0()V" (this)
-  (let* ([i (jfield-index "java/io/FileDescriptor" "fd")] [fd (jslot this i)]
-         [port (hashtable-ref open-files fd #f)])
-    (when port
-      (close-port port)
-      (hashtable-delete! open-files fd))
-    (jslot-set! this i -1)))
 
 ;; --- signals: none are supported, which Terminator.setup tolerates ------------
 (defnative "jdk/internal/misc/Signal.findSignal0(Ljava/lang/String;)I" (name) -1)
@@ -848,14 +815,11 @@
 ;; (none yet: Class.getEnumConstantsShared used to be one, before reflect.ss)
 
 ;; --- java.io.UnixFileSystem: the read-only queries --------------------------------
-;; Enough for code that probes the file system (locale providers, resource
-;; lookups). Writes, permissions and listing are not here yet.
+;; Answered with Chez's own file procedures. Changes, access checks and
+;; canonical paths go through libc in files.ss.
 
 (define (file-path f) (jstring->scheme (jslot f (jfield-index "java/io/File" "path"))))
 
-(defnative "java/io/UnixFileSystem.canonicalize0(Ljava/lang/String;)Ljava/lang/String;" (this p)
-  ;; spike: no symlink resolution; the JDK has already made the path absolute
-  p)
 (defnative "java/io/UnixFileSystem.getBooleanAttributes0(Ljava/io/File;)I" (this f)
   (let ([p (file-path f)])
     (if (file-exists? p)
@@ -863,8 +827,6 @@
                  (if (file-regular? p) 2 0)
                  (if (file-directory? p) 4 0))
         0)))
-(defnative "java/io/UnixFileSystem.checkAccess0(Ljava/io/File;I)Z" (this f access)
-  (if (file-exists? (file-path f)) 1 0))
 (defnative "java/io/UnixFileSystem.getLastModifiedTime0(Ljava/io/File;)J" (this f)
   (let ([p (file-path f)])
     (if (file-exists? p)
@@ -881,6 +843,40 @@
 ;; --- modules and class loaders --------------------------------------------------
 ;; One flat class space: module wiring is recorded nowhere, and every loader
 ;; sees the same classes (user classpath, then java.base).
+
+;; Resources come from the loader (main.clj) the way classes do: the user
+;; classpath, then the JDK module whose packages the path falls under. The
+;; JDK finds its own resources in the runtime image, which isn't read here,
+;; so the getResourceAsStream methods are overridden to ask the loader. The
+;; hook answers a jolt byte array, a record around a bytevector, or false.
+(define resource-hook (lambda (path) #f))
+(define (set-resource-hook! f) (set! resource-hook f))
+(define (host-bytevector x)
+  (let ([bv (if (record? x) ((record-accessor (record-rtd x) 0) x) x)])
+    (unless (bytevector? bv) (error 'champaca "resource hook gave no bytes" x))
+    bv))
+(define (resource-stream path)
+  (let ([found (resource-hook path)])
+    (and found
+         (let* ([bv (host-bytevector found)] [n (bytevector-length bv)] [v (make-vector n)])
+           (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v i (bytevector-s8-ref bv i)))
+           (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v))))))
+;; Class.getResourceAsStream: a name without a leading / is relative to the
+;; class's package
+(define-override! "java/lang/Class.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
+  (lambda (this name)
+    (let ([n (jstring->scheme (nn name))])
+      (resource-stream
+       (if (and (fx> (string-length n) 0) (char=? (string-ref n 0) #\/))
+           (substring n 1 (string-length n))
+           (let* ([c (jclass-cname (mirror-class this))]
+                  [slash (let loop ([i (fx- (string-length c) 1)])
+                           (cond [(fx< i 0) #f] [(char=? (string-ref c i) #\/) i] [else (loop (fx- i 1))]))])
+             (if slash (string-append (substring c 0 (fx+ slash 1)) n) n)))))))
+(define-override! "java/lang/ClassLoader.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
+  (lambda (this name) (resource-stream (jstring->scheme (nn name)))))
+(define-override! "java/lang/ClassLoader.getSystemResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
+  (lambda (name) (resource-stream (jstring->scheme (nn name)))))
 
 (defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (void))
 (defnative "jdk/internal/loader/BootLoader.getSystemPackageNames()[Ljava/lang/String;" ()
@@ -1075,6 +1071,10 @@
       (if static?
           (make-vh 'static (string->symbol (string-append (jclass-cname dc) ":" fname)) (jclass-cname dc) desc)
           (make-vh 'field (jfield-index (jclass-cname dc) fname) #f desc)))))
+
+;; exact-type checking isn't done, so both behaviours are the same handle
+(define-override! "java/lang/invoke/VarHandle.withInvokeExactBehavior()Ljava/lang/invoke/VarHandle;" (lambda (this) this))
+(define-override! "java/lang/invoke/VarHandle.withInvokeBehavior()Ljava/lang/invoke/VarHandle;" (lambda (this) this))
 
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
   (lambda (this recv name type) (field-vh recv name type #f)))
