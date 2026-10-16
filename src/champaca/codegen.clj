@@ -653,10 +653,17 @@
       code
       (sx "guard"
           (apply sx "e"
-                 (for [{:keys [type handler]} covering]
-                   (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
-                       (sx "set!" "s0" "e")
-                       (label handler))))
+                 (concat
+                  (for [{:keys [type handler]} covering]
+                    (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
+                        (sx "set!" "s0" "e")
+                        (label handler)))
+                  ;; no handler here: raise again from this guard. Without
+                  ;; this clause guard re-raises in the thrower's dynamic
+                  ;; context, re-entering any dynamic-wind on the way, so a
+                  ;; synchronized method between them would take its monitor
+                  ;; again.
+                  [(sx "else" (sx "raise" "e"))]))
           code))))
 
 (declare compile-method*)

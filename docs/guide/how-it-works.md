@@ -13,25 +13,25 @@ Classes load lazily too: a class is found and parsed the first time something na
 
 ## The shape of a translated method
 
-Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot becomes `s0`, `s1`, .... The translator tracks the stack's types at compile time, so it knows what every slot holds. The method's code splits into basic blocks, each a `letrec`-bound thunk, and a jump is a tail call, which Chez compiles to a plain jump. `Hello.main` is a single block:
+Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot becomes `s0`, `s1`, .... The translator tracks the stack's types at compile time, so it knows what every slot holds. The method's code splits into basic blocks, each a `letrec`-bound procedure that takes the method's live locals and whatever the stack holds on entry. A jump is a tail call passing the current values, which Chez compiles to a plain jump. Inside a block nothing is assigned: a store or a push binds a fresh variable in a `let`, shadowing the old one. That matters because Chez keeps an assigned variable in a heap box, even when no closure captures it, while a `let`-bound one can live in a register. `Hello.main` is a single block:
 
 ```scheme
 (define |Hello.main([Ljava/lang/String;)V|
-  (lambda (l0)
-    (let ((s0 0) (s1 0))
+  (let ((ic0 (cons #f #f)))
+    (lambda (l0)
       (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
-                (lambda ()
-                  (begin (jinit "java/lang/System")
-                         (set! s0 |java/lang/System:out|)
-                         (set! s1 (jstring-lit "Hello, World!"))
-                         ((jvirt s0 "println(Ljava/lang/String;)V") s0 s1)
-                         (void)))))
-        (|Hello.main([Ljava/lang/String;)V#B0|)))))
+                (lambda (l0)
+                  (begin (jinit-sym '|java/lang/System|)
+                         (let ((s0 |java/lang/System:out|))
+                           (let ((s1 (jstring-lit "Hello, World!")))
+                             (begin ((jvirt-ic ic0 s0 '|println(Ljava/lang/String;)V|) s0 s1)
+                                    (void))))))))
+        (|Hello.main([Ljava/lang/String;)V#B0| l0)))))
 ```
 
-`getstatic` became `jinit` plus a top-level variable, and `invokevirtual` became a vtable lookup (`jvirt`) followed by a call. A static call is a call to the target's top-level name.
+`getstatic` became `jinit-sym` plus a top-level variable. `invokevirtual` became a call through `jvirt-ic`, an inline cache: `ic0` remembers the receiver class this call site saw last and the procedure it found for it, so a repeat call costs one `eq?` test, and a new class looks the method up in that class's vtable, keyed by interned symbols. A static call is a call to the target's top-level name. Classes are named by symbol, which an `eq?` table maps to the class, so `new` and initialization checks don't hash a string.
 
-Exception handlers need one change to that shape. A Scheme `guard` around a block would also cover every block that block tail-calls into, which is wrong for Java's exception ranges. So a method with an exception table runs as a trampoline instead: each block returns the next block rather than calling it, a small loop calls whatever comes back, and the `guard` around a block covers only that block. A Java `throw` is Scheme's `raise` of the exception object itself, and a handler's `guard` clause checks the raised object's class.
+Exception handlers need a different shape. A Scheme `guard` around a block would also cover every block that block tail-calls into, which is wrong for Java's exception ranges. So a method with an exception table runs as a trampoline instead: each block returns the next block rather than calling it, a small loop calls whatever comes back, and the `guard` around a block covers only that block. Its locals and stack slots are method-wide variables assigned with `set!`, since a handler has to see the values a local held when the exception was thrown. Those methods are the slower kind. A Java `throw` is Scheme's `raise` of the exception object itself, and a handler's `guard` clause checks the raised object's class.
 
 Some instructions get special treatment. `invokedynamic` with `LambdaMetafactory` or `ObjectMethods` (lambdas and records), string concatenation's `makeConcatWithConstants`, and the `typeSwitch` and `enumSwitch` behind pattern switches are compiled directly, with no bootstrap method run. VarHandle access modes become calls into the runtime's own VarHandle table, and `invokeExact` and `invoke` on a method handle into its handle table ([Method handles](#method-handles)).
 

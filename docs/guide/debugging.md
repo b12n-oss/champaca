@@ -74,19 +74,19 @@ That one was real; this guide turned it up. The fix was one line:
 
 ```scheme
 (define |Hello.main([Ljava/lang/String;)V|
-  (lambda (l0)
-    (let ((s0 0) (s1 0))
+  (let ((ic0 (cons #f #f)))
+    (lambda (l0)
       (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
-                (lambda ()
-                  (begin (jinit "java/lang/System")
-                         (set! s0 |java/lang/System:out|)
-                         (set! s1 (jstring-lit "Hello, World!"))
-                         ((jvirt s0 "println(Ljava/lang/String;)V") s0 s1)
-                         (void)))))
-        (|Hello.main([Ljava/lang/String;)V#B0|)))))
+                (lambda (l0)
+                  (begin (jinit-sym '|java/lang/System|)
+                         (let ((s0 |java/lang/System:out|))
+                           (let ((s1 (jstring-lit "Hello, World!")))
+                             (begin ((jvirt-ic ic0 s0 '|println(Ljava/lang/String;)V|) s0 s1)
+                                    (void))))))))
+        (|Hello.main([Ljava/lang/String;)V#B0| l0)))))
 ```
 
-(The file has it on one line; it's indented here.) `l0` is local 0, `s0` and `s1` are stack slots, and `#B0` is the method's only basic block. [how-it-works](how-it-works.md) explains the shape.
+(The file has it on one line; it's indented here.) `l0` is local 0, `s0` and `s1` are stack slots, `ic0` is the `println` call's inline cache, and `#B0` is the method's only basic block. [how-it-works](how-it-works.md) explains the shape.
 
 A method compiled from the startup cache doesn't go through the translator, so it won't appear. Add `CHAMPACA_CACHE=off` to see everything.
 

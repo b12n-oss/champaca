@@ -1,6 +1,6 @@
 # Performance
 
-Three things decide how fast champaca feels. The startup cache sets how long `init!` takes. The call-site cache sets what each `invoke` costs. And the generated code itself sets how fast Java runs once it's going; that one hasn't been worked on yet.
+Three things decide how fast champaca feels. The startup cache sets how long `init!` takes. The call-site cache sets what each `invoke` costs. And the generated code itself sets how fast Java runs once it's going.
 
 All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`.
 
@@ -94,7 +94,34 @@ The pin only affects `bb test` in this repo. Champaca works on a released 0.8.22
 
 ## The generated code
 
-Every Java local and stack slot becomes a mutable Scheme variable, and every call looks up a top-level symbol. Neither has been profiled or tuned, and it shows. `test/java/Bench.java` computes `fib(32)` and a 50-million-step loop: it takes 2.34 s on champaca, of which about 0.84 s was startup on a cache carrying 19 generations, against 0.15 s on the JVM, which needs about 0.11 s just to start. That leaves roughly 1.5 s of computing against well under 0.1 s. Code that spends its time inside Java, rather than crossing between jolt and Java, will feel this more than anything else on the page.
+`test/java/Bench.java` computes `fib(32)` and a 50-million-step loop with `long` arithmetic. With a warm cache it takes 0.50 s on champaca, about 0.33 s of that startup, against 0.15 s on the JVM, which needs about 0.11 s just to start. It took 1.79 s before the work below, so its computing went from about 1.46 s to 0.17 s.
+
+Four changes did it, each measured on its own first:
+
+- **Int and long wrapping inline.** Every `int` result was wrapped by calling a procedure, and every `long` result by a procedure whose mask was a bignum, so each `long` add became bignum arithmetic. Macros now handle the fixnum case inline (a Chez fixnum always fits a `long`) and leave bignums to the procedures. That alone took `Bench` from 1.79 s to 0.78 s.
+- **No assignment** in methods without exception handlers ([how-it-works](how-it-works.md#the-shape-of-a-translated-method)). A hand-written version of the loop ran in 368 ms with `set!`, 692 ms with `set!` on block parameters, and 134 ms with only `let`s.
+- **Symbol-keyed dispatch with inline caches** for virtual and interface calls, and symbol-keyed classes for `new` and initialization checks.
+- **Inline field and array access**, and `synchronized` methods released through `dynamic-wind`, which costs about 7 ns to set up against 33 ns for a `guard`.
+
+What single operations cost, measured in a loop of two million, before these changes and after:
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| Empty loop step | 20 ns | 2.2 ns | 1.2 ns |
+| Static call | 12.7 ns | 3.1 ns | 0.4 ns |
+| Virtual call | 54 ns | 6.0 ns | 0.5 ns |
+| Interface call | 83 ns | 11 ns | 0.8 ns |
+| Field read and write | 24 ns | 6.2 ns | 1.1 ns |
+| Static field read and write | 8.3 ns | 3.2 ns | 1.0 ns |
+| Array read and write | 28 ns | 8.0 ns | 1.1 ns |
+| `new` | 96 ns | 27 ns | 4.4 ns |
+| Calling a method with try/catch | 45 ns | 42 ns | 0.6 ns |
+| Calling a `synchronized` method | 111 ns | 66 ns | 9.3 ns |
+| `AtomicInteger.incrementAndGet` | 636 ns | 56 ns | 7.2 ns |
+| `ReentrantLock` lock and unlock | 1435 ns | 133 ns | 13 ns |
+| `StringBuilder.append(char)` | 390 ns | 64 ns | 2.0 ns |
+
+Most of what's left sits in two places. A method with an exception table still uses the trampoline and method-wide variables, and entering a `try` installs a `guard` each time, about 33 ns, where the JVM pays nothing. Atomic operations still go through `Unsafe` and VarHandle code that decodes its access mode at run time. Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s to 0.79 s, against 37 ms on the JVM.
 
 ### What threads cost a single thread
 

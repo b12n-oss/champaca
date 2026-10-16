@@ -264,10 +264,11 @@
     (if (jobj? x)
         (let ([sym (eq-hashtable-ref (jclass-vtable (jobj-cls x)) k #f)])
           (if sym (top-level-value sym) (no-such-virtual (jobj-cls x) k)))
-        (if (eq? k clone-key)
-            array-clone
-            (let* ([c (find-class "java/lang/Object")] [sym (eq-hashtable-ref (jclass-vtable c) k #f)])
-              (if sym (top-level-value sym) (no-such-virtual c k)))))))
+        (cond
+          [(not (jarr? x)) (error 'champaca "virtual call on something that isn't a Java value" x (symbol->string k))]
+          [(eq? k clone-key) array-clone]
+          [else (let* ([c (find-class "java/lang/Object")] [sym (eq-hashtable-ref (jclass-vtable c) k #f)])
+                  (if sym (top-level-value sym) (no-such-virtual c k)))]))))
 (define (no-such-virtual c k)
   (jthrow "java/lang/AbstractMethodError" (string-append (jclass-cname c) "." (symbol->string k))))
 

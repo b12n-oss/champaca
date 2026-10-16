@@ -36,7 +36,7 @@ A JDK library load (`zip`, `net` and so on) is a no-op, because those natives ar
 
 ## Speed
 
-The startup cache makes boot quick, but generated code hasn't been tuned at all: `test/java/Bench.java` spends about 1.5 s computing what the JVM does in well under 0.1 s ([performance](performance.md#the-generated-code)). The startup cache still slows a little as generations pile up, because `state.img` holds every class any run has cached and is read whole.
+The startup cache makes boot quick, and plain computation now runs within a few times of the JVM: `test/java/Bench.java` spends about 0.17 s computing what the JVM does in about 0.04 s. Calls, allocation, `try` blocks and synchronization cost several to many times more than on the JVM ([performance](performance.md#the-generated-code) has the numbers). The startup cache still slows a little as generations pile up, because `state.img` holds every class any run has cached and is read whole.
 
 ## Other gaps
 
