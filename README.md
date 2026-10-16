@@ -120,7 +120,7 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 | `resources/champaca/natives.ss` | JDK native methods (121 named, plus pattern rules for `Unsafe`), resources, a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
 | `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
-| `resources/champaca/files.ss` | file, channel and zlib natives (129) through libc, `UnsafeConstants` |
+| `resources/champaca/files.ss` | file, channel and zlib natives (127) through libc, `UnsafeConstants` |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
 | `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, the call-site cache, auto-wrapping jolt fns |
 

@@ -41,6 +41,8 @@
         (loop (cdr ms) (fx+ i 1) (if (keep? (car ms)) (cons (cons i (car ms)) acc) acc)))))
 
 (define (construct cname desc . args)
+  ;; as bytecode's new does: the class is initialized before its instance
+  (jinit cname)
   (let ([o (jnew cname)])
     (apply (method-proc cname (string-append "<init>" desc)) o args)
     o))

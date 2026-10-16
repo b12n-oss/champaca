@@ -251,9 +251,11 @@
         :when (if (str/ends-with? (str entry) ".jar")
                 (some? (.getEntry (jar entry) path))
                 (.isFile (io/file entry path)))]
+    ;; File.toURI percent-encodes as the JDK's class loaders do; an entry name
+    ;; is encoded the same way, through a File standing for "/<path>"
     (if (str/ends-with? (str entry) ".jar")
-      (str "jar:file:" abs "!/" path)
-      (str "file:" (.getAbsolutePath (io/file entry path))))))
+      (str "jar:" (.toURI f) "!" (subs (str (.toURI (io/file (str "/" path)))) 5))
+      (str (.toURI (io/file abs path))))))
 
 (defn- record!
   "Keep text for the startup cache when it belongs to a JDK class. unit says
@@ -581,6 +583,10 @@
       (s/call "quiet-compile-file" (str src) (str (io/file tmp "runtime.so")))
       (.delete src))
     (dump-classes! (io/file tmp "state.img"))
+    ;; a directory missing a file (a crash mid-write, a load that failed) would
+    ;; block the rename forever, so it goes first
+    (when (and (.exists dir) (not-every? #(.exists (io/file dir %)) ["boot.so" "state.img" "runtime.so"]))
+      (delete-tree! dir))
     (if (.renameTo tmp dir)
       (prune-cache-root! dir)
       ;; another run won the race; ours is redundant
@@ -595,11 +601,19 @@
   (let [so (io/file dir "boot.so") img-file (io/file dir "state.img")]
     (when (and dir (.exists so) (.exists img-file))
       (.setLastModified dir (System/currentTimeMillis))   ; keeps it from being pruned
-      (let [classes (timed :cache-read-state #(img/read-image (str img-file)))]
-        (swap! state assoc :classes classes
-               :lazy (set (for [[k v] classes :when (:cached-class v)] k)))
-        (timed :cache-load-code #(s/call "load" (str so)))
-        true))))
+      (try
+        (let [classes (timed :cache-read-state #(img/read-image (str img-file)))]
+          (swap! state assoc :classes classes
+                 :lazy (set (for [[k v] classes :when (:cached-class v)] k)))
+          (timed :cache-load-code #(s/call "load" (str so)))
+          true)
+        ;; a damaged cache would fail every run the same way: drop it, boot
+        ;; cold, and the cold boot writes a new one
+        (catch Exception e
+          (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
+          (delete-tree! dir)
+          (swap! state assoc :classes {} :lazy #{})
+          nil)))))
 
 (defn save-generation!
   "Append what this run compiled for JDK classes after boot as one more
@@ -633,8 +647,12 @@
         so (when dir (io/file dir "runtime.so"))]
     ;; the cache key covers the runtime's source, so a cached runtime.so is
     ;; always this source compiled
-    (if (and so (.exists so))
-      (timed :cache-load-runtime #(s/call "load" (str so)))
+    (when-not (and so (.exists so)
+                   (try (timed :cache-load-runtime #(s/call "load" (str so))) true
+                        (catch Exception e
+                          (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
+                          (delete-tree! dir)
+                          false)))
       (doseq [f runtime-files] (scheme! (slurp (io/resource f))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   ;; annotation instances: a synthetic class implementing the annotation

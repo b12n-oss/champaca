@@ -421,7 +421,8 @@
     (make-jarr "B" (list->vector (map i2b (bytevector->u8-list s))))))
 (defund "dup(I)I" (fd) (unix-check (libc-dup fd)))
 (defund "open0(JII)I" (path flags mode) (unix-check (restartable (lambda () (libc-open path flags mode)))))
-(defund "close0(I)V" (fd) (when (fx> fd 2) (unix-check (libc-close fd))))
+(defund "close0(I)V" (fd)
+  (when (and (fx> fd 2) (< (libc-close fd) 0) (not (fx= (errno) 4))) (unix-error)))
 (defund "read0(IJI)I" (fd buf n) (unix-check (restartable (lambda () (libc-read fd buf n)))))
 (defund "write0(IJI)I" (fd buf n) (console-flush fd) (unix-check (restartable (lambda () (libc-write fd buf n)))))
 (defund "link0(JJ)V" (a b) (unix-check (libc-link a b)))
@@ -720,6 +721,8 @@
 (define (z-init strm r)
   (cond [(fx= r 0) strm]
         [(fx= r -4) (foreign-free strm) (jthrow "java/lang/OutOfMemoryError" #f)]
+        ;; Z_STREAM_ERROR: a bad level, strategy or window
+        [(fx= r -2) (foreign-free strm) (jthrow "java/lang/IllegalArgumentException" #f)]
         [else (let ([m (z-msg strm "zlib init failed")]) (foreign-free strm) (jthrow "java/lang/InternalError" m))]))
 
 ;; a byte[] slice copied into fresh native memory, and the copy back
@@ -743,39 +746,54 @@
     (values (fx- in-len (foreign-ref 'unsigned-32 strm 8)) (fx- out-len (foreign-ref 'unsigned-32 strm 32)) code)))
 
 ;; the four shapes of each call: input and output each a byte[] slice or an
-;; address; f takes and answers native pointers
+;; address. f takes native pointers and answers (values read written result
+;; failure), failure being #f or a thunk that throws. The output written so
+;; far reaches the byte[] before a failure is thrown, as with the JDK's C code
+;; writing in place, and the copies are freed however the call ends.
 (define (with-z-buffers in-arr in-off in-addr in-len out-arr out-off out-addr out-len f)
-  (let ([in (if in-arr (bytes->native in-arr in-off in-len) in-addr)]
-        [out (if out-arr (foreign-alloc (fxmax out-len 1)) out-addr)])
-    (let-values ([(read written result) (f in out)])
-      (when out-arr (native->bytes! out out-arr out-off written))
-      (when in-arr (foreign-free in))
-      (when out-arr (foreign-free out))
-      result)))
+  (let ([in #f] [out #f])
+    (dynamic-wind
+      (lambda ()
+        (set! in (if in-arr (bytes->native in-arr in-off in-len) in-addr))
+        (set! out (if out-arr (foreign-alloc (fxmax out-len 1)) out-addr)))
+      (lambda ()
+        (let-values ([(read written result failure) (f in out)])
+          (when out-arr (native->bytes! out out-arr out-off written))
+          (if failure (failure) result)))
+      (lambda ()
+        (when (and in-arr in) (foreign-free in))
+        (when (and out-arr out) (foreign-free out))
+        (set! in #f)
+        (set! out #f)))))
 
-(define (inflate-step strm in in-len out out-len)
+;; bad data: like Inflater.c, the bytes used so far go to inputConsumed and
+;; outputConsumed, which Inflater reads to advance its position, then throw
+(define (inflate-step this strm in in-len out out-len)
   (let-values ([(read written code) (z-run strm in in-len out out-len (lambda () (zlib-inflate strm 1)))])
     (case code
-      [(1) (values read written (z-result read written #t #f))]
-      [(0) (values read written (z-result read written #f #f))]
-      [(2) (values read written (z-result read written #f #t))]
-      [(-5) (values 0 0 0)]
-      [(-3) (jthrow "java/util/zip/DataFormatException" (z-msg strm "invalid data"))]
-      [(-4) (jthrow "java/lang/OutOfMemoryError" #f)]
-      [else (jthrow "java/lang/InternalError" (z-msg strm "inflate failed"))])))
+      [(1) (values read written (z-result read written #t #f) #f)]
+      [(0) (values read written (z-result read written #f #f) #f)]
+      [(2) (values read written (z-result read written #f #t) #f)]
+      [(-5) (values 0 0 0 #f)]
+      [(-3) (let ([m (z-msg strm "invalid data")])
+              (jslot-set! this (jfield-index "java/util/zip/Inflater" "inputConsumed") read)
+              (jslot-set! this (jfield-index "java/util/zip/Inflater" "outputConsumed") written)
+              (values read written 0 (lambda () (jthrow "java/util/zip/DataFormatException" m))))]
+      [(-4) (values 0 0 0 (lambda () (jthrow "java/lang/OutOfMemoryError" #f)))]
+      [else (let ([m (z-msg strm "inflate failed")]) (values 0 0 0 (lambda () (jthrow "java/lang/InternalError" m))))])))
 
 (define zi "java/util/zip/Inflater.")
 (defnative (string-append zi "init(Z)J") (nowrap)
   (let ([strm (new-z-stream)])
     (z-init strm (zlib-inflate-init2 strm (if (eqv? nowrap 1) -15 15) (zlib-version-string) z-stream-size))))
 (defnative (string-append zi "inflateBytesBytes(J[BII[BII)J") (this strm in off len out ooff olen)
-  (with-z-buffers in off 0 len out ooff 0 olen (lambda (i o) (inflate-step strm i len o olen))))
+  (with-z-buffers in off 0 len out ooff 0 olen (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "inflateBytesBuffer(J[BIIJI)J") (this strm in off len oaddr olen)
-  (with-z-buffers in off 0 len #f 0 oaddr olen (lambda (i o) (inflate-step strm i len o olen))))
+  (with-z-buffers in off 0 len #f 0 oaddr olen (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "inflateBufferBytes(JJI[BII)J") (this strm iaddr len out ooff olen)
-  (with-z-buffers #f 0 iaddr len out ooff 0 olen (lambda (i o) (inflate-step strm i len o olen))))
+  (with-z-buffers #f 0 iaddr len out ooff 0 olen (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "inflateBufferBuffer(JJIJI)J") (this strm iaddr len oaddr olen)
-  (with-z-buffers #f 0 iaddr len #f 0 oaddr olen (lambda (i o) (inflate-step strm i len o olen))))
+  (with-z-buffers #f 0 iaddr len #f 0 oaddr olen (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "getAdler(J)I") (strm) (i32 (foreign-ref 'unsigned-64 strm 96)))
 (defnative (string-append zi "reset(J)V") (strm)
   (unless (fx= 0 (zlib-inflate-reset strm)) (jthrow "java/lang/InternalError" #f)))
@@ -783,8 +801,11 @@
 (define (z-dictionary strm set p len)
   (let ([r (set strm p len)])
     (unless (fx= r 0) (jthrow "java/lang/IllegalArgumentException" (z-msg strm "bad dictionary")))))
+(define (z-dictionary-bytes strm set b off len)
+  (let ([p (bytes->native b off len)])
+    (dynamic-wind void (lambda () (z-dictionary strm set p len)) (lambda () (foreign-free p)))))
 (defnative (string-append zi "setDictionary(J[BII)V") (strm b off len)
-  (let ([p (bytes->native b off len)]) (z-dictionary strm zlib-inflate-set-dictionary p len) (foreign-free p)))
+  (z-dictionary-bytes strm zlib-inflate-set-dictionary b off len))
 (defnative (string-append zi "setDictionaryBuffer(JJI)V") (strm addr len)
   (z-dictionary strm zlib-inflate-set-dictionary addr len))
 
@@ -795,14 +816,14 @@
                     (z-run strm in in-len out out-len
                            (lambda () (zlib-deflate-params strm (fxsra params 3) (fxlogand (fxsra params 1) 3))))])
         (case code
-          [(0) (values read written (z-result read written #f #f))]
-          [(-5) (values read written (z-result read written #f #t))]
-          [else (jthrow "java/lang/InternalError" (z-msg strm "deflateParams failed"))]))
+          [(0) (values read written (z-result read written #f #f) #f)]
+          [(-5) (values read written (z-result read written #f #t) #f)]
+          [else (let ([m (z-msg strm "deflateParams failed")]) (values 0 0 0 (lambda () (jthrow "java/lang/InternalError" m))))]))
       (let-values ([(read written code) (z-run strm in in-len out out-len (lambda () (zlib-deflate strm flush)))])
         (case code
-          [(1) (values read written (z-result read written #t #f))]
-          [(0 -5) (values read written (z-result read written #f #f))]
-          [else (jthrow "java/lang/InternalError" (z-msg strm "deflate failed"))]))))
+          [(1) (values read written (z-result read written #t #f) #f)]
+          [(0 -5) (values read written (z-result read written #f #f) #f)]
+          [else (let ([m (z-msg strm "deflate failed")]) (values 0 0 0 (lambda () (jthrow "java/lang/InternalError" m))))]))))
 
 (define zd "java/util/zip/Deflater.")
 (defnative (string-append zd "init(IIZ)J") (level strategy nowrap)
@@ -822,6 +843,6 @@
   (unless (fx= 0 (zlib-deflate-reset strm)) (jthrow "java/lang/InternalError" #f)))
 (defnative (string-append zd "end(J)V") (strm) (zlib-deflate-end strm) (foreign-free strm))
 (defnative (string-append zd "setDictionary(J[BII)V") (strm b off len)
-  (let ([p (bytes->native b off len)]) (z-dictionary strm zlib-deflate-set-dictionary p len) (foreign-free p)))
+  (z-dictionary-bytes strm zlib-deflate-set-dictionary b off len))
 (defnative (string-append zd "setDictionaryBuffer(JJI)V") (strm addr len)
   (z-dictionary strm zlib-deflate-set-dictionary addr len))
