@@ -39,6 +39,12 @@
                     ;; test/jar is packed into target/lib.jar, so its classes reach
                     ;; the runtime only from a jar on the classpath
                     _ (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
+                    ;; and its other files: a service registration, a properties file
+                    _ (doseq [f (fs/glob "test/jar" "**")
+                              :when (and (fs/regular-file? f) (not (str/ends-with? (str f) ".java")))
+                              :let [to (fs/path "target/lib-classes" (str (fs/relativize "test/jar" f)))]]
+                        (fs/create-dirs (fs/parent to))
+                        (fs/copy f to {:replace-existing true}))
                     _ (shell "jar cf target/lib.jar -C target/lib-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
                     _ (apply shell "javac -cp target/lib.jar -d target/classes" srcs)

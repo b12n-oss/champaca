@@ -27,6 +27,18 @@ symlink true target name nio.txt same file true real path matches true not same 
 canonical through link nio.txt
 channel read 3456 direct 789 size 6 position 6
 mismatch -1 0
+owner known true
+map 0 locked true
+transferTo 6
+after map and gather 0X2345abcd
+rws length 3
+bad offset: IndexOutOfBoundsException
+gzip true true
+zip entries [a/one.txt, two.txt] 4500
+deflate/inflate aaaaaaaaaabbbbbbbbbb finished true adler 1339885471
+bad data: DataFormatException
+resource file true
+escaping names true true
 NoSuchFileException missing
 FileAlreadyExistsException
 DirectoryNotEmptyException

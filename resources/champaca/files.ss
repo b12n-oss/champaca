@@ -77,9 +77,21 @@
 (deflibc libc-realloc "realloc" #f (uptr size_t) uptr)
 (deflibc libc-getpagesize "getpagesize" #f () int)
 (deflibc libc-pathconf-string "pathconf" #f (utf-8 int) long)
+(deflibc libc-fcntl-lock "fcntl" (__varargs_after 2) (int int uptr) int)
+(deflibc libc-fcntl-int "fcntl" (__varargs_after 2) (int int int) int)
+(deflibc libc-mmap "mmap" #f (uptr size_t int int int integer-64) uptr)
+(deflibc libc-munmap "munmap" #f (uptr size_t) int)
+(deflibc libc-msync "msync" #f (uptr size_t int) int)
+(deflibc libc-getpwuid "getpwuid" #f (unsigned-32) uptr)
+(deflibc libc-getgrgid "getgrgid" #f (unsigned-32) uptr)
 (deflibc libc-clonefile (if fs-macos? "clonefile" "no-clonefile-here") #f (uptr uptr int) int)
 
 (define (errno) (foreign-ref 'int (libc-errno-location) 0))
+;; call thunk again while it fails with EINTR, as the JDK's RESTARTABLE does
+(define (restartable thunk)
+  (let loop ()
+    (let ([r (thunk)])
+      (if (and (< r 0) (fx= (errno) 4)) (loop) r))))
 (define (errno-clear!) (foreign-set! 'int (libc-errno-location) 0 0))
 (define (strerror-text e) (libc-strerror e))
 
@@ -151,8 +163,14 @@
 
 ;; read up to n bytes from fd into Java byte[] arr at off, through scratch
 ;; memory; 0 at end of file
+;; what the JDK's C natives check before touching a byte[]
+(define (check-bounds arr off len)
+  (nn arr)
+  (when (or (fx< off 0) (fx< len 0) (fx> (fx+ off len) (vector-length (jarr-vec arr))))
+    (jthrow "java/lang/IndexOutOfBoundsException" #f)))
+
 (define (fd-read-into fd arr off n)
-  (let* ([want (fxmin n 4096)] [r (libc-read fd fs-scratch want)])
+  (let* ([want (fxmin n 4096)] [r (restartable (lambda () (libc-read fd fs-scratch want)))])
     (when (< r 0) (io-error "Read error"))
     (let ([v (jarr-vec arr)])
       (do ([i 0 (fx+ i 1)]) ((fx= i r) r)
@@ -165,16 +183,20 @@
         (let ([k (fxmin (fx- n done) 4096)])
           (do ([i 0 (fx+ i 1)]) ((fx= i k))
             (foreign-set! 'unsigned-8 fs-scratch i (fxlogand (vector-ref v (fx+ off done i)) #xff)))
-          (let ([w (libc-write fd fs-scratch k)])
+          (let ([w (restartable (lambda () (libc-write fd fs-scratch k)))])
             (when (< w 0) (io-error "Write error"))
             (loop (fx+ done w))))))))
 
-(define (fd-close fd) (when (fx> fd 2) (libc-close fd)))
+;; fds 0-2 stay open: Chez's own ports use them. A failed close is reported,
+;; except EINTR, after which the fd is gone anyway.
+(define (fd-close fd)
+  (when (and (fx> fd 2) (< (libc-close fd) 0) (not (fx= (errno) 4)))
+    (io-error "close failed")))
 
 ;; open for java.io: FileNotFoundException with the reason, and a directory
 ;; refused as the JDK refuses it
 (define (java-io-open path flags)
-  (let ([fd (libc-open-string path flags #o666)])
+  (let ([fd (restartable (lambda () (libc-open-string path flags #o666)))])
     (when (< fd 0) (file-not-found path))
     (when (file-directory? path)
       (libc-close fd)
@@ -193,10 +215,11 @@
   (let ([fd (holder-fd this fis)])
     (if (fx= fd 0)
         (let ([b (get-u8 (standard-input-port))]) (if (eof-object? b) -1 b))
-        (let ([r (libc-read fd fs-scratch 1)])
+        (let ([r (restartable (lambda () (libc-read fd fs-scratch 1)))])
           (cond [(< r 0) (io-error "Read error")] [(fx= r 0) -1] [else (foreign-ref 'unsigned-8 fs-scratch 0)])))))
 
 (defnative "java/io/FileInputStream.readBytes([BII)I" (this bytes off len)
+  (check-bounds bytes off len)
   (let ([fd (holder-fd this fis)])
     (cond
       [(fx= len 0) 0]
@@ -246,6 +269,7 @@
 (define (console-fd? fd) (or (fx= fd 1) (fx= fd 2)))
 
 (defnative "java/io/FileOutputStream.writeBytes([BIIZ)V" (this bytes off len append)
+  (check-bounds bytes off len)
   (let ([fd (holder-fd this fos)])
     (if (console-fd? fd) (console-write-bytes fd bytes off len) (fd-write-from fd bytes off len))))
 (defnative "java/io/FileOutputStream.write(IZ)V" (this b append)
@@ -262,17 +286,22 @@
 (defnative "java/io/RandomAccessFile.open0(Ljava/lang/String;I)V" (this name mode)
   (fdo-fd-set! (holder-fdo this raf)
                (java-io-open (jstring->scheme (nn name))
-                             (if (fxpositive? (fxlogand mode 2))
-                                 (fxlogor (fs-const "O_RDWR") (fs-const "O_CREAT"))
-                                 (fs-const "O_RDONLY")))))
+                             (fxlogor
+                              (if (fxpositive? (fxlogand mode 2))
+                                  (fxlogor (fs-const "O_RDWR") (fs-const "O_CREAT"))
+                                  (fs-const "O_RDONLY"))
+                              (if (fxpositive? (fxlogand mode 4)) (fs-const "O_SYNC") 0)
+                              (if (fxpositive? (fxlogand mode 8)) (fs-const "O_DSYNC") 0)))))
 (defnative "java/io/RandomAccessFile.read0()I" (this)
-  (let ([r (libc-read (holder-fd this raf) fs-scratch 1)])
+  (let* ([fd (holder-fd this raf)] [r (restartable (lambda () (libc-read fd fs-scratch 1)))])
     (cond [(< r 0) (io-error "Read error")] [(fx= r 0) -1] [else (foreign-ref 'unsigned-8 fs-scratch 0)])))
 (defnative "java/io/RandomAccessFile.readBytes0([BII)I" (this bytes off len)
+  (check-bounds bytes off len)
   (if (fx= len 0) 0 (let ([r (fd-read-into (holder-fd this raf) bytes off len)]) (if (fx= r 0) -1 r))))
 (defnative "java/io/RandomAccessFile.write0(I)V" (this b)
   (fd-write-from (holder-fd this raf) (make-jarr "B" (vector b)) 0 1))
 (defnative "java/io/RandomAccessFile.writeBytes0([BII)V" (this bytes off len)
+  (check-bounds bytes off len)
   (fd-write-from (holder-fd this raf) bytes off len))
 (defnative "java/io/RandomAccessFile.getFilePointer()J" (this)
   (let ([r (libc-lseek (holder-fd this raf) 0 seek-cur)]) (if (< r 0) (io-error "Seek failed") r)))
@@ -354,8 +383,8 @@
 ;; t: 0 total, 1 free, 2 usable
 (defnative "java/io/UnixFileSystem.getSpace0(Ljava/io/File;I)J" (this f t)
   (need-macos "File.getTotalSpace")
-  (let ([b (foreign-alloc 2400)])
-    (let ([r (if (< (libc-statfs-string (io-file-path f) b) 0)
+  (let ([path (io-file-path f)] [b (foreign-alloc 2400)])
+    (let ([r (if (< (libc-statfs-string path b) 0)
                  0
                  (* (foreign-ref 'unsigned-32 b 0)
                     (foreign-ref 'unsigned-64 b (case t [(0) 8] [(1) 16] [else 24]))))])
@@ -376,7 +405,13 @@
   (syntax-rules () [(_ sig args body ...) (defnative (string-append und sig) args body ...)]))
 
 ;; capabilities: birth times, no *at calls, no extended attributes
-(defund "init()I" () (if fs-stat-layout? (fxsll 1 16) 0))
+;; without struct stat offsets for this system nothing in java.nio.file can
+;; work, so it fails here, once, rather than in every stat
+(defund "init()I" ()
+  (unless fs-stat-layout?
+    (jthrow "java/lang/UnsupportedOperationException"
+            (string-append "java.nio.file needs struct stat offsets for " (symbol->string (machine-type)) "; only macOS has them")))
+  (fxsll 1 16))
 (defund "fchmodatNoFollowSupported0()Z" () 0)
 
 (defund "getcwd()[B" ()
@@ -385,10 +420,10 @@
   (let ([s (string->utf8 (strerror-text e))])
     (make-jarr "B" (list->vector (map i2b (bytevector->u8-list s))))))
 (defund "dup(I)I" (fd) (unix-check (libc-dup fd)))
-(defund "open0(JII)I" (path flags mode) (unix-check (libc-open path flags mode)))
-(defund "close0(I)V" (fd) (unix-check (libc-close fd)))
-(defund "read0(IJI)I" (fd buf n) (unix-check (libc-read fd buf n)))
-(defund "write0(IJI)I" (fd buf n) (unix-check (libc-write fd buf n)))
+(defund "open0(JII)I" (path flags mode) (unix-check (restartable (lambda () (libc-open path flags mode)))))
+(defund "close0(I)V" (fd) (when (fx> fd 2) (unix-check (libc-close fd))))
+(defund "read0(IJI)I" (fd buf n) (unix-check (restartable (lambda () (libc-read fd buf n)))))
+(defund "write0(IJI)I" (fd buf n) (console-flush fd) (unix-check (restartable (lambda () (libc-write fd buf n)))))
 (defund "link0(JJ)V" (a b) (unix-check (libc-link a b)))
 (defund "unlink0(J)V" (p) (unix-check (libc-unlink p)))
 (defund "rename0(JJ)V" (a b) (unix-check (libc-rename a b)))
@@ -462,11 +497,21 @@
         (if (fx= (errno) 0) #f (unix-error))
         (cbytes (+ e 21) (foreign-ref 'unsigned-16 e 18)))))
 
+;; a user's or group's name: pw_name and gr_name are the first field
+(define (entry-name p)
+  (if (eqv? p 0)
+      (let ([e (errno)]) (raise (construct "sun/nio/fs/UnixException" "(I)V" (if (fx= e 0) (fs-const "ENOENT") e))))
+      (cstring->bytes (foreign-ref 'uptr p 0))))
+(defund "getpwuid(I)[B" (uid) (errno-clear!) (entry-name (libc-getpwuid uid)))
+(defund "getgrgid(I)[B" (gid) (errno-clear!) (entry-name (libc-getgrgid gid)))
+
 (defnative "sun/nio/fs/MacOSXNativeDispatcher.normalizepath([CI)[C" (path form) path)
 
-;; clonefile answers an errno; BsdFileSystem falls back to copying on any
+;; clonefile throws on failure: BsdFileSystem.clone turns ENOTSUP, EXDEV and
+;; ENOTDIR into a fallback copy, and anything else into an IOException
 (defnative "sun/nio/fs/BsdNativeDispatcher.clonefile0(JJI)I" (src dst flags)
-  (if (< (libc-clonefile src dst flags) 0) (errno) 0))
+  (unix-check (libc-clonefile src dst flags))
+  0)
 ;; a plain read/write loop
 (define (copy-fd-to-fd dst src)
   (let loop ()
@@ -481,6 +526,12 @@
              (loop)]))))
 (defnative "sun/nio/fs/BsdFileSystem.directCopy0(IIJ)I" (dst src cancel) (copy-fd-to-fd dst src) 0)
 (defnative "sun/nio/fs/UnixFileSystem.bufferedCopy0(IIJIJ)V" (dst src buf size cancel) (copy-fd-to-fd dst src))
+
+;; Chez's buffered console output goes out before a raw write to fd 1 or 2
+(define (console-flush fd)
+  (when (or (fx= fd 1) (fx= fd 2))
+    (flush-output-port (current-output-port))
+    (flush-output-port (current-error-port))))
 
 ;; --- FileChannel: sun.nio.ch ---------------------------------------------------------------
 ;; IOStatus: -1 end of file, -2 unavailable, -3 interrupted
@@ -504,7 +555,24 @@
 (defufd "pread0(Ljava/io/FileDescriptor;JIJ)I" (fdo addr n pos)
   (if (fx= n 0) 0 (io-status (libc-pread (fdo-fd fdo) addr n pos) "Read failed")))
 (defufd "write0(Ljava/io/FileDescriptor;JI)I" (fdo addr n)
+  (console-flush (fdo-fd fdo))
   (write-status (libc-write (fdo-fd fdo) addr n) "Write failed"))
+;; scattering and gathering: an array of n struct iovec {base, len}, done one
+;; at a time; a short transfer ends it as readv/writev would
+(define (iov-loop fdo addr n op)
+  (let loop ([i 0] [total 0])
+    (if (fx= i n)
+        total
+        (let* ([base (foreign-ref 'uptr addr (fx* i 16))] [len (foreign-ref 'uptr addr (fx+ (fx* i 16) 8))]
+               [r (if (fx= len 0) 0 (op (fdo-fd fdo) base len))])
+          (cond [(< r 0) (if (fx= total 0) r total)]
+                [(< r len) (+ total r)]
+                [else (loop (fx+ i 1) (+ total r))])))))
+(defufd "readv0(Ljava/io/FileDescriptor;JI)J" (fdo addr n)
+  (io-status (iov-loop fdo addr n libc-read) "Read failed"))
+(defufd "writev0(Ljava/io/FileDescriptor;JI)J" (fdo addr n)
+  (console-flush (fdo-fd fdo))
+  (write-status (iov-loop fdo addr n libc-write) "Write failed"))
 (defufd "pwrite0(Ljava/io/FileDescriptor;JIJ)I" (fdo addr n pos)
   (write-status (libc-pwrite (fdo-fd fdo) addr n pos) "Write failed"))
 ;; a negative offset asks for the position
@@ -514,10 +582,19 @@
 (defufd "size0(Ljava/io/FileDescriptor;)J" (fdo) (fd-size (fdo-fd fdo) "Size failed"))
 (defufd "truncate0(Ljava/io/FileDescriptor;J)I" (fdo n)
   (if (< (libc-ftruncate (fdo-fd fdo) n) 0) (io-error "Truncation failed") 0))
+;; macOS's fsync leaves the drive's cache unflushed; F_FULLFSYNC (51) doesn't,
+;; and fsync is the fallback where it isn't supported, as in the JDK
+(define (full-fsync fd)
+  (if (and fs-macos? (fx= 0 (libc-fcntl-int fd 51 0)))
+      0
+      (libc-fsync fd)))
 (defufd "force0(Ljava/io/FileDescriptor;Z)I" (fdo meta)
-  (if (< (libc-fsync (fdo-fd fdo)) 0) (io-error "Force failed") 0))
+  (if (< (full-fsync (fdo-fd fdo)) 0) (io-error "Force failed") 0))
 (defnative "sun/nio/ch/FileDispatcherImpl.force0(Ljava/io/FileDescriptor;Z)I" (fdo meta)
-  (if (< (libc-fsync (fdo-fd fdo)) 0) (io-error "Force failed") 0))
+  (if (< (full-fsync (fdo-fd fdo)) 0) (io-error "Force failed") 0))
+(defnative "java/io/FileDescriptor.sync0()V" (this)
+  (when (< (full-fsync (fdo-fd this)) 0) (jthrow "java/io/SyncFailedException" "sync failed")))
+(defnative "java/io/FileCleanable.cleanupClose0(IJ)V" (fd handle) (fd-close fd))
 (defufd "available0(Ljava/io/FileDescriptor;)I" (fdo)
   (let ([fd (fdo-fd fdo)])
     (if (fd-regular? fd)
@@ -528,6 +605,50 @@
   (let ([b (fd-stat (fdo-fd fdo))])
     (if (and b (not (memv (mode-type (stat-mode b)) (list s-ifreg s-ifdir)))) 1 0)))
 (defufd "closeIntFD(I)V" (fd) (fd-close fd))
+
+;; FileChannel.map: prot is FileChannelImpl's 0 read-only, 1 read-write, 2
+;; private. The mapping is native memory, which Unsafe reads directly.
+(defufd "map0(Ljava/io/FileDescriptor;IJJZ)J" (fdo prot pos len sync)
+  (let ([a (libc-mmap 0 len (if (fx= prot 0) 1 3) (if (fx= prot 2) 2 1) (fdo-fd fdo) pos)])
+    (if (= a (- (expt 2 64) 1)) (io-error "Map failed") a)))
+(defufd "unmap0(JJ)I" (a len) (libc-munmap a len))
+;; MappedByteBuffer.force: MS_SYNC is 16 on macOS, 4 on Linux
+(defnative "java/nio/MappedMemoryUtils.force0(Ljava/io/FileDescriptor;JJ)V" (fdo a len)
+  (when (< (libc-msync a len (if fs-macos? 16 4)) 0) (io-error "msync failed")))
+;; residency hints: report the pages as loaded, and load or unload nothing
+(defnative "java/nio/MappedMemoryUtils.isLoaded0(JJJ)Z" (a len pages) 1)
+(defnative "java/nio/MappedMemoryUtils.load0(JJ)V" (a len) (void))
+(defnative "java/nio/MappedMemoryUtils.unload0(JJ)V" (a len) (void))
+
+;; locks through fcntl and macOS's struct flock: l_start 0, l_len 8, l_pid
+;; 16, l_type 20, l_whence 22. FileDispatcher: 0 locked, -1 not, 2 interrupted
+(define (fcntl-lock fd cmd type pos size)
+  (need-macos "file locks")
+  (foreign-set! 'integer-64 fs-scratch 0 pos)
+  ;; Long.MAX_VALUE means to the end of the file, as l_len 0 does
+  (foreign-set! 'integer-64 fs-scratch 8 (if (= size #x7fffffffffffffff) 0 size))
+  (foreign-set! 'integer-32 fs-scratch 16 0)
+  (foreign-set! 'integer-16 fs-scratch 20 type)
+  (foreign-set! 'integer-16 fs-scratch 22 seek-set)
+  (libc-fcntl-lock fd cmd fs-scratch))
+(defufd "lock0(Ljava/io/FileDescriptor;ZJJZ)I" (fdo blocking pos size shared)
+  (if (fx= 0 (fcntl-lock (fdo-fd fdo) (if (eqv? blocking 1) 9 8) (if (eqv? shared 1) 1 3) pos size))
+      0
+      (let ([e (errno)])
+        (cond [(and (not (eqv? blocking 1)) (memv e (list (fs-const "EAGAIN") (fs-const "EACCES")))) -1]
+              [(fx= e 4) 2]
+              [else (jthrow "java/io/IOException" (string-append "Lock failed (" (strerror-text e) ")"))]))))
+(defufd "release0(Ljava/io/FileDescriptor;JJ)V" (fdo pos size)
+  (unless (fx= 0 (fcntl-lock (fdo-fd fdo) 8 2 pos size)) (io-error "Release failed")))
+;; a file's identity, for the lock table: device and inode
+(defnative "sun/nio/ch/FileKey.init(Ljava/io/FileDescriptor;[J)V" (fdo finfo)
+  (need-macos "FileKey")
+  (let ([b (fd-stat (fdo-fd fdo))])
+    (unless b (io-error "fstat failed"))
+    (vector-set! (jarr-vec finfo) 0 (foreign-ref 'integer-32 b 0))
+    (vector-set! (jarr-vec finfo) 1 (i64 (foreign-ref 'unsigned-64 b 8)))))
+;; no sendfile: FileChannel.transferTo copies through a buffer instead
+(defnative "sun/nio/ch/FileDispatcherImpl.transferTo0(Ljava/io/FileDescriptor;JJLjava/io/FileDescriptor;Z)J" (src pos n dst append) -4)
 (defufd "allocationGranularity0()J" () (libc-getpagesize))
 
 (defnative "sun/nio/ch/IOUtil.fdVal(Ljava/io/FileDescriptor;)I" (fdo) (fdo-fd fdo))
@@ -559,3 +680,148 @@
       (set "BIG_ENDIAN" 0)
       (set "UNALIGNED_ACCESS" 0)
       (set "DATA_CACHE_LINE_FLUSH_SIZE" 0))))
+
+;; --- java.util.zip: Inflater and Deflater over zlib -------------------------------------
+;; A z_stream is 112 bytes of native memory, at zlib's 64-bit offsets:
+;; next_in 0, avail_in 8, next_out 24, avail_out 32, msg 48, adler 96. Each
+;; call returns read | written << 31 | finished << 62 | flag << 63, where the
+;; flag is "needs a dictionary" for Inflater and "parameters not applied yet"
+;; for Deflater, as the JDK's Inflater.c and Deflater.c do.
+
+(define fs-zlib-loaded
+  (guard (e [#t #f]) (load-shared-object (if fs-macos? "libz.dylib" "libz.so.1")) #t))
+(define-syntax deflibz
+  (syntax-rules ()
+    [(_ id name (arg ...) ret)
+     (define id
+       (if (and fs-zlib-loaded (foreign-entry? name))
+           (foreign-procedure name (arg ...) ret)
+           (lambda xs (jthrow "java/lang/UnsupportedOperationException" (string-append "no zlib " name)))))]))
+(deflibz zlib-version-string "zlibVersion" () string)
+(deflibz zlib-inflate-init2 "inflateInit2_" (uptr int string int) int)
+(deflibz zlib-inflate "inflate" (uptr int) int)
+(deflibz zlib-inflate-reset "inflateReset" (uptr) int)
+(deflibz zlib-inflate-end "inflateEnd" (uptr) int)
+(deflibz zlib-inflate-set-dictionary "inflateSetDictionary" (uptr uptr unsigned-32) int)
+(deflibz zlib-deflate-init2 "deflateInit2_" (uptr int int int int int string int) int)
+(deflibz zlib-deflate "deflate" (uptr int) int)
+(deflibz zlib-deflate-params "deflateParams" (uptr int int) int)
+(deflibz zlib-deflate-reset "deflateReset" (uptr) int)
+(deflibz zlib-deflate-end "deflateEnd" (uptr) int)
+(deflibz zlib-deflate-set-dictionary "deflateSetDictionary" (uptr uptr unsigned-32) int)
+
+(define z-stream-size 112)
+(define (z-msg strm what)
+  (let ([m (foreign-ref 'uptr strm 48)])
+    (if (eqv? m 0) what (utf8->string (bytevector-copy-from-c m)))))
+(define (new-z-stream)
+  (let ([strm (foreign-alloc z-stream-size)])
+    (do ([i 0 (fx+ i 8)]) ((fx= i z-stream-size) strm) (foreign-set! 'integer-64 strm i 0))))
+(define (z-init strm r)
+  (cond [(fx= r 0) strm]
+        [(fx= r -4) (foreign-free strm) (jthrow "java/lang/OutOfMemoryError" #f)]
+        [else (let ([m (z-msg strm "zlib init failed")]) (foreign-free strm) (jthrow "java/lang/InternalError" m))]))
+
+;; a byte[] slice copied into fresh native memory, and the copy back
+(define (bytes->native arr off len)
+  (let ([p (foreign-alloc (fxmax len 1))] [v (jarr-vec arr)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i len) p) (foreign-set! 'unsigned-8 p i (fxlogand (vector-ref v (fx+ off i)) #xff)))))
+(define (native->bytes! p arr off n)
+  (let ([v (jarr-vec arr)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ off i) (i2b (foreign-ref 'unsigned-8 p i))))))
+
+(define (z-result read written finished flag)
+  (i64 (+ read (ash written 31) (if finished (ash 1 62) 0) (if flag (ash 1 63) 0))))
+
+;; run step on strm with in/out pointers, answer (values read written code)
+(define (z-run strm in in-len out out-len step)
+  (foreign-set! 'uptr strm 0 in)
+  (foreign-set! 'unsigned-32 strm 8 in-len)
+  (foreign-set! 'uptr strm 24 out)
+  (foreign-set! 'unsigned-32 strm 32 out-len)
+  (let ([code (step)])
+    (values (fx- in-len (foreign-ref 'unsigned-32 strm 8)) (fx- out-len (foreign-ref 'unsigned-32 strm 32)) code)))
+
+;; the four shapes of each call: input and output each a byte[] slice or an
+;; address; f takes and answers native pointers
+(define (with-z-buffers in-arr in-off in-addr in-len out-arr out-off out-addr out-len f)
+  (let ([in (if in-arr (bytes->native in-arr in-off in-len) in-addr)]
+        [out (if out-arr (foreign-alloc (fxmax out-len 1)) out-addr)])
+    (let-values ([(read written result) (f in out)])
+      (when out-arr (native->bytes! out out-arr out-off written))
+      (when in-arr (foreign-free in))
+      (when out-arr (foreign-free out))
+      result)))
+
+(define (inflate-step strm in in-len out out-len)
+  (let-values ([(read written code) (z-run strm in in-len out out-len (lambda () (zlib-inflate strm 1)))])
+    (case code
+      [(1) (values read written (z-result read written #t #f))]
+      [(0) (values read written (z-result read written #f #f))]
+      [(2) (values read written (z-result read written #f #t))]
+      [(-5) (values 0 0 0)]
+      [(-3) (jthrow "java/util/zip/DataFormatException" (z-msg strm "invalid data"))]
+      [(-4) (jthrow "java/lang/OutOfMemoryError" #f)]
+      [else (jthrow "java/lang/InternalError" (z-msg strm "inflate failed"))])))
+
+(define zi "java/util/zip/Inflater.")
+(defnative (string-append zi "init(Z)J") (nowrap)
+  (let ([strm (new-z-stream)])
+    (z-init strm (zlib-inflate-init2 strm (if (eqv? nowrap 1) -15 15) (zlib-version-string) z-stream-size))))
+(defnative (string-append zi "inflateBytesBytes(J[BII[BII)J") (this strm in off len out ooff olen)
+  (with-z-buffers in off 0 len out ooff 0 olen (lambda (i o) (inflate-step strm i len o olen))))
+(defnative (string-append zi "inflateBytesBuffer(J[BIIJI)J") (this strm in off len oaddr olen)
+  (with-z-buffers in off 0 len #f 0 oaddr olen (lambda (i o) (inflate-step strm i len o olen))))
+(defnative (string-append zi "inflateBufferBytes(JJI[BII)J") (this strm iaddr len out ooff olen)
+  (with-z-buffers #f 0 iaddr len out ooff 0 olen (lambda (i o) (inflate-step strm i len o olen))))
+(defnative (string-append zi "inflateBufferBuffer(JJIJI)J") (this strm iaddr len oaddr olen)
+  (with-z-buffers #f 0 iaddr len #f 0 oaddr olen (lambda (i o) (inflate-step strm i len o olen))))
+(defnative (string-append zi "getAdler(J)I") (strm) (i32 (foreign-ref 'unsigned-64 strm 96)))
+(defnative (string-append zi "reset(J)V") (strm)
+  (unless (fx= 0 (zlib-inflate-reset strm)) (jthrow "java/lang/InternalError" #f)))
+(defnative (string-append zi "end(J)V") (strm) (zlib-inflate-end strm) (foreign-free strm))
+(define (z-dictionary strm set p len)
+  (let ([r (set strm p len)])
+    (unless (fx= r 0) (jthrow "java/lang/IllegalArgumentException" (z-msg strm "bad dictionary")))))
+(defnative (string-append zi "setDictionary(J[BII)V") (strm b off len)
+  (let ([p (bytes->native b off len)]) (z-dictionary strm zlib-inflate-set-dictionary p len) (foreign-free p)))
+(defnative (string-append zi "setDictionaryBuffer(JJI)V") (strm addr len)
+  (z-dictionary strm zlib-inflate-set-dictionary addr len))
+
+;; params: bit 0 set to apply strategy (bits 1-2) and level (bits 3 up) first
+(define (deflate-step strm in in-len out out-len flush params)
+  (if (fxodd? params)
+      (let-values ([(read written code)
+                    (z-run strm in in-len out out-len
+                           (lambda () (zlib-deflate-params strm (fxsra params 3) (fxlogand (fxsra params 1) 3))))])
+        (case code
+          [(0) (values read written (z-result read written #f #f))]
+          [(-5) (values read written (z-result read written #f #t))]
+          [else (jthrow "java/lang/InternalError" (z-msg strm "deflateParams failed"))]))
+      (let-values ([(read written code) (z-run strm in in-len out out-len (lambda () (zlib-deflate strm flush)))])
+        (case code
+          [(1) (values read written (z-result read written #t #f))]
+          [(0 -5) (values read written (z-result read written #f #f))]
+          [else (jthrow "java/lang/InternalError" (z-msg strm "deflate failed"))]))))
+
+(define zd "java/util/zip/Deflater.")
+(defnative (string-append zd "init(IIZ)J") (level strategy nowrap)
+  (let ([strm (new-z-stream)])
+    ;; method Z_DEFLATED 8, memLevel 8 as the JDK uses
+    (z-init strm (zlib-deflate-init2 strm level 8 (if (eqv? nowrap 1) -15 15) 8 strategy (zlib-version-string) z-stream-size))))
+(defnative (string-append zd "deflateBytesBytes(J[BII[BIIII)J") (this strm in off len out ooff olen flush params)
+  (with-z-buffers in off 0 len out ooff 0 olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+(defnative (string-append zd "deflateBytesBuffer(J[BIIJIII)J") (this strm in off len oaddr olen flush params)
+  (with-z-buffers in off 0 len #f 0 oaddr olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+(defnative (string-append zd "deflateBufferBytes(JJI[BIIII)J") (this strm iaddr len out ooff olen flush params)
+  (with-z-buffers #f 0 iaddr len out ooff 0 olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+(defnative (string-append zd "deflateBufferBuffer(JJIJIII)J") (this strm iaddr len oaddr olen flush params)
+  (with-z-buffers #f 0 iaddr len #f 0 oaddr olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+(defnative (string-append zd "getAdler(J)I") (strm) (i32 (foreign-ref 'unsigned-64 strm 96)))
+(defnative (string-append zd "reset(J)V") (strm)
+  (unless (fx= 0 (zlib-deflate-reset strm)) (jthrow "java/lang/InternalError" #f)))
+(defnative (string-append zd "end(J)V") (strm) (zlib-deflate-end strm) (foreign-free strm))
+(defnative (string-append zd "setDictionary(J[BII)V") (strm b off len)
+  (let ([p (bytes->native b off len)]) (z-dictionary strm zlib-deflate-set-dictionary p len) (foreign-free p)))
+(defnative (string-append zd "setDictionaryBuffer(JJI)V") (strm addr len)
+  (z-dictionary strm zlib-deflate-set-dictionary addr len))

@@ -222,12 +222,38 @@
   [path]
   (loop [dir (some->> (str/last-index-of path "/") (subs path 0))]
     (when dir
-      (if-let [module (get (package-modules) dir)]
-        (read-entry (jmod-zip module) (str "classes/" path))
-        (recur (some->> (str/last-index-of dir "/") (subs dir 0)))))))
+      (or (when-let [module (get (package-modules) dir)]
+            (read-entry (jmod-zip module) (str "classes/" path)))
+          (recur (some->> (str/last-index-of dir "/") (subs dir 0)))))))
 
-(defn- resource-bytes [path]
-  (or (user-resource-bytes path) (jdk-resource-bytes path)))
+(defn- plain-resource-path?
+  "A resource name that stays inside its classpath entry: no empty, . or ..
+  segment, no leading /."
+  [path]
+  (and (not (str/blank? path))
+       (not-any? #{"" "." ".."} (str/split path #"/"))))
+
+(defn- resource-bytes
+  "The JDK's modules first, as a parent-first class loader would, then the
+  classpath."
+  [path]
+  (when (plain-resource-path? path)
+    (or (jdk-resource-bytes path) (user-resource-bytes path))))
+
+(defn- resource-urls
+  "Every classpath entry's URL for path, file: for a directory and jar: for a
+  jar, in classpath order. JDK resources have none: their jrt: URLs need the
+  runtime image."
+  [path]
+  (for [entry (when (plain-resource-path? path) (:classpath @state))
+        :let [f (io/file entry)
+              abs (.getAbsolutePath f)]
+        :when (if (str/ends-with? (str entry) ".jar")
+                (some? (.getEntry (jar entry) path))
+                (.isFile (io/file entry path)))]
+    (if (str/ends-with? (str entry) ".jar")
+      (str "jar:file:" abs "!/" path)
+      (str "file:" (.getAbsolutePath (io/file entry path))))))
 
 (defn- record!
   "Keep text for the startup cache when it belongs to a JDK class. unit says
@@ -489,11 +515,14 @@
 ;; translator is stale even when the JDK is not (Clojure's AOT
 ;; version-mismatch trap).
 
+(def ^:private runtime-files
+  "The Scheme runtime, in load order."
+  ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"])
+
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
-                        ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"
-                         "champaca/codegen.clj" "champaca/main.clj"
-                         "champaca/classfile.clj"]))))
+                        (concat runtime-files
+                                ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj"])))))
 
 (defn- cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
@@ -545,6 +574,12 @@
       (spit src (str/join "\n" (map :text forms)))
       (s/call "quiet-compile-file" (str src) (str (io/file tmp "boot.so")))
       (.delete src))
+    ;; the runtime itself, so a warm start loads it compiled rather than
+    ;; compiling its source again (about 130 ms)
+    (let [src (io/file tmp "runtime.ss")]
+      (spit src (str/join "\n" (map #(slurp (io/resource %)) runtime-files)))
+      (s/call "quiet-compile-file" (str src) (str (io/file tmp "runtime.so")))
+      (.delete src))
     (dump-classes! (io/file tmp "state.img"))
     (if (.renameTo tmp dir)
       (prune-cache-root! dir)
@@ -594,18 +629,22 @@
   main. Uses the boot cache when it is valid and writes it when it is not.
   Returns 0 on success."
   []
-  (scheme! (slurp (io/resource "champaca/runtime.ss")))
-  (scheme! (slurp (io/resource "champaca/natives.ss")))
-  (scheme! (slurp (io/resource "champaca/reflect.ss")))
-  (scheme! (slurp (io/resource "champaca/handles.ss")))
-  (scheme! (slurp (io/resource "champaca/files.ss")))
+  (let [dir (cache-dir)
+        so (when dir (io/file dir "runtime.so"))]
+    ;; the cache key covers the runtime's source, so a cached runtime.so is
+    ;; always this source compiled
+    (if (and so (.exists so))
+      (timed :cache-load-runtime #(s/call "load" (str so)))
+      (doseq [f runtime-files] (scheme! (slurp (io/resource f))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
   (s/call "set-annotation-class-hook!" (fn [iface keys]
                                          (lambda-class [iface] (if (= "" keys) [] (str/split keys #"\|")))))
   ;; ConstantPool natives (annotations): a constant's value, or a class's name
-  (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false)))
+  (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false))
+          ;; URLs as one string, one per line
+          (fn [path] (str/join "\n" (resource-urls path))))
   (s/call "set-cp-hook!" (fn [cname i]
                            (let [e (get (:cp (parsed cname)) i)]
                              (or (:value e) (:name e)

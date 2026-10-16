@@ -119,28 +119,20 @@
 ;; An object field offset is its slot index; an array offset is the element
 ;; index (base 0, scale 1). Static fields are not addressable yet.
 
-;; Unsafe with a null base and an absolute address reaches native memory.
-;; Real memory comes from malloc (allocateMemory0) and is what libc calls get
-;; pointers into (files.ss). A few words made during boot, Thread's next-id
-;; counter for one, live in a table at small fake addresses instead: boot's
-;; heap is saved in the startup cache, and a malloc address saved there would
-;; point at nothing in the next process. So boot must not allocateMemory.
-(define native-memory (make-eqv-hashtable))
-(define native-next 4096)
-(define native-fake-limit #x100000)
+;; Unsafe with a null base and an absolute address reaches native memory:
+;; malloc'd memory (allocateMemory0) that libc calls get pointers into
+;; (files.ss). The startup cache keeps compiled code and the class table,
+;; never Java objects, so no address outlives its process.
 (define (native-alloc! init)
-  (let ([a native-next]) (set! native-next (+ native-next 8)) (hashtable-set! native-memory a init) a))
-(define (fake-address? a) (< a native-fake-limit))
+  (let ([a (foreign-alloc 8)]) (foreign-set! 'integer-64 a 0 init) a))
 
 (define (foreign-type t)
   (case t
     [("B") 'integer-8] [("Z") 'unsigned-8] [("S") 'integer-16] [("C") 'unsigned-16]
     [("I") 'integer-32] [("J") 'integer-64] [("F") 'single-float] [("D") 'double-float]
     [else (error 'champaca "no off-heap references" t)]))
-(define (native-get a t)
-  (if (fake-address? a) (hashtable-ref native-memory a 0) (foreign-ref (foreign-type t) a 0)))
-(define (native-set! a v t)
-  (if (fake-address? a) (hashtable-set! native-memory a v) (foreign-set! (foreign-type t) a 0 v)))
+(define (native-get a t) (foreign-ref (foreign-type t) a 0))
+(define (native-set! a v t) (foreign-set! (foreign-type t) a 0 v))
 
 (define unsafe-prefix "jdk/internal/misc/Unsafe.")
 ;; Arrays are byte-addressed like a real heap: base offset 16, scale by
@@ -840,6 +832,15 @@
     (and (file-directory? p)
          (make-jarr "Ljava/lang/String;" (list->vector (map jstring (directory-list p)))))))
 
+;; --- performance counters ---------------------------------------------------------
+;; jdk.internal.perf counters (ZipFile counts the zips it opens) are plain
+;; heap buffers here: nothing outside the process reads them.
+(defnative "jdk/internal/perf/Perf.createLong(Ljava/lang/String;IIJ)Ljava/nio/ByteBuffer;" (this name variability units value)
+  (jinit "java/nio/ByteBuffer")
+  (let ([bb ((method-proc "java/nio/ByteBuffer" "allocate(I)Ljava/nio/ByteBuffer;") 8)])
+    ((jvirt bb "putLong(IJ)Ljava/nio/ByteBuffer;") bb 0 value)
+    bb))
+
 ;; --- modules and class loaders --------------------------------------------------
 ;; One flat class space: module wiring is recorded nowhere, and every loader
 ;; sees the same classes (user classpath, then java.base).
@@ -850,7 +851,8 @@
 ;; so the getResourceAsStream methods are overridden to ask the loader. The
 ;; hook answers a jolt byte array, a record around a bytevector, or false.
 (define resource-hook (lambda (path) #f))
-(define (set-resource-hook! f) (set! resource-hook f))
+(define resource-urls-hook (lambda (path) ""))
+(define (set-resource-hook! f urls) (set! resource-hook f) (set! resource-urls-hook urls))
 (define (host-bytevector x)
   (let ([bv (if (record? x) ((record-accessor (record-rtd x) 0) x) x)])
     (unless (bytevector? bv) (error 'champaca "resource hook gave no bytes" x))
@@ -861,22 +863,51 @@
          (let* ([bv (host-bytevector found)] [n (bytevector-length bv)] [v (make-vector n)])
            (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v i (bytevector-s8-ref bv i)))
            (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v))))))
-;; Class.getResourceAsStream: a name without a leading / is relative to the
-;; class's package
+;; Class.getResource*: a name without a leading / is relative to the class's
+;; package. A ClassLoader takes names without one, and finds nothing for a
+;; name with one (the loader's hook refuses it).
+(define (class-resource-path this name)
+  (let ([n (jstring->scheme (nn name))])
+    (if (and (fx> (string-length n) 0) (char=? (string-ref n 0) #\/))
+        (substring n 1 (string-length n))
+        (let* ([c (jclass-cname (mirror-class this))]
+               [slash (let loop ([i (fx- (string-length c) 1)])
+                        (cond [(fx< i 0) #f] [(char=? (string-ref c i) #\/) i] [else (loop (fx- i 1))]))])
+          (if slash (string-append (substring c 0 (fx+ slash 1)) n) n)))))
 (define-override! "java/lang/Class.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
-  (lambda (this name)
-    (let ([n (jstring->scheme (nn name))])
-      (resource-stream
-       (if (and (fx> (string-length n) 0) (char=? (string-ref n 0) #\/))
-           (substring n 1 (string-length n))
-           (let* ([c (jclass-cname (mirror-class this))]
-                  [slash (let loop ([i (fx- (string-length c) 1)])
-                           (cond [(fx< i 0) #f] [(char=? (string-ref c i) #\/) i] [else (loop (fx- i 1))]))])
-             (if slash (string-append (substring c 0 (fx+ slash 1)) n) n)))))))
+  (lambda (this name) (resource-stream (class-resource-path this name))))
 (define-override! "java/lang/ClassLoader.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (this name) (resource-stream (jstring->scheme (nn name)))))
 (define-override! "java/lang/ClassLoader.getSystemResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (name) (resource-stream (jstring->scheme (nn name)))))
+
+;; URLs, for classpath resources only (file: and jar:, which the JDK opens
+;; with its own handlers)
+(define (resource-url-list path)
+  (let ([text (resource-urls-hook path)])
+    (if (string=? text "")
+        '()
+        (map (lambda (u) (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring u)))
+             (let loop ([i 0] [start 0] [acc '()])
+               (cond [(fx= i (string-length text)) (reverse (cons (substring text start i) acc))]
+                     [(char=? (string-ref text i) #\newline) (loop (fx+ i 1) (fx+ i 1) (cons (substring text start i) acc))]
+                     [else (loop (fx+ i 1) start acc)]))))))
+(define (first-resource-url path) (let ([us (resource-url-list path)]) (and (pair? us) (car us))))
+(define (resource-enumeration path)
+  (let ([lst (construct "java/util/ArrayList" "()V")])
+    (for-each (lambda (u) ((jvirt lst "add(Ljava/lang/Object;)Z") lst u)) (resource-url-list path))
+    (jinit "java/util/Collections")
+    ((method-proc "java/util/Collections" "enumeration(Ljava/util/Collection;)Ljava/util/Enumeration;") lst)))
+(define-override! "java/lang/Class.getResource(Ljava/lang/String;)Ljava/net/URL;"
+  (lambda (this name) (first-resource-url (class-resource-path this name))))
+(define-override! "java/lang/ClassLoader.getResource(Ljava/lang/String;)Ljava/net/URL;"
+  (lambda (this name) (first-resource-url (jstring->scheme (nn name)))))
+(define-override! "java/lang/ClassLoader.getSystemResource(Ljava/lang/String;)Ljava/net/URL;"
+  (lambda (name) (first-resource-url (jstring->scheme (nn name)))))
+(define-override! "java/lang/ClassLoader.getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
+  (lambda (this name) (resource-enumeration (jstring->scheme (nn name)))))
+(define-override! "java/lang/ClassLoader.getSystemResources(Ljava/lang/String;)Ljava/util/Enumeration;"
+  (lambda (name) (resource-enumeration (jstring->scheme (nn name)))))
 
 (defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (void))
 (defnative "jdk/internal/loader/BootLoader.getSystemPackageNames()[Ljava/lang/String;" ()

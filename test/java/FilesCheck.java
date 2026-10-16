@@ -129,6 +129,63 @@ public class FilesCheck {
         }
         System.out.println("mismatch " + Files.mismatch(p, p) + " " + Files.mismatch(p, root.resolve("buf.txt")));
 
+        // owner, a memory map, a lock, transferTo, force, gathering writes
+        System.out.println("owner known " + !Files.getOwner(p).getName().isEmpty());
+        try (FileChannel ch = FileChannel.open(root.resolve("chan.bin"), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+            java.nio.MappedByteBuffer m = ch.map(FileChannel.MapMode.READ_WRITE, 0, 6);
+            byte first = m.get(0);
+            m.put(1, (byte) 'X');
+            m.force();
+            try (java.nio.channels.FileLock lock = ch.lock()) { System.out.println("map " + (char) first + " locked " + lock.isValid()); }
+            ch.force(true);
+            try (FileChannel out = FileChannel.open(root.resolve("copy.bin"), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                System.out.println("transferTo " + ch.transferTo(0, 6, out));
+                out.write(new ByteBuffer[] {ByteBuffer.wrap("ab".getBytes()), ByteBuffer.wrap("cd".getBytes())});
+            }
+        }
+        System.out.println("after map and gather " + Files.readString(root.resolve("copy.bin")));
+        try (RandomAccessFile rws = new RandomAccessFile(new File(root.toFile(), "sync.bin"), "rws")) {
+            rws.write(new byte[] {9, 8, 7});
+            rws.getFD().sync();
+            System.out.println("rws length " + rws.length());
+        }
+        try (FileInputStream in = new FileInputStream(new File(root.toFile(), "sync.bin"))) {
+            in.read(new byte[2], 1, 5);
+        } catch (IndexOutOfBoundsException e) { System.out.println("bad offset: IndexOutOfBoundsException"); }
+
+        // gzip and zip, through Inflater and Deflater
+        String text = "champaca ".repeat(500);
+        try (OutputStream gz = new java.util.zip.GZIPOutputStream(Files.newOutputStream(root.resolve("t.gz")))) { gz.write(text.getBytes(StandardCharsets.UTF_8)); }
+        try (InputStream gz = new java.util.zip.GZIPInputStream(Files.newInputStream(root.resolve("t.gz")))) {
+            System.out.println("gzip " + (Files.size(root.resolve("t.gz")) < 200) + " " + new String(gz.readAllBytes(), StandardCharsets.UTF_8).equals(text));
+        }
+        try (java.util.zip.ZipOutputStream zo = new java.util.zip.ZipOutputStream(Files.newOutputStream(root.resolve("t.zip")))) {
+            zo.putNextEntry(new java.util.zip.ZipEntry("a/one.txt")); zo.write(text.getBytes(StandardCharsets.UTF_8)); zo.closeEntry();
+            zo.putNextEntry(new java.util.zip.ZipEntry("two.txt")); zo.write("2".getBytes(StandardCharsets.UTF_8)); zo.closeEntry();
+        }
+        try (java.util.zip.ZipFile zf = new java.util.zip.ZipFile(root.resolve("t.zip").toFile())) {
+            System.out.println("zip entries " + zf.stream().map(java.util.zip.ZipEntry::getName).sorted().collect(Collectors.toList())
+                + " " + new String(zf.getInputStream(zf.getEntry("a/one.txt")).readAllBytes(), StandardCharsets.UTF_8).length());
+        }
+        java.util.zip.Deflater def = new java.util.zip.Deflater(java.util.zip.Deflater.BEST_SPEED);
+        def.setInput("aaaaaaaaaabbbbbbbbbb".getBytes(StandardCharsets.UTF_8)); def.finish();
+        byte[] packed = new byte[100]; int plen = def.deflate(packed); def.end();
+        java.util.zip.Inflater inf = new java.util.zip.Inflater();
+        inf.setInput(packed, 0, plen);
+        byte[] unpacked = new byte[100]; int ulen = inf.inflate(unpacked);
+        System.out.println("deflate/inflate " + new String(unpacked, 0, ulen, StandardCharsets.UTF_8) + " finished " + inf.finished() + " adler " + inf.getAdler());
+        inf.end();
+        try { java.util.zip.Inflater bad = new java.util.zip.Inflater(); bad.setInput(new byte[] {1, 2, 3, 4}); bad.inflate(new byte[10]); }
+        catch (java.util.zip.DataFormatException e) { System.out.println("bad data: DataFormatException"); }
+
+        // resources: a file: URL from the classpath, and names that leave it
+        java.net.URL self = FilesCheck.class.getResource("FilesCheck.class");
+        try (InputStream in = self.openStream()) {
+            System.out.println("resource " + self.getProtocol() + " " + (in.readAllBytes().length > 1000));
+        }
+        System.out.println("escaping names " + (FilesCheck.class.getResource("../FilesCheck.class") == null)
+            + " " + (ClassLoader.getSystemResource("/FilesCheck.class") == null));
+
         // failures
         try { Files.readString(root.resolve("missing")); } catch (NoSuchFileException e) { System.out.println("NoSuchFileException " + Path.of(e.getFile()).getFileName()); }
         try { Files.createDirectory(root.resolve("x")); } catch (FileAlreadyExistsException e) { System.out.println("FileAlreadyExistsException"); }
