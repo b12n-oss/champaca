@@ -379,9 +379,9 @@
                                                     "" keys))]
            [c (find-class cname)]
            [o (jnew cname)])
-      (for-each (lambda (k) (hashtable-set! (jclass-vtable c) k (annotation-proc-symbol k))) keys)
+      (for-each (lambda (k) (eq-hashtable-set! (jclass-vtable c) (string->symbol k) (annotation-proc-symbol k))) keys)
       (let ([at (string->symbol "champaca/Annotation.annotationType")])
         (set-top-level-value! at (lambda (self) (cdr (eq-hashtable-ref annotation-state self #f))))
-        (hashtable-set! (jclass-vtable c) "annotationType()Ljava/lang/Class;" at))
+        (eq-hashtable-set! (jclass-vtable c) (string->symbol "annotationType()Ljava/lang/Class;") at))
       (eq-hashtable-set! annotation-state o (cons values type))
       o)))

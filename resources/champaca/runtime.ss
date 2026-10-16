@@ -108,9 +108,16 @@
 
 ;; meta is ((methods ...) (fields ...)), each entry (name desc access-flags)
 ;; in classfile order; reflection reads it and a member's slot is its index.
+;; A vtable is keyed by symbols, "name(desc)" interned, so a call looks its
+;; method up with eq? rather than hashing a string each time.
+(define (alist->symbol-table al)
+  (let ([t (make-eq-hashtable)])
+    (for-each (lambda (p) (eq-hashtable-set! t (string->symbol (car p)) (cdr p))) al)
+    t))
+
 (define (register-class! name super interfaces template vtable-alist field-alist flags meta)
   (hashtable-set! classes name
-                  (make-jclass name super interfaces template (alist->table vtable-alist)
+                  (make-jclass name super interfaces template (alist->symbol-table vtable-alist)
                                (alist->table field-alist) flags
                                (if (fxpositive? (fxlogand flags #x200)) 'interface 'class)
                                meta 'loaded #f)))
@@ -124,7 +131,7 @@
 (define (pseudo-class! name kind)
   (let ([c (make-jclass name (if (eq? kind 'array) "java/lang/Object" #f)
                         (if (eq? kind 'array) '("java/lang/Cloneable" "java/io/Serializable") '())
-                        (vector) (make-hashtable string-hash string=?) (make-hashtable string-hash string=?)
+                        (vector) (make-eq-hashtable) (make-hashtable string-hash string=?)
                         #x411 kind '(() ()) 'initialized #f)])
     (hashtable-set! classes name c)
     c))
@@ -250,15 +257,51 @@
 ;; Virtual and interface dispatch: one hashtable probe on the receiver's class.
 ;; Arrays dispatch through Object's vtable, except clone.
 (define (array-clone a) (make-jarr (jarr-elem a) (vector-copy (jarr-vec a))))
+;; key is a symbol in generated code; the runtime's own callers pass strings.
+(define clone-key (string->symbol "clone()Ljava/lang/Object;"))
 (define (jvirt x key)
-  (let ([x (nn x)])
-    (if (and (jarr? x) (string=? key "clone()Ljava/lang/Object;"))
-        array-clone
-        (let* ([c (if (jarr? x) (find-class "java/lang/Object") (jobj-cls x))]
-               [sym (hashtable-ref (jclass-vtable c) key #f)])
-          (if sym
-              (top-level-value sym)
-              (jthrow "java/lang/AbstractMethodError" (string-append (jclass-cname c) "." key)))))))
+  (let ([x (nn x)] [k (if (symbol? key) key (string->symbol key))])
+    (if (jobj? x)
+        (let ([sym (eq-hashtable-ref (jclass-vtable (jobj-cls x)) k #f)])
+          (if sym (top-level-value sym) (no-such-virtual (jobj-cls x) k)))
+        (if (eq? k clone-key)
+            array-clone
+            (let* ([c (find-class "java/lang/Object")] [sym (eq-hashtable-ref (jclass-vtable c) k #f)])
+              (if sym (top-level-value sym) (no-such-virtual c k)))))))
+(define (no-such-virtual c k)
+  (jthrow "java/lang/AbstractMethodError" (string-append (jclass-cname c) "." (symbol->string k))))
+
+;; An inline cache: each virtual call site in generated code has a pair,
+;; (class . procedure), for the receiver class it saw last, so a hit is one
+;; eq? test and no lookup (top-level-value alone costs about 14 ns). A stub
+;; is never cached: its method isn't compiled yet, and the compiled
+;; procedure that replaces it is what the site should keep.
+(define-syntax jvirt-ic
+  (syntax-rules ()
+    [(_ ic x key)
+     (let ([o x])
+       (if (and (jobj? o) (eq? (jobj-cls o) (car ic)))
+           (cdr ic)
+           (jvirt-miss ic o key)))]))
+(define (jvirt-miss ic o key)
+  (let ([proc (jvirt o key)])
+    (when (and (jobj? o) (not (eq-hashtable-contains? stub-procs proc)))
+      (set-car! ic (jobj-cls o))
+      (set-cdr! ic proc))
+    proc))
+
+;; Generated code names classes by symbol: the class is found through an eq
+;; table instead of hashing its name on every new and every initialization
+;; check.
+(define class-by-symbol (make-eq-hashtable))
+(define (symbol-class s)
+  (or (eq-hashtable-ref class-by-symbol s #f)
+      (let ([c (find-class (symbol->string s))]) (eq-hashtable-set! class-by-symbol s c) c)))
+(define (jinit-sym s)
+  (let ([c (symbol-class s)])
+    (unless (eq? (jclass-state c) 'initialized) (jinit-slow c (jclass-cname c)))))
+(define (jnew-sym s)
+  (let ([c (symbol-class s)]) (make-jobj c (vector-copy (jclass-template c)))))
 
 ;; --- arrays -------------------------------------------------------------------
 
@@ -646,12 +689,21 @@
     (void)))
 
 ;; One compiled procedure makes every method stub, so registration text (and
-;; the boot cache built from it) carries a call per method, not a lambda.
+;; the boot cache built from it) carries a call per method, not a lambda. The
+;; first call compiles the method, which replaces the stub's global; anything
+;; still holding the stub after that is forwarded. Stubs are recorded so an
+;; inline cache never keeps one.
+(define stub-procs (make-weak-eq-hashtable))
 (define (method-stub cname mname desc sym)
   (or (native-override (string-append cname "." mname desc))
-      (lambda args
-        (jit! cname mname desc)
-        (apply (top-level-value sym) args))))
+      (let* ([compiled? #f]
+             [p (lambda args
+                  (unless compiled?
+                    (jit! cname mname desc)
+                    (set! compiled? #t))
+                  (apply (top-level-value sym) args))])
+        (eq-hashtable-set! stub-procs p #t)
+        p)))
 
 ;; "java.lang.String" -> "java/lang/String"
 (define (slashes s) (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list s))))

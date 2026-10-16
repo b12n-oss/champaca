@@ -262,9 +262,9 @@
                6 (do ((:ensure-loaded resolve) class)
                      (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals))
                7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
-               (5 9) (apply sx (sx "jvirt" (first actuals) (str-lit (str name desc))) actuals)
+               (5 9) (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals)
                8 (do ((:ensure-loaded resolve) class)
-                     (sx "let" (sx (sx "o" (sx "jnew" (str-lit class))))
+                     (sx "let" (sx (sx "o" (sx "jnew-sym" (str "'" (sym class)))))
                          (apply sx (method-global class name desc) "o" actuals) "o")))
         ret-type (if (= kind 8) (str "L" class ";") impl-ret)
         body (cond (= sam-ret "V") (sx "begin" call "(void)")
@@ -340,32 +340,65 @@
                     (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))]
     (str "'" (apply sx (map label arg-idxs)))))
 
+(defn- render-steps
+  "A block's steps and its terminal expression as Scheme. Nested lets when
+  mutable? is false: every store or push binds a fresh variable, shadowing
+  the old one, so Chez can keep values in registers (an assigned variable is
+  boxed even when no closure captures it). set! on method-wide variables
+  otherwise, which the exception-handler trampoline needs."
+  [steps term mutable?]
+  (if mutable?
+    (str "(begin "
+         (str/join " " (for [[k a b] steps]
+                         (case k
+                           :bind (sx "set!" a b)
+                           :pbind (let [temps (map #(str "t" %) (range (count a)))]
+                                    (sx "let" (apply sx (map (fn [t [_ e]] (sx t e)) temps a))
+                                        (apply sx "begin" (map (fn [t [v _]] (sx "set!" v t)) temps a))))
+                           :do a)))
+         " " term ")")
+    (reduce (fn [inner [k a b]]
+              (case k
+                :bind (sx "let" (sx (sx a b)) inner)
+                :pbind (sx "let" (apply sx (map (fn [[v e]] (sx v e)) a)) inner)
+                :do (sx "begin" a inner)))
+            term
+            (reverse steps))))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
   linker callbacks), :tramp? and :next-pc. entry is the compile-time stack at
   block entry: a vector of types (I J F D A), one per operand-stack value.
   Returns {:code text :succ {pc entry-stack}}."
   [ctx blk entry]
-  (let [{:keys [cls resolve tramp? next-pc]} ctx
+  (let [{:keys [cls resolve tramp? next-pc live]} ctx
         cp (:cp cls)
         this-class (:name cls)
         st (volatile! entry)
+        ;; steps, in order: [:bind var expr], [:pbind [[var expr] ...]] (one
+        ;; parallel binding) or [:do expr]. A method without exception handlers
+        ;; renders them as nested lets, so nothing is assigned; one with
+        ;; handlers as set! on method-wide variables (render-steps)
         stmts (transient [])
         succ (volatile! {})
         s (fn [i] (str "s" i))
-        push! (fn [expr t] (conj! stmts (sx "set!" (s (count @st)) expr)) (vswap! st conj t))
+        bind! (fn [v expr] (conj! stmts [:bind v expr]))
+        push! (fn [expr t] (bind! (s (count @st)) expr) (vswap! st conj t))
         pop! (fn [] (let [i (dec (count @st))] (vswap! st pop) (s i)))
         top-t (fn [] (peek @st))
         popn! (fn [n] (vec (reverse (repeatedly n pop!))))
-        stmt! (fn [x] (conj! stmts x))
+        stmt! (fn [x] (conj! stmts [:do x]))
         start-pc (:pc (first blk))
         ;; a backward jump is where a loop can spin, so it is where a thread
         ;; lets another one run (jsafepoint, natives.ss)
         goto (fn [pc]
                (vswap! succ assoc pc @st)
-               (let [j (if tramp? (label pc) (sx (label pc)))]
+               ;; a jump passes the live locals and the stack as arguments
+               (let [j (if tramp?
+                         (label pc)
+                         (apply sx (label pc) (concat (map #(str "l" %) live) (map s (range (count @st))))))]
                  (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
-        init (fn [c] (when (not= c this-class) (stmt! (sx "jinit" (str-lit c)))))
+        init (fn [c] (when (not= c this-class) (stmt! (sx "jinit-sym" (str "'" (sym c))))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
         un (fn [f t] (push! (f (pop!)) t))
         ;; copy the top k values to below the m values under them (dup family)
@@ -374,9 +407,8 @@
                          base (- n k m)
                          items (subvec @st base)
                          order (concat (range (- (count items) k) (count items)) (range (count items)))
-                         temps (map #(str "t" %) (range (count items)))]
-                     (stmt! (sx "let" (apply sx (map #(sx %1 (s (+ base %2))) temps (range)))
-                                (apply sx "begin" (map-indexed (fn [j src] (sx "set!" (s (+ base j)) (nth temps src))) order))))
+                         slots (map #(s (+ base %)) (range (count items)))]
+                     (conj! stmts [:pbind (map-indexed (fn [j src] [(s (+ base j)) (nth slots src)]) order)])
                      (vreset! st (into (subvec @st 0 base) (map items order)))))
         cmp0 {:ifeq "fx=" :ifne "fx<>" :iflt "fx<" :ifge "fx>=" :ifgt "fx>" :ifle "fx<="}
         cmp2 {:if_icmpeq "fx=" :if_icmpne "fx<>" :if_icmplt "fx<" :if_icmpge "fx>="
@@ -416,8 +448,8 @@
           :fload (push! (str "l" a0) "F")
           :dload (push! (str "l" a0) "D")
           :aload (push! (str "l" a0) "A")
-          (:istore :lstore :fstore :dstore :astore) (stmt! (sx "set!" (str "l" a0) (pop!)))
-          :iinc (stmt! (sx "set!" (str "l" a0) (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args))))))
+          (:istore :lstore :fstore :dstore :astore) (bind! (str "l" a0) (pop!))
+          :iinc (bind! (str "l" a0) (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
           (:iaload :baload :caload :saload) (bin (fn [a i] (sx "jaload" a i)) "I")
           :laload (bin (fn [a i] (sx "jaload" a i)) "J")
           :faload (bin (fn [a i] (sx "jaload" a i)) "F")
@@ -437,7 +469,7 @@
           :dup2_x2 (let [k (if (cat2? (top-t)) 1 2)]
                      (shuffle! k (if (cat2? (nth @st (- (count @st) k 1))) 1 2)))
           :swap (let [t1 (top-t) v1 (pop!) t2 (top-t) v2 (pop!)]
-                  (stmt! (sx "let" (sx (sx "t" v1)) (sx "set!" v1 v2) (sx "set!" v2 "t")))
+                  (conj! stmts [:pbind [[v1 v2] [v2 v1]]])
                   (vswap! st conj t1 t2))
           :iadd (bin #(sx "wrap-int" (sx "fx+" %1 %2)) "I")
           :isub (bin #(sx "wrap-int" (sx "fx-" %1 %2)) "I")
@@ -536,7 +568,7 @@
                          (apply sx "mh-call" recv (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
-                             (apply sx (sx "jvirt" recv (str-lit (str name desc))) recv argv)))
+                             (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc)))) recv argv)))
                        :invokespecial
                        (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) recv argv)
                        :invokestatic
@@ -592,7 +624,7 @@
           :new (let [c (:name (cp a0))]
                  ((:ensure-loaded resolve) c)
                  (init c)
-                 (push! (sx "jnew" (str-lit c)) "A"))
+                 (push! (sx "jnew-sym" (str "'" (sym c))) "A"))
           :newarray (let [e (newarray-elem a0)]
                       (un #(sx "jnewarray" (str-lit e) % (if (#{"F" "D"} e) "0.0" "0")) "A"))
           :anewarray (let [c (:name (cp a0))
@@ -603,13 +635,13 @@
           :arraylength (un #(sx "jarraylength" %) "I")
           :checkcast (let [c (:name (cp a0))]
                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
-                       (let [v (s (dec (count @st)))] (stmt! (sx "set!" v (sx "jcheckcast" v (str-lit c))))))
+                       (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast" v (str-lit c)))))
           :instanceof (let [c (:name (cp a0))]
                         (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                         (un #(sx "if" (sx "jinstance?" % (str-lit c)) "1" "0") "I"))
           (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))))
     (let [term (or @terminal (goto next-pc))]
-      {:code (str "(begin " (str/join " " (persistent! stmts)) " " term ")")
+      {:code (render-steps (persistent! stmts) term tramp?)
        :succ @succ})))
 
 (defn- guard-wrap
@@ -641,7 +673,24 @@
         insns (decode code)
         blks (blocks insns handlers)
         tramp? (boolean (seq handlers))
+        ;; inline-cache cells, one per virtual call site, made once per method
+        ics (volatile! 0)
+        ic! (fn [] (str "ic" (dec (vswap! ics inc))))
         next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
+        {:keys [args]} (parse-desc (:desc method))
+        arg-types (if (pos? (bit-and (:flags method) 0x0008)) args (cons "L" args))
+        params (loop [ts arg-types slot 0 out []]
+                 (if-let [t (first ts)]
+                   (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
+                   out))
+        param-set (set params)
+        ;; the locals a jump has to carry: the parameters and every slot the
+        ;; method loads or stores
+        live (vec (sort (into param-set
+                              (for [{:keys [op args]} insns
+                                    :when (#{:iload :lload :fload :dload :aload
+                                             :istore :lstore :fstore :dstore :astore :iinc} op)]
+                                (first args)))))
         ;; worklist over blocks: each is emitted once, at the stack depth its
         ;; first predecessor established (verified bytecode guarantees agreement)
         emitted (loop [work (into [[0 []]] (map (fn [h] [(:handler h) ["A"]]) handlers))
@@ -650,31 +699,31 @@
                     (if (contains? done pc)
                       (recur (rest work) done)
                       (let [{:keys [code succ]} (emit-block {:cls cls :resolve resolve :tramp? tramp?
-                                                             :next-pc (next-pc pc)}
+                                                             :next-pc (next-pc pc) :live live :ic! ic!}
                                                             (blks pc) dep)]
-                        (recur (concat (rest work) succ) (assoc done pc code))))
+                        (recur (concat (rest work) succ) (assoc done pc [dep code]))))
                     done))
-        {:keys [args]} (parse-desc (:desc method))
-        arg-types (if (pos? (bit-and (:flags method) 0x0008)) args (cons "L" args))
-        params (loop [ts arg-types slot 0 out []]
-                 (if-let [t (first ts)]
-                   (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
-                   out))
-        param-set (set params)
         bindings (concat (for [i (range max-locals) :when (not (param-set i))] (sx (str "l" i) "0"))
                          (for [i (range max-stack)] (sx (str "s" i) "0")))]
-    (let [body* (sx "let" (apply sx bindings)
+    (let [body* (if tramp?
+                  (sx "let" (apply sx bindings)
                    (sx "letrec"
-                       (apply sx (for [[pc code] (sort-by key emitted)]
-                                   (sx (label pc) (sx "lambda" "()" (if tramp? (guard-wrap code pc handlers) code)))))
-                       (if tramp?
+                       (apply sx (for [[pc [_ code]] (sort-by key emitted)]
+                                   (sx (label pc) (sx "lambda" "()" (guard-wrap code pc handlers)))))
                          ;; an inline named loop rather than a shared helper,
                          ;; so a frame named for this method stays on the stack
                          ;; while a block runs under guard (getCallerClass)
                          (let [t (sym (str *method-tag* "#T"))]
                            (sx "let" t (sx (sx "r" (sx (label 0))))
-                               (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))
-                         (sx (label 0)))))
+                               (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))))
+                  ;; each block takes the live locals and its entry stack
+                  (sx "letrec"
+                      (apply sx (for [[pc [dep code]] (sort-by key emitted)]
+                                  (sx (label pc)
+                                      (sx "lambda" (apply sx (concat (map #(str "l" %) live)
+                                                                     (map #(str "s" %) (range (count dep)))))
+                                          code))))
+                      (apply sx (label 0) (map #(if (param-set %) (str "l" %) "0") live))))
           ;; ACC_SYNCHRONIZED: the monitor of this, or of the class for a
           ;; static method, held for the call and released however it ends.
           ;; Inline rather than a helper taking a thunk, so this method's
@@ -691,9 +740,12 @@
                            "r")))
                  body*)]
       (sx "define" (method-global (:name cls) (:name method) (:desc method))
-          (sx "lambda" (apply sx (map #(str "l" %) params))
-              ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
-              (if (System/getenv "CHAMPACA_BT")
-                (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
-                    body)
-                body))))))
+          (let [f (sx "lambda" (apply sx (map #(str "l" %) params))
+                      ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+                      (if (System/getenv "CHAMPACA_BT")
+                        (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                            body)
+                        body))]
+            (if (pos? @ics)
+              (sx "let" (apply sx (for [i (range @ics)] (sx (str "ic" i) "(cons #f #f)"))) f)
+              f))))))
