@@ -103,29 +103,29 @@ Four changes did it, each measured on its own first:
 - **Symbol-keyed dispatch with inline caches** for virtual and interface calls, and symbol-keyed classes for `new` and initialization checks.
 - **Inline field and array access**, and `synchronized` methods released through `dynamic-wind`, which costs about 7 ns to set up against 33 ns for a `guard`.
 
-What single operations cost, measured in a loop of two million, before these changes and after:
+What single operations cost, measured in a loop of two million, before these changes and now, with the later work below included:
 
 | Operation | Before | Now | JVM |
 |---|---|---|---|
 | Empty loop step | 20 ns | 2.2 ns | 1.2 ns |
 | Static call | 12.7 ns | 3.1 ns | 0.4 ns |
-| Virtual call | 54 ns | 6.0 ns | 0.5 ns |
-| Interface call | 83 ns | 11 ns | 0.8 ns |
-| Field read and write | 24 ns | 6.2 ns | 1.1 ns |
+| Virtual call | 54 ns | 4.0 ns | 0.5 ns |
+| Interface call | 83 ns | 6.7 ns | 0.8 ns |
+| Field read and write | 24 ns | 4.0 ns | 1.1 ns |
 | Static field read and write | 8.3 ns | 3.2 ns | 1.0 ns |
-| Array read and write | 28 ns | 8.0 ns | 1.1 ns |
-| `new` | 96 ns | 27 ns | 4.4 ns |
+| Array read and write | 28 ns | 5.6 ns | 1.1 ns |
+| `new` | 96 ns | 13 ns | 4.4 ns |
 | Calling a method with try/catch | 45 ns | 21 ns | 0.6 ns |
-| Calling a `synchronized` method | 111 ns | 66 ns | 9.3 ns |
-| `AtomicInteger.incrementAndGet` | 636 ns | 56 ns | 7.2 ns |
-| `ReentrantLock` lock and unlock | 1435 ns | 133 ns | 13 ns |
-| `StringBuilder.append(char)` | 390 ns | 64 ns | 2.0 ns |
+| Calling a `synchronized` method | 111 ns | 22 ns | 9.3 ns |
+| `AtomicInteger.incrementAndGet` | 636 ns | 16 ns | 7.2 ns |
+| `ReentrantLock` lock and unlock | 1435 ns | 42 ns | 13 ns |
+| `StringBuilder.append(char)` | 390 ns | 42 ns | 2.0 ns |
 
 ### Exception handlers
 
 Methods with an exception table came later. They used to run every block through a trampoline, with a `guard` around each block and every local assigned with `set!`, so a loop inside a `try` paid for a `guard` on each step. Now only entering a `try` region costs anything ([how-it-works](how-it-works.md#the-shape-of-a-translated-method)), and the handler goes onto Chez's handler stack directly instead of through `guard`, which takes a full continuation and reads the continuation marks: about 17 ns against 36 ns, measured on their own. Measured the same way, before and after, with calling a method that has a try/catch in the table above:
 
-| Operation | Before | Now | JVM |
+| Operation | Before | After | JVM |
 |---|---|---|---|
 | A loop step inside a `try` | 79 ns | 2.4 ns | 0.9 ns |
 | The same, with a handler that reads the loop's locals | 73 ns | 3.8 ns | 1.0 ns |
@@ -134,13 +134,29 @@ Methods with an exception table came later. They used to run every block through
 | A `synchronized` block | 88 ns | 56 ns | 10.5 ns |
 | Throwing and catching an exception | 600 ns | 600 ns | 380 ns |
 
-Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s before any of this to 0.79 s, then to 0.44 s, against 37 ms on the JVM.
+### Records, monitors and type tests
 
-Most of what's left sits in calls, allocation and monitors. Atomic operations still go through `Unsafe` and VarHandle code that decodes its access mode at run time, and a `synchronized` block still costs 56 ns. About 20 ns of that is its `try` region, so most of the rest goes to the monitor itself.
+Three things were left that every program pays for, found by timing each piece of a `synchronized` block and of `HashMap.get` on its own:
+
+- **Record accessors were procedure calls.** Chez inlines a record's accessors and type check into code compiled later only when the record type is nongenerative, so its descriptor is known at compile time. Objects, arrays, classes and monitors are now sealed and nongenerative records, which made every field read, array access and dispatch cheaper. A field set and read on a plain record took 4.6 ns against 2.2 ns on a sealed nongenerative one, the same as on a vector.
+- **A monitor lived in a weak table** and its owner came from a thread parameter. An object now keeps its monitor in its own record, and the owner is compared with the GIL's owner ([how-it-works](how-it-works.md#threads)). A static `synchronized` method also looked its class mirror up by name on every call, and now finds it once.
+- **`instanceof` and `checkcast` compared class names** and walked the class hierarchy on every test, so `String.equals`, which tests `instanceof String`, took 187 ns. Each site now keeps the last class it saw with its answer, and each initialization check and `new` keeps its class once it's initialized.
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| `String.equals`, unequal | 188 ns | 38 ns | 4.6 ns |
+| `HashMap.get`, `Object` keys | 191 ns | 35 ns | 6.0 ns |
+| A `synchronized` block | 60 ns | 37 ns | 10.3 ns |
+| `StringBuffer.append(char)` | 112 ns | 62 ns | 12.6 ns |
+| Throwing and catching an exception | 600 ns | 340 ns | 380 ns |
+
+Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s before any of this to 0.79 s, then 0.44 s, then 0.28 s, against 37 ms on the JVM.
+
+Most of what's left is plain call cost. A call through a top-level name and the block structure around it costs a few nanoseconds where the JVM inlines, and code that makes many small calls, like `String.equals`, pays it on each.
 
 ### What threads cost a single thread
 
-Thread support adds two things to every program, threaded or not: a monitor lookup on each `synchronized` entry and exit, and a check at each backward branch for a thread waiting to run. Measured against the same code without threads, a loop of 200,000 `StringBuffer.append`, `length` and `Hashtable.put` calls went from 377 ms to about 440 ms, a 20-million-step counting loop from 392 ms to about 420 ms, and `Bench` from 1.85 s to 1.86 to 1.90 s. The monitor sits in a weak table keyed by its object, and that lookup is the likeliest home of the 17% on `synchronized` code, though it hasn't been profiled.
+Thread support adds two things to every program, threaded or not: a monitor lookup on each `synchronized` entry and exit, and a check at each backward branch for a thread waiting to run. Measured against the same code without threads, a loop of 200,000 `StringBuffer.append`, `length` and `Hashtable.put` calls went from 377 ms to about 440 ms, a 20-million-step counting loop from 392 ms to about 420 ms, and `Bench` from 1.85 s to 1.86 to 1.90 s. Those numbers predate the monitor changes above, and the monitor lookup they blamed, unprofiled at the time, has since gone.
 
 ### What method handles cost
 

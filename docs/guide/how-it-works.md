@@ -17,19 +17,19 @@ Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot
 
 ```scheme
 (define |Hello.main([Ljava/lang/String;)V|
-  (let ((ic0 (cons #f #f)))
+  (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
     (lambda (l0)
       (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
                 (lambda (l0)
-                  (begin (jinit-sym '|java/lang/System|)
+                  (begin (jinit-ic ic0 '|java/lang/System|)
                          (let ((s0 |java/lang/System:out|))
                            (let ((s1 (jstring-lit "Hello, World!")))
-                             (begin ((jvirt-ic ic0 s0 '|println(Ljava/lang/String;)V|) s0 s1)
+                             (begin ((jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V|) s0 s1)
                                     (void))))))))
         (|Hello.main([Ljava/lang/String;)V#B0| l0)))))
 ```
 
-`getstatic` became `jinit-sym` plus a top-level variable. `invokevirtual` became a call through `jvirt-ic`, an inline cache: `ic0` remembers the receiver class this call site saw last and the procedure it found for it, so a repeat call costs one `eq?` test, and a new class looks the method up in that class's vtable, keyed by interned symbols. A static call is a call to the target's top-level name. Classes are named by symbol, which an `eq?` table maps to the class, so `new` and initialization checks don't hash a string.
+`getstatic` became an initialization check plus a top-level variable. The check goes through a cell of its own, `ic0`, which holds the class once it's initialized, so after the first time it costs one `car`. `invokevirtual` became a call through `jvirt-ic`, an inline cache: `ic1` remembers the receiver class this call site saw last and the procedure it found for it, so a repeat call costs one `eq?` test, and a new class looks the method up in that class's vtable, keyed by interned symbols. A static call is a call to the target's top-level name. `new`, `instanceof` and `checkcast` get cells too: `new` keeps the initialized class, and the two type tests keep the last class they saw with its answer, since the full test compares class names up the hierarchy.
 
 Exception handlers change the shape a little. A handler can't just wrap a block, because a Scheme handler around a block also covers every block that block tail-calls into, which is wrong for Java's exception ranges. So the blocks of a method with an exception table fall into regions, one for each list of handlers that covers them, and jumps inside a region are tail calls as above. Entering a region from outside goes through an entry procedure that pushes one handler for the whole region onto Chez's handler stack (`jtry` in `runtime.ss`). A jump that leaves a region returns a thunk rather than calling its target, and a small trampoline loop calls whatever comes back, so the region's handler is gone before the target runs. A loop inside a `try` therefore runs as fast as one outside it, and only entering the `try` costs anything.
 
@@ -39,7 +39,7 @@ Some instructions get special treatment. `invokedynamic` with `LambdaMetafactory
 
 ## Values
 
-The comment at the top of `resources/champaca/runtime.ss` has the full mapping. In short: `int`, `short`, `byte`, `char` and `boolean` are fixnums (booleans are 0 and 1, as in bytecode), a `long` is an exact integer wrapped to 64 bits, `float` and `double` are flonums (a float rounds through IEEE single precision), `null` is `#f`, an object is a record holding its class and a slot vector, and an array is a record holding its element descriptor and a Scheme vector. A `java.lang.String` is an ordinary object with the JDK's own fields, a `byte[]` and a coder.
+The comment at the top of `resources/champaca/runtime.ss` has the full mapping. In short: `int`, `short`, `byte`, `char` and `boolean` are fixnums (booleans are 0 and 1, as in bytecode), a `long` is an exact integer wrapped to 64 bits, `float` and `double` are flonums (a float rounds through IEEE single precision), `null` is `#f`, an object is a record holding its class, a slot vector and its monitor once something locks it, and an array is a record holding its element descriptor and a Scheme vector. A `java.lang.String` is an ordinary object with the JDK's own fields, a `byte[]` and a coder.
 
 ## Natives
 
@@ -67,7 +67,7 @@ After that, `System.out.println` goes through the JDK's own `PrintStream`, `Stre
 
 `Thread.start0` forks a Chez thread, which runs the thread's `run()` and then does what HotSpot does on the way out: an uncaught exception goes to `dispatchUncaughtException`, then `Thread.exit()`, then the thread is marked terminated and its monitor notified, which is what `join` waits on.
 
-One global lock (the GIL, in `natives.ss`) lets one thread at a time run Java code, so the class table, the JIT and the runtime's own hashtables need no locks of their own. A thread gives it up whenever it blocks: entering a monitor another thread holds, `wait`, `sleep`, `LockSupport.park`, or a class another thread is still initializing. Generated code also checks at every backward branch whether some thread is waiting for the lock, and after a thousand such checks the running thread lets it go first. A monitor lives in a weak table keyed by its object, with an owner, a count and a wait set. The values the runtime keeps in globals for the running thread (the current `java.lang.Thread`, the `CHAMPACA_BT` shadow stack) are saved and restored as the lock changes hands.
+One global lock (the GIL, in `natives.ss`) lets one thread at a time run Java code, so the class table, the JIT and the runtime's own hashtables need no locks of their own. A thread gives it up whenever it blocks: entering a monitor another thread holds, `wait`, `sleep`, `LockSupport.park`, or a class another thread is still initializing. Generated code also checks at every backward branch whether some thread is waiting for the lock, and after a thousand such checks the running thread lets it go first. A monitor has an owner, a count and a wait set. An object keeps it in a field of its own record, which costs no memory since Chez rounds a record up to the same 32 bytes either way, and an array's sits in a weak table keyed by the array. Only the thread holding the GIL runs Java code, so a monitor's owner is compared against the GIL's owner. The values the runtime keeps in globals for the running thread (the current `java.lang.Thread`, the `CHAMPACA_BT` shadow stack) are saved and restored as the lock changes hands.
 
 When `main` returns, `champaca.main` waits for the other non-daemon threads and then calls `Shutdown.shutdown()`, which runs the shutdown hooks, as the `java` launcher does.
 
