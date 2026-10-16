@@ -108,18 +108,18 @@ What single operations cost, measured in a loop of two million, before these cha
 | Operation | Before | Now | JVM |
 |---|---|---|---|
 | Empty loop step | 20 ns | 2.2 ns | 1.2 ns |
-| Static call | 12.7 ns | 3.1 ns | 0.4 ns |
-| Virtual call | 54 ns | 4.0 ns | 0.5 ns |
+| Static call | 12.7 ns | 2.5 ns | 0.4 ns |
+| Virtual call | 54 ns | 3.8 ns | 0.5 ns |
 | Interface call | 83 ns | 6.7 ns | 0.8 ns |
 | Field read and write | 24 ns | 4.0 ns | 1.1 ns |
 | Static field read and write | 8.3 ns | 3.2 ns | 1.0 ns |
-| Array read and write | 28 ns | 5.6 ns | 1.1 ns |
-| `new` | 96 ns | 13 ns | 4.4 ns |
+| Array read and write | 28 ns | 3.9 ns | 1.1 ns |
+| `new` | 96 ns | 12 ns | 4.4 ns |
 | Calling a method with try/catch | 45 ns | 21 ns | 0.6 ns |
 | Calling a `synchronized` method | 111 ns | 22 ns | 9.3 ns |
-| `AtomicInteger.incrementAndGet` | 636 ns | 16 ns | 7.2 ns |
-| `ReentrantLock` lock and unlock | 1435 ns | 42 ns | 13 ns |
-| `StringBuilder.append(char)` | 390 ns | 42 ns | 2.0 ns |
+| `AtomicInteger.incrementAndGet` | 636 ns | 13 ns | 7.2 ns |
+| `ReentrantLock` lock and unlock | 1435 ns | 34 ns | 13 ns |
+| `StringBuilder.append(char)` | 390 ns | 36 ns | 2.0 ns |
 
 ### Exception handlers
 
@@ -150,9 +150,23 @@ Three things were left that every program pays for, found by timing each piece o
 | `StringBuffer.append(char)` | 112 ns | 62 ns | 12.6 ns |
 | Throwing and catching an exception | 600 ns | 340 ns | 380 ns |
 
+### Arrays and small calls
+
+A loop comparing two 100-byte arrays took 7.0 ns per element. Measured on its own, a plain Chez loop over two vectors takes 2.4 ns per element in safe mode and 0.6 ns unchecked, so most of the 7 ns was checks, and several ran twice: `array-ref` checked the index against the vector and then `vector-ref` checked it again, and `array-length` made a procedure call for its null check. The array macros now check null and bounds once and then use Chez's unchecked vector access (`#3%vector-ref`), which is safe because the index has just been checked against that vector. That brought the loop to 4.4 ns per element, against 0.6 ns on the JVM.
+
+Calls themselves cost little here: a call to a static method is about 1 ns on top of the loop, 3 ns into another class with its initialization check. Code like `StringBuilder.append` pays for many of them, though, so small leaf methods are now inlined and calls that can only reach one method skip dispatch ([how-it-works](how-it-works.md#the-shape-of-a-translated-method)). A static call to a leaf now costs nothing beyond the loop around it.
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| Comparing two 100-byte arrays | 708 ns | 446 ns | 57 ns |
+| `String.equals`, unequal, 3 characters | 38 ns | 27 ns | 4.8 ns |
+| `String.length` | 10 ns | 6.7 ns | 1.9 ns |
+| `ReentrantLock` lock and unlock | 42 ns | 34 ns | 13 ns |
+| `StringBuilder.append(char)` | 42 ns | 36 ns | 2.0 ns |
+
 Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s before any of this to 0.79 s, then 0.44 s, then 0.28 s, against 37 ms on the JVM.
 
-Most of what's left is plain call cost. A call through a top-level name and the block structure around it costs a few nanoseconds where the JVM inlines, and code that makes many small calls, like `String.equals`, pays it on each.
+What's left is spread thin. Each method call still goes through a top-level name and passes its live locals, only leaves get inlined, and safe-mode checks stay on field access and arithmetic.
 
 ### What threads cost a single thread
 
