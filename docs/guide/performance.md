@@ -115,13 +115,28 @@ What single operations cost, measured in a loop of two million, before these cha
 | Static field read and write | 8.3 ns | 3.2 ns | 1.0 ns |
 | Array read and write | 28 ns | 8.0 ns | 1.1 ns |
 | `new` | 96 ns | 27 ns | 4.4 ns |
-| Calling a method with try/catch | 45 ns | 42 ns | 0.6 ns |
+| Calling a method with try/catch | 45 ns | 21 ns | 0.6 ns |
 | Calling a `synchronized` method | 111 ns | 66 ns | 9.3 ns |
 | `AtomicInteger.incrementAndGet` | 636 ns | 56 ns | 7.2 ns |
 | `ReentrantLock` lock and unlock | 1435 ns | 133 ns | 13 ns |
 | `StringBuilder.append(char)` | 390 ns | 64 ns | 2.0 ns |
 
-Most of what's left sits in two places. A method with an exception table still uses the trampoline and method-wide variables, and entering a `try` installs a `guard` each time, about 33 ns, where the JVM pays nothing. Atomic operations still go through `Unsafe` and VarHandle code that decodes its access mode at run time. Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s to 0.79 s, against 37 ms on the JVM.
+### Exception handlers
+
+Methods with an exception table came later. They used to run every block through a trampoline, with a `guard` around each block and every local assigned with `set!`, so a loop inside a `try` paid for a `guard` on each step. Now only entering a `try` region costs anything ([how-it-works](how-it-works.md#the-shape-of-a-translated-method)), and the handler goes onto Chez's handler stack directly instead of through `guard`, which takes a full continuation and reads the continuation marks: about 17 ns against 36 ns, measured on their own. Measured the same way, before and after, with calling a method that has a try/catch in the table above:
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| A loop step inside a `try` | 79 ns | 2.4 ns | 0.9 ns |
+| The same, with a handler that reads the loop's locals | 73 ns | 3.8 ns | 1.0 ns |
+| A `try`/`catch` inside a loop | 44 ns | 25 ns | 0.9 ns |
+| A `try`/`finally` inside a loop | 44 ns | 27 ns | 0.9 ns |
+| A `synchronized` block | 88 ns | 56 ns | 10.5 ns |
+| Throwing and catching an exception | 600 ns | 600 ns | 380 ns |
+
+Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s before any of this to 0.79 s, then to 0.44 s, against 37 ms on the JVM.
+
+Most of what's left sits in calls, allocation and monitors. Atomic operations still go through `Unsafe` and VarHandle code that decodes its access mode at run time, and a `synchronized` block still costs 56 ns. About 20 ns of that is its `try` region, so most of the rest goes to the monitor itself.
 
 ### What threads cost a single thread
 
