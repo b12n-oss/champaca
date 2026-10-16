@@ -22,15 +22,22 @@
 (defnative "java/lang/Object.clone()Ljava/lang/Object;" (this)
   (if (jarr? this) (array-clone this)
       (make-jobj (jobj-cls this) (vector-copy (jobj-slots this)))))
-(defnative "java/lang/Object.notify()V" (this) (void))
-(defnative "java/lang/Object.notifyAll()V" (this) (void))
-(defnative "java/lang/Object.wait0(J)V" (this ms) (void))
 
 ;; --- java.lang.System ------------------------------------------------------------
 
 (define (now-nanos) (let ([t (current-time 'time-utc)]) (+ (* (time-second t) 1000000000) (time-nanosecond t))))
 (defnative "java/lang/Shutdown.beforeHalt()V" () (void))
-(defnative "java/lang/Shutdown.halt0(I)V" (status) (raise (make-java-halt status)))
+;; On the main thread the status unwinds to run-guarded, so it reaches whoever
+;; started the Java code. Any other thread ends the process from where it is,
+;; through jolt's jolt-exit-process: Chez's exit there would end only the thread.
+(define (exit-process status)
+  (if (top-level-bound? 'jolt-exit-process)
+      ((top-level-value 'jolt-exit-process) status)
+      (begin (flush-output-port (current-output-port)) (exit status))))
+(defnative "java/lang/Shutdown.halt0(I)V" (status)
+  (if (eq? (self) main-state)
+      (raise (make-java-halt status))
+      (exit-process status)))
 (defnative "java/lang/System.currentTimeMillis()J" () (quotient (now-nanos) 1000000))
 (defnative "java/lang/System.nanoTime()J" ()
   (let ([t (current-time 'time-monotonic)]) (+ (* (time-second t) 1000000000) (time-nanosecond t))))
@@ -203,6 +210,10 @@
 (defnative "jdk/internal/misc/Unsafe.objectFieldOffset1(Ljava/lang/Class;Ljava/lang/String;)J" (this c name)
   (jfield-index (jclass-cname (mirror-class c)) (jstring->scheme name)))
 (define (field-mirror f) (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))
+;; the same offset, from a reflective Field (CompletableFuture's VarHandles use it)
+(defnative "jdk/internal/misc/Unsafe.objectFieldOffset0(Ljava/lang/reflect/Field;)J" (this f)
+  (jfield-index (jclass-cname (mirror-class (field-mirror (nn f))))
+                (jstring->scheme (jslot f (jfield-index "java/lang/reflect/Field" "name")))))
 (defnative "jdk/internal/misc/Unsafe.staticFieldBase0(Ljava/lang/reflect/Field;)Ljava/lang/Object;" (this f)
   (field-mirror (nn f)))
 (defnative "jdk/internal/misc/Unsafe.staticFieldOffset0(Ljava/lang/reflect/Field;)J" (this f)
@@ -210,7 +221,7 @@
 (defnative "jdk/internal/misc/Unsafe.ensureClassInitialized0(Ljava/lang/Class;)V" (this c)
   (jinit (jclass-cname (mirror-class c))))
 (defnative "jdk/internal/misc/Unsafe.shouldBeInitialized0(Ljava/lang/Class;)Z" (this c)
-  (if (eq? (jclass-state (mirror-class c)) 'loaded) 1 0))
+  (if (eq? (jclass-state (mirror-class c)) 'initialized) 0 1))
 (defnative "jdk/internal/misc/Unsafe.allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;" (this c)
   (jnew (jclass-cname (mirror-class c))))
 
@@ -432,24 +443,356 @@
 (defnative "jdk/internal/misc/Signal.findSignal0(Ljava/lang/String;)I" (name) -1)
 (defnative "jdk/internal/misc/Signal.handle0(IJ)J" (sig handler) 0)
 
-;; --- threads: one platform thread, built the way the JVM builds it --------------
+;; --- threads -------------------------------------------------------------------
+;; Each started Java thread is a Chez thread. One global lock, the GIL, lets
+;; one of them run Java code at a time, so the class table, the JIT and the
+;; runtime's hashtables need no locks of their own. A thread gives the GIL up
+;; when it blocks (a contended monitor, wait, sleep, park, a class another
+;; thread is initializing), and at backward branches (jsafepoint) once
+;; another thread is ready to run.
+;;
+;; The runtime keeps some per-thread values in globals: the current
+;; java.lang.Thread, the CHAMPACA_BT shadow stack, the scoped value cache.
+;; They are saved when a thread gives the GIL up and restored when it takes
+;; it back.
+
+(define-record-type jthread-state
+  (fields (mutable jthread) (mutable jstack) (mutable svc) (mutable permit) (mutable depth) (mutable tid)))
+;; This Chez thread's jthread-state. A forked Chez thread inherits its parent's
+;; value, so a thread jolt started (a future, say) would see its parent's
+;; state: gil-enter! checks the thread id before trusting it.
+(define self (make-thread-parameter #f))
+(define main-state (make-jthread-state #f '() #f #f 1 (get-thread-id)))
+(self main-state)
+
+(define gil (make-mutex))
+(define gil-cv (make-condition))  ; broadcast whenever something a blocked thread waits for may have changed
+(define gil-owner main-state)      ; the jthread-state running Java code, or #f
+(define gil-blocked 0)             ; threads waiting in gil-wait!
+(define gil-ready 0)               ; of those, the ones ready to run but for the GIL
+(define gil-takes 0)               ; how many times the GIL has changed hands
+
+(define main-thread #f)
+(define current-jthread #f)        ; the running thread's java.lang.Thread
+(define scoped-value-cache #f)
+
+(define (gil-save! s)
+  (jthread-state-jstack-set! s jstack)
+  (jthread-state-svc-set! s scoped-value-cache))
+(define (gil-restore! s)
+  (set! current-jthread (jthread-state-jthread s))
+  (set! jstack (jthread-state-jstack s))
+  (set! scoped-value-cache (jthread-state-svc s)))
+
+;; With gil held and the GIL not ours: wait until (ready?) holds, or deadline
+;; (a time-utc, or #f) passes, and the GIL is free; then take it. Returns
+;; what ready? said.
+(define (gil-wait! s ready? deadline)
+  (set! gil-blocked (fx+ gil-blocked 1))
+  (let loop ([counted #f])
+    (let* ([r (ready?)]
+           [go (or r (and deadline (time>=? (current-time 'time-utc) deadline)))])
+      (if (and go (not gil-owner))
+          (begin
+            (when counted (set! gil-ready (fx- gil-ready 1)))
+            (set! gil-blocked (fx- gil-blocked 1))
+            (set! gil-owner s)
+            (set! gil-takes (fx+ gil-takes 1))
+            ;; a thread that yielded waits for this take; woken, it counts
+            ;; itself ready, so the new owner yields back at a safepoint
+            (when (fx> gil-blocked 0) (condition-broadcast gil-cv))
+            r)
+          (begin
+            (unless (eq? go counted)
+              (set! gil-ready (if go (fx+ gil-ready 1) (fx- gil-ready 1)))
+              (condition-broadcast gil-cv))     ; a yielding thread watches gil-ready
+            (if (and deadline (not go))
+                (condition-wait gil-cv gil deadline)
+                (condition-wait gil-cv gil))
+            (loop go))))))
+
+;; The running thread blocks: give the GIL up until (ready?) or the deadline.
+(define (gil-block! ready? deadline)
+  (let ([s (self)])
+    (gil-save! s)
+    (let ([r (with-mutex gil
+               (set! gil-owner #f)
+               (condition-broadcast gil-cv)
+               (gil-wait! s ready? deadline))])
+      (gil-restore! s)
+      r)))
+
+;; Enter Java code from a thread that may not hold the GIL (a new thread, or
+;; jolt calling in); re-entrant. A Chez thread champaca has not seen before
+;; (one jolt started) gets a java.lang.Thread of its own, the way a JVM
+;; attaches a native thread.
+(define (gil-enter!)
+  (let* ([s0 (self)]
+         [known (and s0 (eqv? (jthread-state-tid s0) (get-thread-id)))]
+         [s (if known s0 (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id))]) (self s) s))])
+    (if (eq? gil-owner s)
+        (jthread-state-depth-set! s (fx+ (jthread-state-depth s) 1))
+        (begin
+          (with-mutex gil (gil-wait! s (lambda () #t) #f))
+          (jthread-state-depth-set! s 1)
+          (gil-restore! s)
+          (unless known (attach-jthread! s))))))
+
+(define (gil-leave!)
+  (let* ([s (self)] [d (fx- (jthread-state-depth s) 1)])
+    (jthread-state-depth-set! s d)
+    (when (fx= d 0)
+      (gil-save! s)
+      (with-mutex gil
+        (set! gil-owner #f)
+        (condition-broadcast gil-cv)))))
+
+;; Tell blocked threads to look again at what they wait for.
+(define (gil-poke!)
+  (when (fx> gil-blocked 0)
+    (with-mutex gil (condition-broadcast gil-cv))))
+
+;; Let a thread that is ready run first, then queue for the GIL again.
+(define (gil-yield!)
+  (let ([n gil-takes])
+    (gil-block! (lambda () (or (not (fx= gil-takes n)) (fx= gil-ready 0))) #f)))
+
+;; Generated code checks gil-ready inline at each backward branch and calls
+;; this only when some thread is waiting for the GIL.
+(define safepoint-count 0)
+(define (jsafepoint)
+  (set! safepoint-count (fx+ safepoint-count 1))
+  (when (fx>= safepoint-count 1000)
+    (set! safepoint-count 0)
+    (gil-yield!)))
+
+(define (deadline-after-nanos n)
+  (add-duration (current-time 'time-utc) (make-time 'time-duration (remainder n 1000000000) (quotient n 1000000000))))
+
+;; --- monitors -----------------------------------------------------------------------
+;; One per object that has been locked, found through a weak table. A waiter
+;; is a vector #(thread notified? deadline). blocked counts the threads waiting to enter
+;; it, so releasing an uncontended monitor wakes nobody: a thread parked for
+;; good elsewhere (the Reference Handler) would otherwise make every exit
+;; take the GIL's mutex and broadcast, which cost 60% on synchronized code.
+
+(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked)))
+(define monitors (make-weak-eq-hashtable))
+(define (monitor-of o)
+  (or (eq-hashtable-ref monitors o #f)
+      (let ([m (make-jmonitor #f 0 '() 0)]) (eq-hashtable-set! monitors o m) m)))
+
+;; wait, holding the GIL, until m is free, then own it with count n
+(define (monitor-acquire! m s n)
+  (when (jmonitor-owner m)
+    (jmonitor-blocked-set! m (fx+ (jmonitor-blocked m) 1))
+    (gil-block! (lambda () (not (jmonitor-owner m))) #f)
+    (jmonitor-blocked-set! m (fx- (jmonitor-blocked m) 1)))
+  (jmonitor-owner-set! m s)
+  (jmonitor-count-set! m n))
+
+(define (monitor-release! m)
+  (jmonitor-owner-set! m #f)
+  (jmonitor-count-set! m 0)
+  (when (fx> (jmonitor-blocked m) 0) (gil-poke!)))
+
+(define (jmonitor-enter o)
+  (let ([m (monitor-of (nn o))] [s (self)])
+    (if (eq? (jmonitor-owner m) s)
+        (jmonitor-count-set! m (fx+ (jmonitor-count m) 1))
+        (monitor-acquire! m s 1))))
+
+;; Unbalanced exits are ignored rather than thrown, as monitors predate threads here.
+(define (jmonitor-exit o)
+  (let ([m (monitor-of (nn o))])
+    (when (eq? (jmonitor-owner m) (self))
+      (let ([n (fx- (jmonitor-count m) 1)])
+        (if (fx= n 0)
+            (monitor-release! m)
+            (jmonitor-count-set! m n))))))
+
+(define (owned-monitor o)
+  (let ([m (monitor-of (nn o))])
+    (unless (eq? (jmonitor-owner m) (self))
+      (jthrow "java/lang/IllegalMonitorStateException" "current thread is not owner"))
+    m))
+
+(define interrupted-slot #f)
+(define (interrupted? t) (fx= 1 (jslot t interrupted-slot)))
+(define (take-interrupt! t)
+  (and (interrupted? t) (begin (jslot-set! t interrupted-slot 0) #t)))
+
+;; A notified thread returns normally even if it was interrupted too (its
+;; interrupt stays pending), which JLS 17.2.4 allows, so a notify is never
+;; lost to an interrupt. notify skips a waiter whose timeout has passed or
+;; that was interrupted: it is leaving anyway, and the notify goes to one that
+;; is still waiting.
+(define (waiter-leaving? w)
+  (or (interrupted? (vector-ref w 0))
+      (let ([d (vector-ref w 2)]) (and d (time>=? (current-time 'time-utc) d)))))
+
+(defnative "java/lang/Object.wait0(J)V" (this ms)
+  (let* ([m (owned-monitor this)] [s (self)] [t current-jthread]
+         [deadline (and (> ms 0) (deadline-after-nanos (* ms 1000000)))]
+         [w (vector t #f deadline)] [count (jmonitor-count m)])
+    (when (take-interrupt! t) (jthrow "java/lang/InterruptedException" #f))
+    (jmonitor-waiters-set! m (append (jmonitor-waiters m) (list w)))
+    (monitor-release! m)
+    (gil-block! (lambda () (or (vector-ref w 1) (interrupted? t))) deadline)
+    (jmonitor-waiters-set! m (remq w (jmonitor-waiters m)))
+    (monitor-acquire! m s count)
+    (when (and (not (vector-ref w 1)) (take-interrupt! t))
+      (jthrow "java/lang/InterruptedException" #f))))
+
+(defnative "java/lang/Object.notify()V" (this)
+  (let ([m (owned-monitor this)])
+    (let ([w (find (lambda (w) (not (or (vector-ref w 1) (waiter-leaving? w)))) (jmonitor-waiters m))])
+      (when w (vector-set! w 1 #t) (gil-poke!)))))
+
+(defnative "java/lang/Object.notifyAll()V" (this)
+  (let ([m (owned-monitor this)])
+    (for-each (lambda (w) (vector-set! w 1 #t)) (jmonitor-waiters m))
+    (gil-poke!)))
+
+(defnative "java/lang/Thread.holdsLock(Ljava/lang/Object;)Z" (o)
+  (if (eq? (jmonitor-owner (monitor-of (nn o))) (self)) 1 0))
+
+;; --- Thread ---------------------------------------------------------------------------
 ;; currentThread answers main-thread before its constructor has run, because
 ;; Thread's constructor itself asks for the current thread.
 
-(define main-thread #f)
-(defnative "java/lang/Thread.currentThread()Ljava/lang/Thread;" () main-thread)
-(defnative "java/lang/Thread.currentCarrierThread()Ljava/lang/Thread;" () main-thread)
+(define jthread-states (make-weak-eq-hashtable))  ; java.lang.Thread -> jthread-state
+(define java-live-threads '())                          ; started and not yet terminated
+
+;; JVMTI thread state bits, as Thread.holder.threadStatus holds them
+(define status-runnable 5)    ; ALIVE | RUNNABLE
+(define status-terminated 2)
+
+(define (thread-status-set! t v)
+  (let ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))])
+    (jslot-set! holder (jfield-index "java/lang/Thread$FieldHolder" "threadStatus") v)))
+(define (thread-daemon? t)
+  (let ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))])
+    (fx= 1 (jslot holder (jfield-index "java/lang/Thread$FieldHolder" "daemon")))))
+;; eetop is the VM thread's address; isAlive() is eetop != 0
+(define (thread-alive! t on?)
+  (jslot-set! t (jfield-index "java/lang/Thread" "eetop") (if on? 1 0))
+  (thread-status-set! t (if on? status-runnable status-terminated)))
+
+(defnative "java/lang/Thread.currentThread()Ljava/lang/Thread;" () current-jthread)
+(defnative "java/lang/Thread.currentCarrierThread()Ljava/lang/Thread;" () current-jthread)
 (defnative "java/lang/Thread.setCurrentThread(Ljava/lang/Thread;)V" (this t) (void))
 (defnative "java/lang/Thread.setPriority0(I)V" (this p) (void))
 (defnative "java/lang/Thread.setNativeName(Ljava/lang/String;)V" (this n) (void))
-(defnative "java/lang/Thread.holdsLock(Ljava/lang/Object;)Z" (o) 1)
-(defnative "java/lang/Thread.start0()V" (this) (void)) ; spike: started threads never run
-(defnative "java/lang/Thread.yield0()V" () (void))
 (defnative "java/lang/Thread.getNextThreadIdOffset()J" () (native-alloc! 3))
-(define scoped-value-cache #f)
 (defnative "java/lang/Thread.scopedValueCache()[Ljava/lang/Object;" () scoped-value-cache)
 (defnative "java/lang/Thread.setScopedValueCache([Ljava/lang/Object;)V" (c) (set! scoped-value-cache c))
 (defnative "java/lang/Thread.findScopedValueBindings()Ljava/lang/Object;" () #f)
+(defnative "java/lang/Thread.ensureMaterializedForStackWalk(Ljava/lang/Object;)V" (o) (void))
+(defnative "java/lang/Thread.clearInterruptEvent()V" () (void))
+(defnative "java/lang/Thread.interrupt0()V" (this)
+  (let ([s (eq-hashtable-ref jthread-states this #f)])
+    (when s (jthread-state-permit-set! s #t)))   ; HotSpot unparks it too
+  (gil-poke!))
+(defnative "java/lang/Thread.yield0()V" () (when (fx> gil-ready 0) (gil-yield!)))
+
+(defnative "java/lang/Thread.sleepNanos0(J)V" (nanos)
+  (let ([t current-jthread])
+    (when (take-interrupt! t) (jthrow "java/lang/InterruptedException" "sleep interrupted"))
+    (when (gil-block! (lambda () (interrupted? t)) (deadline-after-nanos (max nanos 0)))
+      (take-interrupt! t)
+      (jthrow "java/lang/InterruptedException" "sleep interrupted"))))
+
+;; Virtual threads need continuations, which are not here; the JDK then
+;; makes Thread.ofVirtual() unsupported and runs everything else on platform
+;; threads.
+(defnative "jdk/internal/vm/ContinuationSupport.isSupported0()Z" () 0)
+
+;; LockSupport.park / unpark: one permit per thread.
+(defnative "jdk/internal/misc/Unsafe.park(ZJ)V" (this absolute time)
+  (let ([s (self)] [t current-jthread])
+    (unless (or (jthread-state-permit s) (interrupted? t)
+                (and (fx= absolute 1) (<= time (quotient (now-nanos) 1000000))))
+      (gil-block! (lambda () (or (jthread-state-permit s) (interrupted? t)))
+                  (cond [(fx= absolute 1)
+                         (let ([n (* time 1000000)])
+                           (make-time 'time-utc (remainder n 1000000000) (quotient n 1000000000)))]
+                        [(> time 0) (deadline-after-nanos time)]
+                        [else #f])))
+    (jthread-state-permit-set! s #f)))
+
+(defnative "jdk/internal/misc/Unsafe.unpark(Ljava/lang/Object;)V" (this t)
+  (let ([s (and t (eq-hashtable-ref jthread-states t #f))])
+    (when s
+      (jthread-state-permit-set! s #t)
+      (gil-poke!))))
+
+;; A started thread: run(), then what HotSpot does on the way out. An
+;; uncaught exception goes to dispatchUncaughtException, which prints it the
+;; JDK's way; anything else (a missing native) is reported here. Then
+;; Thread.exit(), and the thread is marked terminated and its monitor
+;; notified, which is what join() waits on.
+(define (thread-body t)
+  (call/cc
+   (lambda (k)
+     (with-exception-handler
+      (lambda (e)
+        (k (cond
+             [(java-halt? e) (exit-process (java-halt-status e))]
+             [(jobj? e)
+              (guard (e2 [#t (report-uncaught e2)])
+                ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") t e))]
+             [else (report-uncaught e)])))
+      (lambda () ((jvirt t "run()V") t)))))
+  (guard (e [#t (void)]) ((method-proc "java/lang/Thread" "exit()V") t))
+  (jmonitor-enter t)
+  (thread-alive! t #f)
+  ((native-ref "java/lang/Object.notifyAll()V") t)
+  (jmonitor-exit t)
+  (set! java-live-threads (remq t java-live-threads))
+  (flush-output-port (current-output-port)))
+
+(defnative "java/lang/Thread.start0()V" (this)
+  (let ([s (make-jthread-state this '() #f #f 0 #f)])
+    (eq-hashtable-set! jthread-states this s)
+    (thread-alive! this #t)
+    (set! java-live-threads (cons this java-live-threads))
+    ;; jolt's fork-thread/daemon, so jolt's own exit waits for the thread
+    ;; exactly when a JVM would: a daemon thread doesn't hold the process open
+    (fork-thread/daemon
+     (thread-daemon? this)
+     (lambda ()
+       (jthread-state-tid-set! s (get-thread-id))
+       (self s)
+       (gil-enter!)
+       (thread-body this)
+       (gil-leave!)))
+    (void)))
+
+;; A java.lang.Thread for a Chez thread that calls in from jolt, named
+;; jolt-<id> in main's group. Like the main thread at boot, currentThread
+;; answers it before its constructor has run.
+(define (attach-jthread! s)
+  (let ([t (jnew "java/lang/Thread")])
+    (jthread-state-jthread-set! s t)
+    (set! current-jthread t)
+    (eq-hashtable-set! jthread-states t s)
+    ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
+     t ((jvirt main-thread "getThreadGroup()Ljava/lang/ThreadGroup;") main-thread)
+     (jstring (string-append "jolt-" (number->string (get-thread-id)))))
+    (thread-alive! t #t)))
+
+;; The launcher's DestroyJavaVM: wait for every non-daemon thread, then run
+;; the shutdown hooks.
+(define (await-non-daemon-threads!)
+  (let ([others (lambda () (filter (lambda (t) (not (thread-daemon? t))) java-live-threads))])
+    (unless (null? (others))
+      (gil-block! (lambda () (null? (others))) #f))))
+
+(define (java-shutdown!)
+  (await-non-daemon-threads!)
+  (jinit "java/lang/Shutdown")
+  ((method-proc "java/lang/Shutdown" "shutdown()V")))
 
 (define (boot-threads!)
   (jinit "java/lang/ThreadGroup")
@@ -460,8 +803,13 @@
      main system (jstring "main"))
     (jinit "java/lang/Thread")
     (set! main-thread (jnew "java/lang/Thread"))
+    (set! current-jthread main-thread)
+    (jthread-state-jthread-set! main-state main-thread)
+    (eq-hashtable-set! jthread-states main-thread main-state)
+    (set! interrupted-slot (jfield-index "java/lang/Thread" "interrupted"))
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
-     main-thread main (jstring "main"))))
+     main-thread main (jstring "main"))
+    (thread-alive! main-thread #t)))
 
 ;; --- references: no finalization, no reference-processing thread ----------------
 (defnative "java/lang/ref/Finalizer.isFinalizationEnabled()Z" () 0)
@@ -473,7 +821,9 @@
   (if (eq? (jslot this (jfield-index "java/lang/ref/Reference" "referent")) o) 1 0))
 (defnative "java/lang/ref/PhantomReference.clear0()V" (this)
   (jslot-set! this (jfield-index "java/lang/ref/Reference" "referent") #f))
-(defnative "java/lang/ref/Reference.waitForReferencePendingList()V" () (void))
+;; Nothing is ever pending (references are never cleared by GC here), so the
+;; Reference Handler thread waits here for good rather than spinning.
+(defnative "java/lang/ref/Reference.waitForReferencePendingList()V" () (gil-block! (lambda () #f) #f))
 (defnative "java/lang/ref/Reference.getAndClearReferencePendingList()Ljava/lang/ref/Reference;" () #f)
 (defnative "java/lang/ref/Reference.hasReferencePendingList()Z" () 0)
 

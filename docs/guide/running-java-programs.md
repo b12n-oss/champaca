@@ -9,7 +9,7 @@ jolt -M -m champaca.main classes Boom
 
 The first argument is the classpath, colon-separated as with `java -cp` (`classes:lib/gson-2.13.2.jar`). The second is the main class, with dots or slashes. Anything after that goes to `main` as its `String[]`.
 
-`System.out` and `System.err` go through the JDK's own `PrintStream` and encoder down to a native write, and the process exits with the status a JVM would give: 0, the argument to `System.exit`, or 1 after an uncaught exception. Shutdown hooks don't run, though, since each one is a thread.
+`System.out` and `System.err` go through the JDK's own `PrintStream` and encoder down to a native write, and the process exits with the status a JVM would give: 0, the argument to `System.exit`, or 1 after an uncaught exception. As with `java`, the process waits for any non-daemon threads still running when `main` returns, then runs the shutdown hooks.
 
 Here's a small program that throws on its second line of output:
 
@@ -44,7 +44,7 @@ jolt -M -m champaca.main classes Main > main.ldk
 diff main.jvm main.ldk
 ```
 
-Stack traces never match, since champaca's frames name methods by descriptor and have no line numbers. Anything a program does on another thread won't match either, because threads don't start yet ([limitations](limitations.md)).
+Stack traces never match, since champaca's frames name methods by descriptor and have no line numbers. Output from several threads can interleave differently than on a JVM, as it can between two JVM runs.
 
 ## Speed
 

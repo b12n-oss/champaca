@@ -57,9 +57,17 @@ The JDK leaves its `native` methods to the JVM. Champaca writes those in Scheme:
 
 After that, `System.out.println` goes through the JDK's own `PrintStream`, `StreamEncoder` and UTF-8 encoder down to a native `FileOutputStream.writeBytes`. The startup cache ([performance](performance.md)) saves the result of all this, so a warm start loads it rather than repeating it.
 
+## Threads
+
+`Thread.start0` forks a Chez thread, which runs the thread's `run()` and then does what HotSpot does on the way out: an uncaught exception goes to `dispatchUncaughtException`, then `Thread.exit()`, then the thread is marked terminated and its monitor notified, which is what `join` waits on.
+
+One global lock (the GIL, in `natives.ss`) lets one thread at a time run Java code, so the class table, the JIT and the runtime's own hashtables need no locks of their own. A thread gives it up whenever it blocks: entering a monitor another thread holds, `wait`, `sleep`, `LockSupport.park`, or a class another thread is still initializing. Generated code also checks at every backward branch whether some thread is waiting for the lock, and after a thousand such checks the running thread lets it go first. A monitor lives in a weak table keyed by its object, with an owner, a count and a wait set. The values the runtime keeps in globals for the running thread (the current `java.lang.Thread`, the `CHAMPACA_BT` shadow stack) are saved and restored as the lock changes hands.
+
+When `main` returns, `champaca.main` waits for the other non-daemon threads and then calls `Shutdown.shutdown()`, which runs the shutdown hooks, as the `java` launcher does.
+
 ## Calls from jolt
 
-`champaca.api` sits on top. The descriptor-based functions call a method's procedure directly. `invoke` and friends (`dynamic.ss`) first collect candidate methods from the class's registration data, score them against the arguments, convert the arguments for the winner and call it, with the call-site cache in front of all of that. A jolt fn passed as a single-method interface becomes an instance of a generated class whose one method calls back into the fn.
+`champaca.api` sits on top. Each call takes the lock for as long as it runs Java and releases it on return, so Java threads keep running while jolt code does something else. The descriptor-based functions call a method's procedure directly. `invoke` and friends (`dynamic.ss`) first collect candidate methods from the class's registration data, score them against the arguments, convert the arguments for the winner and call it, with the call-site cache in front of all of that. A jolt fn passed as a single-method interface becomes an instance of a generated class whose one method calls back into the fn.
 
 ## Files
 

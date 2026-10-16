@@ -57,7 +57,8 @@
                               ["jars" "a jar and other JDK modules"]
                               ["collections" "jolt collections as java.util and back"]
                               ["callsite" "the call-site cache"]
-                              ["jolt-after-init" "jolt itself still works after init!"]]
+                              ["jolt-after-init" "jolt itself still works after init!"]
+                              ["threads" "Java threads started from jolt"]]
                     ex-fails (doall
                               (for [[n what] examples
                                     :let [{:keys [out exit]} (shell {:out :string :continue true}

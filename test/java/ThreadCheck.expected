@@ -1,0 +1,21 @@
+before start: NEW alive=false
+joined: 42 TERMINATED alive=false
+counters: 20000 20000
+produced sum: 15
+squares: 91 terminated=true
+single: ran on true
+latch: 3
+chm: 400
+interrupted: false
+slept >= 50ms: true
+cf: async!
+thread local: main's / initial
+spin ended: true
+spin hand-offs: 50
+timed wait and notify: true true
+bad init: java.lang.ExceptionInInitializerError
+bad init: java.lang.NoClassDefFoundError
+uncaught in bad: java.lang.IllegalStateException: boom
+main done
+late thread done
+shutdown hook

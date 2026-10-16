@@ -119,14 +119,50 @@
 (define (method-proc cname key)
   (top-level-value (string->symbol (string-append cname "." key))))
 
-;; <clinit> runs on first active use, superclass first.
+;; <clinit> runs on first active use, superclass first. While it runs the
+;; class is 'initializing: the same thread goes ahead (a recursive request),
+;; another thread waits for it to finish (JVMS 5.5). A <clinit> that throws
+;; leaves the class 'erroneous, and any later use throws NoClassDefFoundError.
+(define init-owners (make-weak-eq-hashtable))
+(define init-waiters 0)
+
 (define (jinit name)
   (let ([c (find-class name)])
-    (when (eq? (jclass-state c) 'loaded)
-      (jclass-state-set! c 'initialized)
-      (when (jclass-super c) (jinit (jclass-super c)))
-      (let ([sym (string->symbol (string-append name ".<clinit>()V"))])
-        (when (top-level-bound? sym) ((top-level-value sym)))))))
+    (unless (eq? (jclass-state c) 'initialized)
+      (jinit-slow c name))))
+
+(define (jinit-slow c name)
+  (case (jclass-state c)
+    [(loaded)
+     (jclass-state-set! c 'initializing)
+     (eq-hashtable-set! init-owners c (self))
+     (let ([done (lambda (state)
+                   (jclass-state-set! c state)
+                   (eq-hashtable-delete! init-owners c)
+                   (when (fx> init-waiters 0) (gil-poke!)))])
+       ;; anything but an Error reaches the caller wrapped in an
+       ;; ExceptionInInitializerError (JVMS 5.5 step 11)
+       (guard (e [#t (done 'erroneous)
+                     (raise (if (and (jobj? e) (not (jinstance? e "java/lang/Error")))
+                                (let ([w (begin (jinit "java/lang/ExceptionInInitializerError")
+                                                (jnew "java/lang/ExceptionInInitializerError"))])
+                                  ((method-proc "java/lang/ExceptionInInitializerError" "<init>(Ljava/lang/Throwable;)V") w e)
+                                  w)
+                                e))])
+         (when (jclass-super c) (jinit (jclass-super c)))
+         (let ([sym (string->symbol (string-append name ".<clinit>()V"))])
+           (when (top-level-bound? sym) ((top-level-value sym)))))
+       (done 'initialized))]
+    [(initializing)
+     (unless (eq? (eq-hashtable-ref init-owners c #f) (self))
+       (set! init-waiters (fx+ init-waiters 1))
+       (gil-block! (lambda () (not (eq? (jclass-state c) 'initializing))) #f)
+       (set! init-waiters (fx- init-waiters 1))
+       (jinit-slow c name))]
+    [(erroneous)
+     (jthrow "java/lang/NoClassDefFoundError"
+             (string-append "Could not initialize class " (slashes->dots name)))]
+    [else (void)]))
 
 (define (jnew name)
   (let ([c (find-class name)])
@@ -430,6 +466,7 @@
 ;; reaches whoever started the Java code: run-main returns it, and api.clj
 ;; exits the process with it, as a JVM would.
 (define-record-type java-halt (fields status))
+(define halted #f)
 
 (define (run-guarded thunk)
   (call/cc
@@ -437,16 +474,23 @@
      (with-exception-handler
       (lambda (e)
         (if (java-halt? e)
-            (begin (flush-output-port (current-output-port)) (k (java-halt-status e)))
+            (begin (flush-output-port (current-output-port)) (set! halted #t) (k (java-halt-status e)))
             (begin (report-uncaught e) (k 1))))
       (lambda () (thunk) (flush-output-port (current-output-port)) 0)))))
 
 (define (run-main cname . args)
-  (run-guarded
-   (lambda ()
-     (jinit cname)
-     ((method-proc cname "main([Ljava/lang/String;)V")
-      (scheme-list->jarray "Ljava/lang/String;" (map jstring args))))))
+  (set! halted #f)
+  (let ([status (run-guarded
+                 (lambda ()
+                   (jinit cname)
+                   ((method-proc cname "main([Ljava/lang/String;)V")
+                    (scheme-list->jarray "Ljava/lang/String;" (map jstring args)))))])
+    ;; as the java launcher: unless System.exit ended it, wait for the other
+    ;; non-daemon threads and run the shutdown hooks, keeping main's status
+    (if halted
+        status
+        (let ([s (run-guarded java-shutdown!)])
+          (if halted s status)))))
 
 ;; --- backtraces (CHAMPACA_BT) ------------------------------------------------------
 (define jstack '())
@@ -588,6 +632,7 @@
 
 ;; "java.lang.String" -> "java/lang/String"
 (define (slashes s) (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list s))))
+(define (slashes->dots s) (list->string (map (lambda (c) (if (char=? c #\/) #\. c)) (string->list s))))
 
 ;; --- descriptors ----------------------------------------------------------------------
 

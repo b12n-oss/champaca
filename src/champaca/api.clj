@@ -12,9 +12,18 @@
 
 (defonce ^:private interop-loaded (atom false))
 (defonce ^:private dynamic-loaded (atom false))
+(defonce ^:private gil-released (atom false))
 
-(defn- rethrow
-  "Turn the runtime's java-exception condition into an ex-info."
+(defn- with-gil
+  "Run f holding the runtime's global lock, which one thread at a time holds
+  while it runs Java code (natives.ss). Between calls jolt code runs without
+  it, so Java threads started from here keep going. Re-entrant: a jolt fn
+  that Java calls back can call Java again."
+  [f]
+  (s/call "gil-enter!")
+  (try (f) (finally (s/call "gil-leave!"))))
+
+(defn- rethrow*
   [f]
   (try (f)
        (catch :default e
@@ -32,6 +41,13 @@
            (throw (ex-info (s/call "ldk-condition-message" e) {:champaca/error :missing-native}))
            :else (throw e)))))
 
+(defn- rethrow
+  "Run f, which calls Java, holding the lock, and turn the runtime's
+  java-exception condition into an ex-info (its message is the exception's
+  toString, more Java)."
+  [f]
+  (with-gil #(rethrow* f)))
+
 (defn init!
   "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user classes."
   ([] (init! {}))
@@ -45,15 +61,18 @@
      (s/eval-string (slurp (io/resource "champaca/dynamic.ss")))
      (s/call "set-lambda-class-hook!" (fn [iface sam-key] (main/lambda-class [iface] [sam-key])))
      (reset! dynamic-loaded true))
+   ;; boot ran holding the lock; from here on each call takes it
+   (when (compare-and-set! gil-released false true)
+     (s/call "gil-leave!"))
    :ok))
 
 (defn call-static [cls mname desc & args]
-  (main/ensure-loaded! cls)
-  (rethrow #(apply s/call "ldk-call-static" cls mname desc args)))
+  (rethrow #(do (main/ensure-loaded! cls)
+                (apply s/call "ldk-call-static" cls mname desc args))))
 
 (defn new-object [cls desc & args]
-  (main/ensure-loaded! cls)
-  (rethrow #(apply s/call "ldk-new" cls desc args)))
+  (rethrow #(do (main/ensure-loaded! cls)
+                (apply s/call "ldk-new" cls desc args))))
 
 (defn call [obj mname desc & args]
   (rethrow #(apply s/call "ldk-call" obj mname desc args)))
@@ -62,7 +81,7 @@
   "A Java object implementing the single-method interface iface, whose
   method (mname, desc) calls the jolt fn f with converted arguments."
   [iface mname desc f]
-  (s/call "ldk-implement" (main/lambda-class [iface] [(str mname desc)]) desc f))
+  (with-gil #(s/call "ldk-implement" (main/lambda-class [iface] [(str mname desc)]) desc f)))
 
 (defn to-string [obj] (rethrow #(s/call "ldk-to-string" obj)))
 
@@ -71,7 +90,7 @@
   cache, so the next process loads it instead of compiling it. Call it
   before exit; it is cheap when nothing new was compiled."
   []
-  (main/save-generation!))
+  (with-gil main/save-generation!))
 
 (defn- ->arg
   "jolt vectors go to Scheme as lists, which the runtime turns into a Java
@@ -112,20 +131,25 @@
 (defn get-static [cls fname] (rethrow #(s/call "dyn-get-static" cls fname)))
 (defn get-field [obj fname] (rethrow #(s/call "dyn-get-field" obj fname)))
 
+(declare ->clj*)
+
 (defn ->clj
   "Copy Java data into jolt data, deeply: an array or a List (any Collection)
   becomes a vector, a Set a set, a Map a map, with strings and boxed numbers
   converted. Anything else is returned as is."
   [x]
+  (with-gil #(->clj* x)))
+
+(defn- ->clj* [x]
   (cond
     (s/call "dyn-array?" x)
-    (mapv #(->clj (s/call "dyn-aref" x %)) (range (s/call "dyn-alength" x)))
+    (mapv #(->clj* (s/call "dyn-aref" x %)) (range (s/call "dyn-alength" x)))
     (s/call "dyn-instance?" x "java/util/Map")
     (let [a (s/call "dyn-map-array" x)]
       (into {} (for [i (range 0 (s/call "dyn-alength" a) 2)]
-                 [(->clj (s/call "dyn-aref" a i)) (->clj (s/call "dyn-aref" a (inc i)))])))
-    (s/call "dyn-instance?" x "java/util/Set") (set (->clj (s/call "dyn-coll-array" x)))
-    (s/call "dyn-instance?" x "java/util/Collection") (->clj (s/call "dyn-coll-array" x))
+                 [(->clj* (s/call "dyn-aref" a i)) (->clj* (s/call "dyn-aref" a (inc i)))])))
+    (s/call "dyn-instance?" x "java/util/Set") (set (->clj* (s/call "dyn-coll-array" x)))
+    (s/call "dyn-instance?" x "java/util/Collection") (->clj* (s/call "dyn-coll-array" x))
     :else x))
 
 (defn ->java

@@ -2,9 +2,11 @@
 
 Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the four checked libraries (commons-lang3, gson, jsoup, Jackson) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
 
-## One thread
+## Threads take turns
 
-`Thread.start` returns without running the thread's body, and `isAlive` is `false` right after it. `synchronized`, `wait` and `notify` are no-ops. So code that takes locks on a single thread runs, and code that waits for another thread to do something won't get it. A shutdown hook never runs, since it's a thread too. Executors fail sooner: creating a single-thread executor and submitting a task to it stops on a missing native, `jdk/internal/vm/ContinuationSupport.isSupported0()Z`. VarHandle and `Unsafe` memory-ordering modes all behave alike, which is fine with one thread and will need revisiting along with threads.
+Threads work, but they don't run in parallel. Each Java thread is a real Chez thread, and one global lock lets only one of them run Java code at a time ([how-it-works](how-it-works.md#threads)). A program that uses threads for correctness (a background worker, a producer and a consumer, an executor) behaves as on a JVM. One that uses them for speed gets none.
+
+Some details follow from that. A thread that loops without calling anything gives the lock up every thousand backward branches once another thread is waiting, so a spin-wait ends, but a long recursive computation with no loop in it can keep the others waiting until it returns. A Java thread blocked in file or console I/O holds the lock while it waits. VarHandle and `Unsafe` memory-ordering modes all behave alike, which is safe for the same reason. Virtual threads need continuations, which aren't here, so `Thread.ofVirtual()` is unsupported. `getState` reports `RUNNABLE` for a thread that is blocked or waiting.
 
 ## `invokedynamic` and method handles
 

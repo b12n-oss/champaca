@@ -95,3 +95,7 @@ The pin only affects `bb test` in this repo. Champaca works on a released 0.8.22
 ## The generated code
 
 Every Java local and stack slot becomes a mutable Scheme variable, and every call looks up a top-level symbol. Neither has been profiled or tuned, and it shows. `test/java/Bench.java` computes `fib(32)` and a 50-million-step loop: it takes 2.34 s on champaca, of which about 0.84 s was startup on a cache carrying 19 generations, against 0.15 s on the JVM, which needs about 0.11 s just to start. That leaves roughly 1.5 s of computing against well under 0.1 s. Code that spends its time inside Java, rather than crossing between jolt and Java, will feel this more than anything else on the page.
+
+### What threads cost a single thread
+
+Thread support adds two things to every program, threaded or not: a monitor lookup on each `synchronized` entry and exit, and a check at each backward branch for a thread waiting to run. Measured against the same code without threads, a loop of 200,000 `StringBuffer.append`, `length` and `Hashtable.put` calls went from 377 ms to about 440 ms, a 20-million-step counting loop from 392 ms to about 420 ms, and `Bench` from 1.85 s to 1.86 to 1.90 s. The monitor sits in a weak table keyed by its object, and that lookup is the likeliest home of the 17% on `synchronized` code, though it hasn't been profiled.

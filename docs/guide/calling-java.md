@@ -110,6 +110,25 @@ Where a parameter's type is an interface with one abstract method (`Comparator`,
 
 The fn's return value goes back through the same conversion as an argument, so return a boolean for a `Predicate` and an integer for a `Comparator`.
 
+A fn fits any single-method interface, so a method overloaded on two of them is ambiguous. `ExecutorService.submit` takes a `Runnable` or a `Callable`, and `(ldk/invoke pool "submit" (fn [] 42))` fails with both as candidates. `implement` says which one you mean:
+
+```clojure
+(ldk/invoke pool "submit" (ldk/implement "java/util/concurrent/Callable" "call" "()Ljava/lang/Object;" (fn [] 42)))
+```
+
+## Threads
+
+A Java thread can run a jolt fn, and it keeps running between your calls into Java, while your own jolt code does other work:
+
+```clojure
+(def t (ldk/construct "java.lang.Thread" (fn [] (println "on" (ldk/invoke (ldk/invoke-static "java.lang.Thread" "currentThread") "getName")))))
+(ldk/invoke t "start")
+(ldk/invoke t "join")
+;; on Thread-0
+```
+
+Only one thread runs Java code at a time ([limitations](limitations.md#threads-take-turns)), but jolt code runs alongside it. A fn that Java calls on its thread runs on that thread too, so treat what it touches the way you would any code shared between threads. A thread jolt started, such as a `future`, can call Java as well, and gets a `java.lang.Thread` named `jolt-<n>` the first time it does. As on a JVM, a non-daemon thread still running keeps the process alive when your program ends, and an executor's threads are non-daemon until you call `shutdown`. `examples/threads.clj` has a pool and a producer thread.
+
 ## Results
 
 Strings come back as jolt strings. Boxed numbers, Booleans and Characters come back unboxed, and `void` comes back as `nil`. Everything else stays a Java object: arrays, collections, your own classes. You can keep calling methods on those, or copy them into jolt data with `->clj` ([data-conversion](data-conversion.md)).

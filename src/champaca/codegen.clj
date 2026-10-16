@@ -298,7 +298,13 @@
         top-t (fn [] (peek @st))
         popn! (fn [n] (vec (reverse (repeatedly n pop!))))
         stmt! (fn [x] (conj! stmts x))
-        goto (fn [pc] (vswap! succ assoc pc @st) (if tramp? (label pc) (sx (label pc))))
+        start-pc (:pc (first blk))
+        ;; a backward jump is where a loop can spin, so it is where a thread
+        ;; lets another one run (jsafepoint, natives.ss)
+        goto (fn [pc]
+               (vswap! succ assoc pc @st)
+               (let [j (if tramp? (label pc) (sx (label pc)))]
+                 (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
         init (fn [c] (when (not= c this-class) (stmt! (sx "jinit" (str-lit c)))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
         un (fn [f t] (push! (f (pop!)) t))
@@ -434,7 +440,8 @@
           (:ireturn :lreturn :freturn :dreturn :areturn) (vreset! terminal (pop!))
           :return (vreset! terminal "(void)")
           :athrow (vreset! terminal (sx "jathrow" (pop!)))
-          (:monitorenter :monitorexit) (pop!) ; spike: single-threaded, monitors are no-ops
+          :monitorenter (stmt! (sx "jmonitor-enter" (pop!)))
+          :monitorexit (stmt! (sx "jmonitor-exit" (pop!)))
           :getstatic (let [{:keys [class name desc]} (cp a0)
                            decl ((:resolve-static-field resolve) class name)]
                        (init decl) (push! (static-global decl name) (desc->t desc)))
@@ -574,7 +581,7 @@
         param-set (set params)
         bindings (concat (for [i (range max-locals) :when (not (param-set i))] (sx (str "l" i) "0"))
                          (for [i (range max-stack)] (sx (str "s" i) "0")))]
-    (let [body (sx "let" (apply sx bindings)
+    (let [body* (sx "let" (apply sx bindings)
                    (sx "letrec"
                        (apply sx (for [[pc code] (sort-by key emitted)]
                                    (sx (label pc) (sx "lambda" "()" (if tramp? (guard-wrap code pc handlers) code)))))
@@ -585,7 +592,22 @@
                          (let [t (sym (str *method-tag* "#T"))]
                            (sx "let" t (sx (sx "r" (sx (label 0))))
                                (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))
-                         (sx (label 0)))))]
+                         (sx (label 0)))))
+          ;; ACC_SYNCHRONIZED: the monitor of this, or of the class for a
+          ;; static method, held for the call and released however it ends.
+          ;; Inline rather than a helper taking a thunk, so this method's
+          ;; frame stays on the stack (getCallerClass).
+          body (if (pos? (bit-and (:flags method) 0x0020))
+                 (let [lock (if (pos? (bit-and (:flags method) 0x0008))
+                              (sx "jmirror-of" (str-lit (:name cls)))
+                              "l0")]
+                   (sx "let" (sx (sx "lock" lock))
+                       (sx "jmonitor-enter" "lock")
+                       (sx "let" (sx (sx "r" (sx "guard" (sx "e" (sx "#t" (sx "jmonitor-exit" "lock") (sx "raise" "e")))
+                                                 body*)))
+                           (sx "jmonitor-exit" "lock")
+                           "r")))
+                 body*)]
       (sx "define" (method-global (:name cls) (:name method) (:desc method))
           (sx "lambda" (apply sx (map #(str "l" %) params))
               ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
