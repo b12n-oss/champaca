@@ -6,15 +6,17 @@ All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`
 
 ## The startup cache
 
-Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (6.8 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The runtime's own Scheme (`runtime.ss`, `natives.ss` and the rest) is compiled into the same directory as `runtime.so`, which loads in about 8 ms where compiling the source took about 130 ms on every start. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
+Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (1.5 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The runtime's own Scheme (`runtime.ss`, `natives.ss` and the rest) is compiled into the same directory as `runtime.so`, which loads in about 8 ms where compiling the source took about 130 ms on every start. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
 
-| Program | Cache off | Warm cache | Warm, after a full `bb test` |
+| Program | Cache off | Cold, writing the cache | Warm cache |
 |---|---|---|---|
-| `Hello` | 1.31 s | 0.33 s | 0.42 s |
-| `Streams` | 1.96 s | 0.39 s | 0.48 s |
-| `examples/interop.clj` | 1.47 s | 0.37 s | 0.47 s |
+| `Hello` | 1.49 s | 2.15 s | 0.37 s |
+| `Streams` | 1.75 s | 2.80 s | 0.49 s |
+| `examples/interop.clj` | 1.52 s | 2.37 s | 0.40 s |
 
-Each is the median of five runs, measured after file support went in. The warm column uses a cache that only that program has filled, and the last one a cache that all 29 tests have added to (see Generations). Before the runtime was cached compiled, the warm column read 0.41, 0.47 and 0.45 s.
+Each is the median of five runs, alternated with the version before the changes below on the same machine while other work kept it busy, so read them for the comparison more than the absolute values. A cold run is the first after the cache key changes, with the JDK's modules already extracted (that happens once per JDK). Before, the cold column read 3.15, 4.79 and 4.29 s, and the warm one 0.38, 0.58 and 0.46 s.
+
+A cold start used to spend half its time writing the cache, and most of that compiling the class registrations into `boot.so`. Each method stub was its own top-level `define`, several thousand of them, and Chez's cost per top-level form is far above that of a quoted list, so a class's methods are now defined by one form holding a list (`define-methods!`). Each class's vtable also repeated every inherited entry, about a third of the registration text, and it's now registered as changes to its superclass's. Together they took `boot.so` from 6.8 MB to 1.5 MB, which warm starts load whole. A cold start also used to evaluate the runtime's source and then compile it again for the cache; it now compiles `runtime.so` first and loads that. And class files parse about twice as fast: ASCII constant-pool strings are decoded in Scheme, straight from the byte array.
 
 ### What's in it, and what isn't
 

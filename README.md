@@ -87,7 +87,7 @@ The first run builds a cache under `~/.cache/champaca/<key>/` and later runs loa
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
-The compiled code leaves out Chez's inspector information, which halves `boot.so` (6.8 MB) and the time to load it. `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. Before that change a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. Writing a new cache removes key directories no run has used for a week.
+The compiled code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 1.5 MB now, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. Before that change a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. Writing a new cache removes key directories no run has used for a week.
 
 ## Run it
 
