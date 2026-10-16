@@ -337,6 +337,30 @@
 
 (define (jarraylength a) (vector-length (jarr-vec (nn a))))
 
+;; Generated code's field and array access, inline: a call to jslot or jaload
+;; costs more than the access itself. A null object throws as nn does.
+(define-syntax field-ref
+  (syntax-rules () [(_ x i) (let ([o x]) (if o (vector-ref (jobj-slots o) i) (nn o)))]))
+(define-syntax field-set!
+  (syntax-rules () [(_ x i v) (let ([o x]) (if o (vector-set! (jobj-slots o) i v) (nn o)))]))
+(define-syntax array-ref
+  (syntax-rules ()
+    [(_ a i) (let ([arr a] [j i])
+               (if arr
+                   (let ([v (jarr-vec arr)])
+                     (if (and (fx>= j 0) (fx< j (vector-length v))) (vector-ref v j) (bounds-error j v)))
+                   (nn arr)))]))
+(define-syntax array-set!
+  (syntax-rules ()
+    [(_ a i x) (let ([arr a] [j i])
+                 (if arr
+                     (let ([v (jarr-vec arr)])
+                       (if (and (fx>= j 0) (fx< j (vector-length v))) (vector-set! v j x) (bounds-error j v)))
+                     (nn arr)))]))
+(define-syntax array-length (syntax-rules () [(_ a) (vector-length (jarr-vec (nn a)))]))
+(define-syntax wrap-byte (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80)]))
+(define-syntax wrap-short (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000)]))
+
 (define (scheme-list->jarray elem xs) (make-jarr elem (list->vector xs)))
 
 ;; --- exceptions ------------------------------------------------------------

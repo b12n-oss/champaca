@@ -450,15 +450,15 @@
           :aload (push! (str "l" a0) "A")
           (:istore :lstore :fstore :dstore :astore) (bind! (str "l" a0) (pop!))
           :iinc (bind! (str "l" a0) (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
-          (:iaload :baload :caload :saload) (bin (fn [a i] (sx "jaload" a i)) "I")
-          :laload (bin (fn [a i] (sx "jaload" a i)) "J")
-          :faload (bin (fn [a i] (sx "jaload" a i)) "F")
-          :daload (bin (fn [a i] (sx "jaload" a i)) "D")
-          :aaload (bin (fn [a i] (sx "jaload" a i)) "A")
+          (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i)) "I")
+          :laload (bin (fn [a i] (sx "array-ref" a i)) "J")
+          :faload (bin (fn [a i] (sx "array-ref" a i)) "F")
+          :daload (bin (fn [a i] (sx "array-ref" a i)) "D")
+          :aaload (bin (fn [a i] (sx "array-ref" a i)) "A")
           (:iastore :lastore :fastore :dastore :aastore :bastore :castore :sastore)
           (let [[a i v] (popn! 3)]
-            (stmt! (sx "jastore" a i (case op :bastore (sx "i2b" v) :castore (sx "fxlogand" v "#xffff")
-                                       :sastore (sx "i2s" v) v))))
+            (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "fxlogand" v "#xffff")
+                                       :sastore (sx "wrap-short" v) v))))
           :pop (pop!)
           :pop2 (if (cat2? (top-t)) (pop!) (do (pop!) (pop!)))
           :dup (shuffle! 1 0)
@@ -516,9 +516,9 @@
           :d2f (un #(sx "f32" %) "F")
           (:f2i :d2i) (un #(sx "d2i" %) "I")
           (:f2l :d2l) (un #(sx "d2l" %) "J")
-          :i2b (un #(sx "i2b" %) "I")
+          :i2b (un #(sx "wrap-byte" %) "I")
           :i2c (un #(sx "fxlogand" % "#xffff") "I")
-          :i2s (un #(sx "i2s" %) "I")
+          :i2s (un #(sx "wrap-short" %) "I")
           (:ifeq :ifne :iflt :ifge :ifgt :ifle)
           (let [a (pop!)] (branch (sx (cmp0 op) a "0") a0 (+ pc len)))
           (:if_icmpeq :if_icmpne :if_icmplt :if_icmpge :if_icmpgt :if_icmple)
@@ -548,11 +548,11 @@
                        (init decl) (stmt! (sx "set!" (static-global decl name) (pop!))))
           :getfield (let [{:keys [class name desc]} (cp a0)
                           idx ((:field-index resolve) class name)]
-                      (un #(sx "jslot" % (str idx)) (desc->t desc)))
+                      (un #(sx "field-ref" % (str idx)) (desc->t desc)))
           :putfield (let [{:keys [class name]} (cp a0)
                           idx ((:field-index resolve) class name)
                           v (pop!) o (pop!)]
-                      (stmt! (sx "jslot-set!" o (str idx) v)))
+                      (stmt! (sx "field-set!" o (str idx) v)))
           (:invokevirtual :invokeinterface :invokespecial :invokestatic)
           (let [{:keys [class name desc]} (cp a0)
                 {:keys [args ret]} (parse-desc desc)
@@ -632,7 +632,7 @@
                        (un #(sx "jnewarray" (str-lit e) % "#f") "A"))
           :multianewarray (let [c (:name (cp a0)) dims (popn! (second args))]
                             (push! (sx "jmultiarray" (str-lit c) (apply sx "list" dims)) "A"))
-          :arraylength (un #(sx "jarraylength" %) "I")
+          :arraylength (un #(sx "array-length" %) "I")
           :checkcast (let [c (:name (cp a0))]
                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                        (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast" v (str-lit c)))))
@@ -726,18 +726,20 @@
                       (apply sx (label 0) (map #(if (param-set %) (str "l" %) "0") live))))
           ;; ACC_SYNCHRONIZED: the monitor of this, or of the class for a
           ;; static method, held for the call and released however it ends.
-          ;; Inline rather than a helper taking a thunk, so this method's
-          ;; frame stays on the stack (getCallerClass).
+          ;; dynamic-wind rather than guard: an exception leaves through a
+          ;; handler further out, whose escape runs the exit before that
+          ;; handler's clauses, and installing a guard costs about four times
+          ;; as much. The blocks are named, so this method's frames stay
+          ;; recognizable on the stack (getCallerClass).
           body (if (pos? (bit-and (:flags method) 0x0020))
                  (let [lock (if (pos? (bit-and (:flags method) 0x0008))
                               (sx "jmirror-of" (str-lit (:name cls)))
                               "l0")]
                    (sx "let" (sx (sx "lock" lock))
-                       (sx "jmonitor-enter" "lock")
-                       (sx "let" (sx (sx "r" (sx "guard" (sx "e" (sx "#t" (sx "jmonitor-exit" "lock") (sx "raise" "e")))
-                                                 body*)))
-                           (sx "jmonitor-exit" "lock")
-                           "r")))
+                       (sx "dynamic-wind"
+                           (sx "lambda" "()" (sx "jmonitor-enter" "lock"))
+                           (sx "lambda" "()" body*)
+                           (sx "lambda" "()" (sx "jmonitor-exit" "lock")))))
                  body*)]
       (sx "define" (method-global (:name cls) (:name method) (:desc method))
           (let [f (sx "lambda" (apply sx (map #(str "l" %) params))

@@ -1,0 +1,4 @@
+caught boom held false
+caught deep held false
+other thread got the lock true n=11
+held inside true
