@@ -25,6 +25,29 @@
   (let ([y (logand x #xffffffffffffffff)])
     (if (>= y #x8000000000000000) (- y #x10000000000000000) y)))
 
+;; Generated code wraps int and long results with these macros rather than
+;; i32 and i64: a call to a top-level procedure can't be inlined, and i64's
+;; logand with a bignum mask made every long add a bignum operation. The
+;; fixnum case is inline; anything else (a bignum, which a long past 60 bits
+;; or an int product can be) takes the procedure. A fixnum is always inside
+;; long's range, since Chez's fixnums are 61 bits.
+(define-syntax wrap-int
+  (syntax-rules ()
+    [(_ e) (let ([y e])
+             (if (fixnum? y) (fx- (fxlogxor (fxlogand y #xffffffff) #x80000000) #x80000000) (i32 y)))]))
+(define-syntax wrap-long
+  (syntax-rules ()
+    [(_ e) (let ([y e]) (if (fixnum? y) y (i64 y)))]))
+;; int shifts: a and the result are ints, so fixnums. ishl first drops the bits
+;; that would leave the low 32, so the shift can't overflow a fixnum.
+(define-syntax int-shl
+  (syntax-rules ()
+    [(_ a s) (let ([n (fxlogand s 31)])
+               (wrap-int (fxsll (fxlogand a (fx- (fxsll 1 (fx- 32 n)) 1)) n)))]))
+(define-syntax int-shr (syntax-rules () [(_ a s) (fxsra a (fxlogand s 31))]))
+(define-syntax int-ushr
+  (syntax-rules () [(_ a s) (wrap-int (fxsrl (fxlogand a #xffffffff) (fxlogand s 31)))]))
+
 (define (f32 x)
   (let ([b (make-bytevector 4)])
     (bytevector-ieee-single-native-set! b 0 x)
