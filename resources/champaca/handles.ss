@@ -12,7 +12,7 @@
 ;; invokeExact is not checked for an exact type match, and access checks are
 ;; not done (spike).
 
-(define-record-type mh-info (fields desc args ret proc varargs?))
+(define-record-type mh-info (fields desc args ret proc varargs?) (sealed #t) (nongenerative champaca-mh-info))
 (define obj-desc "Ljava/lang/Object;")
 (define mh-infos (make-weak-eq-hashtable))
 

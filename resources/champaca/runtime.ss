@@ -115,9 +115,18 @@
 ;; once champaca loaded), so this record spells its predicate and name
 ;; accessor differently. examples/jolt-after-init.clj checks jolt still works.
 (define-record-type (jclass make-jclass ldk-jclass?)
-  (fields (immutable name jclass-cname) super interfaces template vtable fields flags kind meta (mutable state) (mutable mirror)))
-(define-record-type jobj (fields cls slots))
-(define-record-type jarr (fields elem vec))
+  (fields (immutable name jclass-cname) super interfaces template vtable fields flags kind meta (mutable state) (mutable mirror))
+  (sealed #t) (nongenerative champaca-jclass))
+;; Sealed and nongenerative: the record type is then known when code using it
+;; compiles, so Chez inlines the accessors and the type check. Otherwise each
+;; access is a procedure call, about three times the cost.
+;; lock is the object's monitor once something synchronizes on it (natives.ss
+;; monitor-of). It costs no memory: Chez rounds a record up to 16 bytes, and
+;; three fields fit the 32 two did.
+(define-record-type jobj (fields cls slots (mutable lock))
+  (protocol (lambda (new) (lambda (cls slots) (new cls slots #f))))
+  (sealed #t) (nongenerative champaca-jobj))
+(define-record-type jarr (fields elem vec) (sealed #t) (nongenerative champaca-jarr))
 
 (define classes (make-hashtable string-hash string=?))
 
@@ -271,6 +280,28 @@
       (jthrow "java/lang/ClassCastException"
               (string-append "class " (class-name-of x) " cannot be cast to class " target))))
 
+;; Generated code's instanceof and checkcast: a per-site cell holding the
+;; last object class seen and the answer for it, since jinstance? compares
+;; class names and walks the hierarchy.
+(define-syntax jinstance-ic?
+  (syntax-rules ()
+    [(_ ic x target)
+     (let ([o x])
+       (if (and (jobj? o) (eq? (jobj-cls o) (car ic)))
+           (cdr ic)
+           (jinstance-miss ic o target)))]))
+(define (jinstance-miss ic o target)
+  (let ([r (jinstance? o target)])
+    (when (jobj? o) (set-car! ic (jobj-cls o)) (set-cdr! ic r))
+    r))
+(define-syntax jcheckcast-ic
+  (syntax-rules ()
+    [(_ ic x target)
+     (let ([o x])
+       (if (or (not o) (and (jobj? o) (eq? (jobj-cls o) (car ic)) (cdr ic)))
+           o
+           (begin (unless (jinstance-miss ic o target) (jcheckcast o target)) o)))]))
+
 (define (jslot x i) (vector-ref (jobj-slots (nn x)) i))
 (define (jslot-set! x i v) (vector-set! (jobj-slots (nn x)) i v))
 
@@ -323,6 +354,20 @@
     (unless (eq? (jclass-state c) 'initialized) (jinit-slow c (jclass-cname c)))))
 (define (jnew-sym s)
   (let ([c (symbol-class s)]) (make-jobj c (vector-copy (jclass-template c)))))
+;; The same from generated code, through a per-site cell that holds the class
+;; once it is initialized, which it then stays: the check becomes one car.
+(define-syntax jinit-ic
+  (syntax-rules () [(_ cell s) (unless (car cell) (jinit-cell! cell s))]))
+(define (jinit-cell! cell s)
+  (jinit-sym s)
+  (let ([c (symbol-class s)])
+    (when (eq? (jclass-state c) 'initialized) (set-car! cell c))))
+(define-syntax jnew-ic
+  (syntax-rules ()
+    [(_ cell s) (let ([c (car cell)])
+                  (if c
+                      (make-jobj c (vector-copy (jclass-template c)))
+                      (begin (jinit-cell! cell s) (jnew-sym s))))]))
 
 ;; --- arrays -------------------------------------------------------------------
 

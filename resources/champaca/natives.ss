@@ -282,23 +282,35 @@
 (define (method-part n) (substring n (string-length unsafe-prefix) (string-length n)))
 
 ;; get<T>[Volatile](Object, long) / put<T>[Volatile](Object, long, T)
+;; An instance field of an object, the case atomics and locks hit, skips
+;; unsafe-get's dispatch: its offset is the slot index.
+(define-syntax field-offset?
+  (syntax-rules () [(_ o off) (and (jobj? o) (fx< off static-offset-tag))]))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "get") (string-search "(Ljava/lang/Object;J)" n)))
-  (lambda (n) (let ([t (unsafe-type (method-part n))]) (lambda (this o off) (unsafe-get o off t)))))
+  (lambda (n) (let ([t (unsafe-type (method-part n))])
+                (lambda (this o off)
+                  (if (field-offset? o off) (vector-ref (jobj-slots o) off) (unsafe-get o off t))))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "put") (string-search "(Ljava/lang/Object;J" n)))
-  (lambda (n) (let ([t (unsafe-type (method-part n))]) (lambda (this o off v) (unsafe-set! o off v t)))))
+  (lambda (n) (let ([t (unsafe-type (method-part n))])
+                (lambda (this o off v)
+                  (if (field-offset? o off) (vector-set! (jobj-slots o) off v) (unsafe-set! o off v t))))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "compareAndSet")))
   (lambda (n) (let ([t (unsafe-type (method-part n))])
                 (lambda (this o off expect new)
-                  (if (eqv? (unsafe-get o off t) expect) (begin (unsafe-set! o off new t) 1) 0)))))
+                  (if (field-offset? o off)
+                      (let ([v (jobj-slots o)])
+                        (if (eqv? (vector-ref v off) expect) (begin (vector-set! v off new) 1) 0))
+                      (if (eqv? (unsafe-get o off t) expect) (begin (unsafe-set! o off new t) 1) 0))))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "compareAndExchange")))
-  (lambda (n) (lambda (this o off expect new)
-                (let* ([t (unsafe-type (method-part n))] [old (unsafe-get o off t)])
-                  (when (eqv? old expect) (unsafe-set! o off new t))
-                  old))))
+  (lambda (n) (let ([t (unsafe-type (method-part n))])
+                (lambda (this o off expect new)
+                  (let ([old (unsafe-get o off t)])
+                    (when (eqv? old expect) (unsafe-set! o off new t))
+                    old)))))
 
 (define (string-search needle hay)
   (let ([n (string-length needle)] [h (string-length hay)])
@@ -441,7 +453,8 @@
 ;; it back.
 
 (define-record-type jthread-state
-  (fields (mutable jthread) (mutable jstack) (mutable svc) (mutable permit) (mutable depth) (mutable tid)))
+  (fields (mutable jthread) (mutable jstack) (mutable svc) (mutable permit) (mutable depth) (mutable tid))
+  (sealed #t) (nongenerative champaca-jthread-state))
 ;; This Chez thread's jthread-state. A forked Chez thread inherits its parent's
 ;; value, so a thread jolt started (a future, say) would see its parent's
 ;; state: gil-enter! checks the thread id before trusting it.
@@ -560,11 +573,18 @@
 ;; good elsewhere (the Reference Handler) would otherwise make every exit
 ;; take the GIL's mutex and broadcast, which cost 60% on synchronized code.
 
-(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked)))
+(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked))
+  (sealed #t) (nongenerative champaca-jmonitor))
+;; An object keeps its monitor in its lock field; an array's sits in a weak
+;; table. Only the GIL's owner runs Java code, so no other thread races the
+;; first lock.
 (define monitors (make-weak-eq-hashtable))
 (define (monitor-of o)
-  (or (eq-hashtable-ref monitors o #f)
-      (let ([m (make-jmonitor #f 0 '() 0)]) (eq-hashtable-set! monitors o m) m)))
+  (if (jobj? o)
+      (or (jobj-lock o)
+          (let ([m (make-jmonitor #f 0 '() 0)]) (jobj-lock-set! o m) m))
+      (or (eq-hashtable-ref monitors o #f)
+          (let ([m (make-jmonitor #f 0 '() 0)]) (eq-hashtable-set! monitors o m) m))))
 
 ;; wait, holding the GIL, until m is free, then own it with count n
 (define (monitor-acquire! m s n)
@@ -580,8 +600,10 @@
   (jmonitor-count-set! m 0)
   (when (fx> (jmonitor-blocked m) 0) (gil-poke!)))
 
+;; The thread running Java code is always the GIL's owner, which a global
+;; holds; (self) reads a thread parameter.
 (define (jmonitor-enter o)
-  (let ([m (monitor-of (nn o))] [s (self)])
+  (let ([m (monitor-of (nn o))] [s gil-owner])
     (if (eq? (jmonitor-owner m) s)
         (jmonitor-count-set! m (fx+ (jmonitor-count m) 1))
         (monitor-acquire! m s 1))))
@@ -589,7 +611,7 @@
 ;; Unbalanced exits are ignored rather than thrown, as monitors predate threads here.
 (define (jmonitor-exit o)
   (let ([m (monitor-of (nn o))])
-    (when (eq? (jmonitor-owner m) (self))
+    (when (eq? (jmonitor-owner m) gil-owner)
       (let ([n (fx- (jmonitor-count m) 1)])
         (if (fx= n 0)
             (monitor-release! m)
@@ -1029,7 +1051,7 @@
 ;; array  (array index)    -                      -
 ;; view   (byte[] index)   width in bytes         big-endian?
 
-(define-record-type vh-target (fields kind a b type))
+(define-record-type vh-target (fields kind a b type) (sealed #t) (nongenerative champaca-vh-target))
 (define vh-targets (make-weak-eq-hashtable))
 
 (define (make-vh kind a b type)

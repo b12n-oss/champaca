@@ -391,7 +391,7 @@
                ;; a jump passes the live locals and the stack as arguments
                (let [j (jump pc (concat (map #(str "l" %) live) (map s (range (count @st)))))]
                  (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
-        init (fn [c] (when (not= c this-class) (stmt! (sx "jinit-sym" (str "'" (sym c))))))
+        init (fn [c] (when (not= c this-class) (stmt! (sx "jinit-ic" ((:ic! ctx)) (str "'" (sym c))))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
         un (fn [f t] (push! (f (pop!)) t))
         ;; copy the top k values to below the m values under them (dup family)
@@ -616,8 +616,7 @@
                 (if (= ret "V") (stmt! call) (push! call (desc->t ret))))))
           :new (let [c (:name (cp a0))]
                  ((:ensure-loaded resolve) c)
-                 (init c)
-                 (push! (sx "jnew-sym" (str "'" (sym c))) "A"))
+                 (push! (sx "jnew-ic" ((:ic! ctx)) (str "'" (sym c))) "A"))
           :newarray (let [e (newarray-elem a0)]
                       (un #(sx "jnewarray" (str-lit e) % (if (#{"F" "D"} e) "0.0" "0")) "A"))
           :anewarray (let [c (:name (cp a0))
@@ -628,10 +627,10 @@
           :arraylength (un #(sx "array-length" %) "I")
           :checkcast (let [c (:name (cp a0))]
                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
-                       (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast" v (str-lit c)))))
+                       (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast-ic" ((:ic! ctx)) v (str-lit c)))))
           :instanceof (let [c (:name (cp a0))]
                         (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
-                        (un #(sx "if" (sx "jinstance?" % (str-lit c)) "1" "0") "I"))
+                        (let [ic ((:ic! ctx))] (un #(sx "if" (sx "jinstance-ic?" ic % (str-lit c)) "1" "0") "I")))
           (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))))
     (let [term (or @terminal (goto next-pc))]
       {:code (render-steps (persistent! stmts) term)
@@ -778,7 +777,13 @@
           ;; recognizable on the stack (getCallerClass).
           body (if (pos? (bit-and (:flags method) 0x0020))
                  (let [lock (if (pos? (bit-and (:flags method) 0x0008))
-                              (sx "jmirror-of" (str-lit (:name cls)))
+                              ;; the class mirror, found once: a cell like the
+                              ;; inline caches, since cached code loads before
+                              ;; any class exists
+                              (let [c (ic!)]
+                                (sx "or" (sx "car" c)
+                                    (sx "let" (sx (sx "m" (sx "jmirror-of" (str-lit (:name cls)))))
+                                        (sx "set-car!" c "m") "m")))
                               "l0")]
                    (sx "let" (sx (sx "lock" lock))
                        (sx "dynamic-wind"

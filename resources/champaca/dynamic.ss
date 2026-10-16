@@ -340,7 +340,7 @@
 ;; The entry keeps the method's symbol, not its procedure: a method compiles on
 ;; first call and its top-level value is replaced then.
 
-(define-record-type call-site (fields pick packed? mkey sym arg-ds ret-d))
+(define-record-type call-site (fields pick packed? mkey sym arg-ds ret-d) (sealed #t) (nongenerative champaca-call-site))
 
 (define call-cache (make-hashtable equal-hash equal?))
 (define call-cache-on? (not (equal? (getenv "CHAMPACA_CALL_CACHE") "off")))
