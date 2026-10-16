@@ -13,6 +13,7 @@
 ;; not done (spike).
 
 (define-record-type mh-info (fields desc args ret proc varargs?))
+(define obj-desc "Ljava/lang/Object;")
 (define mh-infos (make-weak-eq-hashtable))
 
 (define (prim->desc name)
@@ -74,7 +75,9 @@
              (jthrow "java/lang/ClassCastException"
                      (string-append "Cannot cast " (class-name-of v) " to " (cdr (assoc to prim-names)))))
            (widen p to (junbox p v)))]
-        [else v]))
+        ;; a reference narrowing is a checkcast, as asType makes it
+        [(or (not v) (string=? to obj-desc)) v]
+        [else (jcheckcast v (desc->class-name to))]))
 
 (define (adapt-all froms tos args)
   (if (equal? froms tos) args (map adapt froms tos args)))
@@ -93,11 +96,12 @@
 
 ;; a varargs collector called with the trailing arguments spread out
 (define (collect-varargs info site-args xs)
+  (let ([fixed (fx- (length (mh-info-args info)) 1)])
+    (when (fx< (length site-args) fixed) (wrong-type info (length site-args))))
   (let* ([fixed (fx- (length (mh-info-args info)) 1)]
          [arr-desc (list-ref (mh-info-args info) fixed)]
          [elem (substring arr-desc 1 (string-length arr-desc))]
          [rest-args (list-tail site-args fixed)])
-    (when (fx< (length site-args) fixed) (wrong-type info (length site-args)))
     (append (adapt-all (list-head site-args fixed) (list-head (mh-info-args info) fixed) (list-head xs fixed))
             (list (make-jarr elem (list->vector (map (lambda (t v) (adapt t elem v)) rest-args (list-tail xs fixed))))))))
 
@@ -119,7 +123,6 @@
                         [(fx= (length sargs) (length targs)) (adapt-all sargs targs xs)]
                         [else (wrong-type info (length sargs))])))))
 
-(define obj-desc "Ljava/lang/Object;")
 
 (define (invoke-with-arguments mh arr)
   (let ([xs (if arr (vector->list (jarr-vec arr)) '())])
@@ -138,6 +141,11 @@
                (or (and (jclass-super c) (loop (find-class (jclass-super c))))
                    (exists (lambda (i) (loop (find-class i))) (jclass-interfaces c))))))))
 
+;; A method's procedure is read from its global at call time: before its
+;; first call a method is a stub that compiles it on every call, so a
+;; handle that held on to the stub would compile the method again each time.
+(define (method-sym cname key) (string->symbol (string-append cname "." key)))
+
 (define (no-such-method c name desc how)
   (jthrow "java/lang/NoSuchMethodException"
           (string-append "no such method: " (slashes->dots (jclass-cname c)) "." name desc "/" how)))
@@ -148,7 +156,8 @@
   (let ([hit (find-method c name desc)])
     (unless (and hit (static-flag? (caddr (cdr hit)))) (no-such-method c name desc "invokeStatic"))
     (let* ([dc (jclass-cname (car hit))] [key (string-append name desc)])
-      (make-mh desc (lambda xs (jinit dc) (apply (method-proc dc key) xs)) #f (varargs-flag? (cdr hit))))))
+      (let ([sym (method-sym dc key)])
+        (make-mh desc (lambda xs (jinit dc) (apply (top-level-value sym) xs)) #f (varargs-flag? (cdr hit)))))))
 
 (define (virtual-mh c name desc)
   (let ([hit (find-method c name desc)])
@@ -162,17 +171,16 @@
     (unless hit (no-such-method c name desc "invokeSpecial"))
     (let ([dc (jclass-cname (car hit))] [key (string-append name desc)])
       (make-mh (string-append "(" (cname->desc (jclass-cname caller)) (substring desc 1 (string-length desc)))
-               (lambda xs (apply (method-proc dc key) xs)) #f (varargs-flag? (cdr hit))))))
+               (let ([sym (method-sym dc key)]) (lambda xs (apply (top-level-value sym) xs)))
+               #f (varargs-flag? (cdr hit))))))
 
 (define (constructor-mh c desc)
   (let* ([cname (jclass-cname c)]
          [m (find (lambda (m) (and (string=? (car m) "<init>") (string=? (cadr m) desc))) (meta-methods c))])
     (unless m (no-such-method c "<init>" desc "newInvokeSpecial"))
-    (let ([key (string-append "<init>" desc)])
-      ;; method-proc at call time: before its first call a method is a stub
-      ;; that compiles it, and holding on to the stub would compile it again
+    (let ([sym (method-sym cname (string-append "<init>" desc))])
       (make-mh (args->desc (desc-args desc) (cname->desc cname))
-               (lambda xs (jinit cname) (let ([o (jnew cname)]) (apply (method-proc cname key) o xs) o))
+               (lambda xs (jinit cname) (let ([o (jnew cname)]) (apply (top-level-value sym) o xs) o))
                #f (varargs-flag? m)))))
 
 ;; getter or setter on field fname of c; static? from the lookup kind
@@ -183,15 +191,21 @@
               (string-append "no such field: " (slashes->dots (jclass-cname c)) "." fname)))
     (let* ([dc (jclass-cname (car hit))] [desc (cadr (cdr hit))]
            [recv (cname->desc (jclass-cname c))])
+      (unless (string=? desc (mirror->desc type))
+        (jthrow "java/lang/NoSuchFieldException"
+                (string-append "no such field: " (slashes->dots (jclass-cname c)) "." fname "/" (mirror->desc type))))
       (if static?
           (let ([sym (string->symbol (string-append dc ":" fname))])
             (if setter?
                 (make-mh (args->desc (list desc) "V") (lambda (v) (jinit dc) (set-top-level-value! sym v)) #f)
                 (make-mh (args->desc '() desc) (lambda () (jinit dc) (top-level-value sym)) #f)))
-          (let ([i (jfield-index dc fname)])
+          (let ([i (jfield-index dc fname)] [cn (jclass-cname c)])
+            ;; the slot index is only right for instances of c
             (if setter?
-                (make-mh (args->desc (list recv desc) "V") (lambda (o v) (vector-set! (jobj-slots (nn o)) i v)) #f)
-                (make-mh (args->desc (list recv) desc) (lambda (o) (vector-ref (jobj-slots (nn o)) i)) #f)))))))
+                (make-mh (args->desc (list recv desc) "V")
+                         (lambda (o v) (vector-set! (jobj-slots (nn (jcheckcast o cn))) i v)) #f)
+                (make-mh (args->desc (list recv) desc)
+                         (lambda (o) (vector-ref (jobj-slots (nn (jcheckcast o cn))) i)) #f)))))))
 
 (define mh-lookup-class "java/lang/invoke/MethodHandles$Lookup")
 (define (def-lookup name desc proc) (define-override! (string-append mh-lookup-class "." name desc) proc))
@@ -233,7 +247,7 @@
      (lambda (this f)
        (let* ([c (mirror-class (jslot (nn f) (jfield-index "java/lang/reflect/Field" "clazz")))]
               [meta (list-ref (meta-fields c) (jslot f (jfield-index "java/lang/reflect/Field" "slot")))])
-         (field-mh c (car meta) #f (static-flag? (caddr meta)) (cadr spec))))))
+         (field-mh c (car meta) (desc->mirror (cadr meta)) (static-flag? (caddr meta)) (cadr spec))))))
  '(("unreflectGetter" #f) ("unreflectSetter" #t)))
 
 ;; --- MethodHandle's own methods ------------------------------------------------------
@@ -297,22 +311,26 @@
 (def-mhs "filterReturnValue" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)" mh-ret)
   (lambda (target filter)
     (let* ([ti (mh-info-of target)] [fi (mh-info-of filter)] [tp (mh-info-proc ti)] [fp (mh-info-proc fi)])
-      (unless (fx= 1 (length (mh-info-args fi))) (wrong-type fi 1))
-      (let ([farg (car (mh-info-args fi))] [tret (mh-info-ret ti)])
+      (let ([tret (mh-info-ret ti)])
+        ;; a void target's filter takes nothing
+        (unless (fx= (if (string=? tret "V") 0 1) (length (mh-info-args fi))) (wrong-type fi 1))
         (make-mh (args->desc (mh-info-args ti) (mh-info-ret fi))
-                 (lambda xs (fp (adapt tret farg (apply tp xs))))
+                 (if (string=? tret "V")
+                     (lambda xs (apply tp xs) (fp))
+                     (let ([farg (car (mh-info-args fi))]) (lambda xs (fp (adapt tret farg (apply tp xs))))))
                  #f)))))
 (def-mhs "guardWithTest" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)" mh-ret)
   (lambda (test target fallback)
     (let* ([ti (mh-info-of target)] [args (mh-info-args ti)] [ret (mh-info-ret ti)]
-           [qi (mh-info-of test)] [n (length (mh-info-args qi))]
-           [q (adapted-proc qi (list-head args n) "Z")]
-           [on-true (mh-info-proc ti)] [on-false (adapted-proc (mh-info-of fallback) args ret)])
+           [qi (mh-info-of test)] [n (length (mh-info-args qi))] [fi (mh-info-of fallback)])
       (when (fx> n (length args)) (wrong-type qi (length args)))
+      (unless (fx= (length (mh-info-args fi)) (length args)) (wrong-type fi (length args)))
+      (let ([q (adapted-proc qi (list-head args n) "Z")]
+            [on-true (mh-info-proc ti)] [on-false (adapted-proc fi args ret)])
       ;; the test takes a prefix of the target's arguments; booleans are 0 and 1
       (make-mh (mh-info-desc ti)
                (lambda xs (if (eqv? 0 (apply q (list-head xs n))) (apply on-false xs) (apply on-true xs)))
-               #f))))
+               #f)))))
 (def-mhs "permuteArguments" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;[I)" mh-ret)
   (lambda (target mt reorder)
     (let* ([ti (mh-info-of target)] [tp (mh-info-proc ti)] [targs (mh-info-args ti)]
@@ -358,7 +376,7 @@
 (define (jswitch-index x restart labels)
   (if (eq? x #f)
       -1
-      (let loop ([ls (list-tail labels restart)] [i restart])
+      (let loop ([ls (if (fx< restart (length labels)) (list-tail labels restart) '())] [i (fxmin restart (length labels))])
         (cond [(null? ls) i]
               [(switch-label-matches? x (car ls)) i]
               [else (loop (cdr ls) (fx+ i 1))]))))
@@ -367,9 +385,10 @@
 ;; An invokedynamic whose bootstrap the translator doesn't know runs that
 ;; bootstrap for real on first use: a Lookup on the calling class, the call's
 ;; name and MethodType, then the static arguments. The CallSite it returns is
-;; kept per call site, keyed by the identity of the site's literal key. A
+;; kept per call site. A
 ;; ConstantCallSite's target is kept directly, any other CallSite is asked
-;; for its target on every call. An ldc of a MethodHandle, MethodType or
+;; for its target on every call. The key is an interned symbol naming the
+;; method and pc, so it is the same however often the method is compiled. An ldc of a MethodHandle, MethodType or
 ;; dynamic constant resolves the same way, once per site.
 ;;
 ;; Constants arrive as data from codegen (const-datum):
@@ -380,10 +399,10 @@
 (define (const-mh kind cname name desc)
   (let ([c (find-class cname)])
     (case kind
-      [(1) (field-mh c name #f #f #f)]
-      [(2) (field-mh c name #f #t #f)]
-      [(3) (field-mh c name #f #f #t)]
-      [(4) (field-mh c name #f #t #t)]
+      [(1) (field-mh c name (desc->mirror desc) #f #f)]
+      [(2) (field-mh c name (desc->mirror desc) #t #f)]
+      [(3) (field-mh c name (desc->mirror desc) #f #t)]
+      [(4) (field-mh c name (desc->mirror desc) #t #t)]
       [(5 9) (virtual-mh c name desc)]
       [(6) (static-mh c name desc)]
       [(7) (special-mh c name desc c)]
@@ -415,13 +434,24 @@
 ;; a dynamic constant: the bootstrap gets (lookup, name, type class, args...)
 (define (resolve-condy caller d)
   (let ([name (list-ref d 1)] [desc (list-ref d 2)])
-    (run-bootstrap caller (list-ref d 3)
-                   (list (caller-lookup caller) (jstring-lit name) (desc->mirror desc))
-                   (list-ref d 4))))
+    (bootstrap-guarded name
+      (lambda ()
+        (run-bootstrap caller (list-ref d 3)
+                       (list (caller-lookup caller) (jstring-lit name) (desc->mirror desc))
+                       (list-ref d 4))))))
+
+;; a bootstrap that throws anything but an Error throws BootstrapMethodError
+;; with it as the cause, as the JVM's linkage does
+(define (bootstrap-guarded name thunk)
+  (guard (e [(and (jobj? e) (not (jinstance? e "java/lang/Error")))
+             (raise (construct "java/lang/BootstrapMethodError" "(Ljava/lang/String;Ljava/lang/Throwable;)V"
+                               (jstring-lit (string-append "bootstrap for " name " failed")) e))])
+    (thunk)))
 
 (define const-sites (make-eq-hashtable))
 (define (jconst-at key caller d desc)
-  (let ([v (or (eq-hashtable-ref const-sites key #f)
+  (let ([v (if (eq-hashtable-contains? const-sites key)
+               (eq-hashtable-ref const-sites key #f)
                (let ([v (const->java caller d)]) (eq-hashtable-set! const-sites key v) v))])
     (adapt obj-desc desc v)))
 
@@ -429,11 +459,19 @@
 (define constant-call-site "java/lang/invoke/ConstantCallSite")
 
 (define (indy-link caller spec name desc)
-  (let ([cs (run-bootstrap caller (car spec)
-                           (list (caller-lookup caller) (jstring-lit name) (desc->method-type desc))
-                           (cadr spec))])
-    (unless (jinstance? cs "java/lang/invoke/CallSite")
-      (jthrow "java/lang/BootstrapMethodError" (string-append "bootstrap for " name " returned no CallSite")))
+  (let ([cs (bootstrap-guarded name
+              (lambda ()
+                (let ([cs (run-bootstrap caller (car spec)
+                                         (list (caller-lookup caller) (jstring-lit name) (desc->method-type desc))
+                                         (cadr spec))])
+                  (unless (jinstance? cs "java/lang/invoke/CallSite")
+                    (jthrow "java/lang/ClassCastException" (string-append "bootstrap for " name " returned no CallSite")))
+                  ;; the JVM wants the target's type to be exactly the call's
+                  (let ([t (mt-desc ((jvirt cs "type()Ljava/lang/invoke/MethodType;") cs))])
+                    (unless (string=? t desc)
+                      (jthrow "java/lang/invoke/WrongMethodTypeException"
+                              (string-append "call site for " name " has type " t ", call is " desc))))
+                  cs)))])
     (if (jinstance? cs constant-call-site)
         (cons 'constant (call-site-target cs))
         (cons 'mutable cs))))

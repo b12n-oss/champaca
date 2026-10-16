@@ -231,9 +231,10 @@
   (let* ([sb (- soff array-base)] [db (- doff array-base)]
          [et (elem-type src)] [se (type-size et)])
     (if (and (string=? et (elem-type dst)) (zero? (remainder sb se)) (zero? (remainder db se)) (zero? (remainder n se)))
-        (let ([tmp (vector-copy (jarr-vec src))] [k (quotient n se)] [si (quotient sb se)] [di (quotient db se)])
+        (let* ([k (quotient n se)] [si (quotient sb se)] [di (quotient db se)]
+               [tmp (let ([v (make-vector k)]) (do ([i 0 (fx+ i 1)]) ((fx= i k) v) (vector-set! v i (vector-ref (jarr-vec src) (fx+ si i)))))])
           (do ([i 0 (fx+ i 1)]) ((fx= i k))
-            (vector-set! (jarr-vec dst) (fx+ di i) (vector-ref tmp (fx+ si i)))))
+            (vector-set! (jarr-vec dst) (fx+ di i) (vector-ref tmp i))))
         (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (byte-of src (+ sb i)) acc))))])
           (let loop ([i 0] [bs bytes])
             (unless (null? bs) (set-byte! dst (+ db i) (car bs)) (loop (+ i 1) (cdr bs))))))))

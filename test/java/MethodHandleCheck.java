@@ -171,6 +171,17 @@ public class MethodHandleCheck {
         } catch (NoSuchFieldException e) {
             System.out.println("missing field: NoSuchFieldException");
         }
+        try {
+            lk.findGetter(MethodHandleCheck.class, "label", int.class);
+        } catch (NoSuchFieldException e) {
+            System.out.println("wrong field type: NoSuchFieldException");
+        }
+        MethodHandle loosened = concat.asType(MethodType.methodType(String.class, Object.class, String.class));
+        try {
+            System.out.println((String) loosened.invokeExact((Object) 42, "x"));
+        } catch (ClassCastException e) {
+            System.out.println("bad receiver: ClassCastException");
+        }
         MethodHandle parse = lk.findStatic(Integer.class, "parseInt", MethodType.methodType(int.class, String.class));
         try {
             int bad = (int) parse.invokeExact("x1");

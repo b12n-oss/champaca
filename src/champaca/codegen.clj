@@ -406,8 +406,8 @@
               :class (push! (sx "jmirror-of" (str-lit (:name e))) "A")
               (:methodtype :methodhandle :dynamic)
               (let [d (if (= :dynamic (:tag e)) (:desc e) "Ljava/lang/Object;")]
-                ;; resolved once per site, keyed by the literal's identity
-                (push! (sx "jconst-at" (str-lit (str *method-tag* "@" pc)) (str-lit this-class)
+                ;; resolved once per site, keyed by an interned symbol
+                (push! (sx "jconst-at" (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
                            (str "'" (const-datum cls a0)) (str-lit d))
                        (desc->t d)))
               (throw (ex-info "ldc constant not in spike" {:entry e}))))
@@ -548,7 +548,13 @@
           (let [{:keys [bsm-idx name desc]} (cp a0)
                 {:keys [args ret]} (parse-desc desc)
                 bsm (nth (:bootstrap-methods cls) bsm-idx)
-                bsm-name (:name (cp (:ref-idx (cp (:ref-idx bsm)))))
+                bsm-ref (cp (:ref-idx (cp (:ref-idx bsm))))
+                bsm-name (:name bsm-ref)
+                ;; a bootstrap of the same name in another class runs for real
+                bsm-name (if (and (#{"typeSwitch" "enumSwitch"} bsm-name)
+                                  (not= (:class bsm-ref) "java/lang/runtime/SwitchBootstraps"))
+                           (str (:class bsm-ref) "." bsm-name)
+                           bsm-name)
                 argv (popn! (count args))]
             (case bsm-name
               "makeConcatWithConstants"
@@ -578,7 +584,7 @@
               ("typeSwitch" "enumSwitch") ; java.lang.runtime.SwitchBootstraps: pattern switches
               (push! (sx "jswitch-index" (first argv) (second argv) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm))) "I")
               ;; any other bootstrap runs for real, once per call site (handles.ss)
-              (let [call (apply sx "indy-call" (str-lit (str *method-tag* "@" pc)) (str-lit this-class)
+              (let [call (apply sx "indy-call" (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
                                 (str "'" (sx (const-datum cls (:ref-idx bsm))
                                              (apply sx (map #(const-datum cls %) (:args bsm)))))
                                 (str-lit name) (str-lit desc) argv)]

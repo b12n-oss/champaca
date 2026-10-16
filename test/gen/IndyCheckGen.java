@@ -74,6 +74,17 @@ public class IndyCheckGen {
                 println(cb, CD_int);
                 cb.ldc(MethodTypeDesc.of(CD_String, CD_int, CD_Object));
                 println(cb, CD_Object);
+                // bootstraps that fail: each call is wrapped in a handler that prints the error
+                for (String b : new String[] {"boom", "wrongType"}) {
+                    cb.trying(tb -> tb.iconst_1()
+                                      .invokedynamic(DynamicCallSiteDesc.of(bsm(b), b, MethodTypeDesc.of(CD_String, CD_int)))
+                                      .pop(),
+                              catches -> catches.catchingAll(hb -> {
+                                  hb.invokevirtual(CD_Object, "getClass", MethodTypeDesc.of(CD_Class));
+                                  hb.invokevirtual(CD_Class, "getName", MethodTypeDesc.of(CD_String));
+                                  println(hb, CD_String);
+                              }));
+                }
                 // ldc of a dynamic constant
                 cb.ldc(DynamicConstantDesc.ofNamed(answerBsm, "answer", CD_int));
                 println(cb, CD_int);

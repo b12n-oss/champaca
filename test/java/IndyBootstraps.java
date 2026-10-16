@@ -35,6 +35,14 @@ public class IndyBootstraps {
         return "first";
     }
 
+    // a bootstrap that throws, and one whose call site has the wrong type
+    public static CallSite boom(MethodHandles.Lookup lookup, String name, MethodType type) {
+        throw new IllegalStateException("boom");
+    }
+    public static CallSite wrongType(MethodHandles.Lookup lookup, String name, MethodType type) {
+        return new ConstantCallSite(MethodHandles.constant(String.class, "wrong"));
+    }
+
     // a dynamic constant
     public static int answer(MethodHandles.Lookup lookup, String name, Class<?> type) {
         return 42;

@@ -29,6 +29,8 @@ invokeWithArguments 12 ab
 varargs 6 collector true
 missing method: NoSuchMethodException
 missing field: NoSuchFieldException
+wrong field type: NoSuchFieldException
+bad receiver: ClassCastException
 thrown through: For input string: "x1"
 findClass Point lookupClass Point
 dynamicInvoker one two

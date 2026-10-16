@@ -99,3 +99,9 @@ Every Java local and stack slot becomes a mutable Scheme variable, and every cal
 ### What threads cost a single thread
 
 Thread support adds two things to every program, threaded or not: a monitor lookup on each `synchronized` entry and exit, and a check at each backward branch for a thread waiting to run. Measured against the same code without threads, a loop of 200,000 `StringBuffer.append`, `length` and `Hashtable.put` calls went from 377 ms to about 440 ms, a 20-million-step counting loop from 392 ms to about 420 ms, and `Bench` from 1.85 s to 1.86 to 1.90 s. The monitor sits in a weak table keyed by its object, and that lookup is the likeliest home of the 17% on `synchronized` code, though it hasn't been profiled.
+
+### What method handles cost
+
+A method handle call goes through the runtime's handle table rather than straight to the method. In a loop of a million calls to a static `add(int, int)`, a direct call took 12 ns, `invokeExact` 117 ns, and `invoke` with boxed `Object` arguments about 1.35 µs, most of that in boxing through `Integer.valueOf` and unboxing through a virtual call. Linking a call site with a bootstrap of its own happens once, on its first call.
+
+Every run also evaluates `handles.ss` from source at startup, like the rest of the runtime, which added about 20 ms to a warm start: `Hello` went from 0.38 s to 0.40 s, median of nine runs each.

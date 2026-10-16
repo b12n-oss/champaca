@@ -7,4 +7,6 @@ second
 second
 7
 (int,Object)String
+java.lang.BootstrapMethodError
+java.lang.BootstrapMethodError
 42
