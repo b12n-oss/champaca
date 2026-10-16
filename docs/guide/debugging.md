@@ -7,7 +7,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | Variable | What it does |
 |---|---|
 | `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception or a missing native prints where it happened |
-| `CHAMPACA_STATS=1` | prints how many classes were loaded and methods compiled, after boot and at exit |
+| `CHAMPACA_STATS=1` | prints how many classes were loaded, methods compiled and cached units loaded, after boot and at exit |
 | `CHAMPACA_PROF=1` | prints how long each boot phase took |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
@@ -94,10 +94,10 @@ A method compiled from the startup cache doesn't go through the translator, so i
 
 ```console
 $ CHAMPACA_PROF=1 jolt -M -m champaca.main target/classes Hello
-champaca prof (boot, cache hit): wall 557.27 ms
-  cache-load-code 369.23 ms
-  cache-read-state 66.97 ms
-  java+runtime (rest) 121.06 ms
+champaca prof (boot, cache hit): wall 233.87 ms
+  cache-load-code 87.56 ms
+  cache-read-state 24.84 ms
+  java+runtime (rest) 121.46 ms
 Hello, World!
 ```
 

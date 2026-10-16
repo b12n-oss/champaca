@@ -8,19 +8,27 @@ All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`
 
 Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (6.8 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
 
-| Program | Cache off | Warm cache |
-|---|---|---|
-| `Hello` | 1.24 s | 0.40 s |
-| `Streams` | 1.81 s | 0.46 s |
-| `examples/interop.clj` | 1.38 s | 0.43 to 0.52 s |
+| Program | Cache off | Warm cache | Warm, after a full `bb test` |
+|---|---|---|---|
+| `Hello` | 1.21 s | 0.36 s | 0.42 s |
+| `Streams` | 1.73 s | 0.42 s | 0.46 s |
+| `examples/interop.clj` | 1.32 s | 0.40 s | 0.46 s |
 
-Each is three runs, and the warm column uses a cache that only that program has filled (see Upkeep).
+Each is the median of five runs. The warm column uses a cache that only that program has filled, and the last one a cache that all 21 tests have added to (see Generations).
 
 ### What's in it, and what isn't
 
 Only JDK code is cached. Your own classes, from the classpath, compile fresh on every run, so a big application still pays for its own code at startup.
 
 When a run compiles JDK methods the cache didn't have, `champaca.main` appends them as a new generation, `extra-<n>.so`, on the way out. From jolt, `(ldk/save-cache!)` does the same; call it before the process exits. It costs almost nothing when there's nothing new.
+
+### Generations
+
+`boot.so` loads whole on every run, since boot needs all of it. A generation doesn't. It's written one unit at a time, each unit being either one class's registration (its vtable and method stubs) or one compiled method body, and `state.img` records where each unit sits. A later run starts with none of them loaded. When something first needs a class from a generation, its unit loads, its superclass and interfaces first. The first call to one of its methods then loads that method's body rather than compiling it again. `CHAMPACA_STATS=1` counts the units a run loaded.
+
+Before this, every run loaded every generation, and the cost followed the amount of code. A full `bb test` from an empty cache leaves 14 generations, and a warm `Hello` on that cache took 0.58 s instead of 0.37 s. It now takes 0.42 s and loads 85 units. Most of the 60 ms left is `state.img`, which still holds every class any run has loaded (775 KB against 250 KB, 73 ms to read against 25 ms).
+
+Class registrations turned out to be most of a generation's code: 9.4 MB of the 14.7 MB that `bb test` wrote, with method bodies the rest. So loading only the bodies lazily would have saved 40 ms.
 
 ### When it's rebuilt
 
@@ -34,8 +42,6 @@ CHAMPACA_CACHE_DIR=/tmp/ldk jolt -M -m champaca.main classes Main  # keep it som
 ```
 
 ### Upkeep
-
-Every generation loads on every run, whether the program needs that code or not, and the cost follows the amount of code rather than the number of files: merging 14 generations into one file changed nothing measurable. One `bb test` from an empty cache leaves 14 generations (15 MB), and after it a warm `Hello` takes 0.60 s instead of 0.40 s. Loading a generation only when a class in it is first needed would fix that, and doesn't exist yet.
 
 Old key directories are cleaned up when a new cache is written: any sibling directory no run has loaded for 7 days goes, along with leftovers from an interrupted write. A cache hit marks its directory as used, so another key still in use, such as the `CHAMPACA_BT` one, stays as long as something runs with it every week. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jmods/` and `jolt/` beside them unless you mean it: they hold the module index with its copied zips, and the pinned jolt build.
 

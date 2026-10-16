@@ -77,17 +77,17 @@ JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with meth
 
 ## Startup cache
 
-The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 362 methods from 201 classes. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation. Measured on macOS arm64:
+The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 362 methods from 201 classes. The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation, and a run loads only the parts of those generations it reaches. Measured on macOS arm64, median of five runs:
 
-| Program | No cache | Warm cache |
-|---|---|---|
-| Hello | 1.24 s | 0.40 s |
-| Streams | 1.81 s | 0.46 s |
-| `examples/interop.clj` | 1.38 s | 0.43–0.52 s |
+| Program | No cache | Warm cache | Warm, after a full `bb test` |
+|---|---|---|---|
+| Hello | 1.21 s | 0.36 s | 0.42 s |
+| Streams | 1.73 s | 0.42 s | 0.46 s |
+| `examples/interop.clj` | 1.32 s | 0.40 s | 0.46 s |
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
-The compiled code leaves out Chez's inspector information, which halves `boot.so` (6.8 MB) and the time to load it. Every generation is still loaded on every run, so one `bb test` from an empty cache (14 generations) brings a warm Hello to 0.60 s. Writing a new cache removes key directories no run has used for a week.
+The compiled code leaves out Chez's inspector information, which halves `boot.so` (6.8 MB) and the time to load it. `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. Before that change a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. Writing a new cache removes key directories no run has used for a week.
 
 ## Run it
 
@@ -101,7 +101,7 @@ bb test                                               # every test/java program 
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
-CHAMPACA_STATS=1 ...    # print classes loaded and methods compiled
+CHAMPACA_STATS=1 ...    # print classes loaded, methods compiled, cached units loaded
 CHAMPACA_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
 CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
 CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss

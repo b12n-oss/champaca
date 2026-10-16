@@ -187,10 +187,18 @@
   (or (user-class-bytes cname) (jdk-class-bytes cname)))
 
 (defn- record!
-  "Keep text for the boot cache when it belongs to a JDK class."
-  [origin text]
+  "Keep text for the startup cache when it belongs to a JDK class. unit says
+  what the text defines: [cname] a class's registration, [cname key] one
+  method body."
+  [origin unit text]
   (when-let [rec (:recording @state)]
-    (when (= origin :jdk) (vswap! rec conj text))))
+    (when (= origin :jdk) (vswap! rec conj {:unit unit :text text}))))
+
+(defn- load-unit!
+  "Run one unit of a cached generation: [file offset length]."
+  [[file off len]]
+  (swap! state update :units-loaded (fnil inc 0))
+  (timed :cache-load-unit #(s/call "load-unit" (str (io/file (:cache-dir @state) file)) off len)))
 
 ;; --- resolution ----------------------------------------------------------------------
 
@@ -350,7 +358,17 @@
                       (str "'" g))))))))
 
 (defn ensure-loaded! [cname]
-  (when-not (get-in @state [:classes cname])
+  (cond
+    ;; registered by an earlier run: its class table entry came from the
+    ;; cache, and its registration is one unit of a cached generation
+    (contains? (:lazy @state) cname)
+    (let [info (get-in @state [:classes cname])]
+      (swap! state update :lazy disj cname)
+      (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+        (ensure-loaded! dep))
+      (load-unit! (:cached-class info)))
+
+    (not (get-in @state [:classes cname]))
     (let [info (timed :parse #(normalize cname))]
       (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
         (ensure-loaded! dep))
@@ -358,7 +376,7 @@
         (let [linked (timed :link #(link info))]
           (swap! state assoc-in [:classes cname] linked)
           (let [text (timed :register-text #(registration-text linked))]
-            (record! (:origin linked) text)
+            (record! (:origin linked) [cname] text)
             (timed :register-eval #(scheme! text :interpret)))))))
   cname)
 
@@ -369,15 +387,16 @@
   which calls it."
   [ifaces sam-keys]
   (let [n (str "champaca/Lambda$" (str/replace (first ifaces) "/" "$") "$" (Math/abs (hash [ifaces sam-keys])))]
-    (when-not (get-in @state [:classes n])
-      (run! ensure-loaded! ifaces)
-      (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011
-                  :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
-            linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
-        (swap! state assoc-in [:classes n] linked)
-        (let [text (registration-text linked)]
-          (record! :jdk text) ; pure data, safe to cache whoever asked
-          (scheme! text :interpret))))
+    (if (get-in @state [:classes n])
+      (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet
+      (do (run! ensure-loaded! ifaces)
+          (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011
+                      :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
+                linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
+            (swap! state assoc-in [:classes n] linked)
+            (let [text (registration-text linked)]
+              (record! :jdk [n] text) ; pure data, safe to cache whoever asked
+              (scheme! text :interpret)))))
     n))
 
 ;; --- the JIT -----------------------------------------------------------------------
@@ -391,20 +410,26 @@
         (swap! state assoc-in [:classes cname :parsed] p)
         p)))
 
-(defn jit! [cname mname desc]
+(defn- compile-method! [cname mname desc]
   (let [p (parsed cname)
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
         info (assoc (class-info cname) :parsed p)]
     (swap! state update :jitted inc)
     (when (trace?) (binding [*out* *err*] (println "jit" (str cname "." mname desc))))
     (let [text (timed :codegen #(cg/compile-method (:parsed info) m resolver))]
-      (record! (:origin info) text)
+      (record! (:origin info) [cname (str mname desc)] text)
       (timed :chez-compile #(scheme! text)))))
 
+(defn jit! [cname mname desc]
+  (if-let [unit (get-in @state [:classes cname :cached-methods (str mname desc)])]
+    (load-unit! unit) ; compiled by an earlier run
+    (compile-method! cname mname desc)))
+
 (defn- stats []
-  (let [{:keys [classes jitted]} @state]
+  (let [{:keys [classes lazy jitted units-loaded]} @state]
     (binding [*out* *err*]
-      (println (str "champaca: " (count classes) " classes loaded, " jitted " methods compiled")))))
+      (println (str "champaca: " (- (count classes) (count lazy)) " classes loaded, " jitted " methods compiled, "
+                    (or units-loaded 0) " cached units loaded")))))
 
 ;; --- boot cache ---------------------------------------------------------------------
 ;; Modeled on Clojure's RT.load: one compiled unit per input, used only when
@@ -440,13 +465,7 @@
                  (dissoc :parsed)
                  (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))])))
 
-(defn- compile-and-dump!
-  "Compile forms to so through the scratch source file src, then save the
-  JDK class table to img."
-  [forms src so img]
-  (spit src (apply str (interpose "\n" forms)))
-  (s/call "quiet-compile-file" (str src) (str so))
-  (.delete (io/file src))
+(defn- dump-classes! [img]
   (img/dump! (str img) (strip-for-cache (:classes @state))))
 
 (defn- delete-tree! [f] (doseq [x (reverse (file-seq f))] (.delete x)))
@@ -472,41 +491,51 @@
   [dir forms]
   (let [tmp (io/file (str dir ".tmp-" (System/nanoTime)))]
     (.mkdirs tmp)
-    (compile-and-dump! forms (io/file tmp "boot.ss") (io/file tmp "boot.so") (io/file tmp "state.img"))
+    (let [src (io/file tmp "boot.ss")]
+      (spit src (str/join "\n" (map :text forms)))
+      (s/call "quiet-compile-file" (str src) (str (io/file tmp "boot.so")))
+      (.delete src))
+    (dump-classes! (io/file tmp "state.img"))
     (if (.renameTo tmp dir)
       (prune-cache-root! dir)
       ;; another run won the race; ours is redundant
       (delete-tree! tmp))))
 
-(defn- extras [dir]
-  (sort-by #(.getName %) (filter #(re-matches #"extra-\d+\.so" (.getName %)) (.listFiles dir))))
-
 (defn- load-cache!
-  "Restore a cached boot plus every later generation. Returns true on a hit."
+  "Restore a cached boot. Later generations stay on disk until something
+  reaches them: their classes are listed in :lazy, and the class table says
+  where each class's registration and each method body sits. Returns true on
+  a hit."
   [dir]
   (let [so (io/file dir "boot.so") img-file (io/file dir "state.img")]
     (when (and dir (.exists so) (.exists img-file))
       (.setLastModified dir (System/currentTimeMillis))   ; keeps it from being pruned
       (let [classes (timed :cache-read-state #(img/read-image (str img-file)))]
-        (swap! state assoc :classes classes)
-        (timed :cache-load-code #(do (s/call "load" (str so))
-                                     (doseq [f (extras dir)] (s/call "load" (str f)))))
+        (swap! state assoc :classes classes
+               :lazy (set (for [[k v] classes :when (:cached-class v)] k)))
+        (timed :cache-load-code #(s/call "load" (str so)))
         true))))
 
 (defn save-generation!
-  "Append what this run compiled for JDK classes after boot: one more
-  extra-N.so, and a rewritten state.img (written beside, then renamed)."
+  "Append what this run compiled for JDK classes after boot as one more
+  extra-N.so, compiled unit by unit, and rewrite state.img (written beside,
+  then renamed) with where each unit sits."
   []
   (let [dir (:cache-dir @state)
-        forms (some-> (:recording @state) deref)]
-    (when (and dir (.isDirectory dir) (seq forms))
+        units (some-> (:recording @state) deref)]
+    (when (and dir (.isDirectory dir) (seq units))
       (let [stamp (System/currentTimeMillis)
-            src (io/file dir (str "extra-" stamp ".ss.tmp"))
-            so (io/file dir (str "extra-" stamp ".so"))
-            so-tmp (io/file dir (str "extra-" stamp ".so.tmp"))
-            img-tmp (io/file dir (str "state.img.tmp-" stamp))]
-        (compile-and-dump! forms src so-tmp img-tmp)
-        (.renameTo so-tmp so)
+            file (str "extra-" stamp ".so")
+            so-tmp (io/file dir (str file ".tmp"))
+            img-tmp (io/file dir (str "state.img.tmp-" stamp))
+            _ (s/call "begin-units!" (str so-tmp))
+            starts (mapv #(s/call "add-unit!" (:text %)) units)
+            ends (conj (subvec starts 1) (s/call "end-units!"))]
+        (.renameTo so-tmp (io/file dir file))
+        (doseq [[{[cname k] :unit} start end] (map vector units starts ends)]
+          (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
+                 [file start (- end start)]))
+        (dump-classes! img-tmp)
         (.renameTo img-tmp (io/file dir "state.img"))
         (vreset! (:recording @state) [])))))
 

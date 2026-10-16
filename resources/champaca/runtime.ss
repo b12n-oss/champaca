@@ -537,6 +537,43 @@
                  [generate-inspector-information #f])
     (compile-file in out)))
 
+;; Generations after boot are stored unit by unit: one class's registration,
+;; or one method body. Each unit is compiled on its own and appended to the
+;; generation's file, so a later run can load just the units it reaches.
+;; add-unit! returns the unit's start offset; end-units! the file's length.
+(define unit-out #f)
+
+(define (begin-units! path)
+  (set! unit-out (open-file-output-port path (file-options no-fail))))
+
+(define (add-unit! text)
+  (let ([in (open-input-string text)] [start (port-position unit-out)])
+    (let loop ([forms '()])
+      (let ([x (read in)])
+        (if (eof-object? x)
+            (parameterize ([generate-inspector-information #f])
+              (compile-to-port (reverse forms) unit-out))
+            (loop (cons x forms)))))
+    start))
+
+(define (end-units!)
+  (let ([n (port-position unit-out)])
+    (close-port unit-out)
+    (set! unit-out #f)
+    n))
+
+;; Generation files stay open once read; a unit is a slice of one.
+(define unit-ports (make-hashtable string-hash string=?))
+
+(define (load-unit path off len)
+  (let ([p (or (hashtable-ref unit-ports path #f)
+               (let ([p (open-file-input-port path)])
+                 (hashtable-set! unit-ports path p)
+                 p))])
+    (set-port-position! p off)
+    (load-compiled-from-port (open-bytevector-input-port (get-bytevector-n p len)))
+    (void)))
+
 ;; One compiled procedure makes every method stub, so registration text (and
 ;; the boot cache built from it) carries a call per method, not a lambda.
 (define (method-stub cname mname desc sym)
