@@ -75,7 +75,7 @@ When `main` returns, `champaca.main` waits for the other non-daemon threads and 
 
 ## Method handles
 
-The JDK builds a method handle from a `MemberName` the VM resolves and a `LambdaForm` it compiles to a hidden class, and neither exists here. So `handles.ss` replaces the layer above them. A method handle is a bare `MethodHandle` object, allocated without running a constructor, whose `type` field holds a real `MethodType`. A weak table maps it to a Scheme procedure and the descriptor that procedure takes. The `Lookup.find*` and `unreflect*` methods, `asType`, `bindTo`, `invokeWithArguments` and the common `MethodHandles` combinators are overridden to build and combine those. Everything else in `java.lang.invoke`, `MethodType` included, is the JDK's own code.
+The JDK builds a method handle from a `MemberName` the VM resolves and a `LambdaForm` it compiles to a hidden class, and neither exists here. So `handles.ss` replaces the layer above them. A method handle is a bare `MethodHandle` object, allocated without running a constructor, whose `type` field holds a real `MethodType`. A weak table maps it to a Scheme procedure and the descriptor that procedure takes. The `Lookup.find*` and `unreflect*` methods, `asType`, `bindTo`, `invokeWithArguments` and the `MethodHandles` combinators short of the loop builders are overridden to build and combine those. Everything else in `java.lang.invoke`, `MethodType` included, is the JDK's own code.
 
 A call to `invokeExact` or `invoke` carries the call site's descriptor, and the runtime converts each argument and the result between that descriptor and the handle's: boxing, unboxing and primitive widening. When the two match, which is the usual case, nothing is converted.
 
