@@ -335,7 +335,8 @@
           [(eq? k clone-key) array-clone]
           [else (let* ([c (find-class "java/lang/Object")] [sym (eq-hashtable-ref (jclass-vtable c) k #f)])
                   (if sym (top-level-value sym) (no-such-virtual c k)))]))))
-;; a vtable miss is an abstract method nothing implemented, the JVM's message
+;; a vtable miss is an abstract method nothing implemented; the message is
+;; the JVM's for a reabstracted default (its other AME wordings differ)
 (define (no-such-virtual c k)
   (jthrow "java/lang/AbstractMethodError"
           (string-append "Method " (slashes->dots (jclass-cname c)) "." (symbol->string k) " is abstract")))
