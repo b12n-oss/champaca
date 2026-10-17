@@ -462,7 +462,10 @@
           :faload (bin (fn [a i] (sx "array-ref" a i)) "F")
           :daload (bin (fn [a i] (sx "array-ref" a i)) "D")
           :aaload (bin (fn [a i] (sx "array-ref" a i)) "A")
-          (:iastore :lastore :fastore :dastore :aastore :bastore :castore :sastore)
+          :aastore
+          (let [[a i v] (popn! 3)]
+            (stmt! (sx "array-store!" ((:ic! ctx)) a i v)))
+          (:iastore :lastore :fastore :dastore :bastore :castore :sastore)
           (let [[a i v] (popn! 3)]
             (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "fxlogand" v "#xffff")
                                        :sastore (sx "wrap-short" v) v))))

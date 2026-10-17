@@ -429,6 +429,35 @@
                      (let ([v (jarr-vec arr)])
                        (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v)))
                      (nn arr)))]))
+;; aastore: a reference array checks a non-null value against its element
+;; type after the index, as the JVM does. Each site has a cell holding the
+;; element descriptor it last stored into and the value class that passed
+;; (#t when the element type is Object, which takes anything), so a hit is
+;; two eq? tests; the descriptor string is the array's own, shared by every
+;; array one allocation site makes.
+(define-syntax array-store!
+  (syntax-rules ()
+    [(_ ic a i x) (let ([arr a] [j i] [o x])
+                    (if arr
+                        (let ([v (jarr-vec arr)])
+                          (if (fx< -1 j (#3%vector-length v))
+                              (begin
+                                (when (and o (not (and (eq? (jarr-elem arr) (car ic))
+                                                       (or (eq? (cdr ic) #t)
+                                                           (and (jobj? o) (eq? (jobj-cls o) (cdr ic)))))))
+                                  (array-store-miss ic arr o))
+                                (#3%vector-set! v j o))
+                              (bounds-error j v)))
+                        (nn arr)))]))
+(define (array-store-ok? arr o)
+  (let ([e (jarr-elem arr)])
+    (or (string=? e "Ljava/lang/Object;") (jinstance? o (desc->class-name e)))))
+(define (array-store-miss ic arr o)
+  (unless (array-store-ok? arr o)
+    (jthrow "java/lang/ArrayStoreException" (slashes->dots (class-name-of o))))
+  (let ([e (jarr-elem arr)])
+    (cond [(string=? e "Ljava/lang/Object;") (set-car! ic e) (set-cdr! ic #t)]
+          [(jobj? o) (set-car! ic e) (set-cdr! ic (jobj-cls o))])))
 (define-syntax array-length
   (syntax-rules () [(_ a) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (nn arr)))]))
 (define-syntax wrap-byte (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80)]))

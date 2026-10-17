@@ -42,13 +42,50 @@
 (defnative "java/lang/System.nanoTime()J" ()
   (let ([t (current-time 'time-monotonic)]) (+ (* (time-second t) 1000000000) (time-nanosecond t))))
 (defnative "java/lang/System.identityHashCode(Ljava/lang/Object;)I" (x) (identity-hash x))
+;; HotSpot's checks, order and messages: both arrays, the same primitive type
+;; or both reference arrays, then the indexes. A reference copy whose source
+;; element type isn't assignable to the destination's checks each element and
+;; stops at the first that doesn't fit, leaving the ones before it copied.
+(define (arraycopy-type-name e) (if (prim-desc? e) (desc->class-name e) "object array"))
+(define (arraycopy-fail cls msg) (jthrow cls (string-append "arraycopy: " msg)))
 (defnative "java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V" (src sp dst dp n)
-  (let ([sv (jarr-vec (nn src))] [dv (jarr-vec (nn dst))])
-    (when (or (fx< sp 0) (fx< dp 0) (fx< n 0) (fx> (fx+ sp n) (vector-length sv)) (fx> (fx+ dp n) (vector-length dv)))
-      (jthrow "java/lang/ArrayIndexOutOfBoundsException" "arraycopy: last source index out of bounds"))
-    (if (and (eq? sv dv) (fx< sp dp))
-        (do ([i (fx- n 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))
-        (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i)))))))
+  (let ([src (nn src)] [dst (nn dst)])
+    (unless (jarr? src)
+      (arraycopy-fail "java/lang/ArrayStoreException"
+                      (string-append "source type " (slashes->dots (class-name-of src)) " is not an array")))
+    (unless (jarr? dst)
+      (arraycopy-fail "java/lang/ArrayStoreException"
+                      (string-append "destination type " (slashes->dots (class-name-of dst)) " is not an array")))
+    (let* ([se (jarr-elem src)] [de (jarr-elem dst)] [sv (jarr-vec src)] [dv (jarr-vec dst)]
+           [sname (arraycopy-type-name se)]
+           [bounds (lambda (msg) (arraycopy-fail "java/lang/ArrayIndexOutOfBoundsException" msg))]
+           [out-of (lambda (e v) (string-append " out of bounds for " (arraycopy-type-name e)
+                                                "[" (number->string (vector-length v)) "]"))])
+      (unless (if (prim-desc? se) (string=? se de) (not (prim-desc? de)))
+        (arraycopy-fail "java/lang/ArrayStoreException"
+                        (string-append "type mismatch: can not copy " sname "[] into "
+                                       (arraycopy-type-name de) "[]")))
+      (cond [(fx< sp 0) (bounds (string-append "source index " (number->string sp) (out-of se sv)))]
+            [(fx< dp 0) (bounds (string-append "destination index " (number->string dp) (out-of de dv)))]
+            [(fx< n 0) (bounds (string-append "length " (number->string n) " is negative"))]
+            [(fx> (fx+ sp n) (vector-length sv))
+             (bounds (string-append "last source index " (number->string (fx+ sp n)) (out-of se sv)))]
+            [(fx> (fx+ dp n) (vector-length dv))
+             (bounds (string-append "last destination index " (number->string (fx+ dp n)) (out-of de dv)))])
+      (cond
+        [(and (eq? sv dv) (fx< sp dp))
+         (do ([i (fx- n 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))]
+        [(or (prim-desc? se) (class-assignable? (string-append "[" se) (string-append "[" de)))
+         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))]
+        [else
+         (do ([i 0 (fx+ i 1)]) ((fx= i n))
+           (let ([x (vector-ref sv (fx+ sp i))])
+             (unless (or (not x) (array-store-ok? dst x))
+               (arraycopy-fail "java/lang/ArrayStoreException"
+                               (string-append "element type mismatch: can not cast one of the elements of "
+                                              (slashes->dots (desc->class-name se)) "[] to the type of the destination array, "
+                                              (slashes->dots (desc->class-name de)))))
+             (vector-set! dv (fx+ dp i) x)))]))))
 (defnative "java/lang/System.setIn0(Ljava/io/InputStream;)V" (s) (set-top-level-value! '|java/lang/System:in| s))
 (defnative "java/lang/System.setOut0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:out| s))
 (defnative "java/lang/System.setErr0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:err| s))
@@ -1129,14 +1166,11 @@
   (case t [("F") (float->bits v)] [("D") (double->bits v)] [else v]))
 
 ;; A reference array checks what it stores against its own element type, as
-;; aastore should (it doesn't yet, docs/guide/limitations.md). Only a plain
-;; set names the class, as on the JVM.
+;; aastore does. Only a plain set names the class, as on the JVM.
 (define (array-store-check a v mode)
-  (let ([e (jarr-elem (nn a))])
-    (when (and v (memv (string-ref e 0) '(#\L #\[)) (not (string=? e "Ljava/lang/Object;"))
-               (not (jinstance? v (desc->class-name e))))
-      (jthrow "java/lang/ArrayStoreException"
-              (and (string=? mode "set") (slashes->dots (class-name-of v)))))))
+  (when (and v (not (prim-desc? (jarr-elem (nn a)))) (not (array-store-ok? a v)))
+    (jthrow "java/lang/ArrayStoreException"
+            (and (string=? mode "set") (slashes->dots (class-name-of v))))))
 
 ;; read and write the variable at one access's coordinates
 (define (vh-get t coords)

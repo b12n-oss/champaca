@@ -1,0 +1,26 @@
+ArrayStoreException: java.lang.Integer
+ok s
+ok null
+ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
+npe
+ok ArrayStoreException: java.lang.String
+ok ArrayStoreException: ArrayStoreCheck$1
+ok ArrayStoreException: [J ArrayStoreException: [Ljava.lang.Object;
+ok ok ArrayStoreException: java.lang.Object
+ok ok ok ok ArrayStoreException: java.lang.Integer
+ok ok ok 
+ok | ArrayStoreException: java.lang.Integer | ArrayStoreException: java.lang.String | ok | ArrayStoreException: ArrayStoreCheck$Sq | ok | 
+ok | ArrayStoreException: java.lang.Integer | ok | ArrayStoreException: java.lang.StringBuilder | 
+ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String [a, b, null, null]
+ArrayStoreException: arraycopy: type mismatch: can not copy int[] into long[]
+ArrayStoreException: arraycopy: type mismatch: can not copy int[] into object array[]
+ArrayStoreException: arraycopy: source type java.lang.String is not an array
+ArrayStoreException: arraycopy: destination type java.lang.String is not an array
+ArrayIndexOutOfBoundsException: arraycopy: last destination index 3 out of bounds for int[2]
+ArrayIndexOutOfBoundsException: arraycopy: source index -1 out of bounds for object array[3]
+ArrayIndexOutOfBoundsException: arraycopy: length -1 is negative
+NullPointerException: null
+[null, p, q] [r, null]
+ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String
+ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.Integer
+IllegalArgumentException: array element type mismatch

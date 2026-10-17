@@ -44,7 +44,6 @@ The startup cache makes boot quick, and plain computation now runs within a few 
 - `java.nio.file` needs macOS. The file natives read `struct stat`, `struct dirent` and `struct flock` at macOS's offsets, and on any other system `UnixNativeDispatcher.init` throws `UnsupportedOperationException` instead of guessing. `java.io` streams and `RandomAccessFile` don't depend on those layouts and work anywhere libc does. Everything built on `java.nio.file`, `MessageDigest` included, works on macOS only.
 - `Files.getFileStore` and the other mount queries have no natives yet.
 - `available()` on a pipe or a terminal is 0, where the JVM asks the kernel how much is waiting.
-- Storing into an array doesn't check the element type, so `Object[] a = new String[1]; a[0] = 1;` stores the `Integer` where the JVM throws `ArrayStoreException`. Array VarHandles do check.
 - `Unsafe.copyMemory` between native memory and a `float[]` or `double[]` fails, since those arrays hold Scheme flonums rather than bytes.
 - Resources from the JDK's own modules can be read as streams but have no URL: `getResource` answers `file:` and `jar:` URLs for the classpath only.
 - `sun.misc.Unsafe` runs with `sun.misc.unsafe.memory.access=allow`, because the default warning finds its caller through `StackWalker`, which has no natives yet.

@@ -335,6 +335,8 @@
 
 (defnative "java/lang/reflect/Array.set(Ljava/lang/Object;ILjava/lang/Object;)V" (a i v)
   (let ([e (jarr-elem (reflect-array a))])
+    (when (and v (not (prim-desc? e)) (not (array-store-ok? a v)))
+      (jthrow "java/lang/IllegalArgumentException" "array element type mismatch"))
     (jastore a i (if (prim-desc? e) (junbox e (nn v)) v))))
 
 ;; --- annotation instances ---------------------------------------------------------
