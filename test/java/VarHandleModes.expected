@@ -33,12 +33,31 @@ WrongMethodTypeException
 null receiver NullPointerException
 (VarHandleModes)String a
 -128 -123
+int into short WrongMethodTypeException
+long into int WrongMethodTypeException
+long as int WrongMethodTypeException
+byte into char WrongMethodTypeException
+boolean into int WrongMethodTypeException
+int as boolean WrongMethodTypeException
+Long into int ClassCastException
+cannot convert MethodHandle(VarHandle,VarHandleModes,short)void to (VarHandle,VarHandleModes,int)void
+Cannot cast java.lang.Long to java.lang.Integer
+3 99
+explicit 5
+rounded 0.0
+-3 -3 -3.0 7 1.6777216E7 7 8
+9.223372E18
 a r VarHandle[varType=java.lang.String, coord=[class VarHandleModes]] 4 UnsupportedOperationException
 array store ArrayStoreException
 ase java.lang.Integer
 ase null
 ase null
 ase [Ljava.lang.String;
+ArrayStoreException
+ArrayStoreException
+ArrayStoreException
+ArrayIndexOutOfBoundsException
+ArrayIndexOutOfBoundsException
 null s true t
 65535 0
 boolean[] add UnsupportedOperationException or false true

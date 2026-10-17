@@ -58,13 +58,25 @@
        (let ([e (find (lambda (e) (string=? (cadr e) (jclass-cname (jobj-cls x)))) box-classes)])
          (and e (car e)))))
 
+;; an integer widened to float rounds to float
 (define (widen from to v)
   (if (and (memv (string-ref to 0) '(#\F #\D)) (not (memv (string-ref from 0) '(#\F #\D))))
-      (inexact v)
+      (if (char=? (string-ref to 0) #\F) (f32 (inexact v)) (inexact v))
       v))
 
-;; v has type `from` and is wanted as `to`
-(define (adapt from to v)
+;; whether asType converts a primitive `from` to a primitive `to`: the same
+;; type or a widening one
+(define prim-widenings
+  '(("B" "S" "I" "J" "F" "D") ("S" "I" "J" "F" "D") ("C" "I" "J" "F" "D")
+    ("I" "J" "F" "D") ("J" "F" "D") ("F" "D")))
+(define (prim-convertible? from to)
+  (or (string=? from to)
+      (not (prim-desc? from)) (not (prim-desc? to))
+      (let ([w (assoc from prim-widenings)]) (and w (member to (cdr w)) #t))))
+
+;; v has type `from` and is wanted as `to`. explicitCastArguments passes
+;; loose? to unbox any wrapper, which asType rejects when it would narrow.
+(define (adapt from to v . loose?)
   (cond [(string=? from to) v]
         [(string=? to "V") v]
         [(string=? from "V") (if (prim-desc? to) (elem-default to) #f)]
@@ -74,6 +86,11 @@
            (unless p
              (jthrow "java/lang/ClassCastException"
                      (string-append "Cannot cast " (class-name-of v) " to " (cdr (assoc to prim-names)))))
+           ;; only a widening unbox: a Long is not an int
+           (unless (or (pair? loose?) (prim-convertible? p to))
+             (jthrow "java/lang/ClassCastException"
+                     (string-append "Cannot cast " (slashes->dots (class-name-of v)) " to "
+                                    (slashes->dots (cadr (assoc to box-classes))))))
            (widen p to (junbox p v)))]
         ;; a reference narrowing is a checkcast, as asType makes it
         [(or (not v) (string=? to obj-desc)) v]
@@ -83,11 +100,12 @@
   (if (equal? froms tos) args (map adapt froms tos args)))
 
 ;; a procedure taking `to-args` and returning `to-ret`, over info's procedure
-(define (adapted-proc info to-args to-ret)
+(define (adapted-proc info to-args to-ret . loose?)
   (let ([p (mh-info-proc info)] [args (mh-info-args info)] [ret (mh-info-ret info)])
-    (if (and (equal? args to-args) (string=? ret to-ret))
-        p
-        (lambda xs (adapt ret to-ret (apply p (adapt-all to-args args xs)))))))
+    (cond [(and (equal? args to-args) (string=? ret to-ret)) p]
+          [(pair? loose?)
+           (lambda xs (adapt ret to-ret (apply p (map (lambda (f t x) (adapt f t x #t)) to-args args xs)) #t))]
+          [else (lambda xs (adapt ret to-ret (apply p (adapt-all to-args args xs))))])))
 
 (define (wrong-type info n)
   (jthrow "java/lang/invoke/WrongMethodTypeException"
@@ -254,10 +272,10 @@
 
 (define (def-mh name desc proc) (define-override! (string-append "java/lang/invoke/MethodHandle." name desc) proc))
 
-(define (as-type mh mt)
+(define (as-type mh mt . loose?)
   (let* ([info (mh-info-of mh)] [desc (mt-desc mt)] [args (desc-args desc)])
     (unless (fx= (length args) (length (mh-info-args info))) (wrong-type info (length args)))
-    (make-mh desc (adapted-proc info args (desc-ret desc)) mt)))
+    (make-mh desc (apply adapted-proc info args (desc-ret desc) loose?) mt)))
 
 (def-mh "asType" (string-append "(Ljava/lang/invoke/MethodType;)" mh-ret) as-type)
 (def-mh "bindTo" (string-append "(Ljava/lang/Object;)" mh-ret)
@@ -343,7 +361,7 @@
                         (apply tp (map (lambda (i t) (adapt (list-ref nargs i) t (list-ref xs i))) order targs))))
                mt))))
 (def-mhs "explicitCastArguments" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)" mh-ret)
-  as-type)
+  (lambda (mh mt) (as-type mh mt #t)))
 
 ;; --- SwitchBootstraps -------------------------------------------------------------
 ;; javac compiles a pattern switch to invokedynamic typeSwitch or enumSwitch

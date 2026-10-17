@@ -1,4 +1,5 @@
 import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.invoke.VarHandle;
 import java.lang.invoke.VarHandle.AccessMode;
 import java.nio.ByteOrder;
@@ -7,7 +8,7 @@ import java.util.Arrays;
 // Which access modes each kind of VarHandle supports, what an unsupported
 // one throws, and the handle's own methods (varType, accessModeType, ...).
 public class VarHandleModes {
-  byte b; char c; short s; float f; double d; boolean z; String str = "a";
+  byte b; char c; short s; int i; long l; float f; double d; boolean z; String str = "a";
   final int fin = 3;
   static final int SFIN = 4;
 
@@ -90,6 +91,29 @@ public class VarHandleModes {
     var mh2 = B.toMethodHandle(AccessMode.GET_AND_ADD);
     System.out.println((byte) mh2.invoke(o, (byte) 5) + " " + o.b);
 
+    // only conversions asType allows: widening, boxing, unboxing, casts
+    VarHandle I = lk.findVarHandle(VarHandleModes.class, "i", int.class);
+    VarHandle L = lk.findVarHandle(VarHandleModes.class, "l", long.class);
+    System.out.println("int into short " + tryIt(() -> S.set(o, 5)));
+    System.out.println("long into int " + tryIt(() -> I.set(o, 5L)));
+    System.out.println("long as int " + tryIt(() -> { int x = (int) L.get(o); }));
+    System.out.println("byte into char " + tryIt(() -> C.set(o, (byte) 1)));
+    System.out.println("boolean into int " + tryIt(() -> I.set(o, true)));
+    System.out.println("int as boolean " + tryIt(() -> { boolean x = (boolean) I.get(o); }));
+    System.out.println("Long into int " + tryIt(() -> I.set(o, (Object) 5L)));
+    try { S.set(o, 5); } catch (Throwable t) { System.out.println(t.getMessage()); }
+    var ident = MethodHandles.identity(int.class);
+    try { int x = (int) ident.invoke((Object) 3L); } catch (ClassCastException e) { System.out.println(e.getMessage()); }
+    System.out.println((long) ident.invoke((Object) (short) 3) + " " + (int) ident.invoke((Object) 'c'));
+    var loose = MethodHandles.explicitCastArguments(ident, MethodType.methodType(int.class, Object.class));
+    System.out.println("explicit " + (int) loose.invokeExact((Object) 5L));
+    I.set(o, (byte) -3);
+    L.set(o, Integer.valueOf(7));
+    F.set(o, 16777217);
+    System.out.println("rounded " + (o.f - 16777216f));
+    System.out.println(o.i + " " + (long) I.get(o) + " " + (double) I.get(o) + " " + o.l + " " + o.f + " " + (long) L.getAndAdd(o, (byte) 1) + " " + o.l);
+    try { F.set(o, Long.MAX_VALUE); System.out.println(o.f); } catch (Throwable t) { System.out.println(t.getClass().getSimpleName()); }
+
     // from reflection
     VarHandle RS = lk.unreflectVarHandle(VarHandleModes.class.getDeclaredField("str"));
     VarHandle RF = lk.unreflectVarHandle(VarHandleModes.class.getDeclaredField("SFIN"));
@@ -102,6 +126,11 @@ public class VarHandleModes {
     for (Runnable r : new Runnable[] {() -> OA.set(objs, 0, 1), () -> OA.compareAndSet(objs, 0, null, 1),
                                       () -> OA.getAndSet(objs, 0, 1), () -> OA.set(new Integer[1][], 0, new String[0])})
       try { r.run(); } catch (ArrayStoreException e) { System.out.println("ase " + e.getMessage()); }
+    for (Runnable r : new Runnable[] {() -> OA.compareAndSet(objs, 0, "zz", (Object) 1),
+                                      () -> OA.compareAndExchange(objs, 0, "zz", (Object) 1),
+                                      () -> OA.weakCompareAndSet(objs, 0, "zz", (Object) 1),
+                                      () -> OA.set(objs, 5, (Object) 1), () -> OA.compareAndSet(objs, 5, "zz", (Object) 1)})
+      try { r.run(); System.out.println("no throw"); } catch (RuntimeException e) { System.out.println(e.getClass().getSimpleName()); }
     OA.set(objs, 1, "s");
     OA.set(objs, 0, null);
     System.out.println(objs[0] + " " + objs[1] + " " + OA.compareAndSet(objs, 1, "s", "t") + " " + objs[1]);

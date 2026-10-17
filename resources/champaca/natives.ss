@@ -1142,7 +1142,7 @@
 (define (vh-get t coords)
   (case (vh-target-kind t)
     [(field) (vector-ref (jobj-slots (nn (car coords))) (vh-target-a t))]
-    [(static) (jinit (vh-target-b t)) (top-level-value (vh-target-a t))]
+    [(static) (top-level-value (vh-target-a t))]
     [(array) (jaload (car coords) (cadr coords))]
     [else (view-decode (vh-target-type t)
                        (bytes-get (car coords) (cadr coords) (vh-target-a t) (vh-target-b t)))]))
@@ -1150,8 +1150,8 @@
 (define (vh-set! t coords v mode)
   (case (vh-target-kind t)
     [(field) (vector-set! (jobj-slots (nn (car coords))) (vh-target-a t) v)]
-    [(static) (jinit (vh-target-b t)) (set-top-level-value! (vh-target-a t) v)]
-    [(array) (array-store-check (car coords) v mode) (jastore (car coords) (cadr coords) v)]
+    [(static) (set-top-level-value! (vh-target-a t) v)]
+    [(array) (jastore (car coords) (cadr coords) v)]
     [else (bytes-set! (car coords) (cadr coords) (vh-target-a t) (vh-target-b t)
                       (view-encode (vh-target-type t) v))]))
 
@@ -1174,15 +1174,31 @@
 (define (method-type-text args ret)
   (jstring-of (desc->method-type (args->desc args ret))))
 
-;; site is the call site's descriptor (a literal, so its parse is cached by
-;; identity). Its argument and result types are adapted to the access type's,
-;; as asType would; a handle with invoke-exact behavior wants them equal.
+;; the JDK's text: the handle's type and the site's, each with the VarHandle
+;; as a leading argument
+(define (cannot-convert targs tret sargs sret)
+  (define (with-vh text)
+    (string-append "(VarHandle" (if (char=? (string-ref text 1) #\)) "" ",")
+                   (substring text 1 (string-length text))))
+  (jthrow "java/lang/invoke/WrongMethodTypeException"
+          (string-append "cannot convert MethodHandle" (with-vh (method-type-text targs tret))
+                         " to " (with-vh (method-type-text sargs sret)))))
+
+;; A static's class is initialized first. A reference array checks the index,
+;; then the value it may store, before anything is read or compared, which
+;; is the JVM's order: a failing compareAndSet still throws for a bad value.
 (define (vh-run t op mode args)
   (let* ([ty (vh-target-type t)]
          [vals (list-tail args (length (vh-target-coords t)))])
     (define (get) (vh-get t args))
     (define (set v) (vh-set! t args v mode))
     (define (update f) (let ([old (get)]) (set (wrap-as ty (f old))) old))
+    (case (vh-target-kind t)
+      [(static) (jinit (vh-target-b t))]
+      [(array)
+       (case op
+         [(set gas) (jaload (car args) (cadr args)) (array-store-check (car args) (car vals) mode)]
+         [(cas cax) (jaload (car args) (cadr args)) (array-store-check (car args) (cadr vals) mode)])])
     (case op
       [(get) (get)]
       [(set) (set (car vals))]
@@ -1221,6 +1237,10 @@
               (jthrow "java/lang/invoke/WrongMethodTypeException"
                       (string-append "expected " (method-type-text targs tret)
                                      " but found " (method-type-text sargs (cdr sp)))))
+            ;; a void on either side is a dropped or default result
+            (unless (and (for-all prim-convertible? sargs targs)
+                         (or (member "V" (list tret (cdr sp))) (prim-convertible? tret (cdr sp))))
+              (cannot-convert targs tret sargs (cdr sp)))
             (when (eqv? 1 (jslot vh (vh-exact-index)))
               (jthrow "java/lang/invoke/WrongMethodTypeException"
                       (string-append "handle's method type " (method-type-text targs tret)
