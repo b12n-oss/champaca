@@ -461,19 +461,24 @@
     (set! string-coder-slot (jfield-index "java/lang/String" "coder"))))
 
 (define (code-units s)
-  ;; Scheme string (code points) -> list of UTF-16 code units
-  (let loop ([cs (reverse (string->list s))] [acc '()])
-    (if (null? cs) acc
-        (let ([cp (char->integer (car cs))])
-          (if (fx> cp #xffff)
-              (let ([v (fx- cp #x10000)])
-                (loop (cdr cs) (cons (fx+ #xd800 (fxsrl v 10)) (cons (fx+ #xdc00 (fxlogand v #x3ff)) acc))))
-              (loop (cdr cs) (cons cp acc)))))))
+  ;; Scheme string (code points) -> list of UTF-16 code units. A vector is a
+  ;; classfile constant holding a lone surrogate, already in code units.
+  (if (vector? s)
+      (vector->list s)
+      (let loop ([cs (reverse (string->list s))] [acc '()])
+        (if (null? cs) acc
+            (let ([cp (char->integer (car cs))])
+              (if (fx> cp #xffff)
+                  (let ([v (fx- cp #x10000)])
+                    (loop (cdr cs) (cons (fx+ #xd800 (fxsrl v 10)) (cons (fx+ #xdc00 (fxlogand v #x3ff)) acc))))
+                  (loop (cdr cs) (cons cp acc))))))))
 
-(define (jstring s)
+(define (jstring s) (units->jstring (code-units s)))
+
+;; a list of UTF-16 code units -> java.lang.String
+(define (units->jstring units)
   (string-slots!)
-  (let* ([units (code-units s)]
-         [latin1? (for-all (lambda (u) (fx< u 256)) units)]
+  (let* ([latin1? (for-all (lambda (u) (fx< u 256)) units)]
          [bytes (if latin1?
                     (map i2b units)
                     (apply append (map (lambda (u) (list (i2b (fxlogand u #xff)) (i2b (fxsrl u 8)))) units)))]
@@ -483,9 +488,11 @@
     o))
 
 (define interned (make-hashtable string-hash string=?))
+(define interned-units (make-hashtable equal-hash equal?))
 (define (jstring-lit s)
-  (or (hashtable-ref interned s #f)
-      (let ([o (jstring s)]) (hashtable-set! interned s o) o)))
+  (let ([t (if (string? s) interned interned-units)])
+    (or (hashtable-ref t s #f)
+        (let ([o (jstring s)]) (hashtable-set! t s o) o))))
 
 (define (jstring->scheme o)
   (string-slots!)
@@ -502,8 +509,30 @@
                 (if (and (fx>= u #xd800) (fx< u #xdc00) (fx< (fx+ i 2) n))
                     (let ([lo (fxlogor (fxlogand (vector-ref v (fx+ i 2)) #xff)
                                        (fxsll (fxlogand (vector-ref v (fx+ i 3)) #xff) 8))])
-                      (loop (fx+ i 4) (cons (integer->char (fx+ #x10000 (fxsll (fx- u #xd800) 10) (fx- lo #xdc00))) acc)))
-                    (loop (fx+ i 2) (cons (integer->char u) acc)))))))))
+                      (if (and (fx>= lo #xdc00) (fx< lo #xe000))
+                          (loop (fx+ i 4) (cons (integer->char (fx+ #x10000 (fxsll (fx- u #xd800) 10) (fx- lo #xdc00))) acc))
+                          (loop (fx+ i 2) (cons (integer->char #xfffd) acc))))
+                    ;; a lone surrogate has no Scheme char; U+FFFD, as an
+                    ;; encoder would write it
+                    (loop (fx+ i 2) (cons (if (and (fx>= u #xd800) (fx< u #xe000)) (integer->char #xfffd) (integer->char u)) acc)))))))))
+
+;; a java.lang.String's UTF-16 code units, as a list
+(define (jstring-units o)
+  (string-slots!)
+  (let* ([v (jarr-vec (vector-ref (jobj-slots o) string-value-slot))]
+         [n (vector-length v)])
+    (if (eqv? 0 (vector-ref (jobj-slots o) string-coder-slot))
+        (map (lambda (b) (fxlogand b #xff)) (vector->list v))
+        (let loop ([i (fx- n 2)] [acc '()])
+          (if (fx< i 0) acc
+              (loop (fx- i 2) (cons (fxlogor (fxlogand (vector-ref v i) #xff)
+                                             (fxsll (fxlogand (vector-ref v (fx+ i 1)) #xff) 8))
+                                    acc)))))))
+
+;; whether a java.lang.String equals a constant (a string or code-unit vector);
+;; by code units, since jstring->scheme maps a lone surrogate to U+FFFD
+(define (jstring-lit-equal? o lit)
+  (equal? (jstring-units o) (code-units lit)))
 
 ;; any Java reference -> Scheme string, the way string concatenation sees it
 (define (jstring-of x)
@@ -513,18 +542,42 @@
 
 (define (jbool->string z) (if (eqv? z 0) "false" "true"))
 
-;; makeConcatWithConstants: \x1 takes the next argument (already a Scheme
-;; string), \x2 the next bootstrap constant.
+;; any Java reference -> its UTF-16 code units, the way string concatenation
+;; sees it; unlike jstring-of this keeps a lone surrogate
+(define (jstring-units-of x)
+  (cond [(not x) (code-units "null")]
+        [(and (jobj? x) (string=? (jclass-cname (jobj-cls x)) "java/lang/String")) (jstring-units x)]
+        [else (let ([s ((jvirt x "toString()Ljava/lang/String;") x)]) (if s (jstring-units s) (code-units "null")))]))
+
+;; x's code units pushed onto acc, last first: x is a Scheme string, a list of
+;; code units, or a classfile constant's code-unit vector
+(define (units-onto x acc)
+  (cond
+    [(string? x)
+     (let ([n (string-length x)])
+       (let loop ([i 0] [acc acc])
+         (if (fx= i n) acc
+             (let ([cp (char->integer (string-ref x i))])
+               (loop (fx+ i 1)
+                     (if (fx> cp #xffff)
+                         (let ([v (fx- cp #x10000)])
+                           (cons (fx+ #xdc00 (fxlogand v #x3ff)) (cons (fx+ #xd800 (fxsrl v 10)) acc)))
+                         (cons cp acc)))))))]
+    [(vector? x) (units-onto (vector->list x) acc)]
+    [else (fold-left (lambda (a u) (cons u a)) acc x)]))
+
+;; makeConcatWithConstants: \x1 takes the next argument (a Scheme string or a
+;; list of code units), \x2 the next bootstrap constant. Built as code units, so
+;; a lone surrogate in any part survives.
 (define (jconcat recipe args consts)
-  (let ([out (open-output-string)])
-    (let loop ([i 0] [args args] [consts consts])
-      (if (fx= i (string-length recipe))
-          (jstring (get-output-string out))
-          (let ([c (string-ref recipe i)])
-            (cond
-              [(char=? c #\x1) (put-string out (car args)) (loop (fx+ i 1) (cdr args) consts)]
-              [(char=? c #\x2) (put-string out (car consts)) (loop (fx+ i 1) args (cdr consts))]
-              [else (put-char out c) (loop (fx+ i 1) args consts)]))))))
+  (let loop ([rs (code-units recipe)] [args args] [consts consts] [acc '()])
+    (if (null? rs)
+        (units->jstring (reverse acc))
+        (let ([u (car rs)])
+          (cond
+            [(fx= u 1) (loop (cdr rs) (cdr args) consts (units-onto (car args) acc))]
+            [(fx= u 2) (loop (cdr rs) args (cdr consts) (units-onto (car consts) acc))]
+            [else (loop (cdr rs) args consts (cons u acc))])))))
 
 ;; --- Class mirrors ---------------------------------------------------------------
 

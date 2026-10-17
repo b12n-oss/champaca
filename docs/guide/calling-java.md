@@ -131,7 +131,7 @@ Only one thread runs Java code at a time ([limitations](limitations.md#threads-t
 
 ## Results
 
-Strings come back as jolt strings. Boxed numbers, Booleans and Characters come back unboxed, and `void` comes back as `nil`. Everything else stays a Java object: arrays, collections, your own classes. You can keep calling methods on those, or copy them into jolt data with `->clj` ([data-conversion](data-conversion.md)).
+Strings come back as jolt strings, with any lone surrogate turned into U+FFFD ([limitations](limitations.md#the-calling-api)). Boxed numbers, Booleans and Characters come back unboxed, and `void` comes back as `nil`. Everything else stays a Java object: arrays, collections, your own classes. You can keep calling methods on those, or copy them into jolt data with `->clj` ([data-conversion](data-conversion.md)).
 
 ```clojure
 (ldk/invoke "champaca" "length")                      ;=> 8

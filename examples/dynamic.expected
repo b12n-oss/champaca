@@ -17,4 +17,5 @@ upper HELLO
 charAt b
 split 3
 MAX_VALUE 2147483647
+surrogates (128512 65533)
 caught java.lang.NumberFormatException: For input string: "x"

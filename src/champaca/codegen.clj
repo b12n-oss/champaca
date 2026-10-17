@@ -21,16 +21,27 @@
   [s]
   (str "|" s "|"))
 
-(defn str-lit [s]
-  (str "\""
-       (apply str (map (fn [c]
-                         (let [i (int c)]
-                           (cond (= c \\) "\\\\"
-                                 (= c \") "\\\""
-                                 (< i 32) (str "\\x" (Integer/toHexString i) ";")
-                                 :else (str c))))
-                       s))
-       "\""))
+(defn str-lit
+  "A Scheme string literal, or for a constant holding a lone surrogate (a
+  vector of UTF-16 code units, see classfile/decode-mutf8) a vector literal.
+  Quote it where it's evaluated; jstring-lit-form does."
+  [s]
+  (if (vector? s)
+    (str "#" (apply sx (map str s)))
+    (str "\""
+         (apply str (map (fn [c]
+                           (let [i (int c)]
+                             (cond (= c \\) "\\\\"
+                                   (= c \") "\\\""
+                                   (< i 32) (str "\\x" (Integer/toHexString i) ";")
+                                   :else (str c))))
+                         s))
+         "\"")))
+
+(defn jstring-lit-form
+  "The expression for a String constant: the interned java.lang.String."
+  [s]
+  (sx "jstring-lit" (if (vector? s) (str "'" (str-lit s)) (str-lit s))))
 
 (defn num-lit [x]
   (cond
@@ -430,7 +441,7 @@
               :long (push! (num-lit (:value e)) "J")
               :float (push! (num-lit (:value e)) "F")
               :double (push! (num-lit (:value e)) "D")
-              :string (push! (sx "jstring-lit" (str-lit (:value e))) "A")
+              :string (push! (jstring-lit-form (:value e)) "A")
               :class (push! (sx "jmirror-of" (str-lit (:name e))) "A")
               (:methodtype :methodhandle :dynamic)
               (let [d (if (= :dynamic (:tag e)) (:desc e) "Ljava/lang/Object;")]
@@ -599,17 +610,20 @@
             (case bsm-name
               "makeConcatWithConstants"
               (let [recipe (:value (cp (first (:args bsm))))
-                    consts (map #(let [e (cp %)] (str-lit (str (:value e)))) (rest (:args bsm)))
+                    ;; a code-unit vector (a lone surrogate) is quoted, being evaluated
+                    lit #(if (vector? %) (str "'" (str-lit %)) (str-lit (str %)))
+                    consts (map #(lit (:value (cp %))) (rest (:args bsm)))
                     conv (map (fn [t v]
                                 (case t
                                   ("I" "S" "B" "J") (sx "number->string" v)
                                   "F" (sx "java-float->string" v)
                                   "D" (sx "jdouble->string" v)
-                                  "C" (sx "string" (sx "integer->char" v))
+                                  ;; one code unit, which may be half a surrogate pair
+                                  "C" (sx "list" v)
                                   "Z" (sx "jbool->string" v)
-                                  (sx "jstring-of" v)))
+                                  (sx "jstring-units-of" v)))
                               args argv)]
-                (push! (sx "jconcat" (str-lit recipe) (apply sx "list" conv) (apply sx "list" consts)) "A"))
+                (push! (sx "jconcat" (lit recipe) (apply sx "list" conv) (apply sx "list" consts)) "A"))
               "bootstrap" ; java.lang.runtime.ObjectMethods: record toString/equals/hashCode
               (let [[_rec names-idx & getters] (:args bsm)
                     fields (for [g getters :let [{:keys [class name desc]} (cp (:ref-idx (cp g)))]]

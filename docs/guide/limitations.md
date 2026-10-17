@@ -33,6 +33,7 @@ A JDK library load (`zip`, `net` and so on) is a no-op, because those natives ar
 - `->clj` returns map keys as strings, with no option to turn them into keywords.
 - A vector passed to a plain `Object` parameter becomes an array, not a `List`.
 - A Java object prints as `#object[:object]` in jolt. Use `ldk/to-string`.
+- A Java string can hold a lone surrogate (half of a UTF-16 pair) and a jolt string can't, so one comes back to jolt with U+FFFD in its place. Inside Java nothing is lost: string constants, concatenation and `switch` keep the code units exactly.
 
 ## Speed
 

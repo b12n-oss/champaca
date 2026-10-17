@@ -69,23 +69,41 @@
     (loop [i start acc (transient [])]
       (if (< i end) (recur (inc i) (conj! acc (at i))) (persistent! acc)))))
 
+(defn- units->string
+  "UTF-16 code units to a string, a surrogate pair becoming one character;
+  nil when a surrogate stands alone, which a Chez string can't hold."
+  [units]
+  (let [n (count units)]
+    (loop [i 0 out (StringBuilder.)]
+      (if (>= i n)
+        (str out)
+        (let [u (nth units i)
+              lo (when (< (inc i) n) (nth units (inc i)))]
+          (cond
+            (or (< u 0xd800) (> u 0xdfff)) (recur (inc i) (.append out (char u)))
+            (and (< u 0xdc00) lo (<= 0xdc00 lo 0xdfff))
+            (recur (+ i 2) (.append out (char (+ 0x10000 (* (- u 0xd800) 1024) (- lo 0xdc00)))))
+            :else nil))))))
+
 (defn- decode-mutf8
   "Modified UTF-8 to a string. Supplementary characters arrive as surrogate
-  pairs; the spike leaves them as two code units."
+  pairs and become one character. A constant with a lone surrogate comes
+  back as a vector of its UTF-16 code units; codegen/str-lit writes that as
+  a Scheme vector and the runtime's jstring takes either."
   [bs]
-  (loop [i 0 out (StringBuilder.)]
-    (if (>= i (count bs))
-      (str out)
-      (let [b (nth bs i)]
-        (cond
-          (< b 0x80) (recur (inc i) (.append out (char b)))
-          (< b 0xe0) (recur (+ i 2)
-                            (.append out (char (+ (* (bit-and b 0x1f) 64)
-                                                  (bit-and (nth bs (inc i)) 0x3f)))))
-          :else (recur (+ i 3)
-                       (.append out (char (+ (* (bit-and b 0x0f) 4096)
-                                             (* (bit-and (nth bs (inc i)) 0x3f) 64)
-                                             (bit-and (nth bs (+ i 2)) 0x3f))))))))))
+  (let [n (count bs)
+        units (loop [i 0 acc (transient [])]
+                (if (>= i n)
+                  (persistent! acc)
+                  (let [b (nth bs i)]
+                    (cond
+                      (< b 0x80) (recur (inc i) (conj! acc b))
+                      (< b 0xe0) (recur (+ i 2) (conj! acc (+ (* (bit-and b 0x1f) 64)
+                                                              (bit-and (nth bs (inc i)) 0x3f))))
+                      :else (recur (+ i 3) (conj! acc (+ (* (bit-and b 0x0f) 4096)
+                                                         (* (bit-and (nth bs (inc i)) 0x3f) 64)
+                                                         (bit-and (nth bs (+ i 2)) 0x3f))))))))]
+    (or (units->string units) units)))
 
 (defn- read-cp-entry [r]
   (let [tag (u1 r)]

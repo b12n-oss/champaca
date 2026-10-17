@@ -41,5 +41,9 @@
 (p "charAt" (ldk/invoke "abc" "charAt" 1))
 (p "split" (count (ldk/->clj (ldk/invoke "a,b,c" "split" ","))))
 (p "MAX_VALUE" (ldk/get-static "java.lang.Integer" "MAX_VALUE"))
+;; a surrogate pair comes back as one character; a lone surrogate, which a
+;; jolt string can't hold, as U+FFFD
+(p "surrogates" (map int (str (ldk/invoke-static "java.lang.String" "valueOf" (ldk/invoke-static "java.lang.Character" "toChars" 0x1F600))
+                              (ldk/invoke-static "java.lang.String" "valueOf" (ldk/invoke-static "java.lang.Character" "toChars" 0xD800)))))
 (try (ldk/invoke-static "java.lang.Integer" "parseInt" "x")
      (catch Exception e (p "caught" (ex-message e))))

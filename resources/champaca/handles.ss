@@ -366,7 +366,7 @@
   (case (car label)
     [(class) (jinstance? x (cadr label))]
     [(prim) (number? x)]
-    [(string) (and (jinstance? x "java/lang/String") (string=? (jstring->scheme x) (cadr label)))]
+    [(string) (and (jinstance? x "java/lang/String") (jstring-lit-equal? x (cadr label)))]
     [(int) (let ([p (box-prim-of x)])
              (and p (memv (string-ref p 0) '(#\I #\S #\B #\C)) (eqv? (junbox p x) (cadr label))))]
     [(name) (and (jinstance? x "java/lang/Enum") (string=? (enum-name x) (cadr label)))]

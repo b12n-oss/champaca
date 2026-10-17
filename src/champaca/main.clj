@@ -457,7 +457,7 @@
 (defn- constant-text [{:keys [tag value]}]
   (case tag
     (:int :long :float :double) (cg/num-lit value)
-    :string (cg/sx "jstring-lit" (cg/str-lit value))))
+    :string (cg/jstring-lit-form value)))
 
 ;; A reflection attribute as a Scheme literal: a Signature string, raw
 ;; annotation bytes, or #f when the classfile has none.
@@ -772,8 +772,11 @@
           (fn [path] (str/join "\n" (resource-urls path))))
   (s/call "set-cp-hook!" (fn [cname i]
                            (let [e (get (:cp (parsed cname)) i)]
-                             (or (:value e) (:name e)
-                                 (throw (ex-info "no such constant" {:class cname :index i}))))))
+                             (let [v (or (:value e) (:name e)
+                                         (throw (ex-info "no such constant" {:class cname :index i})))]
+                               ;; a lone surrogate's code units (classfile/decode-mutf8)
+                               ;; go over as a Scheme vector, which jstring takes
+                               (if (vector? v) (apply s/call "vector" v) v)))))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
     (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))

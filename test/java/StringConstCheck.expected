@@ -1,0 +1,15 @@
+4: 61 d83d de00 62
+true
+1: d800
+3: 78 d800 79
+2: dc00 d800
+true
+2: d83d de00
+1 2 3 4
+4: 61 d83d de00 62
+1: dbff / 2: d800 dc00
+8: 3c 78 d800 79 37 d83d de00 3e
+3: d83d de00 dc01
+5: 70 dbff 30 d83d de00
+d6d09439fc36
+3: 4e2d d83d de00
