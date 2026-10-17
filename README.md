@@ -81,13 +81,13 @@ The first run builds a cache under `~/.cache/champaca/<key>/` and later runs loa
 
 | Program | No cache | Warm cache | Warm, after a full `bb test` |
 |---|---|---|---|
-| Hello | 1.31 s | 0.33 s | 0.42 s |
-| Streams | 1.96 s | 0.39 s | 0.48 s |
-| `examples/interop.clj` | 1.47 s | 0.37 s | 0.47 s |
+| Hello | 1.20 s | 0.30 s | 0.34 s |
+| Streams | 1.70 s | 0.46 s | 0.44 s |
+| `examples/interop.clj` | 1.52 s | 0.36 s | 0.39 s |
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
-The compiled code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 1.5 MB now, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. Before that change a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. A cold start compiles each JDK method once and caches that same object code, rather than compiling it again to write the cache. Writing a new cache removes key directories no run has used for a week.
+The compiled code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 1.5 MB now, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. The class table in `state.img` works the same way: each class rides as edn text and parses the first time a run touches it, so a cache grown by many programs costs a warm run little. Before those changes a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. A cold start compiles each JDK method once and caches that same object code, rather than compiling it again to write the cache. Writing a new cache removes key directories no run has used for a week, and keeps at most the 16 most recently used.
 
 ## Run it
 

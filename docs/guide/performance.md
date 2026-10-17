@@ -30,7 +30,9 @@ When a run compiles JDK methods the cache didn't have, `champaca.main` appends t
 
 `boot.so` loads whole on every run, since boot needs all of it. A generation doesn't. It's written one unit at a time, each unit being either one class's registration (its vtable and method stubs) or one compiled method body, and `state.img` records where each unit sits. A later run starts with none of them loaded. When something first needs a class from a generation, its unit loads, its superclass and interfaces first. The first call to one of its methods then loads that method's body rather than compiling it again. `CHAMPACA_STATS=1` counts the units a run loaded.
 
-Before this, every run loaded every generation, and the cost followed the amount of code. A full `bb test` from an empty cache leaves 14 generations, and a warm `Hello` on that cache took 0.58 s instead of 0.37 s. Right after the change it took 0.42 s and loaded 85 units. Most of the 60 ms left is `state.img`, which still holds every class any run has loaded (775 KB against 250 KB, 73 ms to read against 25 ms).
+Before this, every run loaded every generation, and the cost followed the amount of code. A full `bb test` from an empty cache leaves 14 generations, and a warm `Hello` on that cache took 0.58 s instead of 0.37 s. Right after the change it took 0.42 s and loaded 85 units. Most of the 60 ms left was `state.img`, which holds every class any run has loaded (775 KB against 250 KB, 73 ms to read against 25 ms).
+
+`state.img` is now written as one piece of edn text per class. Reading the image builds strings, and an entry is parsed the first time the run touches its class, so boot pays for the classes the program uses rather than for everything the cache has seen. After today's full `bb test` the table holds about 1,450 classes in a 1.6 MB image: decoding the old form took 144 ms, reading the text form takes 35 ms, and a warm `Hello` on that cache went from 0.43 s to 0.34 s (medians of nine interleaved runs). A save keeps the text of every entry the run never parsed, so rewriting the image doesn't re-print the whole table either.
 
 Class registrations turned out to be most of a generation's code: 9.4 MB of the 14.7 MB that `bb test` wrote, with method bodies the rest. So loading only the bodies lazily would have saved 40 ms.
 
@@ -47,7 +49,7 @@ CHAMPACA_CACHE_DIR=/tmp/ldk jolt -M -m champaca.main classes Main  # keep it som
 
 ### Upkeep
 
-Old key directories are cleaned up when a new cache is written: any sibling directory no run has loaded for 7 days goes, along with leftovers from an interrupted write. A cache hit marks its directory as used, so another key still in use, such as the `CHAMPACA_BT` one, stays as long as something runs with it every week. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jmods/` and `jolt/` beside them unless you mean it: they hold the module index with its copied zips, and the pinned jolt build.
+Old key directories are cleaned up when a new cache is written: any sibling directory no run has loaded for 7 days goes, along with leftovers from an interrupted write. A cache hit marks its directory as used, so another key still in use, such as the `CHAMPACA_BT` one, stays as long as something runs with it every week. Besides the age rule, only the 16 most recently used key directories are kept. That matters when the translator itself is being edited, since every edit makes a new key, and a day of that would otherwise leave gigabytes behind. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jmods/` and `jolt/` beside them unless you mean it: they hold the module index with its copied zips, and the pinned jolt build.
 
 ## The call-site cache
 
