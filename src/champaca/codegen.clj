@@ -569,8 +569,9 @@
                        (:invokevirtual :invokeinterface)
                        (cond
                          (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
-                         ;; signature-polymorphic: the runtime decodes the call site
-                         (apply sx "vh-call" recv (str-lit name) argv)
+                         ;; signature-polymorphic: the runtime adapts the call site's
+                         ;; types to the access mode's, as asType would
+                         (apply sx "vh-call" recv (str-lit name) (str-lit desc) argv)
                          (and (= class "java/lang/invoke/MethodHandle") (#{"invokeExact" "invoke"} name))
                          (apply sx "mh-call" recv (str-lit desc) argv)
                          :else

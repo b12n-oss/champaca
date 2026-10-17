@@ -1,0 +1,56 @@
+127 -128
+65535 1
+-32768 32767 32767 -32768
+0.1 0.3 true
+true 1.0
+false 0.0
+true true true false
+float or UnsupportedOperationException
+double and UnsupportedOperationException
+boolean add UnsupportedOperationException
+ref add UnsupportedOperationException
+ref xor UnsupportedOperationException
+final get 3 set UnsupportedOperationException cas UnsupportedOperationException 3
+static final get 4 set UnsupportedOperationException
+byte [class VarHandleModes] 1111111111111111111111111111111
+float [class VarHandleModes] 1111111111111111111111000000000
+boolean [class VarHandleModes] 1111111111111111111000111111111
+java.lang.String [class VarHandleModes] 1111111111111111111000000000000
+int [class VarHandleModes] 1010101000000000000000000000000
+(VarHandleModes,String,String)boolean
+(VarHandleModes,String)String
+()int
+GET_AND_ADD_ACQUIRE getOpaque
+uoe getAndBitwiseOr
+uoe setVolatile
+UnsupportedOperationException
+VarHandle[varType=float, coord=[class VarHandleModes]] false true
+3.0 3.5 Byte -128 -128 Boolean
+1 true 5.0
+-128 exact boxed WrongMethodTypeException
+java.lang.invoke.WrongMethodTypeException: handle's method type (VarHandleModes)byte but found (VarHandleModes)Object
+WrongMethodTypeException
+null receiver NullPointerException
+(VarHandleModes)String a
+-128 -123
+a r VarHandle[varType=java.lang.String, coord=[class VarHandleModes]] 4 UnsupportedOperationException
+array store ArrayStoreException
+ase java.lang.Integer
+ase null
+ase null
+ase [Ljava.lang.String;
+null s true t
+65535 0
+boolean[] add UnsupportedOperationException or false true
+char [class [C, int]
+plain misaligned ok 7
+volatile misaligned UnsupportedOperationException
+cas misaligned UnsupportedOperationException
+cas aligned UnsupportedOperationException add aligned UnsupportedOperationException
+short cas UnsupportedOperationException short volatile UnsupportedOperationException
+float add UnsupportedOperationException float cas UnsupportedOperationException
+view bounds ArrayIndexOutOfBoundsException
+110000000000000000000000000000011000000000000000000000000000001100000000000000000000000000000
+int [class [B, int]
+uoe getVolatile
+mh uoe getAndAdd (byte[],int,int)int

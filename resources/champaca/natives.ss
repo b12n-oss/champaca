@@ -1041,21 +1041,86 @@
 ;; at. Codegen sends every signature-polymorphic call on VarHandle to vh-call
 ;; with the access mode's name, so one procedure serves get, set,
 ;; compareAndSet, getAndAdd and the rest. Memory-ordering suffixes (Volatile,
-;; Acquire, Release, Opaque, Plain) don't matter on one thread.
+;; Acquire, Release, Opaque, Plain) don't matter here: every access is
+;; already sequentially consistent. A mode the JVM doesn't support for the
+;; handle throws UnsupportedOperationException named after the mode, before
+;; the receiver is looked at, as the JVM does: numeric updates on references
+;; and booleans, bitwise ones on references and floating point, anything but
+;; reads on a final field, and anything but plain get and set on a byte[]
+;; view (JDK 25 can't promise a heap byte[] is aligned).
 ;;
 ;; kind   coordinates      a                      b
 ;; field  (obj)            slot index             -
 ;; static ()               the static's symbol    class to initialize
 ;; array  (array index)    -                      -
 ;; view   (byte[] index)   width in bytes         big-endian?
+;;
+;; type is the variable's descriptor, coords the coordinates' descriptors
+;; (what coordinateTypes() shows), ops the operations it supports (plain-only?
+;; when only the plain modes of those are), and parts each access type's
+;; #(args ret sites), made when first called: sites maps a call site's
+;; descriptor to whether its types are already the access type's.
 
-(define-record-type vh-target (fields kind a b type) (sealed #t) (nongenerative champaca-vh-target))
+(define-record-type vh-target (fields kind a b type coords ops plain-only? parts)
+  (sealed #t) (nongenerative champaca-vh-target))
 (define vh-targets (make-weak-eq-hashtable))
 
-(define (make-vh kind a b type)
+(define (vh-target-new kind a b type coords final?)
+  (let ([ref? (memv (string-ref type 0) '(#\L #\[))])
+    (make-vh-target kind a b type coords
+                    (cond [(eq? kind 'view) '(get set)]
+                          [final? '(get)]
+                          [else (append '(get set cas cax gas)
+                                        (if (or ref? (string=? type "Z")) '() '(add))
+                                        (if (or ref? (member type '("F" "D"))) '() '(or and xor)))])
+                    (eq? kind 'view) (make-vector 5 #f))))
+
+(define vh-exact-slot #f)
+(define (vh-exact-index)
+  (or vh-exact-slot
+      (begin (set! vh-exact-slot (jfield-index "java/lang/invoke/VarHandle" "exact")) vh-exact-slot)))
+
+(define (vh-of t exact?)
   (let ([vh (jnew "java/lang/invoke/VarHandle")])
-    (eq-hashtable-set! vh-targets vh (make-vh-target kind a b type))
+    (jslot-set! vh (vh-exact-index) (if exact? 1 0))
+    (eq-hashtable-set! vh-targets vh t)
     vh))
+
+(define (make-vh kind a b type coords final?)
+  (vh-of (vh-target-new kind a b type coords final?) #f))
+
+;; access mode name -> operation
+(define vh-mode-ops
+  (let ([t (make-hashtable string-hash string=?)])
+    (for-each (lambda (e) (for-each (lambda (n) (hashtable-set! t n (car e))) (cdr e)))
+              '((get "get" "getVolatile" "getOpaque" "getAcquire")
+                (set "set" "setVolatile" "setOpaque" "setRelease")
+                (cas "compareAndSet" "weakCompareAndSetPlain" "weakCompareAndSet"
+                     "weakCompareAndSetAcquire" "weakCompareAndSetRelease")
+                (cax "compareAndExchange" "compareAndExchangeAcquire" "compareAndExchangeRelease")
+                (gas "getAndSet" "getAndSetAcquire" "getAndSetRelease")
+                (add "getAndAdd" "getAndAddAcquire" "getAndAddRelease")
+                (or "getAndBitwiseOr" "getAndBitwiseOrAcquire" "getAndBitwiseOrRelease")
+                (and "getAndBitwiseAnd" "getAndBitwiseAndAcquire" "getAndBitwiseAndRelease")
+                (xor "getAndBitwiseXor" "getAndBitwiseXorAcquire" "getAndBitwiseXorRelease")))
+    t))
+
+;; mode -> (op . plain?), cached by the identity of the name, which at a call
+;; site is a literal
+(define vh-mode-infos (make-weak-eq-hashtable))
+(define (vh-mode-info mode)
+  (or (eq-hashtable-ref vh-mode-infos mode #f)
+      (let ([i (cons (hashtable-ref vh-mode-ops mode #f) (and (member mode '("get" "set")) #t))])
+        (eq-hashtable-set! vh-mode-infos mode i)
+        i)))
+
+(define (vh-supports? t mode)
+  (let ([i (vh-mode-info mode)])
+    (and (memq (car i) (vh-target-ops t)) (or (cdr i) (not (vh-target-plain-only? t))) #t)))
+
+(define (vh-target-of vh mode)
+  (or (eq-hashtable-ref vh-targets (nn vh) #f)
+      (jthrow "java/lang/UnsupportedOperationException" mode)))
 
 (define (view-decode t u)
   (case t [("S") (i2s u)] [("I") (i32 u)] [("J") (i64 u)]
@@ -1063,50 +1128,132 @@
 (define (view-encode t v)
   (case t [("F") (float->bits v)] [("D") (double->bits v)] [else v]))
 
-;; getter and setter over one access's coordinates
-(define (vh-access t coords)
+;; A reference array checks what it stores against its own element type, as
+;; aastore should (it doesn't yet, docs/guide/limitations.md). Only a plain
+;; set names the class, as on the JVM.
+(define (array-store-check a v mode)
+  (let ([e (jarr-elem (nn a))])
+    (when (and v (memv (string-ref e 0) '(#\L #\[)) (not (string=? e "Ljava/lang/Object;"))
+               (not (jinstance? v (desc->class-name e))))
+      (jthrow "java/lang/ArrayStoreException"
+              (and (string=? mode "set") (slashes->dots (class-name-of v)))))))
+
+;; read and write the variable at one access's coordinates
+(define (vh-get t coords)
   (case (vh-target-kind t)
-    [(field)
-     (let ([o (nn (car coords))] [i (vh-target-a t)])
-       (values (lambda () (vector-ref (jobj-slots o) i))
-               (lambda (v) (vector-set! (jobj-slots o) i v))))]
-    [(static)
-     (let ([sym (vh-target-a t)])
-       (jinit (vh-target-b t))
-       (values (lambda () (top-level-value sym)) (lambda (v) (set-top-level-value! sym v))))]
-    [(array)
-     (let ([a (car coords)] [i (cadr coords)])
-       (values (lambda () (jaload a i)) (lambda (v) (jastore a i v))))]
-    [(view)
-     (let ([a (car coords)] [i (cadr coords)] [n (vh-target-a t)] [big? (vh-target-b t)] [ty (vh-target-type t)])
-       (values (lambda () (view-decode ty (bytes-get a i n big?)))
-               (lambda (v) (bytes-set! a i n big? (view-encode ty v)))))]))
+    [(field) (vector-ref (jobj-slots (nn (car coords))) (vh-target-a t))]
+    [(static) (jinit (vh-target-b t)) (top-level-value (vh-target-a t))]
+    [(array) (jaload (car coords) (cadr coords))]
+    [else (view-decode (vh-target-type t)
+                       (bytes-get (car coords) (cadr coords) (vh-target-a t) (vh-target-b t)))]))
+
+(define (vh-set! t coords v mode)
+  (case (vh-target-kind t)
+    [(field) (vector-set! (jobj-slots (nn (car coords))) (vh-target-a t) v)]
+    [(static) (jinit (vh-target-b t)) (set-top-level-value! (vh-target-a t) v)]
+    [(array) (array-store-check (car coords) v mode) (jastore (car coords) (cadr coords) v)]
+    [else (bytes-set! (car coords) (cadr coords) (vh-target-a t) (vh-target-b t)
+                      (view-encode (vh-target-type t) v))]))
 
 (define (wrap-as t v)
-  (case t [("I") (i32 v)] [("J") (i64 v)] [("S") (i2s v)] [("B") (i2b v)] [("C") (logand v #xffff)] [else v]))
+  (case t [("I") (i32 v)] [("J") (i64 v)] [("S") (i2s v)] [("B") (i2b v)] [("C") (logand v #xffff)]
+          [("F") (f32 v)] [else v]))
 
-(define (vh-call vh mode . args)
-  (let* ([t (or (eq-hashtable-ref vh-targets (nn vh) #f)
-                (jthrow "java/lang/UnsupportedOperationException" (string-append "VarHandle." mode)))]
-         [ty (vh-target-type t)]
-         [n (case (vh-target-kind t) [(field) 1] [(static) 0] [else 2])]
-         [vals (list-tail args n)]
-         [has? (lambda (p) (starts? mode p))])
-    (let-values ([(get set) (vh-access t (list-head args n))])
-      (define (update f) (let ([old (get)]) (set (wrap-as ty (f old))) old))
-      (cond
-        [(or (has? "compareAndSet") (has? "weakCompareAndSet"))
-         (if (eqv? (get) (car vals)) (begin (set (cadr vals)) 1) 0)]
-        [(has? "compareAndExchange")
-         (let ([old (get)]) (when (eqv? old (car vals)) (set (cadr vals))) old)]
-        [(has? "getAndSet") (let ([old (get)]) (set (car vals)) old)]
-        [(has? "getAndAdd") (update (lambda (old) (+ old (car vals))))]
-        [(has? "getAndBitwiseOr") (update (lambda (old) (logior old (car vals))))]
-        [(has? "getAndBitwiseAnd") (update (lambda (old) (logand old (car vals))))]
-        [(has? "getAndBitwiseXor") (update (lambda (old) (logxor old (car vals))))]
-        [(has? "get") (get)]
-        [(has? "set") (set (car vals))]
-        [else (jthrow "java/lang/UnsupportedOperationException" (string-append "VarHandle." mode))]))))
+(define access-types '#("GET" "SET" "COMPARE_AND_SET" "COMPARE_AND_EXCHANGE" "GET_AND_UPDATE"))
+(define (op-access-type op)
+  (case op [(get) 0] [(set) 1] [(cas) 2] [(cax) 3] [else 4]))
+
+;; #(args ret sites) of the access type, made once per handle
+(define (vh-parts t k)
+  (or (vector-ref (vh-target-parts t) k)
+      (let* ([d (vh-access-type-desc t (vector-ref access-types k))]
+             [p (vector (desc-args d) (desc-ret d) (make-weak-eq-hashtable))])
+        (vector-set! (vh-target-parts t) k p)
+        p)))
+
+(define (method-type-text args ret)
+  (jstring-of (desc->method-type (args->desc args ret))))
+
+;; site is the call site's descriptor (a literal, so its parse is cached by
+;; identity). Its argument and result types are adapted to the access type's,
+;; as asType would; a handle with invoke-exact behavior wants them equal.
+(define (vh-run t op mode args)
+  (let* ([ty (vh-target-type t)]
+         [vals (list-tail args (length (vh-target-coords t)))])
+    (define (get) (vh-get t args))
+    (define (set v) (vh-set! t args v mode))
+    (define (update f) (let ([old (get)]) (set (wrap-as ty (f old))) old))
+    (case op
+      [(get) (get)]
+      [(set) (set (car vals))]
+      [(cas) (if (eqv? (get) (car vals)) (begin (set (cadr vals)) 1) 0)]
+      [(cax) (let ([old (get)]) (when (eqv? old (car vals)) (set (cadr vals))) old)]
+      [(gas) (let ([old (get)]) (set (car vals)) old)]
+      [(add) (update (lambda (old) (+ old (car vals))))]
+      [(or) (update (lambda (old) (logior old (car vals))))]
+      [(and) (update (lambda (old) (logand old (car vals))))]
+      [(xor) (update (lambda (old) (logxor old (car vals))))])))
+
+;; whether a call site's types are already the access type's, remembered per
+;; site descriptor
+(define (vh-site-same? e site)
+  (let ([v (eq-hashtable-ref (vector-ref e 2) site 'unknown)])
+    (if (eq? v 'unknown)
+        (let* ([sp (site-parts site)]
+               [same? (and (equal? (car sp) (vector-ref e 0)) (string=? (cdr sp) (vector-ref e 1)))])
+          (eq-hashtable-set! (vector-ref e 2) site same?)
+          same?)
+        v)))
+
+;; site is the call site's descriptor (a literal, so its parse is cached by
+;; identity). Its argument and result types are adapted to the access type's,
+;; as asType would; a handle with invoke-exact behavior wants them equal.
+(define (vh-call vh mode site . args)
+  (let* ([t (vh-target-of vh mode)]
+         [op (car (vh-mode-info mode))])
+    (unless (vh-supports? t mode)
+      (jthrow "java/lang/UnsupportedOperationException" mode))
+    (let ([e (vh-parts t (op-access-type op))])
+      (if (vh-site-same? e site)
+          (vh-run t op mode args)
+          (let* ([sp (site-parts site)] [sargs (car sp)] [targs (vector-ref e 0)] [tret (vector-ref e 1)])
+            (unless (fx= (length sargs) (length targs))
+              (jthrow "java/lang/invoke/WrongMethodTypeException"
+                      (string-append "expected " (method-type-text targs tret)
+                                     " but found " (method-type-text sargs (cdr sp)))))
+            (when (eqv? 1 (jslot vh (vh-exact-index)))
+              (jthrow "java/lang/invoke/WrongMethodTypeException"
+                      (string-append "handle's method type " (method-type-text targs tret)
+                                     " but found " (method-type-text sargs (cdr sp)))))
+            (adapt tret (cdr sp) (vh-run t op mode (adapt-all sargs targs args))))))))
+
+;; VarHandle's own methods. varType, coordinateTypes, accessModeType and
+;; toString are the JDK's, built on accessModeTypeUncached.
+(define (vh-access-type-desc t type-name)
+  (let ([cs (vh-target-coords t)] [v (vh-target-type t)])
+    (case type-name
+      [("GET") (args->desc cs v)]
+      [("SET") (args->desc (append cs (list v)) "V")]
+      [("COMPARE_AND_SET") (args->desc (append cs (list v v)) "Z")]
+      [("COMPARE_AND_EXCHANGE") (args->desc (append cs (list v v)) v)]
+      [("GET_AND_UPDATE") (args->desc (append cs (list v)) v)])))
+
+(define (access-mode-name m)
+  (str-of (jslot (nn m) (jfield-index "java/lang/invoke/VarHandle$AccessMode" "methodName"))))
+
+(define-override! "java/lang/invoke/VarHandle.accessModeTypeUncached(Ljava/lang/invoke/VarHandle$AccessType;)Ljava/lang/invoke/MethodType;"
+  (lambda (this at) (desc->method-type (vh-access-type-desc (vh-target-of this "accessModeType") (enum-name (nn at))))))
+(define-override! "java/lang/invoke/VarHandle.isAccessModeSupported(Ljava/lang/invoke/VarHandle$AccessMode;)Z"
+  (lambda (this m)
+    (let ([mode (access-mode-name m)])
+      (if (vh-supports? (vh-target-of this mode) mode) 1 0))))
+;; an unsupported mode's handle throws when called, as the JDK's does
+(define-override! "java/lang/invoke/VarHandle.toMethodHandle(Ljava/lang/invoke/VarHandle$AccessMode;)Ljava/lang/invoke/MethodHandle;"
+  (lambda (this m)
+    (let* ([mode (access-mode-name m)] [t (vh-target-of this mode)]
+           [at (enum-name (jslot m (jfield-index "java/lang/invoke/VarHandle$AccessMode" "at")))]
+           [d (vh-access-type-desc t at)])
+      (make-mh d (lambda args (apply vh-call this mode d args)) #f))))
 
 ;; the field named fname in class c or a superclass: (declaring-class . meta)
 (define (find-field c fname static?)
@@ -1127,19 +1274,28 @@
                 (string-append "no such field: " (dots (jclass-cname c)) "." fname "/"
                                (dots (jclass-cname (mirror-class (nn type))))
                                (if static? "/getStatic" "/getField")))))
-    (let ([dc (car hit)] [desc (cadr (cdr hit))])
+    (let ([dc (car hit)] [desc (cadr (cdr hit))] [final? (fxpositive? (fxlogand (caddr (cdr hit)) #x10))])
       (if static?
-          (make-vh 'static (string->symbol (string-append (jclass-cname dc) ":" fname)) (jclass-cname dc) desc)
-          (make-vh 'field (jfield-index (jclass-cname dc) fname) #f desc)))))
+          (make-vh 'static (string->symbol (string-append (jclass-cname dc) ":" fname)) (jclass-cname dc) desc
+                   '() final?)
+          (make-vh 'field (jfield-index (jclass-cname dc) fname) #f desc (list (cname->desc (jclass-cname c))) final?)))))
 
-;; exact-type checking isn't done, so both behaviours are the same handle
-(define-override! "java/lang/invoke/VarHandle.withInvokeExactBehavior()Ljava/lang/invoke/VarHandle;" (lambda (this) this))
-(define-override! "java/lang/invoke/VarHandle.withInvokeBehavior()Ljava/lang/invoke/VarHandle;" (lambda (this) this))
+;; the same variable, with or without invoke-exact behavior
+(define-override! "java/lang/invoke/VarHandle.withInvokeExactBehavior()Ljava/lang/invoke/VarHandle;"
+  (lambda (this) (vh-of (vh-target-of this "withInvokeExactBehavior") #t)))
+(define-override! "java/lang/invoke/VarHandle.withInvokeBehavior()Ljava/lang/invoke/VarHandle;"
+  (lambda (this) (vh-of (vh-target-of this "withInvokeBehavior") #f)))
 
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
   (lambda (this recv name type) (field-vh recv name type #f)))
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findStaticVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
   (lambda (this recv name type) (field-vh recv name type #t)))
+
+;; from a reflective Field, which names the declaring class
+(define-override! "java/lang/invoke/MethodHandles$Lookup.unreflectVarHandle(Ljava/lang/reflect/Field;)Ljava/lang/invoke/VarHandle;"
+  (lambda (this f)
+    (let ([slot (lambda (n) (jslot (nn f) (jfield-index "java/lang/reflect/Field" n)))])
+      (field-vh (slot "clazz") (slot "name") (slot "type") (static-flag? (slot "modifiers"))))))
 
 (define (array-class-elem cls)
   (let ([n (jclass-cname (mirror-class (nn cls)))])
@@ -1148,11 +1304,11 @@
     (substring n 1 (string-length n))))
 
 (define-override! "java/lang/invoke/MethodHandles.arrayElementVarHandle(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
-  (lambda (cls) (make-vh 'array #f #f (array-class-elem cls))))
+  (lambda (cls) (make-vh 'array #f #f (array-class-elem cls) (list (mirror->desc cls) "I") #f)))
 (define-override! "java/lang/invoke/MethodHandles.byteArrayViewVarHandle(Ljava/lang/Class;Ljava/nio/ByteOrder;)Ljava/lang/invoke/VarHandle;"
   (lambda (cls order)
     (let ([e (array-class-elem cls)]
           [big? (string=? "BIG_ENDIAN" (jstring->scheme (jslot (nn order) (jfield-index "java/nio/ByteOrder" "name"))))])
       (unless (member e '("S" "C" "I" "J" "F" "D"))
         (jthrow "java/lang/UnsupportedOperationException" (string-append "not a view type: " e)))
-      (make-vh 'view (type-size e) big? e))))
+      (make-vh 'view (type-size e) big? e '("[B" "I") #f))))
