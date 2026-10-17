@@ -636,7 +636,16 @@
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
                                            (s/call "compile-unit" text)))]
           (record! :jdk unit {:fasl bv}))
-        (timed :chez-compile #(scheme! text))))))
+        ;; the text is kept (cheaply) so save-cache! can compile it into a
+        ;; generation; without that a jolt program re-jits these every run
+        (do (timed :chez-compile #(scheme! text))
+            (record! (:origin info) unit {:text text}))))))
+
+(defn saves-generation!
+  "Tell the JIT this process will save a generation, so JDK methods compile
+  once to object code (api save-cache! calls it on its first save)."
+  []
+  (swap! state assoc :saves-generation true))
 
 (defn jit! [cname mname desc]
   (if-let [unit (get-in @state [:classes cname :cached-methods (str mname desc)])]
@@ -870,7 +879,7 @@
   "Run cname's main method with classes found under the classpath dirs,
   after booting the JDK. Returns the exit status."
   [classpath cname args]
-  (swap! state assoc :saves-generation true) ; save-generation! below
+  (saves-generation!) ; save-generation! runs at exit below
   (let [t0 (System/nanoTime)
         status (init! classpath)
         _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]

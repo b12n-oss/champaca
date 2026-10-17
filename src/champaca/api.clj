@@ -88,9 +88,11 @@
 (defn save-cache!
   "Add whatever JDK code this process compiled since boot to the startup
   cache, so the next process loads it instead of compiling it. Call it
-  before exit; it is cheap when nothing new was compiled."
+  before exit; it is cheap when nothing new was compiled. The first call
+  also tells the JIT this process saves, so later compiles go straight to
+  object code instead of being compiled again at the next call."
   []
-  (with-gil main/save-generation!))
+  (with-gil #(do (main/saves-generation!) (main/save-generation!))))
 
 (defn- ->arg
   "jolt vectors go to Scheme as lists, which the runtime turns into a Java
