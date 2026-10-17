@@ -81,9 +81,9 @@ The first run builds a cache under `~/.cache/champaca/<key>/` and later runs loa
 
 | Program | No cache | Warm cache | Warm, after a full `bb test` |
 |---|---|---|---|
-| Hello | 1.20 s | 0.30 s | 0.34 s |
-| Streams | 1.70 s | 0.46 s | 0.44 s |
-| `examples/interop.clj` | 1.52 s | 0.36 s | 0.39 s |
+| Hello | 1.18 s | 0.32 s | 0.33 s |
+| Streams | 1.72 s | 0.43 s | 0.44 s |
+| `examples/interop.clj` | 1.50 s | 0.37 s | 0.39 s |
 
 The key covers the JDK (`release`, the jmod's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
