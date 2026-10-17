@@ -64,18 +64,34 @@
      (s/call "interpret-string" text)
      (s/eval-string text))))
 
-(declare ensure-loaded! ancestry-of-unlinked lambda-class link registration-text)
+(declare ensure-loaded! ancestry-of-unlinked lambda-class link registration-text delete-tree!)
+
+(defn- parse-entry
+  "edn/read-string for one packed class entry. Damage inside an entry of an
+  otherwise readable state.img surfaces here, mid-run, where booting cold is
+  no longer possible (generations are already half loaded). The cache goes,
+  so the next run boots cold, and this run fails loudly."
+  [cname e]
+  (try (edn/read-string e)
+       (catch Exception ex
+         (binding [*out* *err*]
+           (println "champaca: discarding a damaged startup cache (bad entry for"
+                    (str cname "):") (ex-message ex)))
+         (when-let [dir (:cache-dir @state)] (delete-tree! dir))
+         (throw ex))))
 
 (defn- thaw!
   "The class table entry for cname as a map, or nil. A cache hit leaves
   every entry packed as edn text; the first read parses it and puts the
-  map back, so a run only pays for the classes it touches."
+  map back, so a run only pays for the classes it touches. The swap keeps
+  a map that is already there, so a racing thaw or a concurrent assoc-in
+  on the same entry is never overwritten."
   [cname]
   (let [e (get-in @state [:classes cname])]
     (if (string? e)
-      (let [u (edn/read-string e)]
-        (swap! state assoc-in [:classes cname] u)
-        u)
+      (let [u (parse-entry cname e)]
+        (-> (swap! state update-in [:classes cname] #(if (string? %) u %))
+            (get-in [:classes cname])))
       e)))
 
 (defn- class-info [cname]
@@ -314,10 +330,16 @@
     (conj starts (s/call "end-units!"))))
 
 (defn- load-unit!
-  "Run one unit of a cached generation: [file offset length]."
+  "Run one unit of a cached generation: [file offset length]. False when the
+  generation file is gone (pruned under a live process, cleared by hand), so
+  callers fall back to compiling and the next save re-caches the unit."
   [[file off len]]
-  (swap! state update :units-loaded (fnil inc 0))
-  (timed :cache-load-unit #(s/call "load-unit" (str (io/file (:cache-dir @state) file)) off len)))
+  (let [f (io/file (:cache-dir @state) file)]
+    (if (.exists f)
+      (do (swap! state update :units-loaded (fnil inc 0))
+          (timed :cache-load-unit #(s/call "load-unit" (str f) off len))
+          true)
+      false)))
 
 ;; --- resolution ----------------------------------------------------------------------
 
@@ -591,7 +613,10 @@
       (swap! state update :lazy disj cname)
       (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
         (ensure-loaded! dep))
-      (load-unit! (:cached-class info)))
+      (or (load-unit! (:cached-class info))
+          (let [text (registration-text info)]
+            (record! (:origin info) [cname] {:text text})
+            (scheme! text :interpret))))
 
     (not (get-in @state [:classes cname]))
     (let [info (timed :parse #(normalize cname))]
@@ -660,9 +685,9 @@
   (swap! state assoc :saves-generation true))
 
 (defn jit! [cname mname desc]
-  (if-let [unit (get (:cached-methods (thaw! cname)) (str mname desc))]
-    (load-unit! unit) ; compiled by an earlier run
-    (compile-method! cname mname desc)))
+  (let [unit (get (:cached-methods (thaw! cname)) (str mname desc))]
+    (when-not (and unit (load-unit! unit)) ; else compiled by an earlier run
+      (compile-method! cname mname desc))))
 
 (defn- stats []
   (let [{:keys [classes lazy jitted units-loaded]} @state]
@@ -742,7 +767,7 @@
                            (re-matches #"[0-9a-f]{1,8}(\.tmp-\d+)?" (.getName %))
                            (not= (.getName %) (.getName keep)))
                      (.listFiles (.getParentFile keep)))
-        keys-newest-first (sort-by #(- (.lastModified %))
+        keys-newest-first (sort-by (juxt #(- (.lastModified %)) #(.getName %))
                                    (remove #(str/includes? (.getName %) ".tmp-") sibs))
         over (set (drop (dec keep-keys) keys-newest-first))]
     (doseq [d sibs
@@ -788,7 +813,7 @@
       (.setLastModified dir (System/currentTimeMillis))   ; keeps it from being pruned
       (try
         (let [{:keys [classes lazy]} (timed :cache-read-state #(img/read-image (str img-file)))]
-          (when-not (map? classes)
+          (when-not (and (map? classes) (set? lazy))
             (throw (ex-info "not a champaca state image" {})))
           (swap! state assoc :classes classes :lazy lazy)
           (timed :cache-load-code #(s/call "load" (str so)))
