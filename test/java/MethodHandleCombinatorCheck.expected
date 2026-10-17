@@ -30,6 +30,8 @@ note 5
 foldArguments-void: 7
 note 9
 collectArguments-void: 5
+noteS abc
+foldArguments-void-het: 7
 asSpreader: 5
 spreader-shortarray: java.lang.IllegalArgumentException: array is not of length 2
 spreader-nullarray: java.lang.NullPointerException: null array reference

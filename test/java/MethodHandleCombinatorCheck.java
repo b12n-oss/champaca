@@ -20,6 +20,8 @@ public class MethodHandleCombinatorCheck {
     static int sum(int[] xs) { int s = 0; for (int x : xs) s += x; return s; }
     static int fin(Throwable t, int r, int a) { System.out.println("fin r=" + r); return r + 1000; }
     static void note(int a) { System.out.println("note " + a); }
+    static void noteS(String s) { System.out.println("noteS " + s); }
+    static int len2(String s, int b) { return s.length() + b; }
 
     public static void main(String[] args) throws Throwable {
         MethodHandles.Lookup L = MethodHandles.lookup();
@@ -68,6 +70,9 @@ public class MethodHandleCombinatorCheck {
         MethodHandle note = L.findStatic(me, "note", MethodType.methodType(void.class, int.class));
         t("foldArguments-void", () -> (int) MethodHandles.foldArguments(add, note).invoke(5, 2));
         t("collectArguments-void", () -> (int) MethodHandles.collectArguments(add, 0, note).invoke(9, 2, 3));
+        t("foldArguments-void-het", () -> { MethodHandle len2 = L.findStatic(me, "len2", MethodType.methodType(int.class, String.class, int.class));
+            MethodHandle noteS = L.findStatic(me, "noteS", MethodType.methodType(void.class, String.class));
+            return (int) MethodHandles.foldArguments(len2, noteS).invoke("abc", 4); });
 
         // spreaders and collectors
         t("asSpreader", () -> (int) add.asSpreader(int[].class, 2).invoke(new int[]{2,3}));
