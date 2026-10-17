@@ -66,9 +66,21 @@
 
 (declare ensure-loaded! ancestry-of-unlinked lambda-class link registration-text)
 
+(defn- thaw!
+  "The class table entry for cname as a map, or nil. A cache hit leaves
+  every entry packed as edn text; the first read parses it and puts the
+  map back, so a run only pays for the classes it touches."
+  [cname]
+  (let [e (get-in @state [:classes cname])]
+    (if (string? e)
+      (let [u (edn/read-string e)]
+        (swap! state assoc-in [:classes cname] u)
+        u)
+      e)))
+
 (defn- class-info [cname]
-  (or (get-in @state [:classes cname])
-      (do (ensure-loaded! cname) (get-in @state [:classes cname]))))
+  (or (thaw! cname)
+      (do (ensure-loaded! cname) (thaw! cname))))
 
 ;; --- class bytes -----------------------------------------------------------------
 ;; JDK classes come from $JAVA_HOME/jmods. A .jmod is a zip behind a 4-byte
@@ -575,7 +587,7 @@
     ;; registered by an earlier run: its class table entry came from the
     ;; cache, and its registration is one unit of a cached generation
     (contains? (:lazy @state) cname)
-    (let [info (get-in @state [:classes cname])]
+    (let [info (thaw! cname)]
       (swap! state update :lazy disj cname)
       (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
         (ensure-loaded! dep))
@@ -618,7 +630,7 @@
   "The parsed classfile for cname. A class restored from the boot cache
   carries no bytecode, so it is re-read on the first method compile."
   [cname]
-  (or (get-in @state [:classes cname :parsed])
+  (or (:parsed (thaw! cname))
       (let [p (timed :parse #(cf/parse (class-bytes cname)))]
         (swap! state assoc-in [:classes cname :parsed] p)
         p)))
@@ -648,7 +660,7 @@
   (swap! state assoc :saves-generation true))
 
 (defn jit! [cname mname desc]
-  (if-let [unit (get-in @state [:classes cname :cached-methods (str mname desc)])]
+  (if-let [unit (get (:cached-methods (thaw! cname)) (str mname desc))]
     (load-unit! unit) ; compiled by an earlier run
     (compile-method! cname mname desc)))
 
@@ -686,17 +698,30 @@
       (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
 
 (defn- strip-for-cache
-  "The linker's class map for JDK classes only, without bytecode: methods
-  keep :code as a flag."
+  "The linker's class map as edn text per class, JDK classes only, without
+  bytecode: methods keep :code as a flag. An entry this run never thawed is
+  already text and is kept as it is."
   [classes]
   (into {}
-        (for [[k info] classes :when (not= :user (:origin info))]
-          [k (-> info
-                 (dissoc :parsed)
-                 (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))])))
+        (for [[k info] classes
+              :let [s (if (string? info)
+                        info
+                        (when (not= :user (:origin info))
+                          (pr-str (-> info
+                                      (dissoc :parsed)
+                                      (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms)))))))]
+              :when s]
+          [k s])))
 
-(defn- dump-classes! [img]
-  (img/dump! (str img) (strip-for-cache (:classes @state))))
+(defn- dump-classes!
+  "state.img: each class entry as edn text, plus the set of classes whose
+  registration sits in a generation, so a load knows what is lazy without
+  parsing anything."
+  [img]
+  (let [{:keys [classes lazy]} @state]
+    (img/dump! (str img) {:lazy (into (set lazy)
+                                      (for [[k v] classes :when (and (map? v) (:cached-class v))] k))
+                          :classes (strip-for-cache classes)})))
 
 (defn- delete-tree! [f] (doseq [x (reverse (file-seq f))] (.delete x)))
 
@@ -704,15 +729,24 @@
 ;; a JDK update), so writing a new one removes siblings no run has loaded for a
 ;; week: a hit touches its directory. Other live keys (CHAMPACA_BT, a second
 ;; JDK) stay as long as something uses them. jmods/ and jolt/ never match.
+;; The age rule alone is not enough on a machine where the translator itself
+;; is edited: every edit is a new key, none a week old, and a day of work
+;; leaves gigabytes. So the newest few keys survive and the rest go, however
+;; young. Half-written .tmp- directories are collected by age only.
 (def ^:private stale-ms (* 7 24 60 60 1000))
+(def ^:private keep-keys 16)
 
 (defn- prune-cache-root! [keep]
-  (let [cutoff (- (System/currentTimeMillis) stale-ms)]
-    (doseq [d (.listFiles (.getParentFile keep))
-            :when (and (.isDirectory d)
-                       (re-matches #"[0-9a-f]{1,8}(\.tmp-\d+)?" (.getName d))
-                       (not= (.getName d) (.getName keep))
-                       (< (.lastModified d) cutoff))]
+  (let [cutoff (- (System/currentTimeMillis) stale-ms)
+        sibs (filter #(and (.isDirectory %)
+                           (re-matches #"[0-9a-f]{1,8}(\.tmp-\d+)?" (.getName %))
+                           (not= (.getName %) (.getName keep)))
+                     (.listFiles (.getParentFile keep)))
+        keys-newest-first (sort-by #(- (.lastModified %))
+                                   (remove #(str/includes? (.getName %) ".tmp-") sibs))
+        over (set (drop (dec keep-keys) keys-newest-first))]
+    (doseq [d sibs
+            :when (or (< (.lastModified d) cutoff) (over d))]
       (delete-tree! d))))
 
 (defn- write-cache!
@@ -753,9 +787,10 @@
     (when (and dir (.exists so) (.exists img-file))
       (.setLastModified dir (System/currentTimeMillis))   ; keeps it from being pruned
       (try
-        (let [classes (timed :cache-read-state #(img/read-image (str img-file)))]
-          (swap! state assoc :classes classes
-                 :lazy (set (for [[k v] classes :when (:cached-class v)] k)))
+        (let [{:keys [classes lazy]} (timed :cache-read-state #(img/read-image (str img-file)))]
+          (when-not (map? classes)
+            (throw (ex-info "not a champaca state image" {})))
+          (swap! state assoc :classes classes :lazy lazy)
           (timed :cache-load-code #(s/call "load" (str so)))
           true)
         ;; a damaged cache would fail every run the same way: drop it, boot
