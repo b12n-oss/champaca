@@ -25,6 +25,7 @@ public class MethodHandleCombinatorCheck {
     static int h2(RuntimeException e, int a, int b) { return 0; }
     static long hL(RuntimeException e) { return 1L; }
     static int h00() { return 0; }
+    static int hStr(String s) { return 0; }
     static void note(int a) { System.out.println("note " + a); }
     static void noteS(String s) { System.out.println("noteS " + s); }
     static int len2(String s, int b) { return s.length() + b; }
@@ -144,6 +145,8 @@ public class MethodHandleCombinatorCheck {
         t("catch-h0args", () -> MethodHandles.catchException(neg, RuntimeException.class,
             L.findStatic(me, "h00", MethodType.methodType(int.class))));
         t("catch-badexc", () -> MethodHandles.catchException(neg, (Class) String.class, h0h));
+        t("catch-wrongparam", () -> MethodHandles.catchException(neg, RuntimeException.class,
+            L.findStatic(me, "hStr", MethodType.methodType(int.class, String.class))));
         t("tryFinally-badfirst", () -> MethodHandles.tryFinally(neg,
             L.findStatic(me, "finBad", MethodType.methodType(int.class, String.class, int.class, int.class))));
         t("tryFinally-rettype", () -> MethodHandles.tryFinally(neg,
