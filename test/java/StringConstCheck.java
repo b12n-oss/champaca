@@ -34,6 +34,7 @@ public class StringConstCheck {
         return switch (s) {
             case "\uD83D\uDE00" -> 1;
             case "\uDC00" -> 2;
+            case "\uFFFD" -> 5;
             case String t when t.isEmpty() -> 3;
             default -> 4;
         };
@@ -59,6 +60,14 @@ public class StringConstCheck {
         char hi = '\uD83D', lo = '\uDE00', alone = '\uDC01';
         System.out.println(units("" + hi + lo + alone));
         System.out.println(units("p\uDBFF" + args.length + "\uD83D\uDE00"));
+        // intern() agrees with the constants, and lone surrogates don't collide
+        String d800 = new String(new char[]{0xD800}).intern();
+        String dc00 = new String(new char[]{0xDC00}).intern();
+        String fffd = new String(new char[]{0xFFFD}).intern();
+        System.out.println((d800 == "\uD800") + " " + (dc00 == "\uDC00") + " " + (fffd == "\uFFFD")
+                           + " " + (d800 != dc00) + " " + units(dc00) + " " + units(fffd));
+        System.out.println((new String(SMILE.toCharArray()).intern() == SMILE) + " "
+                           + kind(new String(new char[]{0xD800})) + " " + kind(new String(new char[]{0xFFFD})));
         Charset gb = Charset.forName("GB18030");
         byte[] enc = "\u4E2D\uD83D\uDE00".getBytes(gb);
         System.out.println(bytes(enc));

@@ -11,5 +11,7 @@ true
 8: 3c 78 d800 79 37 d83d de00 3e
 3: d83d de00 dc01
 5: 70 dbff 30 d83d de00
+true true true true 1: dc00 1: fffd
+true 4 5
 d6d09439fc36
 3: 4e2d d83d de00

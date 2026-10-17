@@ -91,9 +91,7 @@
 
 ;; --- strings and numbers -------------------------------------------------------
 
-(defnative "java/lang/String.intern()Ljava/lang/String;" (this)
-  (let ([s (jstring->scheme this)])
-    (or (hashtable-ref interned s #f) (begin (hashtable-set! interned s this) this))))
+(defnative "java/lang/String.intern()Ljava/lang/String;" (this) (jstring-intern! this))
 (defnative "java/lang/StringUTF16.isBigEndian()Z" () 0)
 
 (define (bits->float b) (let ([v (make-bytevector 4)]) (bytevector-u32-native-set! v 0 (logand b #xffffffff)) (bytevector-ieee-single-native-ref v 0)))

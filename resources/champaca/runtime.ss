@@ -529,10 +529,36 @@
                                              (fxsll (fxlogand (vector-ref v (fx+ i 1)) #xff) 8))
                                     acc)))))))
 
-;; whether a java.lang.String equals a constant (a string or code-unit vector);
-;; by code units, since jstring->scheme maps a lone surrogate to U+FFFD
+;; UTF-16 code units -> Scheme string, a pair becoming one char; #f when a
+;; surrogate stands alone (classfile/decode-mutf8 makes the same split)
+(define (units->string-or-false units)
+  (let loop ([us units] [acc '()])
+    (cond
+      [(null? us) (list->string (reverse acc))]
+      [(or (fx< (car us) #xd800) (fx>= (car us) #xe000))
+       (loop (cdr us) (cons (integer->char (car us)) acc))]
+      [(and (fx< (car us) #xdc00) (pair? (cdr us))
+            (fx>= (cadr us) #xdc00) (fx< (cadr us) #xe000))
+       (loop (cddr us) (cons (integer->char (fx+ #x10000 (fxsll (fx- (car us) #xd800) 10) (fx- (cadr us) #xdc00))) acc))]
+      [else #f])))
+
+;; String.intern, keyed the way jstring-lit keys constants: by the Scheme
+;; string, or by the code-unit vector when a surrogate stands alone (keying on
+;; jstring->scheme would map every lone surrogate to U+FFFD and collide)
+(define (jstring-intern! o)
+  (let* ([units (jstring-units o)]
+         [s (units->string-or-false units)]
+         [t (if s interned interned-units)]
+         [k (or s (list->vector units))])
+    (or (hashtable-ref t k #f) (begin (hashtable-set! t k o) o))))
+
+;; whether a java.lang.String equals a constant (a string or code-unit vector).
+;; jstring->scheme maps a lone surrogate to U+FFFD, so string=? is exact only
+;; when the label has no U+FFFD; otherwise compare code units.
 (define (jstring-lit-equal? o lit)
-  (equal? (jstring-units o) (code-units lit)))
+  (if (and (string? lit) (not (memv (integer->char #xfffd) (string->list lit))))
+      (string=? (jstring->scheme o) lit)
+      (equal? (jstring-units o) (code-units lit))))
 
 ;; any Java reference -> Scheme string, the way string concatenation sees it
 (define (jstring-of x)
