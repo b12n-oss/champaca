@@ -335,8 +335,14 @@
           [(eq? k clone-key) array-clone]
           [else (let* ([c (find-class "java/lang/Object")] [sym (eq-hashtable-ref (jclass-vtable c) k #f)])
                   (if sym (top-level-value sym) (no-such-virtual c k)))]))))
+;; a vtable miss is an abstract method nothing implemented, the JVM's message
 (define (no-such-virtual c k)
-  (jthrow "java/lang/AbstractMethodError" (string-append (jclass-cname c) "." (symbol->string k))))
+  (jthrow "java/lang/AbstractMethodError"
+          (string-append "Method " (slashes->dots (jclass-cname c)) "." (symbol->string k) " is abstract")))
+
+;; the vtable entry for conflicting default methods (main.clj link)
+(define (icce-stub msg)
+  (lambda args (jthrow "java/lang/IncompatibleClassChangeError" msg)))
 
 ;; An inline cache: each virtual call site in generated code has a pair,
 ;; (class . procedure), for the receiver class it saw last, so a hit is one

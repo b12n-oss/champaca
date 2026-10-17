@@ -1,0 +1,11 @@
+i1ref java.lang.IncompatibleClassChangeError: Conflicting default methods: DcI1.m DcI2.m
+i2ref java.lang.IncompatibleClassChangeError: Conflicting default methods: DcI1.m DcI2.m
+again java.lang.IncompatibleClassChangeError: Conflicting default methods: DcI1.m DcI2.m
+sub ok sub
+ame java.lang.AbstractMethodError: Method DcD.m()Ljava/lang/String; is abstract
+three java.lang.IncompatibleClassChangeError: Conflicting default methods: DcI1.m DcI2.m DcI4.m
+refl java.lang.reflect.InvocationTargetException
+refl-cause ok caught java.lang.IncompatibleClassChangeError: Conflicting default methods: DcI1.m DcI2.m
+refl-decl ok interface DcI1
+mh java.lang.IncompatibleClassChangeError: Conflicting default methods: DcI1.m DcI2.m
+tostr ok DcC@

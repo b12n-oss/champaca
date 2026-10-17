@@ -331,18 +331,18 @@
                   :when (and (:virtual m) (zero? (bit-and (:flags m) 0x0002)))]
               [i m])))
 
-(defn- max-specific
+(defn- specific-defaults
   "Of cands, the [interface method] pairs declaring one method, the
-  interface JVM selection picks (JVMS 5.4.3.3): of the declarations no other
-  declaring interface extends, the one with a body, when exactly one has.
-  nil otherwise."
+  maximally specific declarations with a body (JVMS 5.4.3.3): those no other
+  declaring interface extends. One is the default interface dispatch picks,
+  two or more conflict (the call throws IncompatibleClassChangeError), and
+  none leaves the method abstract."
   [cands]
   (let [maximal (if (next cands)
                   (let [extends? (fn [j i] (some #{i} (rest (ancestry j))))]
                     (remove (fn [[i _]] (some (fn [[j _]] (and (not= i j) (extends? j i))) cands)) cands))
-                  cands)
-        concrete (filter (fn [[_ m]] (:code m)) maximal)]
-    (when (= 1 (count concrete)) (ffirst concrete))))
+                  cands)]
+    (filter (fn [[_ m]] (:code m)) maximal)))
 
 (defn- resolve-static-field [cname fname]
   (or (some (fn [c] (when (some #(and (:static %) (= fname (:name %))) (:fields (class-info c))) c))
@@ -367,8 +367,9 @@
                                  (:methods (class-info c))))
         supers (take-while some? (iterate #(:super (class-info %)) cname))]
     (or (some #(when (has? % false) %) supers)
-        (max-specific (get (iface-methods (filter #(cf/interface? (class-info %)) (ancestry cname)))
-                           (str mname desc)))
+        ;; a conflict resolves arbitrarily (JVMS 5.4.3.3); dispatch still throws
+        (ffirst (specific-defaults (get (iface-methods (filter #(cf/interface? (class-info %)) (ancestry cname)))
+                                       (str mname desc))))
         (some #(when (has? % true) %) (ancestry cname))
         (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
@@ -462,17 +463,23 @@
         ;; the superclass's entries for methods some class declares; the
         ;; defaults it picked are picked again below, since this class may
         ;; implement a more specific interface
-        vtable (into (into {} (remove (fn [[_ g]] (cf/interface? (class-info (subs g 0 (str/index-of g ".")))))
+        vtable (into (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
+                                                      (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
                                       (:vtable sup)))
                      (for [m (:methods info)
                            :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
                        [(str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))]))
-        defaults (for [[k cands] (iface-methods (filter #(cf/interface? (class-info %))
-                                                        (rest (ancestry-of-unlinked info))))
-                       :when (not (contains? vtable k))
-                       :let [i (max-specific cands)]
-                       :when i]
-                   [k (str i "." k)])
+        picked (for [[k cands] (iface-methods (filter #(cf/interface? (class-info %))
+                                                      (rest (ancestry-of-unlinked info))))
+                     :when (not (contains? vtable k))
+                     :let [ds (specific-defaults cands)]
+                     :when (seq ds)]
+                 [k ds])
+        ;; two or more maximally specific defaults conflict: the vtable entry
+        ;; is a stub that throws, defined by this class's registration
+        defaults (for [[k ds] picked]
+                   [k (if (next ds) (str "icce:" (:name info) "." k) (str (ffirst ds) "." k))])
+        conflicts (into {} (for [[k ds] picked :when (next ds)] [k (mapv first ds)]))
         vtable (into vtable defaults)
         ;; an interface's private methods aren't inherited and pick no
         ;; default, but javac calls them with invokeinterface on the
@@ -482,7 +489,7 @@
                        :when (and (:virtual m) (:code m) (pos? (bit-and (:flags m) 0x0002)))]
                    [(str (:name m) (:desc m)) (str i "." (:name m) (:desc m))])
         vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable privates)]
-    (assoc info :layout layout :template template :vtable vtable)))
+    (assoc info :layout layout :template template :vtable vtable :conflicts conflicts)))
 
 (defn- ancestry-of-unlinked
   "ancestry for a class that is not in the registry yet."
@@ -502,7 +509,7 @@
         (string? v) (cg/str-lit v)
         :else (str "#vu8" (apply cg/sx (map str v)))))
 
-(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags reflection]}]
+(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags reflection conflicts]}]
   (str/join
    "\n"
    (concat
@@ -542,6 +549,13 @@
                                        (cg/sx (refl-lit (:class enclosing-method)) (refl-lit (:name enclosing-method))
                                               (refl-lit (:desc enclosing-method)))
                                        "#f"))))))]
+    ;; a conflicting default's stub, with the JVM's message: the interfaces
+    ;; in declaration order, dotted, without descriptors
+    (for [[k is] (sort conflicts)
+          :let [mname (subs k 0 (str/index-of k "("))]]
+      (cg/sx "define" (cg/sym (str "icce:" name "." k))
+             (cg/sx "icce-stub" (cg/str-lit (str "Conflicting default methods: "
+                                                 (str/join " " (map #(str (str/replace % "/" ".") "." mname) is)))))))
     (for [f fields :when (:static f)]
       (cg/sx "define" (cg/static-global name (:name f))
              (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))

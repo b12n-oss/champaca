@@ -50,6 +50,8 @@
                     _ (apply shell "javac -cp target/lib.jar -d target/classes" srcs)
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
+                    ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses
+                    _ (shell "java test/gen/DefaultConflictGen.java target/classes")
                     mains (->> (fs/glob "test/java" "*.expected")
                                (map (fn [p] (str/replace (fs/file-name p) ".expected" "")))
                                sort)
