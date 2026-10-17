@@ -10,13 +10,15 @@ Booting the JDK means parsing classes, translating their methods to Scheme and c
 
 | Program | Cache off | Cold, writing the cache | Warm cache |
 |---|---|---|---|
-| `Hello` | 1.49 s | 2.15 s | 0.37 s |
-| `Streams` | 1.75 s | 2.80 s | 0.49 s |
-| `examples/interop.clj` | 1.52 s | 2.37 s | 0.40 s |
+| `Hello` | 1.17 s | 1.53 s | 0.31 s |
+| `Streams` | 1.68 s | 2.20 s | 0.47 s |
+| `examples/interop.clj` | 1.48 s | 1.82 s | 0.36 s |
 
-Each is the median of five runs, alternated with the version before the changes below on the same machine while other work kept it busy, so read them for the comparison more than the absolute values. A cold run is the first after the cache key changes, with the JDK's modules already extracted (that happens once per JDK). Before, the cold column read 3.15, 4.79 and 4.29 s, and the warm one 0.38, 0.58 and 0.46 s.
+Each is the median of five runs, measured right after the version before the last change below on the same machine, so read them for the comparison more than the absolute values. A cold run is the first after the cache key changes, with the JDK's modules already extracted (that happens once per JDK). Without compiling each method once, the cold column read 1.87, 2.65 and 2.28 s, with the other two columns the same. Before the earlier changes, on a busier machine, it read 3.15, 4.79 and 4.29 s.
 
 A cold start used to spend half its time writing the cache, and most of that compiling the class registrations into `boot.so`. Each method stub was its own top-level `define`, several thousand of them, and Chez's cost per top-level form is far above that of a quoted list, so a class's methods are now defined by one form holding a list (`define-methods!`). Each class's vtable also repeated every inherited entry, about a third of the registration text, and it's now registered as changes to its superclass's. Together they took `boot.so` from 6.8 MB to 1.5 MB, which warm starts load whole. A cold start also used to evaluate the runtime's source and then compile it again for the cache; it now compiles `runtime.so` first and loads that. And class files parse about twice as fast: ASCII constant-pool strings are decoded in Scheme, straight from the byte array.
+
+Each JDK method a cold start compiled was also compiled twice: once to run it, then again from its text when `boot.so` was written, about 200 ms for `Hello`. Now the JIT compiles such a method to object code once, runs that code, and keeps the same bytes for the cache, which appends them to `boot.so` as they are. Compiling to bytes and loading them costs a bit more than compiling straight into memory, about 290 µs against 225 µs for a method-sized form, so champaca does it only when the bytes will be written: during boot, and in a `champaca.main` run, which saves a generation at exit. A jolt program records the text instead and compiles it again only if it calls `save-cache!`. Methods compiled this way, like everything loaded from the cache, carry no inspector information.
 
 ### What's in it, and what isn't
 
