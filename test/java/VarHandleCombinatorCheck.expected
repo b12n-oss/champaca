@@ -1,0 +1,31 @@
+<5> 5 java.lang.String [class VarHandleCombinatorCheck]
+true 6 <6> 7
+<7> 8
+false false 8
+fv add ok fv or ok
+1111111111111111111111111111111 (VarHandleCombinatorCheck,String)String
+5 -5 5 -8 8
+9 [] int
+20 22
+42 [class VarHandleCombinatorCheck, class java.lang.String, long]
+41 [class java.lang.String, class VarHandleCombinatorCheck]
+7 [class [I, class java.lang.String]
+99 [int, class [I]
+1 2 [class VarHandleCombinatorCheck, class VarHandleCombinatorCheck, boolean]
+<41> [] java.lang.String
+IllegalArgumentException: Invalid position 2 for coordinate types: [class VarHandleCombinatorCheck]
+ClassCastException: Cannot cast java.lang.String to VarHandleCombinatorCheck
+IllegalArgumentException: Too many values
+IllegalArgumentException: filterFromTarget filter type does not match target var handle type: (String)int, int
+NullPointerException
+IllegalArgumentException: Invalid filter type (int)String for coordinate type class [I
+IllegalArgumentException: Invalid position 3 for coordinate types: [class VarHandleCombinatorCheck]
+IllegalArgumentException: parameter types do not match after reorder: (int[],int)void, (int,int[])void
+IllegalArgumentException: Invalid filter type (int)String for coordinate type class VarHandleCombinatorCheck
+true WrongMethodTypeException: handle's method type (VarHandleCombinatorCheck)String but found (VarHandleCombinatorCheck)Object
+3 [class java.lang.String] ok
+16909060 1 UnsupportedOperationException: getVolatile [class [B]
+55 [class VarHandleCombinatorCheck, class VarHandleCombinatorCheck]
+-93 7 [class VarHandleCombinatorCheck, int] int
+-1 [99, 22, -1] [class java.lang.String]
+Integer 93

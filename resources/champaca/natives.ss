@@ -1240,7 +1240,19 @@
 ;; A static's class is initialized first. A reference array checks the index,
 ;; then the value it may store, before anything is read or compared, which
 ;; is the JVM's order: a failing compareAndSet still throws for a bad value.
+;; a derived handle (a coordinate combinator's) maps its coordinates onto its
+;; base and converts values both ways, then the base does the access, so
+;; updates and compares happen in the base's domain, as the JVM's adapters do
 (define (vh-run t op mode args)
+  (if (eq? (vh-target-kind t) 'derived)
+      (let ([n (length (vh-target-coords t))])
+        (let-values ([(coords to from) ((vh-target-b t) (list-head args n))])
+          (let ([r (vh-run (vh-target-a t) op mode
+                           (append coords (if to (map to (list-tail args n)) (list-tail args n))))])
+            (if (and from (memq op '(get cax gas add or and xor))) (from r) r))))
+      (vh-run-direct t op mode args)))
+
+(define (vh-run-direct t op mode args)
   (let* ([ty (vh-target-type t)]
          [vals (list-tail args (length (vh-target-coords t)))])
     (define (get) (vh-get t args))
@@ -1358,6 +1370,185 @@
   (lambda (this) (vh-of (vh-target-of this "withInvokeExactBehavior") #t)))
 (define-override! "java/lang/invoke/VarHandle.withInvokeBehavior()Ljava/lang/invoke/VarHandle;"
   (lambda (this) (vh-of (vh-target-of this "withInvokeBehavior") #f)))
+
+;; --- coordinate combinators ---------------------------------------------------------
+;; Each returns a 'derived vh-target over the base: type and coords are the
+;; new handle's, ops (and the byte[] view restriction) are the base's, as on
+;; the JVM, and b is a procedure from the new coordinates to the base's plus
+;; the value conversions. Checks run at construction, in the JDK's order and
+;; with its messages (VarHandles.java), including printing coordinate i where
+;; it means pos + i in the filter-type message.
+
+(define (vh-derived base type coords adapter)
+  (vh-of (make-vh-target 'derived base adapter type coords
+                         (vh-target-ops base) (vh-target-plain-only? base) (make-vector 5 #f))
+         #f))
+
+(define (mh-type-text mh)
+  (jstring-of (jslot (nn mh) (jfield-index "java/lang/invoke/MethodHandle" "type"))))
+(define (vh-class-text d) (jstring-of (desc->mirror d)))
+(define (vh-coords-text ds)
+  (string-append "[" (fold-left (lambda (acc d) (if acc (string-append acc ", " (vh-class-text d)) (vh-class-text d))) #f ds) "]"))
+(define (vh-iae . parts) (jthrow "java/lang/IllegalArgumentException" (apply string-append parts)))
+
+;; the elements of a java.util.List, via its own size and get
+(define (jlist->list l)
+  (let ([size ((jvirt l "size()I") l)]
+        [get (jvirt l "get(I)Ljava/lang/Object;")])
+    (let loop ([i 0]) (if (fx= i size) '() (cons (get l i) (loop (fx+ i 1)))))))
+(define (vh-bad-pos pos ds)
+  (vh-iae "Invalid position " (number->string pos) " for coordinate types: " (vh-coords-text ds)))
+(define (vh-check-pos pos ds) (when (or (fx< pos 0) (fx>= pos (length ds))) (vh-bad-pos pos ds)))
+
+;; take, drop and splice over coordinate lists
+(define (list-insert-at xs pos ys)
+  (append (list-head xs pos) ys (list-tail xs pos)))
+(define (list-remove-range xs pos k)
+  (append (list-head xs pos) (list-tail xs (fx+ pos k))))
+
+;; a value for a coordinate of descriptor d, checked the way the JDK inserts
+;; one: a reference is cast (null passes), a primitive unboxes and may widen
+(define (vh-insert-value d v)
+  (if (prim-desc? d)
+      (let ([p (box-prim-of (nn v))])
+        (unless (and p (prim-convertible? p d))
+          (jthrow "java/lang/ClassCastException"
+                  (string-append "Cannot cast " (slashes->dots (class-name-of (nn v))) " to " (vh-class-text d))))
+        (widen p d (junbox p v)))
+      (begin
+        (when (and v (not (jinstance? v (desc->class-name d))))
+          (jthrow "java/lang/ClassCastException"
+                  (string-append "Cannot cast " (slashes->dots (class-name-of v)) " to " (slashes->dots (desc->class-name d)))))
+        v)))
+
+(define-override! "java/lang/invoke/MethodHandles.insertCoordinates(Ljava/lang/invoke/VarHandle;I[Ljava/lang/Object;)Ljava/lang/invoke/VarHandle;"
+  (lambda (vh pos values*)
+    (let* ([t (vh-target-of (nn vh) "insertCoordinates")]
+           [ds (vh-target-coords t)]
+           [vs (vector->list (jarr-vec (nn values*)))])
+      (vh-check-pos pos ds)
+      (when (fx> (fx+ pos (length vs)) (length ds)) (vh-iae "Too many values"))
+      (if (null? vs)
+          vh
+          (let ([converted (map vh-insert-value (list-head (list-tail ds pos) (length vs)) vs)])
+            (vh-derived t (vh-target-type t) (list-remove-range ds pos (length vs))
+                        (lambda (cs) (values (list-insert-at cs pos converted) #f #f))))))))
+
+(define-override! "java/lang/invoke/MethodHandles.dropCoordinates(Ljava/lang/invoke/VarHandle;I[Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
+  (lambda (vh pos types)
+    (let* ([t (vh-target-of (nn vh) "dropCoordinates")]
+           [ds (vh-target-coords t)]
+           [extra (map mirror->desc (vector->list (jarr-vec (nn types))))])
+      (when (or (fx< pos 0) (fx> pos (length ds))) (vh-bad-pos pos ds))
+      (if (null? extra)
+          vh
+          (vh-derived t (vh-target-type t) (list-insert-at ds pos extra)
+                      (lambda (cs) (values (list-remove-range cs pos (length extra)) #f #f)))))))
+
+;; filter i converts new coordinate pos+i into the base's
+(define-override! "java/lang/invoke/MethodHandles.filterCoordinates(Ljava/lang/invoke/VarHandle;I[Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/VarHandle;"
+  (lambda (vh pos filters)
+    (let* ([t (vh-target-of (nn vh) "filterCoordinates")]
+           [ds (vh-target-coords t)]
+           [fs (vector->list (jarr-vec (nn filters)))])
+      (vh-check-pos pos ds)
+      (when (fx> (fx+ pos (length fs)) (length ds)) (vh-iae "Too many filters"))
+      (if (null? fs)
+          vh
+          (let loop ([i 0] [coords ds] [procs '()])
+            (if (fx= i (length fs))
+                (let ([pv (list->vector (reverse procs))])
+                  (vh-derived t (vh-target-type t) coords
+                              (lambda (cs)
+                                (values (let conv ([cs cs] [k 0])
+                                          (cond [(null? cs) '()]
+                                                [(and (fx>= k pos) (fx< k (fx+ pos (length fs))))
+                                                 (cons ((vector-ref pv (fx- k pos)) (car cs)) (conv (cdr cs) (fx+ k 1)))]
+                                                [else (cons (car cs) (conv (cdr cs) (fx+ k 1)))]))
+                                        #f #f))))
+                (let* ([f (nn (list-ref fs i))] [info (mh-info-of f)])
+                  (unless (fx= (length (mh-info-args info)) 1)
+                    (vh-iae "Invalid filter type " (mh-type-text f)))
+                  (unless (string=? (list-ref coords (fx+ pos i)) (mh-info-ret info))
+                    ;; the JDK prints coordinate i here, not pos + i
+                    (vh-iae "Invalid filter type " (mh-type-text f) " for coordinate type " (vh-class-text (list-ref coords i))))
+                  (loop (fx+ i 1)
+                        (append (list-head coords (fx+ pos i)) (list (car (mh-info-args info))) (list-tail coords (fx+ pos i 1)))
+                        (cons (mh-info-proc info) procs)))))))))
+
+(define-override! "java/lang/invoke/MethodHandles.permuteCoordinates(Ljava/lang/invoke/VarHandle;Ljava/util/List;[I)Ljava/lang/invoke/VarHandle;"
+  (lambda (vh new-list reorder*)
+    (let* ([t (vh-target-of (nn vh) "permuteCoordinates")]
+           [ds (vh-target-coords t)]
+           [new (map mirror->desc (jlist->list (nn new-list)))]
+           [reorder (vector->list (jarr-vec (nn reorder*)))]
+           [mt (lambda (as) (method-type-text as "V"))])
+      (unless (fx= (length reorder) (length ds))
+        (vh-iae "old and new parameter lists differ in size: " (mt new) ", " (mt ds)))
+      (let loop ([i 0])
+        (when (fx< i (length reorder))
+          (let ([k (list-ref reorder i)])
+            (when (or (fx< k 0) (fx>= k (length new)))
+              (vh-iae "index is out of bounds for new parameter list: " (number->string k)))
+            (unless (string=? (list-ref ds i) (list-ref new k))
+              (vh-iae "parameter types do not match after reorder: " (mt ds) ", " (mt new)))
+            (loop (fx+ i 1)))))
+      (vh-derived t (vh-target-type t) new
+                  (lambda (cs) (values (map (lambda (k) (list-ref cs k)) reorder) #f #f))))))
+
+(define-override! "java/lang/invoke/MethodHandles.collectCoordinates(Ljava/lang/invoke/VarHandle;ILjava/lang/invoke/MethodHandle;)Ljava/lang/invoke/VarHandle;"
+  (lambda (vh pos filter)
+    (let* ([t (vh-target-of (nn vh) "collectCoordinates")]
+           [ds (vh-target-coords t)]
+           [info (mh-info-of (nn filter))]
+           [k (length (mh-info-args info))])
+      (vh-check-pos pos ds)
+      (unless (string=? (mh-info-ret info) (list-ref ds pos))
+        (vh-iae "Invalid filter type " (mh-type-text filter) " for coordinate type " (vh-class-text (list-ref ds pos))))
+      (vh-derived t (vh-target-type t)
+                  (append (list-head ds pos) (mh-info-args info) (list-tail ds (fx+ pos 1)))
+                  (lambda (cs)
+                    (values (append (list-head cs pos)
+                                    (list (apply (mh-info-proc info) (list-head (list-tail cs pos) k)))
+                                    (list-tail cs (fx+ pos k)))
+                            #f #f))))))
+
+;; to converts a new-type value into the base's type, from the other way;
+;; extra leading filter parameters become trailing coordinates
+(define-override! "java/lang/invoke/MethodHandles.filterValue(Ljava/lang/invoke/VarHandle;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/VarHandle;"
+  (lambda (vh to from)
+    (let* ([t (vh-target-of (nn vh) "filterValue")]
+           [ti (mh-info-of (nn to))] [fi (mh-info-of (nn from))]
+           [tn (length (mh-info-args ti))] [fn (length (mh-info-args fi))]
+           [last (lambda (xs) (list-ref xs (fx- (length xs) 1)))]
+           [vt (vh-target-type t)]
+           [both (lambda () (string-append (mh-type-text from) ", " (mh-type-text to)))])
+      (cond
+        [(not (fx= fn tn))
+         (vh-iae "filterFromTarget and filterToTarget have different arity: " (both))]
+        [(fx< fn 1) (vh-iae "filterFromTarget filter type has wrong arity: " (mh-type-text from))]
+        [(or (not (string=? (last (mh-info-args fi)) (mh-info-ret ti)))
+             (not (string=? (last (mh-info-args ti)) (mh-info-ret fi))))
+         (vh-iae "filterFromTarget and filterToTarget filter types do not match: " (both))]
+        [(not (string=? vt (last (mh-info-args fi))))
+         (vh-iae "filterFromTarget filter type does not match target var handle type: "
+                 (mh-type-text from) ", " (vh-class-text vt))]
+        [(not (string=? vt (mh-info-ret ti)))
+         (vh-iae "filterFromTarget filter type does not match target var handle type: "
+                 (mh-type-text to) ", " (vh-class-text vt))]
+        [else
+         (let ([extra (list-head (mh-info-args fi) (fx- fn 1))])
+           (for-each (lambda (a b) (unless (string=? a b)
+                                     (vh-iae "filterFromTarget and filterToTarget filter types do not match: " (both))))
+                     extra (list-head (mh-info-args ti) (fx- tn 1)))
+           (let ([nds (length (vh-target-coords t))]
+                 [top (mh-info-proc ti)] [fromp (mh-info-proc fi)])
+             (vh-derived t (mh-info-ret fi) (append (vh-target-coords t) extra)
+                         (lambda (cs)
+                           (let ([base (list-head cs nds)] [ex (list-tail cs nds)])
+                             (values base
+                                     (lambda (v) (apply top (append ex (list v))))
+                                     (lambda (r) (apply fromp (append ex (list r))))))))))]))))
 
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
   (lambda (this recv name type) (field-vh recv name type #f)))
