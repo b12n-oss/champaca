@@ -769,11 +769,14 @@
 (defn save-generation!
   "Append what this run compiled for JDK classes after boot as one more
   extra-N.so, compiled unit by unit, and rewrite state.img (written beside,
-  then renamed) with where each unit sits."
+  then renamed) with where each unit sits. A save that fails drops its
+  units rather than keeping them: retrying would fail the same way at every
+  later save, and the code already ran, so only cache coverage is lost."
   []
   (let [dir (:cache-dir @state)
         units (some-> (:recording @state) deref)]
     (when (and dir (.isDirectory dir) (seq units))
+      (vreset! (:recording @state) [])
       (let [stamp (System/currentTimeMillis)
             file (str "extra-" stamp ".so")
             so-tmp (io/file dir (str file ".tmp"))
@@ -786,8 +789,7 @@
           (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
                  [file start (- end start)]))
         (dump-classes! img-tmp)
-        (.renameTo img-tmp (io/file dir "state.img"))
-        (vreset! (:recording @state) [])))))
+        (.renameTo img-tmp (io/file dir "state.img"))))))
 
 (defn- boot!
   "Load the runtime, then run System.initPhase1 the way the JVM does before
