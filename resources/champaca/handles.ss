@@ -58,6 +58,20 @@
        (let ([e (find (lambda (e) (string=? (cadr e) (jclass-cname (jobj-cls x)))) box-classes)])
          (and e (car e)))))
 
+;; can asType convert a value of type `from` into `to`: identity, a prim
+;; widening, boxing, an unboxing that widens, a reference cast, and anything
+;; into or out of void (a void source reads as the default value)
+(define (as-type-ok? from to)
+  (cond [(string=? from to) #t]
+        [(or (string=? from "V") (string=? to "V")) #t]
+        [(prim-desc? from) (if (prim-desc? to) (prim-convertible? from to) #t)]
+        [(prim-desc? to)
+         (or (member from '("Ljava/lang/Object;" "Ljava/lang/Number;"
+                            "Ljava/lang/Comparable;" "Ljava/io/Serializable;"))
+             (let ([e (find (lambda (e) (string=? (string-append "L" (cadr e) ";") from)) box-classes)])
+               (and e (prim-convertible? (car e) to))))]
+        [else #t]))
+
 ;; an integer widened to float rounds to float
 (define (widen from to v)
   (if (and (memv (string-ref to 0) '(#\F #\D)) (not (memv (string-ref from 0) '(#\F #\D))))
@@ -275,6 +289,12 @@
 (define (as-type mh mt . loose?)
   (let* ([info (mh-info-of mh)] [desc (mt-desc mt)] [args (desc-args desc)])
     (unless (fx= (length args) (length (mh-info-args info))) (wrong-type info (length args)))
+    (unless (or (pair? loose?)
+                (and (for-all as-type-ok? args (mh-info-args info))
+                     (as-type-ok? (mh-info-ret info) (desc-ret desc))))
+      (jthrow "java/lang/invoke/WrongMethodTypeException"
+              (string-append "cannot convert MethodHandle" (mh-type-text mh)
+                             " to " (type-text args (desc-ret desc)))))
     (make-mh desc (apply adapted-proc info args (desc-ret desc) loose?) mt)))
 
 (def-mh "asType" (string-append "(Ljava/lang/invoke/MethodType;)" mh-ret) as-type)
@@ -299,10 +319,25 @@
 
 (def-mhs "constant" (string-append "(Ljava/lang/Class;Ljava/lang/Object;)" mh-ret)
   (lambda (c x)
-    (let* ([d (mirror->desc c)] [v (adapt obj-desc d x)])
-      (make-mh (args->desc '() d) (lambda () v) #f))))
+    (let ([d (mirror->desc (nn c))])
+      (when (string=? d "V") (jthrow "java/lang/IllegalArgumentException" "void type"))
+      ;; the JDK converts through Wrapper: a widening box passes, a wrong or
+      ;; narrowing one is "not compatible", null into a primitive the helpful NPE
+      (let ([v (vh-insert-value d x)])
+        (make-mh (args->desc '() d) (lambda () v) #f)))))
 (def-mhs "identity" (string-append "(Ljava/lang/Class;)" mh-ret)
-  (lambda (c) (let ([d (mirror->desc c)]) (make-mh (args->desc (list d) d) (lambda (x) x) #f))))
+  (lambda (c)
+    (unless c (jthrow "java/lang/NullPointerException"
+                      "Cannot invoke \"java.lang.Class.isPrimitive()\" because \"type\" is null"))
+    (let ([d (mirror->desc c)])
+      (when (string=? d "V") (jthrow "java/lang/IllegalArgumentException" "parameter type cannot be void"))
+      (make-mh (args->desc (list d) d) (lambda (x) x) #f))))
+(define (zero-mh d) (make-mh (args->desc '() d) (lambda () (elem-default d)) #f))
+(def-mhs "zero" (string-append "(Ljava/lang/Class;)" mh-ret)
+  (lambda (c) (zero-mh (mirror->desc (nn c)))))
+(def-mhs "empty" (string-append "(Ljava/lang/invoke/MethodType;)" mh-ret)
+  (lambda (mt) (let ([d (mt-desc (nn mt))])
+                 (drop-arguments (zero-mh (desc-ret d)) 0 (desc-args d)))))
 (def-mhs "insertArguments" (string-append "(Ljava/lang/invoke/MethodHandle;I[Ljava/lang/Object;)" mh-ret)
   (lambda (mh pos vals)
     (let* ([info (mh-info-of mh)] [p (mh-info-proc info)] [args (mh-info-args info)]
@@ -362,6 +397,250 @@
                mt))))
 (def-mhs "explicitCastArguments" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)" mh-ret)
   (lambda (mh mt) (as-type mh mt #t)))
+
+;; the JVM prints a method type with simple class names: (int,int)int
+(define (desc->simple d)
+  (cond [(char=? #\[ (string-ref d 0)) (string-append (desc->simple (substring d 1 (string-length d))) "[]")]
+        [(prim-desc? d) (cdr (assoc d prim-names))]
+        [else (let* ([n (desc->class-name d)] [len (string-length n)])
+                (let loop ([i (fx- len 1)])
+                  (if (or (fx< i 0) (memv (string-ref n i) '(#\/ #\$)))
+                      (substring n (fx+ i 1) len)
+                      (loop (fx- i 1)))))]))
+(define (type-text args ret)
+  (string-append "(" (if (null? args) ""
+                         (fold-left (lambda (acc d) (string-append acc "," (desc->simple d)))
+                                    (desc->simple (car args)) (cdr args)))
+                 ")" (desc->simple ret)))
+
+(def-mhs "filterArguments" (string-append "(Ljava/lang/invoke/MethodHandle;I[Ljava/lang/invoke/MethodHandle;)" mh-ret)
+  (lambda (target pos filters)
+    (let* ([ti (mh-info-of target)] [targs (mh-info-args ti)] [tp (mh-info-proc ti)]
+           [fs (vector->list (jarr-vec (nn filters)))])
+      (when (or (fx< pos 0) (fx> (fx+ pos (length fs)) (length targs)))
+        (vh-iae "too many filters"))
+      ;; a filter maps one incoming argument to the target's parameter; a null
+      ;; filter leaves its argument alone
+      (let ([rows (map (lambda (t i)
+                         (let ([f (and (fx>= i pos) (fx< i (fx+ pos (length fs)))
+                                       (list-ref fs (fx- i pos)))])
+                           (if f
+                               (let ([fi (mh-info-of f)])
+                                 (unless (and (fx= 1 (length (mh-info-args fi)))
+                                              (string=? (mh-info-ret fi) t))
+                                   (vh-iae "target and filter types do not match: "
+                                           (mh-type-text target) ", " (mh-type-text f)))
+                                 (cons (car (mh-info-args fi)) (mh-info-proc fi)))
+                               (cons t #f))))
+                       targs (iota (length targs)))])
+        (make-mh (args->desc (map car rows) (mh-info-ret ti))
+                 (lambda xs (apply tp (map (lambda (r x) (if (cdr r) ((cdr r) x) x)) rows xs)))
+                 #f)))))
+
+;; foldArguments: the combiner reads target arguments pos.. and its result (when
+;; it has one) becomes the target's argument at pos, dropped from the new type
+(define (fold-arguments target pos combiner)
+  (let* ([ti (mh-info-of target)] [targs (mh-info-args ti)] [tp (mh-info-proc ti)]
+         [ci (mh-info-of combiner)] [cargs (mh-info-args ci)] [cp (mh-info-proc ci)]
+         [void? (string=? (mh-info-ret ci) "V")]
+         [n (length cargs)]
+         [vals-at (if void? pos (fx+ pos 1))]
+         [fail (lambda () (vh-iae "target and combiner types must match: "
+                                  (mh-type-text target) " != " (mh-type-text combiner)))])
+    (unless (and (fx>= pos 0) (fx<= (fx+ vals-at n) (length targs))) (fail))
+    (unless (and (or void? (string=? (list-ref targs pos) (mh-info-ret ci)))
+                 (equal? cargs (list-head (list-tail targs vals-at) n)))
+      (fail))
+    (make-mh (args->desc (if void? targs (append (list-head targs pos) (list-tail targs (fx+ pos 1))))
+                         (mh-info-ret ti))
+             (if void?
+                 (lambda xs (apply cp (list-head (list-tail xs pos) n)) (apply tp xs))
+                 (lambda xs
+                   (let ([v (apply cp (list-head (list-tail xs pos) n))])
+                     (apply tp (append (list-head xs pos) (list v) (list-tail xs pos))))))
+             #f)))
+(def-mhs "foldArguments" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)" mh-ret)
+  (lambda (target combiner) (fold-arguments target 0 combiner)))
+(def-mhs "foldArguments" (string-append "(Ljava/lang/invoke/MethodHandle;ILjava/lang/invoke/MethodHandle;)" mh-ret)
+  fold-arguments)
+
+;; collectArguments: the filter's arguments replace the target's argument at
+;; pos, whose value the filter computes; a void filter's replace nothing
+(def-mhs "collectArguments" (string-append "(Ljava/lang/invoke/MethodHandle;ILjava/lang/invoke/MethodHandle;)" mh-ret)
+  (lambda (target pos filter)
+    (let* ([ti (mh-info-of target)] [targs (mh-info-args ti)] [tp (mh-info-proc ti)]
+           [fi (mh-info-of filter)] [fargs (mh-info-args fi)] [fp (mh-info-proc fi)]
+           [void? (string=? (mh-info-ret fi) "V")] [n (length fargs)])
+      (when (or (fx< pos 0) (fx> pos (fx- (length targs) (if void? 0 1))))
+        (vh-iae "position " (number->string pos) " out of range for " (mh-type-text target)))
+      (unless (or void? (string=? (mh-info-ret fi) (list-ref targs pos)))
+        (vh-iae "target and filter types do not match: " (mh-type-text target) ", " (mh-type-text filter)))
+      (make-mh (args->desc (append (list-head targs pos) fargs
+                                   (list-tail targs (if void? pos (fx+ pos 1))))
+                           (mh-info-ret ti))
+               (if void?
+                   (lambda xs
+                     (apply fp (list-head (list-tail xs pos) n))
+                     (apply tp (append (list-head xs pos) (list-tail xs (fx+ pos n)))))
+                   (lambda xs
+                     (let ([v (apply fp (list-head (list-tail xs pos) n))])
+                       (apply tp (append (list-head xs pos) (list v) (list-tail xs (fx+ pos n)))))))
+               #f))))
+
+(def-mh "asSpreader" (string-append "(Ljava/lang/Class;I)" mh-ret)
+  (lambda (mh c n)
+    (let* ([info (mh-info-of mh)] [args (mh-info-args info)] [p (mh-info-proc info)]
+           [ad (mirror->desc (nn c))])
+      (unless (char=? #\[ (string-ref ad 0)) (vh-iae "not an array type: " (vh-class-text ad)))
+      (when (or (fx< n 0) (fx> n (length args))) (vh-iae "bad spread array length"))
+      (let* ([elem (substring ad 1 (string-length ad))]
+             [fixed (fx- (length args) n)]
+             [spread (list-tail args fixed)])
+        (unless (for-all (lambda (t) (as-type-ok? elem t)) spread)
+          (jthrow "java/lang/invoke/WrongMethodTypeException"
+                  (string-append "cannot convert MethodHandle" (mh-type-text mh) " to "
+                                 (type-text (append (list-head args fixed) (map (lambda (t) elem) spread))
+                                            (mh-info-ret info)))))
+        (make-mh (args->desc (append (list-head args fixed) (list ad)) (mh-info-ret info))
+                 (lambda xs
+                   (let ([arr (list-ref xs fixed)])
+                     (when (and (not arr) (fx> n 0))
+                       (jthrow "java/lang/NullPointerException" "null array reference"))
+                     (unless (or (fx= n 0) (fx= (jarraylength arr) n))
+                       (vh-iae "array is not of length " (number->string n)))
+                     (apply p (append (list-head xs fixed)
+                                      (map (lambda (t v) (adapt elem t v))
+                                           spread (vector->list (jarr-vec arr)))))))
+                 #f)))))
+
+(def-mh "asCollector" (string-append "(Ljava/lang/Class;I)" mh-ret)
+  (lambda (mh c n)
+    (let* ([info (mh-info-of mh)] [args (mh-info-args info)] [p (mh-info-proc info)]
+           [ad (mirror->desc (nn c))]
+           [last (and (pair? args) (list-ref args (fx- (length args) 1)))])
+      (unless (and last (not (prim-desc? last))
+                   (or (string=? ad last) (string=? last "Ljava/lang/Object;")
+                       (and (char=? #\[ (string-ref last 0)) (char=? #\[ (string-ref ad 0))
+                            (let ([ae (substring ad 1 (string-length ad))]
+                                  [le (substring last 1 (string-length last))])
+                              (and (not (prim-desc? ae)) (not (prim-desc? le))
+                                   (class-assignable? (desc->class-name ae) (desc->class-name le)))))))
+        (vh-iae "array type not assignable to argument: MethodHandle" (mh-type-text mh) ", " (vh-class-text ad)))
+      (when (fx< n 0) (vh-iae "bad collect array length"))
+      (let* ([elem (substring ad 1 (string-length ad))]
+             [fixed (fx- (length args) 1)])
+        (make-mh (args->desc (append (list-head args fixed) (map (lambda (i) elem) (iota n)))
+                             (mh-info-ret info))
+                 (lambda xs
+                   (apply p (append (list-head xs fixed)
+                                    (list (make-jarr elem (list->vector (list-tail xs fixed)))))))
+                 #f)))))
+
+;; array element access as handles, with the bytecode's checks and messages
+(define (array-kind-text e) (if (prim-desc? e) (cdr (assoc e prim-names)) "object"))
+(define (mhs-array-desc c)
+  (let ([ad (mirror->desc (nn c))])
+    (unless (char=? #\[ (string-ref ad 0)) (vh-iae "not an array type: " (vh-class-text ad)))
+    ad))
+(def-mhs "arrayElementGetter" (string-append "(Ljava/lang/Class;)" mh-ret)
+  (lambda (c)
+    (let* ([ad (mhs-array-desc c)] [e (substring ad 1 (string-length ad))])
+      (make-mh (args->desc (list ad "I") e)
+               (lambda (a i)
+                 (unless a (jthrow "java/lang/NullPointerException"
+                                   (string-append "Cannot load from " (array-kind-text e)
+                                                  " array because \"a\" is null")))
+                 (jaload a i))
+               #f))))
+(def-mhs "arrayElementSetter" (string-append "(Ljava/lang/Class;)" mh-ret)
+  (lambda (c)
+    (let* ([ad (mhs-array-desc c)] [e (substring ad 1 (string-length ad))])
+      (make-mh (args->desc (list ad "I" e) "V")
+               (lambda (a i v)
+                 (unless a (jthrow "java/lang/NullPointerException"
+                                   (string-append "Cannot store to " (array-kind-text e)
+                                                  " array because \"a\" is null")))
+                 (array-store-check a v "set")
+                 (jastore a i v))
+               #f))))
+(def-mhs "arrayLength" (string-append "(Ljava/lang/Class;)" mh-ret)
+  (lambda (c)
+    (let ([ad (mhs-array-desc c)])
+      (make-mh (args->desc (list ad) "I") (lambda (a) (jarraylength a)) #f))))
+
+;; invokers: handles that take the target handle first
+(define (invoker-of d exact?)
+  (make-mh (args->desc (cons "Ljava/lang/invoke/MethodHandle;" (desc-args d)) (desc-ret d))
+           (if exact?
+               (lambda (mh . xs)
+                 (let ([info (mh-info-of (nn mh))])
+                   (unless (string=? (mh-info-desc info) d)
+                     (jthrow "java/lang/invoke/WrongMethodTypeException"
+                             (string-append "handle's method type " (mh-type-text mh)
+                                            " but found " (type-text (desc-args d) (desc-ret d)))))
+                   (apply (mh-info-proc info) xs)))
+               (lambda (mh . xs) (apply mh-call (nn mh) d xs)))
+           #f))
+(def-mhs "invoker" (string-append "(Ljava/lang/invoke/MethodType;)" mh-ret)
+  (lambda (mt) (invoker-of (mt-desc (nn mt)) #f)))
+(def-mhs "exactInvoker" (string-append "(Ljava/lang/invoke/MethodType;)" mh-ret)
+  (lambda (mt) (invoker-of (mt-desc (nn mt)) #t)))
+(def-mhs "spreadInvoker" (string-append "(Ljava/lang/invoke/MethodType;I)" mh-ret)
+  (lambda (mt n)
+    (let* ([d (mt-desc (nn mt))] [args (desc-args d)]
+           ;; the spread values arrive boxed, so the call site declares them
+           ;; Object and mh-call unboxes against the target
+           [site (args->desc (append (list-head args n) (map (lambda (t) obj-desc) (list-tail args n)))
+                             (desc-ret d))])
+      (when (or (fx< n 0) (fx> n (length args))) (vh-iae "bad argument count " (number->string n)))
+      (make-mh (args->desc (cons "Ljava/lang/invoke/MethodHandle;"
+                                 (append (list-head args n) (list "[Ljava/lang/Object;")))
+                           (desc-ret d))
+               (lambda (mh . xs)
+                 (apply mh-call (nn mh) site
+                        (append (list-head xs n) (vector->list (jarr-vec (nn (list-ref xs n)))))))
+               #f))))
+
+;; exceptions as handles. A Java throw is a raise of the jobj, so guard with a
+;; jinstance? test catches exactly what a bytecode handler would.
+(def-mhs "catchException" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/Class;Ljava/lang/invoke/MethodHandle;)" mh-ret)
+  (lambda (target exc handler)
+    (let* ([ti (mh-info-of target)] [tp (mh-info-proc ti)]
+           [hi (mh-info-of handler)] [hp (mh-info-proc hi)]
+           [exname (jclass-cname (mirror-class (nn exc)))]
+           [n (fx- (length (mh-info-args hi)) 1)])
+      ;; the handler takes the exception, then a prefix of the target's arguments
+      (make-mh (mh-info-desc ti)
+               (lambda xs
+                 (guard (e [(and (jobj? e) (jinstance? e exname))
+                            (adapt (mh-info-ret hi) (mh-info-ret ti) (apply hp e (list-head xs n)))])
+                   (apply tp xs)))
+               #f))))
+(def-mhs "throwException" (string-append "(Ljava/lang/Class;Ljava/lang/Class;)" mh-ret)
+  (lambda (ret exc)
+    (make-mh (args->desc (list (mirror->desc (nn exc))) (mirror->desc (nn ret)))
+             (lambda (e) (jathrow e)) #f)))
+(def-mhs "tryFinally" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)" mh-ret)
+  (lambda (target cleanup)
+    (let* ([ti (mh-info-of target)] [tp (mh-info-proc ti)] [tret (mh-info-ret ti)]
+           [ci (mh-info-of cleanup)] [cp (mh-info-proc ci)]
+           [void? (string=? tret "V")]
+           [n (fx- (length (mh-info-args ci)) (if void? 1 2))])
+      ;; the cleanup takes the throwable (null on the normal path), the result
+      ;; unless void (the default value on the thrown path), then an argument
+      ;; prefix; its return is the result, and a thrown exception rethrows
+      (make-mh (mh-info-desc ti)
+               (lambda xs
+                 (guard (e [(jobj? e)
+                            (begin (if void?
+                                       (apply cp e (list-head xs n))
+                                       (apply cp e (elem-default tret) (list-head xs n)))
+                                   (raise e))])
+                   (let ([r (apply tp xs)])
+                     (if void?
+                         (begin (apply cp #f (list-head xs n)) r)
+                         (apply cp #f r (list-head xs n))))))
+               #f))))
 
 ;; --- SwitchBootstraps -------------------------------------------------------------
 ;; javac compiles a pattern switch to invokedynamic typeSwitch or enumSwitch

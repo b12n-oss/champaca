@@ -1,0 +1,62 @@
+0
+null
+false
+0.0
+zero-void type ()void
+0
+zero-null: java.lang.NullPointerException: null
+empty-null: java.lang.NullPointerException: null
+empty-void: (int)void
+empty-type: (int)String
+constant: 42
+constant-widen: 5
+constant-narrow: java.lang.ClassCastException: class java.lang.Integer is not compatible with class java.lang.Long
+constant-ref: s
+constant-refbad: java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
+constant-nullref: null
+constant-nullprim: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "x" is null
+constant-nulltype: java.lang.NullPointerException: null
+constant-void: java.lang.IllegalArgumentException: void type
+identity-void: java.lang.IllegalArgumentException: parameter type cannot be void
+identity-null: java.lang.NullPointerException: Cannot invoke "java.lang.Class.isPrimitive()" because "type" is null
+identity-prim: 7
+filterArguments: 7
+filterArguments-null: -7
+foldArguments: 0
+foldArguments-pos: 0
+collectArguments: -1
+collectArguments-2: -5
+note 5
+foldArguments-void: 7
+note 9
+collectArguments-void: 5
+asSpreader: 5
+spreader-shortarray: java.lang.IllegalArgumentException: array is not of length 2
+spreader-nullarray: java.lang.NullPointerException: null array reference
+spreader-badcount: java.lang.IllegalArgumentException: bad spread array length
+spreader-badtype: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle(int,int)int to (String,String)int
+asCollector: 6
+collector-badtype: java.lang.IllegalArgumentException: array type not assignable to argument: MethodHandle(int,int)int, class [Ljava.lang.String;
+arrayElementGetter: 8
+arrayElementSetter: 7
+arrayLength: 3
+arrayConstructor: 4
+aget-null: java.lang.NullPointerException: Cannot load from int array because "a" is null
+aget-oob: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 2
+aset-badval: java.lang.ArrayStoreException: java.lang.Integer
+invoker: 5
+invoker-adapts: 5
+exactInvoker: 5
+exactInvoker-mismatch: java.lang.invoke.WrongMethodTypeException: handle's method type (long,int)int but found (int,int)int
+spreadInvoker: 5
+spreadInvoker-lead: 7
+asType-reject: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle(int,int)int to (int,long)int
+catchException: -4
+catchException-prefix: -9
+catchException-miss: through: x4
+throwException: threw boom
+throwException-type: (RuntimeException)int
+fin r=-6
+tryFinally: 994
+fin r=0
+tryFinally-throw: rethrew x6
