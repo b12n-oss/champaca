@@ -836,15 +836,34 @@
 (define (begin-units! path)
   (set! unit-out (open-file-output-port path (file-options no-fail))))
 
-(define (add-unit! text)
-  (let ([in (open-input-string text)] [start (port-position unit-out)])
+(define (read-all text)
+  (let ([in (open-input-string text)])
     (let loop ([forms '()])
       (let ([x (read in)])
-        (if (eof-object? x)
-            (parameterize ([generate-inspector-information #f])
-              (compile-to-port (reverse forms) unit-out))
-            (loop (cons x forms)))))
+        (if (eof-object? x) (reverse forms) (loop (cons x forms)))))))
+
+(define (add-unit! text)
+  (let ([start (port-position unit-out)])
+    (parameterize ([generate-inspector-information #f])
+      (compile-to-port (read-all text) unit-out))
     start))
+
+;; a unit compile-unit already compiled, appended as it is
+(define (add-fasl! bv)
+  (let ([start (port-position unit-out)])
+    (put-bytevector unit-out bv)
+    start))
+
+;; Compile text once to object code, run it, and return the code's bytes for
+;; the startup cache, which appends them unchanged (add-fasl!). Evaluating the
+;; text and compiling it again for the cache cost a second compile per method.
+(define (compile-unit text)
+  (let-values ([(p get) (open-bytevector-output-port)])
+    (parameterize ([generate-inspector-information #f])
+      (compile-to-port (read-all text) p))
+    (let ([bv (get)])
+      (load-compiled-from-port (open-bytevector-input-port bv))
+      bv)))
 
 (define (end-units!)
   (let ([n (port-position unit-out)])

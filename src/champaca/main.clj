@@ -47,15 +47,19 @@
       (doseq [[k v] (sort-by (comp - val) p)] (println (str "  " (name k) " " (ms v) " ms")))
       (println (str "  java+runtime (rest) " (ms (- wall-ns accounted)) " ms")))))
 
+(defn- scheme-trace!
+  "Append text to target/jit/trace.ss (CHAMPACA_TRACE)."
+  [text]
+  (let [dir (io/file "target" "jit")]
+    (.mkdirs dir)
+    (spit (io/file dir "trace.ss") (str text "\n\n") :append true)))
+
 (defn- scheme!
   "Evaluate Scheme text: compiled by default, or :interpret for one-shot
   plumbing like class registration."
   ([text] (scheme! text :compile))
   ([text mode]
-   (when (trace?)
-     (let [dir (io/file "target" "jit")]
-       (.mkdirs dir)
-       (spit (io/file dir "trace.ss") (str text "\n\n") :append true)))
+   (when (trace?) (scheme-trace! text))
    (if (= mode :interpret)
      (s/call "interpret-string" text)
      (s/eval-string text))))
@@ -258,12 +262,31 @@
       (str (.toURI (io/file abs path))))))
 
 (defn- record!
-  "Keep text for the startup cache when it belongs to a JDK class. unit says
-  what the text defines: [cname] a class's registration, [cname key] one
-  method body."
-  [origin unit text]
+  "Keep code for the startup cache when it belongs to a JDK class: {:text t}
+  to compile when the cache is written, or {:fasl bv}, object code already
+  compiled (compile-unit). unit says what it defines: [cname] a class's
+  registration, [cname key] one method body."
+  [origin unit code]
   (when-let [rec (:recording @state)]
-    (when (= origin :jdk) (vswap! rec conj {:unit unit :text text}))))
+    (when (= origin :jdk) (vswap! rec conj (assoc code :unit unit)))))
+
+(defn- recording-jdk? [origin] (and (= origin :jdk) (:recording @state)))
+
+(defn- write-units!
+  "Write units to path as one object file: text compiled here, fasl appended
+  as it is. Returns each unit's start offset, then the file's length. With
+  batch?, consecutive texts compile in one call (Chez pays per call), and
+  their offsets are the run's start, so nothing can load them one by one."
+  [path units batch?]
+  (s/call "begin-units!" path)
+  (let [runs (if batch? (partition-by #(boolean (:fasl %)) units) (map vector units))
+        starts (reduce (fn [acc run]
+                         (if (:fasl (first run))
+                           (into acc (map #(s/call "add-fasl!" (:fasl %)) run))
+                           (let [start (s/call "add-unit!" (str/join "\n" (map :text run)))]
+                             (into acc (repeat (count run) start)))))
+                       [] runs)]
+    (conj starts (s/call "end-units!"))))
 
 (defn- load-unit!
   "Run one unit of a cached generation: [file offset length]."
@@ -539,7 +562,7 @@
         (let [linked (timed :link #(link info))]
           (swap! state assoc-in [:classes cname] linked)
           (let [text (timed :register-text #(registration-text linked))]
-            (record! (:origin linked) [cname] text)
+            (record! (:origin linked) [cname] {:text text})
             (timed :register-eval #(scheme! text :interpret)))))))
   cname)
 
@@ -558,7 +581,7 @@
                 linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
             (swap! state assoc-in [:classes n] linked)
             (let [text (registration-text linked)]
-              (record! :jdk [n] text) ; pure data, safe to cache whoever asked
+              (record! :jdk [n] {:text text}) ; pure data, safe to cache whoever asked
               (scheme! text :interpret)))))
     n))
 
@@ -579,9 +602,14 @@
         info (assoc (class-info cname) :parsed p)]
     (swap! state update :jitted inc)
     (when (trace?) (binding [*out* *err*] (println "jit" (str cname "." mname desc))))
-    (let [text (timed :codegen #(cg/compile-method (:parsed info) m resolver))]
-      (record! (:origin info) [cname (str mname desc)] text)
-      (timed :chez-compile #(scheme! text)))))
+    (let [text (timed :codegen #(cg/compile-method (:parsed info) m resolver))
+          unit [cname (str mname desc)]]
+      (if (recording-jdk? (:origin info))
+        ;; compiled once: the same object code runs now and goes in the cache
+        (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
+                                           (s/call "compile-unit" text)))]
+          (record! :jdk unit {:fasl bv}))
+        (timed :chez-compile #(scheme! text))))))
 
 (defn jit! [cname mname desc]
   (if-let [unit (get-in @state [:classes cname :cached-methods (str mname desc)])]
@@ -660,10 +688,8 @@
         tmp (if (and pre (.exists (io/file pre "runtime.so"))) pre (io/file (str dir ".tmp-" (System/nanoTime))))]
     (swap! state dissoc :cache-tmp)
     (.mkdirs tmp)
-    (let [src (io/file tmp "boot.ss")]
-      (spit src (str/join "\n" (map :text forms)))
-      (timed :cache-write-boot #(s/call "quiet-compile-file" (str src) (str (io/file tmp "boot.so"))))
-      (.delete src))
+    ;; registrations compile here; method bodies were compiled when they ran
+    (timed :cache-write-boot #(write-units! (str (io/file tmp "boot.so")) forms true))
     ;; the runtime itself, so a warm start loads it compiled rather than
     ;; compiling its source again (about 130 ms)
     (when-not (.exists (io/file tmp "runtime.so"))
@@ -716,9 +742,9 @@
             file (str "extra-" stamp ".so")
             so-tmp (io/file dir (str file ".tmp"))
             img-tmp (io/file dir (str "state.img.tmp-" stamp))
-            _ (s/call "begin-units!" (str so-tmp))
-            starts (mapv #(s/call "add-unit!" (:text %)) units)
-            ends (conj (subvec starts 1) (s/call "end-units!"))]
+            offsets (write-units! (str so-tmp) units false)
+            starts (pop offsets)
+            ends (subvec offsets 1)]
         (.renameTo so-tmp (io/file dir file))
         (doseq [[{[cname k] :unit} start end] (map vector units starts ends)]
           (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
