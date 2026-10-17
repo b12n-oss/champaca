@@ -1410,10 +1410,14 @@
 ;; one: a reference is cast (null passes), a primitive unboxes and may widen
 (define (vh-insert-value d v)
   (if (prim-desc? d)
-      (let ([p (box-prim-of (nn v))])
+      (let ([p (begin (unless v (jthrow "java/lang/NullPointerException"
+                                        "Cannot invoke \"Object.getClass()\" because \"x\" is null"))
+                      (box-prim-of v))])
+        ;; a widening box converts; the message names the wanted wrapper first
         (unless (and p (prim-convertible? p d))
           (jthrow "java/lang/ClassCastException"
-                  (string-append "Cannot cast " (slashes->dots (class-name-of (nn v))) " to " (vh-class-text d))))
+                  (string-append "class " (slashes->dots (cadr (assoc d box-classes)))
+                                 " is not compatible with class " (slashes->dots (class-name-of v)))))
         (widen p d (junbox p v)))
       (begin
         (when (and v (not (jinstance? v (desc->class-name d))))
@@ -1484,12 +1488,13 @@
            [reorder (vector->list (jarr-vec (nn reorder*)))]
            [mt (lambda (as) (method-type-text as "V"))])
       (unless (fx= (length reorder) (length ds))
-        (vh-iae "old and new parameter lists differ in size: " (mt new) ", " (mt ds)))
+        (vh-iae "old type parameter count and reorder array length do not match: " (mt ds)
+                ", [" (fold-left (lambda (acc k) (if acc (string-append acc ", " (number->string k)) (number->string k))) #f reorder) "]"))
       (let loop ([i 0])
         (when (fx< i (length reorder))
           (let ([k (list-ref reorder i)])
             (when (or (fx< k 0) (fx>= k (length new)))
-              (vh-iae "index is out of bounds for new parameter list: " (number->string k)))
+              (vh-iae "index is out of bounds for new type: " (number->string k) ", " (mt new)))
             (unless (string=? (list-ref ds i) (list-ref new k))
               (vh-iae "parameter types do not match after reorder: " (mt ds) ", " (mt new)))
             (loop (fx+ i 1)))))
@@ -1501,17 +1506,21 @@
     (let* ([t (vh-target-of (nn vh) "collectCoordinates")]
            [ds (vh-target-coords t)]
            [info (mh-info-of (nn filter))]
-           [k (length (mh-info-args info))])
+           [k (length (mh-info-args info))]
+           [void? (string=? (mh-info-ret info) "V")])
       (vh-check-pos pos ds)
-      (unless (string=? (mh-info-ret info) (list-ref ds pos))
+      (unless (or void? (string=? (mh-info-ret info) (list-ref ds pos)))
         (vh-iae "Invalid filter type " (mh-type-text filter) " for coordinate type " (vh-class-text (list-ref ds pos))))
+      ;; a void filter runs for effect: the coordinate at pos stays, and the
+      ;; filter's parameters go in front of it
       (vh-derived t (vh-target-type t)
-                  (append (list-head ds pos) (mh-info-args info) (list-tail ds (fx+ pos 1)))
+                  (append (list-head ds pos) (mh-info-args info) (list-tail ds (if void? pos (fx+ pos 1))))
                   (lambda (cs)
-                    (values (append (list-head cs pos)
-                                    (list (apply (mh-info-proc info) (list-head (list-tail cs pos) k)))
-                                    (list-tail cs (fx+ pos k)))
-                            #f #f))))))
+                    (let ([r (apply (mh-info-proc info) (list-head (list-tail cs pos) k))])
+                      (values (append (list-head cs pos)
+                                      (if void? '() (list r))
+                                      (list-tail cs (fx+ pos k)))
+                              #f #f)))))))
 
 ;; to converts a new-type value into the base's type, from the other way;
 ;; extra leading filter parameters become trailing coordinates

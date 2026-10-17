@@ -13,6 +13,9 @@ fv add ok fv or ok
 99 [int, class [I]
 1 2 [class VarHandleCombinatorCheck, class VarHandleCombinatorCheck, boolean]
 <41> [] java.lang.String
+3 8 [class [I, int, int]
+ok ClassCastException: class java.lang.Integer is not compatible with class java.lang.Long NullPointerException: Cannot invoke "Object.getClass()" because "x" is null
+IllegalArgumentException: old type parameter count and reorder array length do not match: (int[],int)void, [0] | IllegalArgumentException: index is out of bounds for new type: 2, (int,int[])void
 IllegalArgumentException: Invalid position 2 for coordinate types: [class VarHandleCombinatorCheck]
 ClassCastException: Cannot cast java.lang.String to VarHandleCombinatorCheck
 IllegalArgumentException: Too many values
@@ -27,5 +30,5 @@ true WrongMethodTypeException: handle's method type (VarHandleCombinatorCheck)St
 16909060 1 UnsupportedOperationException: getVolatile [class [B]
 55 [class VarHandleCombinatorCheck, class VarHandleCombinatorCheck]
 -93 7 [class VarHandleCombinatorCheck, int] int
--1 [99, 22, -1] [class java.lang.String]
+-1 [99, 8, -1] [class java.lang.String]
 Integer 93

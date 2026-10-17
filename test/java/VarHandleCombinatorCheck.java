@@ -16,6 +16,8 @@ public class VarHandleCombinatorCheck {
   static int unwrap(String s) { return Integer.parseInt(s.substring(1, s.length() - 1)); }
   static int idx(String key) { return key.length(); }
   static VarHandleCombinatorCheck pick(VarHandleCombinatorCheck a, VarHandleCombinatorCheck b, boolean first) { return first ? a : b; }
+  static int sideSum;
+  static void side(int x) { sideSum += x; }
   static int shift(int base, int x) { return x - base; }
   static int unshift(int base, int x) { return x + base; }
 
@@ -82,6 +84,19 @@ public class VarHandleCombinatorCheck {
     // stacking: insert over filterValue
     VarHandle S2 = MethodHandles.insertCoordinates(FV, 0, o);
     System.out.println((String) S2.get() + " " + S2.coordinateTypes() + " " + S2.varType().getName());
+
+    // a void filter runs for its effect and keeps the coordinate
+    MethodHandle SIDE = lk.findStatic(VarHandleCombinatorCheck.class, "side", MethodType.methodType(void.class, int.class));
+    VarHandle CV = MethodHandles.collectCoordinates(A, 1, SIDE);
+    CV.set(arr, 3, 1, 8);
+    System.out.println(sideSum + " " + arr[1] + " " + CV.coordinateTypes());
+
+    // primitive coordinate values widen but never narrow, and nulls refuse
+    System.out.println(tryIt(() -> MethodHandles.insertCoordinates(A, 1, (short) 1)) + " "
+        + tryIt(() -> MethodHandles.insertCoordinates(A, 1, 1L)) + " "
+        + tryIt(() -> MethodHandles.insertCoordinates(A, 1, (Object) null)));
+    System.out.println(tryIt(() -> MethodHandles.permuteCoordinates(A, List.of(int.class, int[].class), 0))
+        + " | " + tryIt(() -> MethodHandles.permuteCoordinates(A, List.of(int.class, int[].class), 1, 2)));
 
     // construction errors
     System.out.println(tryIt(() -> MethodHandles.insertCoordinates(N, 2, o)));
