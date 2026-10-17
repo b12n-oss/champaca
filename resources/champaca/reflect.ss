@@ -329,15 +329,60 @@
                               (class-name->desc (jclass-cname (mirror-class (nn cls)))))
                (vector->list (jarr-vec dims))))
 
+;; HotSpot's checks and order: an array (of primitives, for the typed
+;; methods), then the index (no message), then the value's type, which may
+;; widen (an int into a long[]) but never narrow.
+(define (reflect-prim-array a)
+  (let ([a (reflect-array a)])
+    (if (prim-desc? (jarr-elem a)) a
+        (jthrow "java/lang/IllegalArgumentException" "Argument is not an array of primitive type"))))
+(define (reflect-index a i)
+  (unless (and (fx>= i 0) (fx< i (vector-length (jarr-vec a))))
+    (jthrow "java/lang/ArrayIndexOutOfBoundsException" #f)))
+(define (reflect-type-mismatch) (jthrow "java/lang/IllegalArgumentException" "argument type mismatch"))
+;; x has primitive type `from`
+(define (reflect-prim-set! a i from x)
+  (let ([e (jarr-elem a)])
+    (unless (prim-convertible? from e) (reflect-type-mismatch))
+    (vector-set! (jarr-vec a) i (widen from e x))))
+
 (defnative "java/lang/reflect/Array.get(Ljava/lang/Object;I)Ljava/lang/Object;" (a i)
-  (let ([v (jaload (reflect-array a) i)] [e (jarr-elem a)])
-    (if (prim-desc? e) (jbox e v) v)))
+  (let* ([a (reflect-array a)] [e (jarr-elem a)])
+    (reflect-index a i)
+    (let ([v (vector-ref (jarr-vec a) i)]) (if (prim-desc? e) (jbox e v) v))))
 
 (defnative "java/lang/reflect/Array.set(Ljava/lang/Object;ILjava/lang/Object;)V" (a i v)
-  (let ([e (jarr-elem (reflect-array a))])
-    (when (and v (not (prim-desc? e)) (not (array-store-ok? a v)))
-      (jthrow "java/lang/IllegalArgumentException" "array element type mismatch"))
-    (jastore a i (if (prim-desc? e) (junbox e (nn v)) v))))
+  (let* ([a (reflect-array a)] [e (jarr-elem a)])
+    (cond
+      [(prim-desc? e)
+       (unless v (jthrow "java/lang/IllegalArgumentException" #f))
+       (reflect-index a i)
+       (let ([p (box-prim-of v)])
+         (unless p (reflect-type-mismatch))
+         (reflect-prim-set! a i p (junbox p v)))]
+      [else
+       (reflect-index a i)
+       (when (and v (not (array-store-ok? a v)))
+         (jthrow "java/lang/IllegalArgumentException" "array element type mismatch"))
+       (vector-set! (jarr-vec a) i v)])))
+
+;; getInt, setLong and the rest
+(for-each
+ (lambda (p)
+   (let ([name (car p)] [t (cdr p)])
+     (define-native! (string-append "java/lang/reflect/Array.get" name "(Ljava/lang/Object;I)" t)
+       (lambda (a i)
+         (let* ([a (reflect-prim-array a)] [e (jarr-elem a)])
+           (reflect-index a i)
+           (unless (prim-convertible? e t) (reflect-type-mismatch))
+           (widen e t (vector-ref (jarr-vec a) i)))))
+     (define-native! (string-append "java/lang/reflect/Array.set" name "(Ljava/lang/Object;I" t ")V")
+       (lambda (a i x)
+         (let ([a (reflect-prim-array a)])
+           (reflect-index a i)
+           (reflect-prim-set! a i t x))))))
+ '(("Boolean" . "Z") ("Byte" . "B") ("Char" . "C") ("Short" . "S")
+   ("Int" . "I") ("Long" . "J") ("Float" . "F") ("Double" . "D")))
 
 ;; --- annotation instances ---------------------------------------------------------
 ;; The JDK builds an annotation with java.lang.reflect.Proxy, which generates a

@@ -126,7 +126,19 @@
 (define-record-type jobj (fields cls slots (mutable lock))
   (protocol (lambda (new) (lambda (cls slots) (new cls slots #f))))
   (sealed #t) (nongenerative champaca-jobj))
-(define-record-type jarr (fields elem vec) (sealed #t) (nongenerative champaca-jarr))
+;; An array's element descriptor is interned, so every String[] shares one
+;; string and an aastore cell can compare descriptors with eq?. The lookup is
+;; by the descriptor object first (one eq? hash for the literal an allocation
+;; site passes each time), then by its text.
+(define-record-type (jarr make-jarr* jarr?) (fields elem vec) (sealed #t) (nongenerative champaca-jarr))
+(define elem-by-object (make-ephemeron-eq-hashtable))
+(define elem-by-text (make-hashtable string-hash string=?))
+(define (intern-elem e)
+  (or (eq-hashtable-ref elem-by-object e #f)
+      (let ([i (or (hashtable-ref elem-by-text e #f) (begin (hashtable-set! elem-by-text e e) e))])
+        (eq-hashtable-set! elem-by-object e i)
+        i)))
+(define (make-jarr e v) (make-jarr* (intern-elem e) v))
 
 (define classes (make-hashtable string-hash string=?))
 
@@ -310,7 +322,7 @@
 
 ;; Virtual and interface dispatch: one hashtable probe on the receiver's class.
 ;; Arrays dispatch through Object's vtable, except clone.
-(define (array-clone a) (make-jarr (jarr-elem a) (vector-copy (jarr-vec a))))
+(define (array-clone a) (make-jarr* (jarr-elem a) (vector-copy (jarr-vec a))))
 ;; key is a symbol in generated code; the runtime's own callers pass strings.
 (define clone-key (string->symbol "clone()Ljava/lang/Object;"))
 (define (jvirt x key)
@@ -378,6 +390,11 @@
   (if (fx< n 0)
       (jthrow "java/lang/NegativeArraySizeException" (number->string n))
       (make-jarr elem (make-vector n default))))
+;; generated code's newarray and anewarray, with elem already interned
+(define (jnewarray-interned elem n default)
+  (if (fx< n 0)
+      (jthrow "java/lang/NegativeArraySizeException" (number->string n))
+      (make-jarr* elem (make-vector n default))))
 
 (define (elem-default d)
   (case (string-ref d 0) [(#\L #\[) #f] [(#\F #\D) 0.0] [else 0]))
@@ -430,11 +447,13 @@
                        (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v)))
                      (nn arr)))]))
 ;; aastore: a reference array checks a non-null value against its element
-;; type after the index, as the JVM does. Each site has a cell holding the
-;; element descriptor it last stored into and the value class that passed
-;; (#t when the element type is Object, which takes anything), so a hit is
-;; two eq? tests; the descriptor string is the array's own, shared by every
-;; array one allocation site makes.
+;; type after the index, as the JVM does. Each site has a cell: its car is the
+;; (interned) element descriptor it last stored into, its cdr #t when that is
+;; Object (anything goes) or else the one or two value keys that passed, as a
+;; key or a pair of keys. A key is an object's class or an array's element
+;; descriptor, so a repeat store costs a few eq? tests.
+(define-syntax store-key
+  (syntax-rules () [(_ o) (cond [(jobj? o) (jobj-cls o)] [(jarr? o) (jarr-elem o)] [else #f])]))
 (define-syntax array-store!
   (syntax-rules ()
     [(_ ic a i x) (let ([arr a] [j i] [o x])
@@ -443,8 +462,11 @@
                           (if (fx< -1 j (#3%vector-length v))
                               (begin
                                 (when (and o (not (and (eq? (jarr-elem arr) (car ic))
-                                                       (or (eq? (cdr ic) #t)
-                                                           (and (jobj? o) (eq? (jobj-cls o) (cdr ic)))))))
+                                                       (let ([c (cdr ic)])
+                                                         (or (eq? c #t)
+                                                             (let ([k (store-key o)])
+                                                               (or (eq? c k)
+                                                                   (and (pair? c) (or (eq? (car c) k) (eq? (cdr c) k))))))))))
                                   (array-store-miss ic arr o))
                                 (#3%vector-set! v j o))
                               (bounds-error j v)))
@@ -452,12 +474,17 @@
 (define (array-store-ok? arr o)
   (let ([e (jarr-elem arr)])
     (or (string=? e "Ljava/lang/Object;") (jinstance? o (desc->class-name e)))))
+;; The cell's car is cleared while it changes, so no store in between can
+;; pair one element type with another's keys.
 (define (array-store-miss ic arr o)
   (unless (array-store-ok? arr o)
     (jthrow "java/lang/ArrayStoreException" (slashes->dots (class-name-of o))))
-  (let ([e (jarr-elem arr)])
-    (cond [(string=? e "Ljava/lang/Object;") (set-car! ic e) (set-cdr! ic #t)]
-          [(jobj? o) (set-car! ic e) (set-cdr! ic (jobj-cls o))])))
+  (let ([e (jarr-elem arr)] [k (store-key o)] [c (cdr ic)])
+    (cond [(string=? e "Ljava/lang/Object;") (set-car! ic #f) (set-cdr! ic #t) (set-car! ic e)]
+          [(not k)]
+          [(and (eq? (car ic) e) (pair? c)) (set-cdr! ic (cons k (car c)))]
+          [(and (eq? (car ic) e) c (not (eq? c #t))) (set-cdr! ic (cons k c))]
+          [else (set-car! ic #f) (set-cdr! ic k) (set-car! ic e)])))
 (define-syntax array-length
   (syntax-rules () [(_ a) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (nn arr)))]))
 (define-syntax wrap-byte (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80)]))

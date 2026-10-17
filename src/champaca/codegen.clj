@@ -650,11 +650,13 @@
           :new (let [c (:name (cp a0))]
                  ((:ensure-loaded resolve) c)
                  (push! (sx "jnew-ic" ((:ic! ctx)) (str "'" (sym c))) "A"))
-          :newarray (let [e (newarray-elem a0)]
-                      (un #(sx "jnewarray" (str-lit e) % (if (#{"F" "D"} e) "0.0" "0")) "A"))
+          ;; the element descriptor is interned once per method (runtime.ss)
+          :newarray (let [e (newarray-elem a0) el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
+                      (un #(sx "jnewarray-interned" el % (if (#{"F" "D"} e) "0.0" "0")) "A"))
           :anewarray (let [c (:name (cp a0))
-                           e (if (str/starts-with? c "[") c (str "L" c ";"))]
-                       (un #(sx "jnewarray" (str-lit e) % "#f") "A"))
+                           e (if (str/starts-with? c "[") c (str "L" c ";"))
+                           el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
+                       (un #(sx "jnewarray-interned" el % "#f") "A"))
           :multianewarray (let [c (:name (cp a0)) dims (popn! (second args))]
                             (push! (sx "jmultiarray" (str-lit c) (apply sx "list" dims)) "A"))
           :arraylength (un #(sx "array-length" %) "I")
@@ -740,9 +742,12 @@
   [cls method resolve]
   (let [tag (str (:name cls) "." (:name method) (:desc method))
         ;; inline-cache cells, one per site that needs one, made once per
-        ;; method and shared with the methods inlined into it
-        ics (volatile! 0)
-        ic! (fn [] (str "ic" (dec (vswap! ics inc))))
+        ;; method and shared with the methods inlined into it; given an
+        ;; expression, a variable holding its value, computed once the same way
+        ics (volatile! [])
+        ic! (fn ic!
+              ([] (ic! "(cons #f #f)"))
+              ([init] (str "ic" (dec (count (vswap! ics conj init))))))
         inlined (volatile! {})          ; callee tag -> label, or false
         defs (volatile! [])             ; [label lambda-text], in order
         bt? (System/getenv "CHAMPACA_BT")
@@ -767,8 +772,8 @@
         f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
         f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
     (sx "define" (method-global (:name cls) (:name method) (:desc method))
-        (if (pos? @ics)
-          (sx "let" (apply sx (for [i (range @ics)] (sx (str "ic" i) "(cons #f #f)"))) f)
+        (if (seq @ics)
+          (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f)
           f))))
 
 (defn- compile-method*

@@ -1,3 +1,4 @@
+import java.lang.reflect.Array;
 import java.util.*;
 
 // aastore and System.arraycopy check what they store against the array's
@@ -51,6 +52,19 @@ public class ArrayStoreCheck {
     }
     System.out.println();
 
+    // one site: two allocation sites of one type, array values, two classes taking turns
+    Object[] one = mk1(), two = mk2();
+    for (Object[] t : new Object[][] {one, two, one, two}) System.out.print(run(() -> put(t, "s")) + " ");
+    System.out.println(run(() -> put(two, 1)));
+    Object[] grid2 = new int[1][];
+    for (Object v : new Object[] {new int[1], new int[2], new long[1], new int[0][], new int[3]})
+      System.out.print(run(() -> put(grid2, v)) + " | ");
+    System.out.println();
+    Object[] cs = new CharSequence[1];
+    for (Object v : new Object[] {"a", new StringBuilder("b"), "c", new StringBuilder("d"), 5, new StringBuffer("e"), "f"})
+      System.out.print(run(() -> put(cs, v)) + " | ");
+    System.out.println();
+
     // arraycopy
     Object[] mixed = {"a", "b", 3, "d"};
     String[] dst = new String[4];
@@ -63,6 +77,16 @@ public class ArrayStoreCheck {
     System.out.println(run(() -> System.arraycopy(new String[3], -1, new String[2], 0, 1)));
     System.out.println(run(() -> System.arraycopy(new String[3], 0, new String[2], 0, -1)));
     System.out.println(run(() -> System.arraycopy(null, 0, new String[2], 0, 1)));
+    System.out.println(run(() -> System.arraycopy(new Integer[] {1, 2}, 0, new String[2], 0, 2)));
+    System.out.println(run(() -> System.arraycopy(new A[] {null, new A() {}}, 0, new B[2], 0, 2)));
+    System.out.println(run(() -> System.arraycopy(new A[2], 0, new B[2], 0, 2)));
+    System.out.println(run(() -> System.arraycopy(new int[][] {new int[0]}, 0, new String[1][], 0, 1)));
+    System.out.println(run(() -> System.arraycopy(new String[][][] {new String[0][]}, 0, new String[1][], 0, 1)));
+    System.out.println(run(() -> System.arraycopy(new Object[2], 0, new int[2], 0, 2)));
+    System.out.println(run(() -> System.arraycopy(new String[3], 0, new String[2], -1, 1)));
+    Object[] self = {"a", 1, "b", null};
+    System.arraycopy(self, 0, self, 1, 3);
+    System.out.println(Arrays.toString(self));
     String[] ok = new String[3];
     System.arraycopy(new Object[] {"p", "q"}, 0, ok, 1, 2);
     System.out.println(Arrays.toString(ok) + " " + Arrays.toString(Arrays.copyOf(new Object[] {"r"}, 2, String[].class)));
@@ -70,8 +94,34 @@ public class ArrayStoreCheck {
     List<Object> list = new ArrayList<>(List.of("a", "b"));
     System.out.println(run(() -> list.toArray(new Integer[0])));
     System.out.println(run(() -> java.lang.reflect.Array.set(new String[1], 0, 1)));
+
+    // reflection: the array, then the index, then the value
+    for (Runnable r : new Runnable[] {
+        () -> Array.set(new String[1], 5, 1), () -> Array.set(new String[1], -1, "s"),
+        () -> Array.set(new int[1], 0, "x"), () -> Array.set(new int[1], 0, 3L),
+        () -> Array.set(new int[1], 0, null), () -> Array.set(new int[1], 3, null),
+        () -> Array.set(new int[1], 3, "x"), () -> Array.set(new long[1], 0, 3),
+        () -> Array.set(new char[1], 0, (byte) 1), () -> Array.set(new double[1], 0, 'c'),
+        () -> Array.set(new boolean[1], 0, 1), () -> Array.set("str", 0, 1),
+        () -> Array.setInt(new long[1], 0, 3), () -> Array.setInt(new short[1], 0, 3),
+        () -> Array.setLong(new String[1], 0, 3), () -> Array.setInt(new long[1], 5, 3),
+        () -> Array.setBoolean(new int[1], 0, true), () -> Array.setChar(new int[1], 0, 'c'),
+        () -> Array.getInt(new long[1], 0), () -> Array.getInt(new String[1], 5),
+        () -> Array.getInt(new long[1], 5), () -> Array.getChar(new byte[1], 0)})
+      System.out.print(run(r) + " | ");
+    System.out.println();
+    try { Array.set(null, 0, 1); } catch (NullPointerException e) { System.out.println("npe"); }
+    long[] l = new long[1]; Array.setInt(l, 0, -3);
+    float[] f = new float[1]; Array.setLong(f, 0, 16777217L);
+    double[] d = new double[1]; Array.set(d, 0, 'c');
+    System.out.println(l[0] + " " + f[0] + " " + (f[0] - 16777216f) + " " + d[0] + " " + Array.getInt(new short[] {7}, 0)
+        + " " + Array.getDouble(new char[] {'a'}, 0) + " " + Array.getFloat(new long[] {16777217L}, 0) + " " + Array.get(new long[] {9}, 0));
   }
 
   static Object i0(Object[] a) { return "s"; }
   static void put(Object[] a, Object v) { a[0] = v; }
+  static String[] mk1() { return new String[1]; }
+  static String[] mk2() { return new String[1]; }
+  interface A {}
+  interface B {}
 }

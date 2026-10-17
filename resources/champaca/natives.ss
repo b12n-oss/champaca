@@ -48,7 +48,22 @@
 ;; stops at the first that doesn't fit, leaving the ones before it copied.
 (define (arraycopy-type-name e) (if (prim-desc? e) (desc->class-name e) "object array"))
 (define (arraycopy-fail cls msg) (jthrow cls (string-append "arraycopy: " msg)))
+;; vector-copy!-style copy that handles overlap within one vector
+(define (arraycopy-move! sv sp dv dp n)
+  (if (and (eq? sv dv) (fx< sp dp))
+      (do ([i (fx- n 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))
+      (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))))
+
+;; the common case first: two arrays of one (interned) element type and
+;; indexes in range need none of the checks below
 (defnative "java/lang/System.arraycopy(Ljava/lang/Object;ILjava/lang/Object;II)V" (src sp dst dp n)
+  (if (and (jarr? src) (jarr? dst) (eq? (jarr-elem src) (jarr-elem dst))
+           (fx>= sp 0) (fx>= dp 0) (fx>= n 0)
+           (fx<= (fx+ sp n) (vector-length (jarr-vec src))) (fx<= (fx+ dp n) (vector-length (jarr-vec dst))))
+      (arraycopy-move! (jarr-vec src) sp (jarr-vec dst) dp n)
+      (arraycopy-checked src sp dst dp n)))
+
+(define (arraycopy-checked src sp dst dp n)
   (let ([src (nn src)] [dst (nn dst)])
     (unless (jarr? src)
       (arraycopy-fail "java/lang/ArrayStoreException"
@@ -73,18 +88,22 @@
             [(fx> (fx+ dp n) (vector-length dv))
              (bounds (string-append "last destination index " (number->string (fx+ dp n)) (out-of de dv)))])
       (cond
-        [(and (eq? sv dv) (fx< sp dp))
-         (do ([i (fx- n 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))]
-        [(or (prim-desc? se) (class-assignable? (string-append "[" se) (string-append "[" de)))
-         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))]
+        ;; descriptors are interned, so the same element type is eq?
+        [(or (eq? se de) (prim-desc? se) (string=? de "Ljava/lang/Object;")
+             (class-assignable? (string-append "[" se) (string-append "[" de)))
+         (arraycopy-move! sv sp dv dp n)]
+        ;; each element, up to the first that doesn't fit; the message says
+        ;; whether the copy narrows or the element types are unrelated
         [else
          (do ([i 0 (fx+ i 1)]) ((fx= i n))
            (let ([x (vector-ref sv (fx+ sp i))])
              (unless (or (not x) (array-store-ok? dst x))
-               (arraycopy-fail "java/lang/ArrayStoreException"
-                               (string-append "element type mismatch: can not cast one of the elements of "
-                                              (slashes->dots (desc->class-name se)) "[] to the type of the destination array, "
-                                              (slashes->dots (desc->class-name de)))))
+               (let ([sn (slashes->dots (desc->class-name se))] [dn (slashes->dots (desc->class-name de))])
+                 (arraycopy-fail "java/lang/ArrayStoreException"
+                                 (if (class-assignable? (string-append "[" de) (string-append "[" se))
+                                     (string-append "element type mismatch: can not cast one of the elements of "
+                                                    sn "[] to the type of the destination array, " dn)
+                                     (string-append "type mismatch: can not copy " sn "[] into " dn "[]")))))
              (vector-set! dv (fx+ dp i) x)))]))))
 (defnative "java/lang/System.setIn0(Ljava/io/InputStream;)V" (s) (set-top-level-value! '|java/lang/System:in| s))
 (defnative "java/lang/System.setOut0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:out| s))

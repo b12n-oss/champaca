@@ -11,6 +11,9 @@ ok ok ok ok ArrayStoreException: java.lang.Integer
 ok ok ok 
 ok | ArrayStoreException: java.lang.Integer | ArrayStoreException: java.lang.String | ok | ArrayStoreException: ArrayStoreCheck$Sq | ok | 
 ok | ArrayStoreException: java.lang.Integer | ok | ArrayStoreException: java.lang.StringBuilder | 
+ok ok ok ok ArrayStoreException: java.lang.Integer
+ok | ok | ArrayStoreException: [J | ArrayStoreException: [[I | ok | 
+ok | ok | ok | ok | ArrayStoreException: java.lang.Integer | ok | ok | 
 ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String [a, b, null, null]
 ArrayStoreException: arraycopy: type mismatch: can not copy int[] into long[]
 ArrayStoreException: arraycopy: type mismatch: can not copy int[] into object array[]
@@ -20,7 +23,18 @@ ArrayIndexOutOfBoundsException: arraycopy: last destination index 3 out of bound
 ArrayIndexOutOfBoundsException: arraycopy: source index -1 out of bounds for object array[3]
 ArrayIndexOutOfBoundsException: arraycopy: length -1 is negative
 NullPointerException: null
+ArrayStoreException: arraycopy: type mismatch: can not copy java.lang.Integer[] into java.lang.String[]
+ArrayStoreException: arraycopy: type mismatch: can not copy ArrayStoreCheck$A[] into ArrayStoreCheck$B[]
+ok
+ArrayStoreException: arraycopy: type mismatch: can not copy [I[] into [Ljava.lang.String;[]
+ArrayStoreException: arraycopy: type mismatch: can not copy [[Ljava.lang.String;[] into [Ljava.lang.String;[]
+ArrayStoreException: arraycopy: type mismatch: can not copy object array[] into int[]
+ArrayIndexOutOfBoundsException: arraycopy: destination index -1 out of bounds for object array[2]
+[a, a, 1, b]
 [null, p, q] [r, null]
 ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.String
 ArrayStoreException: arraycopy: element type mismatch: can not cast one of the elements of java.lang.Object[] to the type of the destination array, java.lang.Integer
 IllegalArgumentException: array element type mismatch
+ArrayIndexOutOfBoundsException: null | ArrayIndexOutOfBoundsException: null | IllegalArgumentException: argument type mismatch | IllegalArgumentException: argument type mismatch | IllegalArgumentException: null | IllegalArgumentException: null | ArrayIndexOutOfBoundsException: null | ok | IllegalArgumentException: argument type mismatch | ok | IllegalArgumentException: argument type mismatch | IllegalArgumentException: Argument is not an array | ok | IllegalArgumentException: argument type mismatch | IllegalArgumentException: Argument is not an array of primitive type | ArrayIndexOutOfBoundsException: null | IllegalArgumentException: argument type mismatch | ok | IllegalArgumentException: argument type mismatch | IllegalArgumentException: Argument is not an array of primitive type | ArrayIndexOutOfBoundsException: null | IllegalArgumentException: argument type mismatch | 
+npe
+-3 1.6777216E7 0.0 99.0 7 97.0 1.6777216E7 9
