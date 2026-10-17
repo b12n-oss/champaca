@@ -62,3 +62,29 @@ fin r=-6
 tryFinally: 994
 fin r=0
 tryFinally-throw: rethrew x6
+fin2 t=null r=-6
+tryFinally-cleanup-throws: java.lang.IllegalStateException: cleanup
+spreader-null-0: 5
+spreader-len3-0: java.lang.IllegalArgumentException: array is not of length 0
+spreadInvoker-badcount: java.lang.IllegalArgumentException: bad argument count: 5
+spreadInvoker-neg: java.lang.IllegalArgumentException: bad argument count: -1
+spreadInvoker-null: 5
+spreadInvoker-null0: 5
+spreadInvoker-short: java.lang.IllegalArgumentException: array is not of length 2
+catch-h2: java.lang.IllegalArgumentException: target and handler types must match: (int)int != (RuntimeException,int,int)int
+catch-rettype: java.lang.IllegalArgumentException: target and handler return types must match: (int)int != (RuntimeException)long
+catch-h0args: java.lang.IllegalArgumentException: handler does not accept exception type class java.lang.RuntimeException
+catch-badexc: java.lang.ClassCastException: java.lang.String
+tryFinally-badfirst: java.lang.IllegalArgumentException: cleanup first argument and Throwable must match: (String,int,int)int != class java.lang.Throwable
+tryFinally-rettype: java.lang.IllegalArgumentException: target and return types must match: long != int
+collector-objclass: java.lang.IllegalArgumentException: not an array type: class java.lang.Object
+collect-oob: java.lang.IllegalArgumentException: position is out of range for target: MethodHandle(int)int, 5
+collect-neg: java.lang.IllegalArgumentException: position is out of range for target: MethodHandle(int)int, -1
+collect-void-oob: java.lang.IllegalArgumentException: position is out of range for target: MethodHandle(int)int, 2
+asType-constable: (Constable)int
+asType-numbool: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle()boolean to ()Number
+asType-intLong: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle(int)int to (int)Long
+aget-null-bool: java.lang.NullPointerException: Cannot load from byte/boolean array because "a" is null
+aget-null-long: java.lang.NullPointerException: Cannot load from long array because "a" is null
+aset-null-byte: java.lang.NullPointerException: Cannot store to byte/boolean array because "a" is null
+arrayLength-null: java.lang.NullPointerException: Cannot read the array length because "a" is null

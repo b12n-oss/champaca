@@ -19,6 +19,12 @@ public class MethodHandleCombinatorCheck {
     static int h0(RuntimeException e) { return -9; }
     static int sum(int[] xs) { int s = 0; for (int x : xs) s += x; return s; }
     static int fin(Throwable t, int r, int a) { System.out.println("fin r=" + r); return r + 1000; }
+    static int fin2(Throwable t, int r, int a) { System.out.println("fin2 t=" + t + " r=" + r); throw new IllegalStateException("cleanup"); }
+    static int finBad(String s, int r, int a) { return 0; }
+    static long finLong(Throwable t, int r, int a) { return 1L; }
+    static int h2(RuntimeException e, int a, int b) { return 0; }
+    static long hL(RuntimeException e) { return 1L; }
+    static int h00() { return 0; }
     static void note(int a) { System.out.println("note " + a); }
     static void noteS(String s) { System.out.println("noteS " + s); }
     static int len2(String s, int b) { return s.length() + b; }
@@ -119,5 +125,39 @@ public class MethodHandleCombinatorCheck {
         t("tryFinally-throw", () -> { MethodHandle b = L.findStatic(me, "boom", MethodType.methodType(int.class, int.class));
             MethodHandle f = L.findStatic(me, "fin", MethodType.methodType(int.class, Throwable.class, int.class, int.class));
             try { return (int) MethodHandles.tryFinally(b, f).invoke(6); } catch (RuntimeException e) { return "rethrew " + e.getMessage(); }});
+
+        // review round: the edges the first version missed
+        t("tryFinally-cleanup-throws", () -> { MethodHandle f2 = L.findStatic(me, "fin2", MethodType.methodType(int.class, Throwable.class, int.class, int.class));
+            return (int) MethodHandles.tryFinally(neg, f2).invoke(6); });
+        t("spreader-null-0", () -> (int) add.asSpreader(int[].class, 0).invoke(2, 3, (int[]) null));
+        t("spreader-len3-0", () -> (int) add.asSpreader(int[].class, 0).invoke(2, 3, new int[3]));
+        t("spreadInvoker-badcount", () -> MethodHandles.spreadInvoker(ii_i, 5));
+        t("spreadInvoker-neg", () -> MethodHandles.spreadInvoker(ii_i, -1));
+        t("spreadInvoker-null", () -> (int) MethodHandles.spreadInvoker(ii_i, 2).invoke(add, 2, 3, (Object[]) null));
+        t("spreadInvoker-null0", () -> (int) MethodHandles.spreadInvoker(MethodType.methodType(int.class, int.class, int.class), 2).invoke(add, 2, 3, (Object[]) null));
+        t("spreadInvoker-short", () -> (int) MethodHandles.spreadInvoker(ii_i, 0).invoke(add, new Object[]{1}));
+        MethodHandle h0h = L.findStatic(me, "h0", MethodType.methodType(int.class, RuntimeException.class));
+        t("catch-h2", () -> MethodHandles.catchException(neg, RuntimeException.class,
+            L.findStatic(me, "h2", MethodType.methodType(int.class, RuntimeException.class, int.class, int.class))));
+        t("catch-rettype", () -> MethodHandles.catchException(neg, RuntimeException.class,
+            L.findStatic(me, "hL", MethodType.methodType(long.class, RuntimeException.class))));
+        t("catch-h0args", () -> MethodHandles.catchException(neg, RuntimeException.class,
+            L.findStatic(me, "h00", MethodType.methodType(int.class))));
+        t("catch-badexc", () -> MethodHandles.catchException(neg, (Class) String.class, h0h));
+        t("tryFinally-badfirst", () -> MethodHandles.tryFinally(neg,
+            L.findStatic(me, "finBad", MethodType.methodType(int.class, String.class, int.class, int.class))));
+        t("tryFinally-rettype", () -> MethodHandles.tryFinally(neg,
+            L.findStatic(me, "finLong", MethodType.methodType(long.class, Throwable.class, int.class, int.class))));
+        t("collector-objclass", () -> add.asCollector(Object.class, 1));
+        t("collect-oob", () -> MethodHandles.collectArguments(neg, 5, neg));
+        t("collect-neg", () -> MethodHandles.collectArguments(neg, -1, neg));
+        t("collect-void-oob", () -> MethodHandles.collectArguments(neg, 2, note));
+        t("asType-constable", () -> neg.asType(MethodType.methodType(int.class, java.lang.constant.Constable.class)).type());
+        t("asType-numbool", () -> MethodHandles.zero(boolean.class).asType(MethodType.methodType(Number.class)));
+        t("asType-intLong", () -> neg.asType(MethodType.methodType(Long.class, int.class)));
+        t("aget-null-bool", () -> MethodHandles.arrayElementGetter(boolean[].class).invoke((boolean[]) null, 0));
+        t("aget-null-long", () -> MethodHandles.arrayElementGetter(long[].class).invoke((long[]) null, 0));
+        t("aset-null-byte", () -> { MethodHandles.arrayElementSetter(byte[].class).invoke((byte[]) null, 0, (byte) 1); return "ok"; });
+        t("arrayLength-null", () -> MethodHandles.arrayLength(int[].class).invoke((int[]) null));
     }
 }
