@@ -270,7 +270,15 @@
   (when-let [rec (:recording @state)]
     (when (= origin :jdk) (vswap! rec conj (assoc code :unit unit)))))
 
-(defn- recording-jdk? [origin] (and (= origin :jdk) (:recording @state)))
+(defn- compile-to-cache?
+  "Whether a JDK method should compile straight to object code kept for the
+  cache (compile-unit): during boot, whose cache write always follows, or
+  when this run saves a generation at exit (run does). Otherwise it is
+  recorded as text, cheaper to compile, and compiled again only if
+  save-cache! is called after all."
+  [origin]
+  (and (= origin :jdk) (:recording @state)
+       (or (nil? (:boot-status @state)) (:saves-generation @state))))
 
 (defn- write-units!
   "Write units to path as one object file: text compiled here, fasl appended
@@ -280,12 +288,17 @@
   [path units batch?]
   (s/call "begin-units!" path)
   (let [runs (if batch? (partition-by #(boolean (:fasl %)) units) (map vector units))
-        starts (reduce (fn [acc run]
-                         (if (:fasl (first run))
-                           (into acc (map #(s/call "add-fasl!" (:fasl %)) run))
-                           (let [start (s/call "add-unit!" (str/join "\n" (map :text run)))]
-                             (into acc (repeat (count run) start)))))
-                       [] runs)]
+        starts (try
+                 (reduce (fn [acc run]
+                           (if (:fasl (first run))
+                             (into acc (map #(s/call "add-fasl!" (:fasl %)) run))
+                             (let [start (s/call "add-unit!" (str/join "\n" (map :text run)))]
+                               (into acc (repeat (count run) start)))))
+                         [] runs)
+                 (catch Exception e
+                   ;; close the file; the caller's temp name keeps it out of the cache
+                   (s/call "end-units!")
+                   (throw e)))]
     (conj starts (s/call "end-units!"))))
 
 (defn- load-unit!
@@ -604,7 +617,7 @@
     (when (trace?) (binding [*out* *err*] (println "jit" (str cname "." mname desc))))
     (let [text (timed :codegen #(cg/compile-method (:parsed info) m resolver))
           unit [cname (str mname desc)]]
-      (if (recording-jdk? (:origin info))
+      (if (compile-to-cache? (:origin info))
         ;; compiled once: the same object code runs now and goes in the cache
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
                                            (s/call "compile-unit" text)))]
@@ -843,6 +856,7 @@
   "Run cname's main method with classes found under the classpath dirs,
   after booting the JDK. Returns the exit status."
   [classpath cname args]
+  (swap! state assoc :saves-generation true) ; save-generation! below
   (let [t0 (System/nanoTime)
         status (init! classpath)
         _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
