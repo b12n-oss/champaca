@@ -1,0 +1,18 @@
+;; Real libraries, each run by `bb libs` on the JVM and through champaca with
+;; the outputs compared. A probe runs only when its jars are in ~/.m2;
+;; `bb libs:fetch` downloads the missing ones from Maven Central and keeps a
+;; jar only when its SHA-1 matches the one pinned here.
+{:libs
+ [{:main "Lang" :jars [["org.apache.commons:commons-lang3:3.12.0" "c6842c86792ff03b9f1d1fe2aab8dc23aa6c6f0e"]]}
+  {:main "Gs" :jars [["com.google.code.gson:gson:2.13.2" "48b8230771e573b54ce6e867a9001e75977fe78e"]]}
+  {:main "Soup" :jars [["org.jsoup:jsoup:1.18.1" "cb7cd991d47b44101cbe4655dec611cdc01f8a02"]]}
+  {:main "Jack" :jars [["com.fasterxml.jackson.core:jackson-databind:2.20.1" "9586a7fe0e1775de0e54237fa6a2c8455c93ac06"]
+                       ["com.fasterxml.jackson.core:jackson-core:2.20.1" "5734323adfece72111769b0ae38a6cf803e3d178"]
+                       ["com.fasterxml.jackson.core:jackson-annotations:2.20" "6a5e7291ea3f2b590a7ce400adb7b3aea4d7e12c"]]}
+  {:main "Caf" :jars [["com.github.ben-manes.caffeine:caffeine:3.2.2" "8b0a31cb57ac00e18161d5586759912bd2637398"]]}
+  {:main "Gua" :jars [["com.google.guava:guava:33.4.8-jre" "e70a3268e6cd3e7d458aa15787ce6811c34e96ae"]]}
+  ;; slf4j-simple logs to stderr, so that is compared too
+  {:main "Log" :stderr true
+   :jars [["org.slf4j:slf4j-api:2.0.16" "0172931663a09a1fa515567af5fbef00897d3c04"]
+          ["org.slf4j:slf4j-simple:2.0.16" "56d3d8e59293543780ad35af4ee4a5d9c111a588"]]}
+  {:main "Yml" :jars [["org.yaml:snakeyaml:2.3" "936b36210e27320f920536f695cf1af210c44586"]]}]}

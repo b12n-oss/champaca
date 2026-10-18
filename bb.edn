@@ -9,7 +9,15 @@
           (def jolt-pinned (str jolt-dir "/jolt"))
           ;; $JOLT wins, then the pinned build, then jolt on PATH
           (defn jolt-bin []
-            (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt")))
+            (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt"))
+          ;; test/libs: a Maven coordinate's path in a repository, and a file's SHA-1
+          (defn m2-path [coord]
+            (let [[g a v] (str/split coord (re-pattern ":"))]
+              (str (str/replace g "." "/") "/" a "/" v "/" a "-" v ".jar")))
+          (defn m2-jar [coord] (str (System/getenv "HOME") "/.m2/repository/" (m2-path coord)))
+          (defn sha1-hex [f]
+            (let [md (java.security.MessageDigest/getInstance "SHA-1")]
+              (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))
   jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha>/jolt"
         :task (let [sha (:git/sha jolt-pin)
                     src (or (System/getenv "JOLT_SRC") (str (System/getenv "HOME") "/dev/jolt"))
@@ -85,4 +93,57 @@
                     fails (remove nil? (concat fails ex-fails))
                     mains (concat mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
-                (when (seq fails) (System/exit 1)))}}}
+                (when (seq fails) (System/exit 1)))}
+  libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some)"
+        :task (let [only (set *command-line-args*)
+                    results
+                    (doall
+                     (for [{:keys [main jars stderr]} (:libs (edn/read-string (slurp "test/libs/libs.edn")))
+                           :when (or (empty? only) (contains? only main))
+                           :let [missing (remove (fn [[c _]] (fs/exists? (m2-jar c))) jars)]]
+                       (if (seq missing)
+                         (do (println "SKIP" main "(not in ~/.m2:" (str (str/join ", " (map first missing)) "; bb libs:fetch gets them)"))
+                             :skip)
+                         (let [out (str "target/libs/" main)
+                               cp (str/join ":" (map (fn [[c _]] (m2-jar c)) jars))
+                               _ (fs/create-dirs out)
+                               jc (shell {:err :string :continue true} "javac -nowarn -cp" cp "-d" out (str "test/libs/" main ".java"))
+                               _ (when-not (zero? (:exit jc)) (println (:err jc)) (System/exit 1))
+                               run-cp (str out ":" cp)
+                               jvm (shell {:out :string :err :string :continue true} "java -cp" run-cp main)
+                               ;; a fresh cache each time, so the run is a cold one
+                               ch (shell {:out :string :err :string :continue true
+                                          :extra-env {"CHAMPACA_CACHE_DIR" (str (fs/create-temp-dir))}}
+                                         (jolt-bin) "-M" "-m" "champaca.main" run-cp main)
+                               same-out (= (:out jvm) (:out ch))
+                               ok (and (zero? (:exit jvm)) (zero? (:exit ch)) same-out
+                                       (or (not stderr) (= (:err jvm) (:err ch))))]
+                           (println (if ok "MATCH" "DIFF ") main)
+                           (when-not ok
+                             (let [a (str/split-lines (if same-out (:err jvm) (:out jvm)))
+                                   b (str/split-lines (if same-out (:err ch) (:out ch)))
+                                   i (or (first (filter (fn [i] (not= (get a i) (get b i))) (range (max (count a) (count b))))) 0)]
+                               (println (str "  exit jvm " (:exit jvm) ", champaca " (:exit ch)
+                                             "; first difference, " (if same-out "stderr" "stdout") " line " (inc i) ":"))
+                               (println "  jvm:     " (get a i))
+                               (println "  champaca:" (get b i))))
+                           (if ok :match :diff)))))
+                    ran (remove (fn [r] (= r :skip)) results)
+                    skipped (- (count results) (count ran))]
+                (println (str (count (filter (fn [r] (= r :match)) ran)) "/" (count ran) " matched"
+                              (when (pos? skipped) (str ", " skipped " skipped"))))
+                (when (some (fn [r] (= r :diff)) ran) (System/exit 1)))}
+  libs:fetch {:doc "Download the test/libs jars missing from ~/.m2 from Maven Central, each kept only when its SHA-1 is the pinned one"
+              :task (doseq [{:keys [jars]} (:libs (edn/read-string (slurp "test/libs/libs.edn")))
+                            [c sha] jars
+                            :let [f (m2-jar c)]
+                            :when (not (fs/exists? f))]
+                      (let [part (str f ".part")]
+                        (fs/create-dirs (fs/parent f))
+                        (shell "curl -fsSL -o" part (str "https://repo1.maven.org/maven2/" (m2-path c)))
+                        (let [got (sha1-hex part)]
+                          (if (= got sha)
+                            (do (fs/move part f {:replace-existing true}) (println "fetched" c))
+                            (do (fs/delete part)
+                                (println "REFUSED" c ": SHA-1" got "is not the pinned" sha)
+                                (System/exit 1))))))}}}
