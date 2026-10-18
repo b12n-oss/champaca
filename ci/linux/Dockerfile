@@ -1,0 +1,39 @@
+# Linux for champaca: OpenJDK 25.0.2 with its jmods (the build this repo's
+# .expected files come from), babashka, and what building jolt from source
+# needs (jolt's own make provisions its Chez Scheme). Every download is pinned
+# by SHA-256. `bb linux:image` builds it for the host's architecture.
+#
+# The JDK comes from the build context (ci/linux/cache/, which `bb linux:image`
+# fills) because Temurin's builds of 25 ship no jmods and the proxy some
+# machines sit behind refuses download.java.net from inside a container.
+FROM ubuntu:26.04
+ARG TARGETARCH
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git curl ca-certificates libncurses-dev uuid-dev \
+      zlib1g-dev xz-utils unzip \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY cache/ /tmp/jdk/
+RUN case "$TARGETARCH" in \
+      arm64) a=aarch64; s=671208d205e70c9805da45a483f670d49dd64654990a7b7223ccffb2abb070dd ;; \
+      amd64) a=x64; s=555ce0821e4fe175ea50d54518cd6fbece9663c1998de529bc6ce429534457df ;; \
+      *) echo "no JDK pinned for $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && f=/tmp/jdk/openjdk-25.0.2_linux-${a}_bin.tar.gz \
+ && echo "$s  $f" | sha256sum -c - \
+ && mkdir -p /opt/jdk && tar xzf "$f" -C /opt/jdk --strip-components=1 && rm -rf /tmp/jdk \
+ && test -f /opt/jdk/jmods/java.base.jmod
+ENV JAVA_HOME=/opt/jdk
+ENV PATH=/opt/jdk/bin:$PATH
+
+# babashka 1.13.220, static
+RUN case "$TARGETARCH" in \
+      arm64) a=aarch64; s=0efd6ef36b93ea2f0ae6ebf9d1bcd1a66167c2f41c17e990659aa067654437e8 ;; \
+      amd64) a=amd64; s=eb3edd128276f0b6fbdefcb18dc7d42652a95ea409a81b34f08e36b8ac3cbc3c ;; \
+    esac \
+ && curl -fsSL -o /tmp/bb.tgz "https://github.com/babashka/babashka/releases/download/v1.13.220/babashka-1.13.220-linux-${a}-static.tar.gz" \
+ && echo "$s  /tmp/bb.tgz" | sha256sum -c - \
+ && tar xzf /tmp/bb.tgz -C /usr/local/bin bb && rm /tmp/bb.tgz
+
+WORKDIR /champaca

@@ -3,3 +3,4 @@ AGENTS.md
 /target/
 *.class
 .cpcache/
+ci/linux/cache/

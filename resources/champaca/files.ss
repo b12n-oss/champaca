@@ -7,14 +7,60 @@
 ;; memory (Unsafe.allocateMemory, natives.ss), and go to libc as they are.
 ;; fds 0, 1 and 2 keep going through Chez's own ports, which jolt shares.
 ;;
-;; struct stat, struct dirent and struct statfs are read at macOS's offsets
-;; (64-bit inodes, arm64 and x86_64). On another system the natives that read
-;; them throw UnsupportedOperationException, and java.io's size and
-;; regular-file checks fall back to lseek; the rest only need libc.
+;; struct stat, struct dirent, struct flock and the disk-space struct are read
+;; through fs-layout, one table per system, each measured with offsetof on that
+;; system (ci/linux/layout.c prints Linux's). On a system with no table the
+;; natives that read them throw UnsupportedOperationException, and java.io's
+;; size and regular-file checks fall back to lseek; the rest only need libc.
 
 (define fs-macos? (and (memq (machine-type) '(tarm64osx arm64osx ta6osx a6osx)) #t))
-;; whether struct stat and friends are read here: the macOS offsets below
-(define fs-stat-layout? fs-macos?)
+(define fs-linux? (and (memq (machine-type) '(tarm64le arm64le ta6le a6le)) #t))
+
+;; field -> (offset . foreign type). dirent-namlen is macOS's d_namlen; Linux's
+;; d_name is NUL-terminated. space-unit is the block size the totals count in:
+;; macOS's statfs f_bsize, Linux's statvfs f_frsize, as each JDK reads them.
+;; flock-* are fcntl's commands and lock types, which differ too.
+(define fs-layout-macos
+  '((st_dev 0 . integer-32) (st_mode 4 . unsigned-16) (st_nlink 6 . unsigned-16)
+    (st_ino 8 . unsigned-64) (st_uid 16 . unsigned-32) (st_gid 20 . unsigned-32)
+    (st_rdev 24 . integer-32)
+    (st_atime_sec 32 . integer-64) (st_atime_nsec 40 . integer-64)
+    (st_mtime_sec 48 . integer-64) (st_mtime_nsec 56 . integer-64)
+    (st_ctime_sec 64 . integer-64) (st_ctime_nsec 72 . integer-64)
+    (st_birthtime_sec 80 . integer-64) (st_birthtime_nsec 88 . integer-64)
+    (st_size 96 . integer-64)
+    (dirent-name 21 . #f) (dirent-namlen 18 . unsigned-16)
+    (space-unit 0 . unsigned-32) (space-total 8 . unsigned-64) (space-free 16 . unsigned-64) (space-usable 24 . unsigned-64)
+    (flock-start 0 . integer-64) (flock-len 8 . integer-64) (flock-pid 16 . integer-32)
+    (flock-type 20 . integer-16) (flock-whence 22 . integer-16)
+    (F_SETLK 8 . #f) (F_SETLKW 9 . #f) (F_RDLCK 1 . #f) (F_WRLCK 3 . #f) (F_UNLCK 2 . #f)))
+;; glibc on arm64 (the generic layout), from ci/linux/layout.c
+(define fs-layout-linux-arm64
+  '((st_dev 0 . unsigned-64) (st_ino 8 . unsigned-64) (st_mode 16 . unsigned-32)
+    (st_nlink 20 . unsigned-32) (st_uid 24 . unsigned-32) (st_gid 28 . unsigned-32)
+    (st_rdev 32 . unsigned-64) (st_size 48 . integer-64)
+    (st_atime_sec 72 . integer-64) (st_atime_nsec 80 . integer-64)
+    (st_mtime_sec 88 . integer-64) (st_mtime_nsec 96 . integer-64)
+    (st_ctime_sec 104 . integer-64) (st_ctime_nsec 112 . integer-64)
+    (dirent-name 19 . #f)
+    (space-unit 8 . unsigned-64) (space-total 16 . unsigned-64) (space-free 24 . unsigned-64) (space-usable 32 . unsigned-64)
+    (flock-type 0 . integer-16) (flock-whence 2 . integer-16) (flock-start 8 . integer-64)
+    (flock-len 16 . integer-64) (flock-pid 24 . integer-32)
+    (F_SETLK 6 . #f) (F_SETLKW 7 . #f) (F_RDLCK 0 . #f) (F_WRLCK 1 . #f) (F_UNLCK 2 . #f)))
+(define fs-layout
+  (case (machine-type)
+    [(tarm64osx arm64osx ta6osx a6osx) fs-layout-macos]
+    [(tarm64le arm64le) fs-layout-linux-arm64]
+    [else #f]))
+;; whether struct stat and friends can be read here
+(define fs-stat-layout? (and fs-layout #t))
+(define (fs-off name) (cadr (or (assq name fs-layout) (error 'champaca "no layout field" name))))
+(define (fs-has? name) (and fs-layout (assq name fs-layout) #t))
+(define (fs-ref buf name)
+  (let ([f (or (assq name fs-layout) (error 'champaca "no layout field" name))])
+    (foreign-ref (cddr f) buf (cadr f))))
+(define (fs-set! buf name v)
+  (let ([f (assq name fs-layout)]) (foreign-set! (cddr f) buf (cadr f) v)))
 (define fs-libc-loaded
   (guard (e [#t #f])
     (load-shared-object (if fs-macos? "libSystem.dylib" "libc.so.6"))
@@ -45,7 +91,11 @@
 (deflibc libc-lstat (if (memq (machine-type) '(ta6osx a6osx)) "lstat$INODE64" "lstat") #f (uptr uptr) int)
 (deflibc libc-fstat (if (memq (machine-type) '(ta6osx a6osx)) "fstat$INODE64" "fstat") #f (int uptr) int)
 (deflibc libc-stat-string (if (memq (machine-type) '(ta6osx a6osx)) "stat$INODE64" "stat") #f (utf-8 uptr) int)
-(deflibc libc-statfs-string (if (memq (machine-type) '(ta6osx a6osx)) "statfs$INODE64" "statfs") #f (utf-8 uptr) int)
+;; the disk-space call each JDK makes: statfs on macOS, statvfs on Linux
+(deflibc libc-space-string (cond [(memq (machine-type) '(ta6osx a6osx)) "statfs$INODE64"]
+                                 [fs-macos? "statfs"]
+                                 [else "statvfs"])
+  #f (utf-8 uptr) int)
 (deflibc libc-mkdir "mkdir" #f (uptr int) int)
 (deflibc libc-mkdir-string "mkdir" #f (utf-8 int) int)
 (deflibc libc-rmdir "rmdir" #f (uptr) int)
@@ -95,9 +145,11 @@
 (define (errno-clear!) (foreign-set! 'int (libc-errno-location) 0 0))
 (define (strerror-text e) (libc-strerror e))
 
-(define (need-macos what)
+(define (need-layout what)
   (unless fs-stat-layout?
-    (jthrow "java/lang/UnsupportedOperationException" (string-append what " reads macOS's struct layout"))))
+    (jthrow "java/lang/UnsupportedOperationException"
+            (string-append what " needs this system's struct layouts, and champaca has none for "
+                           (symbol->string (machine-type))))))
 
 ;; a C string at address p as a Java byte[]
 (define (cbytes p n)
@@ -139,11 +191,11 @@
 (define seek-cur 1)
 (define seek-end 2)
 
-;; fstat fields at macOS offsets; #f on failure, or off macOS
+;; fstat into the scratch buffer; #f on failure, or with no layout table
 (define (fd-stat fd)
   (and fs-stat-layout? (if (< (libc-fstat fd fs-stat-buf) 0) #f fs-stat-buf)))
-(define (stat-mode buf) (foreign-ref 'unsigned-16 buf 4))
-(define (stat-size buf) (foreign-ref 'integer-64 buf 96))
+(define (stat-mode buf) (fs-ref buf 'st_mode))
+(define (stat-size buf) (fs-ref buf 'st_size))
 (define (mode-type m) (fxlogand m #o170000))
 (define s-ifreg #o100000)
 (define s-ifdir #o040000)
@@ -352,7 +404,7 @@
 (defnative "java/io/UnixFileSystem.checkAccess0(Ljava/io/File;I)Z" (this f access)
   (ok? (libc-access-string (io-file-path f) access)))
 (defnative "java/io/UnixFileSystem.setPermission0(Ljava/io/File;IZZ)Z" (this f access enable owner-only)
-  (need-macos "File.setPermission")
+  (need-layout "File.setPermission")
   (let ([p (io-file-path f)])
     (if (< (libc-stat-string p fs-stat-buf) 0)
         0
@@ -360,7 +412,7 @@
                [m (fxlogand (stat-mode fs-stat-buf) #o7777)])
           (ok? (libc-chmod-string p (if (eqv? enable 1) (fxlogor m bits) (fxlogand m (fxlognot bits)))))))))
 (defnative "java/io/UnixFileSystem.setReadOnly0(Ljava/io/File;)Z" (this f)
-  (need-macos "File.setReadOnly")
+  (need-layout "File.setReadOnly")
   (let ([p (io-file-path f)])
     (if (< (libc-stat-string p fs-stat-buf) 0)
         0
@@ -382,12 +434,12 @@
   (ok? (libc-utimensat-string (fs-const "AT_FDCWD") (io-file-path f) fs-scratch 0)))
 ;; t: 0 total, 1 free, 2 usable
 (defnative "java/io/UnixFileSystem.getSpace0(Ljava/io/File;I)J" (this f t)
-  (need-macos "File.getTotalSpace")
+  (need-layout "File.getTotalSpace")
   (let ([path (io-file-path f)] [b (foreign-alloc 2400)])
-    (let ([r (if (< (libc-statfs-string path b) 0)
+    (let ([r (if (< (libc-space-string path b) 0)
                  0
-                 (* (foreign-ref 'unsigned-32 b 0)
-                    (foreign-ref 'unsigned-64 b (case t [(0) 8] [(1) 16] [else 24]))))])
+                 (* (fs-ref b 'space-unit)
+                    (fs-ref b (case t [(0) 'space-total] [(1) 'space-free] [else 'space-usable]))))])
       (foreign-free b)
       r)))
 (defnative "java/io/UnixFileSystem.getNameMax0(Ljava/lang/String;)J" (this path)
@@ -404,14 +456,12 @@
 (define-syntax defund
   (syntax-rules () [(_ sig args body ...) (defnative (string-append und sig) args body ...)]))
 
-;; capabilities: birth times, no *at calls, no extended attributes
-;; without struct stat offsets for this system nothing in java.nio.file can
-;; work, so it fails here, once, rather than in every stat
+;; capabilities: birth times where struct stat has them (macOS), no *at
+;; calls, no extended attributes. Without a layout table nothing in
+;; java.nio.file can work, so it fails here, once, rather than in every stat.
 (defund "init()I" ()
-  (unless fs-stat-layout?
-    (jthrow "java/lang/UnsupportedOperationException"
-            (string-append "java.nio.file needs struct stat offsets for " (symbol->string (machine-type)) "; only macOS has them")))
-  (fxsll 1 16))
+  (need-layout "java.nio.file")
+  (if (fs-has? 'st_birthtime_sec) (fxsll 1 16) 0))
 (defund "fchmodatNoFollowSupported0()Z" () 0)
 
 (defund "getcwd()[B" ()
@@ -458,31 +508,33 @@
 (define ufa "sun/nio/fs/UnixFileAttributes")
 (define (fill-attrs! attrs buf)
   (let ([set (lambda (f v) (jslot-set! attrs (jfield-index ufa f) v))]
-        [s64 (lambda (off) (foreign-ref 'integer-64 buf off))])
-    (set "st_dev" (foreign-ref 'integer-32 buf 0))
-    (set "st_mode" (foreign-ref 'unsigned-16 buf 4))
-    (set "st_nlink" (foreign-ref 'unsigned-16 buf 6))
-    (set "st_ino" (i64 (foreign-ref 'unsigned-64 buf 8)))
-    (set "st_uid" (i32 (foreign-ref 'unsigned-32 buf 16)))
-    (set "st_gid" (i32 (foreign-ref 'unsigned-32 buf 20)))
-    (set "st_rdev" (foreign-ref 'integer-32 buf 24))
-    (set "st_atime_sec" (s64 32)) (set "st_atime_nsec" (s64 40))
-    (set "st_mtime_sec" (s64 48)) (set "st_mtime_nsec" (s64 56))
-    (set "st_ctime_sec" (s64 64)) (set "st_ctime_nsec" (s64 72))
-    (set "st_birthtime_sec" (s64 80)) (set "st_birthtime_nsec" (s64 88))
-    (set "birthtime_available" 1)
-    (set "st_size" (s64 96))))
+        [get (lambda (f) (fs-ref buf f))])
+    (set "st_dev" (i64 (get 'st_dev)))
+    (set "st_mode" (i32 (get 'st_mode)))
+    (set "st_nlink" (i32 (get 'st_nlink)))
+    (set "st_ino" (i64 (get 'st_ino)))
+    (set "st_uid" (i32 (get 'st_uid)))
+    (set "st_gid" (i32 (get 'st_gid)))
+    (set "st_rdev" (i64 (get 'st_rdev)))
+    (set "st_atime_sec" (get 'st_atime_sec)) (set "st_atime_nsec" (get 'st_atime_nsec))
+    (set "st_mtime_sec" (get 'st_mtime_sec)) (set "st_mtime_nsec" (get 'st_mtime_nsec))
+    (set "st_ctime_sec" (get 'st_ctime_sec)) (set "st_ctime_nsec" (get 'st_ctime_nsec))
+    ;; only macOS's struct stat carries a birth time
+    (when (fs-has? 'st_birthtime_sec)
+      (set "st_birthtime_sec" (get 'st_birthtime_sec)) (set "st_birthtime_nsec" (get 'st_birthtime_nsec))
+      (set "birthtime_available" 1))
+    (set "st_size" (get 'st_size))))
 
 ;; stat0 answers an errno rather than throwing
 (defund "stat0(JLsun/nio/fs/UnixFileAttributes;)I" (p attrs)
-  (need-macos "stat")
+  (need-layout "stat")
   (if (< (libc-stat p fs-stat-buf) 0) (errno) (begin (fill-attrs! attrs fs-stat-buf) 0)))
 (defund "lstat0(JLsun/nio/fs/UnixFileAttributes;)V" (p attrs)
-  (need-macos "lstat")
+  (need-layout "lstat")
   (unix-check (libc-lstat p fs-stat-buf))
   (fill-attrs! attrs fs-stat-buf))
 (defund "fstat0(ILsun/nio/fs/UnixFileAttributes;)V" (fd attrs)
-  (need-macos "fstat")
+  (need-layout "fstat")
   (unix-check (libc-fstat fd fs-stat-buf))
   (fill-attrs! attrs fs-stat-buf))
 
@@ -491,12 +543,13 @@
 (defund "closedir(J)V" (d) (unix-check (libc-closedir d)))
 ;; the next name, or null at the end; "." and ".." are left to the caller
 (defund "readdir0(J)[B" (d)
-  (need-macos "readdir")
+  (need-layout "readdir")
   (errno-clear!)
   (let ([e (libc-readdir d)])
     (if (eqv? e 0)
         (if (fx= (errno) 0) #f (unix-error))
-        (cbytes (+ e 21) (foreign-ref 'unsigned-16 e 18)))))
+        (let ([name (+ e (fs-off 'dirent-name))])
+          (cbytes name (if (fs-has? 'dirent-namlen) (fs-ref e 'dirent-namlen) (cstring-length name)))))))
 
 ;; a user's or group's name: pw_name and gr_name are the first field
 (define (entry-name p)
@@ -602,7 +655,7 @@
         (max 0 (min #x7fffffff (- (fd-size fd "Available failed") (libc-lseek fd 0 seek-cur))))
         0)))
 (defufd "isOther0(Ljava/io/FileDescriptor;)Z" (fdo)
-  (need-macos "isOther")
+  (need-layout "isOther")
   (let ([b (fd-stat (fdo-fd fdo))])
     (if (and b (not (memv (mode-type (stat-mode b)) (list s-ifreg s-ifdir)))) 1 0)))
 (defufd "closeIntFD(I)V" (fd) (fd-close fd))
@@ -621,33 +674,33 @@
 (defnative "java/nio/MappedMemoryUtils.load0(JJ)V" (a len) (void))
 (defnative "java/nio/MappedMemoryUtils.unload0(JJ)V" (a len) (void))
 
-;; locks through fcntl and macOS's struct flock: l_start 0, l_len 8, l_pid
-;; 16, l_type 20, l_whence 22. FileDispatcher: 0 locked, -1 not, 2 interrupted
+;; locks through fcntl and this system's struct flock. FileDispatcher: 0
+;; locked, -1 not, 2 interrupted. cmd and type are layout names (F_SETLK ...).
 (define (fcntl-lock fd cmd type pos size)
-  (need-macos "file locks")
-  (foreign-set! 'integer-64 fs-scratch 0 pos)
+  (need-layout "file locks")
+  (do ([i 0 (fx+ i 1)]) ((fx= i 32)) (foreign-set! 'unsigned-8 fs-scratch i 0))
+  (fs-set! fs-scratch 'flock-start pos)
   ;; Long.MAX_VALUE means to the end of the file, as l_len 0 does
-  (foreign-set! 'integer-64 fs-scratch 8 (if (= size #x7fffffffffffffff) 0 size))
-  (foreign-set! 'integer-32 fs-scratch 16 0)
-  (foreign-set! 'integer-16 fs-scratch 20 type)
-  (foreign-set! 'integer-16 fs-scratch 22 seek-set)
-  (libc-fcntl-lock fd cmd fs-scratch))
+  (fs-set! fs-scratch 'flock-len (if (= size #x7fffffffffffffff) 0 size))
+  (fs-set! fs-scratch 'flock-type (fs-off type))
+  (fs-set! fs-scratch 'flock-whence seek-set)
+  (libc-fcntl-lock fd (fs-off cmd) fs-scratch))
 (defufd "lock0(Ljava/io/FileDescriptor;ZJJZ)I" (fdo blocking pos size shared)
-  (if (fx= 0 (fcntl-lock (fdo-fd fdo) (if (eqv? blocking 1) 9 8) (if (eqv? shared 1) 1 3) pos size))
+  (if (fx= 0 (fcntl-lock (fdo-fd fdo) (if (eqv? blocking 1) 'F_SETLKW 'F_SETLK) (if (eqv? shared 1) 'F_RDLCK 'F_WRLCK) pos size))
       0
       (let ([e (errno)])
         (cond [(and (not (eqv? blocking 1)) (memv e (list (fs-const "EAGAIN") (fs-const "EACCES")))) -1]
               [(fx= e 4) 2]
               [else (jthrow "java/io/IOException" (string-append "Lock failed (" (strerror-text e) ")"))]))))
 (defufd "release0(Ljava/io/FileDescriptor;JJ)V" (fdo pos size)
-  (unless (fx= 0 (fcntl-lock (fdo-fd fdo) 8 2 pos size)) (io-error "Release failed")))
+  (unless (fx= 0 (fcntl-lock (fdo-fd fdo) 'F_SETLK 'F_UNLCK pos size)) (io-error "Release failed")))
 ;; a file's identity, for the lock table: device and inode
 (defnative "sun/nio/ch/FileKey.init(Ljava/io/FileDescriptor;[J)V" (fdo finfo)
-  (need-macos "FileKey")
+  (need-layout "FileKey")
   (let ([b (fd-stat (fdo-fd fdo))])
     (unless b (io-error "fstat failed"))
-    (vector-set! (jarr-vec finfo) 0 (foreign-ref 'integer-32 b 0))
-    (vector-set! (jarr-vec finfo) 1 (i64 (foreign-ref 'unsigned-64 b 8)))))
+    (vector-set! (jarr-vec finfo) 0 (i64 (fs-ref b 'st_dev)))
+    (vector-set! (jarr-vec finfo) 1 (i64 (fs-ref b 'st_ino)))))
 ;; no sendfile: FileChannel.transferTo copies through a buffer instead
 (defnative "sun/nio/ch/FileDispatcherImpl.transferTo0(Ljava/io/FileDescriptor;JJLjava/io/FileDescriptor;Z)J" (src pos n dst append) -4)
 (defufd "allocationGranularity0()J" () (libc-getpagesize))
