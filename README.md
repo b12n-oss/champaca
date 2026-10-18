@@ -100,6 +100,7 @@ bb jolt                                               # build the pinned jolt (a
 bb test                                               # every test/java program vs the JVM, plus the examples/*.clj programs
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
+bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
 CHAMPACA_STATS=1 ...    # print classes loaded, methods compiled, cached units loaded

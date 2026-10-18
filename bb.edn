@@ -15,6 +15,28 @@
             (let [[g a v] (str/split coord (re-pattern ":"))]
               (str (str/replace g "." "/") "/" a "/" v "/" a "-" v ".jar")))
           (defn m2-jar [coord] (str (System/getenv "HOME") "/.m2/repository/" (m2-path coord)))
+          ;; ci/linux: the image's architecture, and building it
+          (defn linux-arch [given]
+            (or given (if (re-find (re-pattern "arm64|aarch64") (str/trim (:out (shell {:out :string} "uname -m")))) "arm64" "amd64")))
+          (defn linux-image! [arch]
+            (let [[a sha] (case arch
+                            "arm64" ["aarch64" "671208d205e70c9805da45a483f670d49dd64654990a7b7223ccffb2abb070dd"]
+                            "amd64" ["x64" "555ce0821e4fe175ea50d54518cd6fbece9663c1998de529bc6ce429534457df"])
+                  f (str "ci/linux/cache/openjdk-25.0.2_linux-" a "_bin.tar.gz")]
+              (when-not (fs/exists? f)
+                (fs/create-dirs "ci/linux/cache")
+                ;; some proxies refuse download.java.net; a direct connection works
+                (shell {:env (apply dissoc (into {} (System/getenv)) ["HTTPS_PROXY" "https_proxy" "HTTP_PROXY" "http_proxy"])}
+                       "curl -fsSL --retry 2 -o" (str f ".part")
+                       (str "https://download.java.net/java/GA/jdk25.0.2/b1e0dfa218384cb9959bdcb897162d4e/10/GPL/openjdk-25.0.2_linux-" a "_bin.tar.gz"))
+                (fs/move (str f ".part") f {:replace-existing true}))
+              (let [md (java.security.MessageDigest/getInstance "SHA-256")
+                    got (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f))))]
+                (when-not (= got sha)
+                  (fs/delete f)
+                  (println "REFUSED" f ": SHA-256" got "is not the pinned" sha)
+                  (System/exit 1)))
+              (shell "docker build --platform" (str "linux/" arch) "-t" (str "champaca-linux:" arch) "ci/linux")))
           (defn sha1-hex [f]
             (let [md (java.security.MessageDigest/getInstance "SHA-1")]
               (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))
@@ -160,6 +182,19 @@
                               (when (pos? skipped) (str ", " skipped " skipped, NOT verified"))))
                 (when (or (not= matched (count ran)) (empty? ran) (and (pos? skipped) (not allow-skip)))
                   (System/exit 1)))}
+  linux:image {:doc "Build ci/linux's image for arm64 or amd64 (default: this machine's), fetching its JDK into ci/linux/cache first"
+               :task (linux-image! (linux-arch (first *command-line-args*)))}
+  linux {:doc "Run bb test and bb libs on Linux (arm64 or amd64, default this machine's) in ci/linux's image; jars come from ~/.m2, read-only"
+         :task (let [arch (linux-arch (first *command-line-args*))]
+                 (linux-image! arch)
+                 (shell "bb libs:fetch")
+                 (shell "docker run --rm --platform" (str "linux/" arch)
+                        "-v" (str (fs/cwd) ":/champaca")
+                        ;; the jolt build and champaca's caches persist per architecture
+                        "-v" (str "champaca-linux-" arch ":/root")
+                        "-v" (str (System/getenv "HOME") "/.m2:/root/.m2:ro")
+                        (str "champaca-linux:" arch)
+                        "sh" "-c" "bb jolt && bb test && bb libs"))}
   libs:fetch {:doc "Download the test/libs jars missing from ~/.m2 from Maven Central, each kept only when its SHA-1 is the pinned one"
               :task (doseq [{:keys [jars]} (:libs (edn/read-string (slurp "test/libs/libs.edn")))
                             [c sha] jars
