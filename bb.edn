@@ -17,12 +17,18 @@
           (defn m2-jar [coord] (str (System/getenv "HOME") "/.m2/repository/" (m2-path coord)))
           ;; ci/linux: the image's architecture, and building it
           (defn linux-arch [given]
-            (or given (if (re-find (re-pattern "arm64|aarch64") (str/trim (:out (shell {:out :string} "uname -m")))) "arm64" "amd64")))
+            (let [arch (or given (if (re-find (re-pattern "arm64|aarch64") (str/trim (:out (shell {:out :string} "uname -m")))) "arm64" "amd64"))]
+              (when-not (contains? #{"arm64" "amd64"} arch)
+                (println (str "bb linux: the architecture is arm64 or amd64, not " arch))
+                (System/exit 1))
+              arch))
+          ;; the pinned OpenJDK 25.0.2 per architecture: the one place its checksums live
           (defn linux-image! [arch]
             (let [[a sha] (case arch
                             "arm64" ["aarch64" "671208d205e70c9805da45a483f670d49dd64654990a7b7223ccffb2abb070dd"]
                             "amd64" ["x64" "555ce0821e4fe175ea50d54518cd6fbece9663c1998de529bc6ce429534457df"])
-                  f (str "ci/linux/cache/openjdk-25.0.2_linux-" a "_bin.tar.gz")]
+                  file (str "openjdk-25.0.2_linux-" a "_bin.tar.gz")
+                  f (str "ci/linux/cache/" file)]
               (when-not (fs/exists? f)
                 (fs/create-dirs "ci/linux/cache")
                 ;; some proxies refuse download.java.net; a direct connection works
@@ -36,7 +42,8 @@
                   (fs/delete f)
                   (println "REFUSED" f ": SHA-256" got "is not the pinned" sha)
                   (System/exit 1)))
-              (shell "docker build --platform" (str "linux/" arch) "-t" (str "champaca-linux:" arch) "ci/linux")))
+              (shell "docker build --platform" (str "linux/" arch) "--build-arg" (str "JDK_FILE=" file)
+                     "--build-arg" (str "JDK_SHA256=" sha) "-t" (str "champaca-linux:" arch) "ci/linux")))
           (defn sha1-hex [f]
             (let [md (java.security.MessageDigest/getInstance "SHA-1")]
               (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))

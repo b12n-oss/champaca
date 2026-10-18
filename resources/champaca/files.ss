@@ -65,19 +65,26 @@
     [(tarm64le arm64le) fs-layout-linux-arm64]
     [(ta6le a6le) fs-layout-linux-x86_64]
     [else #f]))
-;; whether struct stat and friends can be read here
-(define fs-stat-layout? (and fs-layout #t))
 (define (fs-off name) (cadr (or (assq name fs-layout) (error 'champaca "no layout field" name))))
 (define (fs-has? name) (and fs-layout (assq name fs-layout) #t))
 (define (fs-ref buf name)
   (let ([f (or (assq name fs-layout) (error 'champaca "no layout field" name))])
     (foreign-ref (cddr f) buf (cadr f))))
 (define (fs-set! buf name v)
-  (let ([f (assq name fs-layout)]) (foreign-set! (cddr f) buf (cadr f) v)))
+  (let ([f (or (assq name fs-layout) (error 'champaca "no layout field" name))])
+    (foreign-set! (cddr f) buf (cadr f) v)))
 (define fs-libc-loaded
   (guard (e [#t #f])
     (load-shared-object (if fs-macos? "libSystem.dylib" "libc.so.6"))
     #t))
+;; whether struct stat and friends can be read here: a table for this machine,
+;; and a libc that exports stat itself. glibc does since 2.33; before that, and
+;; on a libc whose name isn't libc.so.6 (musl), stat is missing and
+;; java.nio.file fails at init rather than at the first stat.
+(define fs-stat-layout?
+  (and fs-layout fs-libc-loaded
+       (foreign-entry? (if (memq (machine-type) '(ta6osx a6osx)) "stat$INODE64" "stat"))
+       #t))
 
 ;; a libc function, or one that throws when this libc lacks it
 (define-syntax deflibc
@@ -165,8 +172,10 @@
 (define (need-layout what)
   (unless fs-stat-layout?
     (jthrow "java/lang/UnsupportedOperationException"
-            (string-append what " needs this system's struct layouts, and champaca has none for "
-                           (symbol->string (machine-type))))))
+            (string-append what " needs macOS, or Linux with glibc 2.33 or newer on arm64 or x86_64 (this is "
+                           (symbol->string (machine-type))
+                           (if (and fs-layout fs-libc-loaded) ", and its libc doesn't export stat" "")
+                           ")"))))
 
 ;; a C string at address p as a Java byte[]
 (define (cbytes p n)

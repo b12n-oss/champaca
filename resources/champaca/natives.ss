@@ -456,10 +456,12 @@
     (set "_stderr_encoding_NDX" "UTF-8")
     ;; as the JVM names them: x86_64 is "amd64" on Linux, "x86_64" on macOS
     (set "_os_name_NDX" (if (memq (machine-type) '(tarm64osx arm64osx ta6osx a6osx)) "Mac OS X" "Linux"))
+    ;; anything else isn't supported; it reports Chez's own machine name
     (set "_os_arch_NDX" (case (machine-type)
                           [(tarm64osx arm64osx tarm64le arm64le) "aarch64"]
                           [(ta6osx a6osx) "x86_64"]
-                          [else "amd64"]))
+                          [(ta6le a6le) "amd64"]
+                          [else (symbol->string (machine-type))]))
     (set "_os_version_NDX" (os-version))
     (set "_java_io_tmpdir_NDX" "/tmp")
     (set "_user_dir_NDX" (current-directory))

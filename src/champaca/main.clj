@@ -105,8 +105,18 @@
 ;; the cache root. java.base is tried first, then the other modules in name
 ;; order. User classes come from the classpath: directories and jars.
 
-(defn- java-home []
-  (or (env "JAVA_HOME") (throw (ex-info "JAVA_HOME is not set" {}))))
+(defn- java-home
+  "JAVA_HOME, which must be a JDK that ships its jmods: since JEP 493 (JDK 24)
+  a JDK may be built without them, and Temurin's builds of 25 are."
+  []
+  (let [h (or (env "JAVA_HOME") (throw (ex-info "JAVA_HOME is not set" {})))]
+    (when-not (.exists (io/file h "jmods" "java.base.jmod"))
+      (throw (ex-info (str "champaca reads the JDK's classes from $JAVA_HOME/jmods, and " h
+                           " has none: this JDK was built without them, as Temurin's builds of JDK 25 are."
+                           " Use one that ships them, such as an OpenJDK build from jdk.java.net,"
+                           " Oracle's JDK or GraalVM CE.")
+                      {:java-home h})))
+    h))
 
 (defn- cache-root []
   (io/file (or (env "CHAMPACA_CACHE_DIR") (str (env "HOME") "/.cache/champaca"))))
