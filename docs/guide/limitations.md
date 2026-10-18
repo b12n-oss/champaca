@@ -1,6 +1,6 @@
 # Limitations
 
-Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the seven checked libraries (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
+Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the eight checked libraries (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J, SnakeYAML) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
 
 ## Threads take turns
 
@@ -18,7 +18,7 @@ VarHandles work too: `findVarHandle`, `findStaticVarHandle`, `unreflectVarHandle
 
 ## Reflection
 
-Methods, fields, constructors, `Method.invoke`, `newInstance` and field get and set work, and so do annotations with their defaults, generic signatures, and member, local and anonymous classes. Missing: checked-exception lists and record components (both come back empty), type annotations and parameter names. An annotation is an instance of a generated class rather than a `java.lang.reflect.Proxy`, so its `toString`, `equals` and `hashCode` are `Object`'s. Field access through reflection ignores access control.
+Methods, fields, constructors, `Method.invoke`, `newInstance` and field get and set work, and so do annotations with their defaults, generic signatures, and member, local and anonymous classes. Missing: checked-exception lists and record components (both come back empty), type annotations and parameter names. An annotation is an instance of a generated class rather than a `java.lang.reflect.Proxy`, so its `toString`, `equals` and `hashCode` are `Object`'s. Field access through reflection ignores access control. `Class.getPackage` gives one `Package` per name, and a classpath class's carries the version attributes of its own jar's manifest, as on the JVM. A JDK package's `isSealed` says false, where the JVM says true, because the JVM's JDK packages belong to named modules and every module here is unnamed.
 
 ## Native code
 

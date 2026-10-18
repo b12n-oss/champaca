@@ -17,7 +17,7 @@ Pass the whole classpath on the first `init!`. A second call does nothing, so it
 
 ### A real library
 
-Seven libraries have been run this way and checked against the JVM, with identical output:
+Eight libraries have been run this way and checked against the JVM, with identical output:
 
 | Library | What was exercised |
 |---|---|
@@ -28,6 +28,7 @@ Seven libraries have been run this way and checked against the JVM, with identic
 | Caffeine 3.2.2 | size, weight, write- and access-based eviction against a fake clock, removal listeners, refresh, `getAll`, async and loading caches, stats |
 | Guava 33.4.8 | CRC32C, CRC32, Adler-32, Murmur3, FarmHash, SHA-256, SHA-512 and MD5 hashing, a Bloom filter, immutable multimaps, `Joiner`, `Splitter` |
 | SLF4J 2.0.16 with `slf4j-simple` | logging through the provider `ServiceLoader` finds in `slf4j-simple`'s jar |
+| SnakeYAML 2.3 | loading and dumping maps, beans with generic `List` and `Map` properties, public fields and enums, anchors and merge keys, multi-document streams, block style, timestamps, error messages with their line and column marks |
 
 They aren't part of `bb test`, since that would mean downloading the jars. If you have them in `~/.m2`:
 
