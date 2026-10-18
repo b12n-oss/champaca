@@ -6,12 +6,14 @@
 # The JDK comes from the build context (ci/linux/cache/, which `bb linux:image`
 # fills) because Temurin's builds of 25 ship no jmods and the proxy some
 # machines sit behind refuses download.java.net from inside a container.
+# Archives are unpacked with bsdtar: GNU tar on Ubuntu 26.04 fails under x86_64
+# emulation on Apple silicon ("Cannot open: Function not implemented").
 FROM ubuntu:26.04
 ARG TARGETARCH
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git curl ca-certificates libncurses-dev uuid-dev \
-      zlib1g-dev xz-utils unzip \
+      zlib1g-dev xz-utils unzip libarchive-tools \
  && rm -rf /var/lib/apt/lists/*
 
 COPY cache/ /tmp/jdk/
@@ -22,7 +24,7 @@ RUN case "$TARGETARCH" in \
     esac \
  && f=/tmp/jdk/openjdk-25.0.2_linux-${a}_bin.tar.gz \
  && echo "$s  $f" | sha256sum -c - \
- && mkdir -p /opt/jdk && tar xzf "$f" -C /opt/jdk --strip-components=1 && rm -rf /tmp/jdk \
+ && mkdir -p /opt/jdk && bsdtar -xzf "$f" -C /opt/jdk --strip-components 1 && rm -rf /tmp/jdk \
  && test -f /opt/jdk/jmods/java.base.jmod
 ENV JAVA_HOME=/opt/jdk
 ENV PATH=/opt/jdk/bin:$PATH
@@ -34,6 +36,6 @@ RUN case "$TARGETARCH" in \
     esac \
  && curl -fsSL -o /tmp/bb.tgz "https://github.com/babashka/babashka/releases/download/v1.13.220/babashka-1.13.220-linux-${a}-static.tar.gz" \
  && echo "$s  /tmp/bb.tgz" | sha256sum -c - \
- && tar xzf /tmp/bb.tgz -C /usr/local/bin bb && rm /tmp/bb.tgz
+ && bsdtar -xzf /tmp/bb.tgz -C /usr/local/bin bb && rm /tmp/bb.tgz
 
 WORKDIR /champaca
