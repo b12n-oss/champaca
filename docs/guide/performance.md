@@ -78,14 +78,16 @@ The table holds at most 4096 entries and empties itself when full, so a call sit
 
 ## The pinned jolt
 
-Inside this repo, `deps.edn` names an upstream jolt commit:
+Inside this repo, `deps.edn` names a jolt commit, the v0.8.23 tag:
 
 ```clojure
 :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                :git/sha "9eb0b9b34aa229ca1403a1fce4472f39a26d2818"}
+                :git/sha "a0ac71c3f638fe55158bd01b4ecbb0dd3d7545e5"}
 ```
 
-That commit has a fix that isn't in a jolt release yet: `FileInputStream.skip` seeks instead of reading every skipped byte ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)). Champaca's module index skips to the end of each of the 69 jmods, which drops from 63 ms to 5 to 8 ms with the fix. On a cold `gson` run that's 6.17 s against 6.30 to 6.47 s.
+It's the release's own code, built from source. Built that way it ran a warm `Hello` in 0.32 s (median of seven, interleaved), where one release binary of the same commit took 0.45 s and started jolt itself 50 ms slower. A local build of the commit the pin used before, from upstream main, was as fast as the new one, so the slowdown comes from how that release binary was built, not from jolt's code.
+
+0.8.23 is also the first release where `FileInputStream.skip` seeks instead of reading every skipped byte ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), so it's the minimum. Champaca's module index skips to the end of each of the 69 jmods, which drops from 63 ms to 5 to 8 ms with the fix. On a cold `gson` run that's 6.17 s against 6.30 to 6.47 s.
 
 `bb jolt` builds the pinned commit:
 
@@ -96,7 +98,7 @@ bb test        # prints which jolt it picked
 
 It makes a detached worktree of a jolt checkout (`$JOLT_SRC`, else `~/dev/jolt`, cloned from the URL if neither exists) at `~/.cache/champaca/jolt/<sha>/src`, runs `make build` there and copies the binary next to it. `bb test` uses `$JOLT` when it's set, then the pinned build, then whatever `jolt` is on your `PATH`.
 
-The pin only affects `bb test` in this repo. Champaca works on a released 0.8.22 too, with the first run a little slower. Once a jolt release includes the fix, the pin goes and `:jolt/min-version` moves up to that release.
+The pin only affects `bb test` and `bb libs` in this repo. Champaca works on any released 0.8.23 or later.
 
 ## The generated code
 

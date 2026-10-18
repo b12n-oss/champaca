@@ -91,9 +91,9 @@ The compiled code leaves out Chez's inspector information, which halves `boot.so
 
 ## Run it
 
-You need jolt 0.8.22 or later (`deps.edn` sets that as `:jolt/min-version`) and JDK 25 with `JAVA_HOME` set. The zip inside each jmod is copied, the first time a class is looked up in it, under `~/.cache/champaca/jmods/`.
+You need jolt 0.8.23 or later (`deps.edn` sets that as `:jolt/min-version`) and JDK 25 with `JAVA_HOME` set. The zip inside each jmod is copied, the first time a class is looked up in it, under `~/.cache/champaca/jmods/`.
 
-`deps.edn` also pins an upstream jolt commit under `:champaca/jolt`, because a fix champaca wants hasn't reached a jolt release yet: `FileInputStream.skip` used to read the bytes it skipped, and now it seeks ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)). `bb jolt` builds that commit from a jolt checkout (`$JOLT_SRC`, or `~/dev/jolt`, cloned if missing) through a detached worktree, and puts the binary in `~/.cache/champaca/jolt/<sha>/jolt`. `bb test` runs on `$JOLT` if it's set, then on the pinned build if it exists, then on `jolt` from your `PATH`, and prints which one it picked. Everything also works on a released 0.8.22, just a bit slower on the first run.
+`deps.edn` also pins a jolt commit under `:champaca/jolt`, the v0.8.23 tag. That is the release's own code, built from source, because a local build of it ran a warm Hello in 0.32 s where one release binary of the same commit took 0.45 s. 0.8.23 is also the first release where `FileInputStream.skip` seeks instead of reading the bytes it skips ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), which is why it is the minimum. `bb jolt` builds that commit from a jolt checkout (`$JOLT_SRC`, or `~/dev/jolt`, cloned if missing) through a detached worktree, and puts the binary in `~/.cache/champaca/jolt/<sha>/jolt`. `bb test` runs on `$JOLT` if it's set, then on the pinned build if it exists, then on `jolt` from your `PATH`, and prints which one it picked. Everything also works on a released 0.8.23, just slower.
 
 ```sh
 bb jolt                                               # build the pinned jolt (about 45 s, once per pin)

@@ -2,7 +2,7 @@
 
 ## What you need
 
-- **jolt 0.8.22 or later.** Champaca's `deps.edn` declares it as `:jolt/min-version "0.8.22"`.
+- **jolt 0.8.23 or later.** Champaca's `deps.edn` declares it as `:jolt/min-version "0.8.23"`.
 - **JDK 25, with `JAVA_HOME` set.** Champaca doesn't run a JVM. It reads the JDK's classes out of `$JAVA_HOME/jmods` and compiles them itself, so it needs the jmods, and `javac` if you want to compile Java of your own. It's been tested with OpenJDK 25.0.2 (the Oracle build) and GraalVM CE 25.0.1.
 - **babashka**, for the `bb` tasks in this repo.
 
