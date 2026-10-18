@@ -1000,7 +1000,9 @@
 ;; the way the JDK's class loaders define one: a classpath class's from its
 ;; jar's manifest (the hook), a JDK class's with no version information. On
 ;; the JVM a JDK package belongs to a named module and reports isSealed;
-;; every module here is unnamed.
+;; every module here is unnamed. A lambda class is champaca/Lambda$..., shared
+;; by every call site with the same interface, so its package is champaca, in
+;; step with its getName (the JVM's lambda lives in its caller's package).
 (define jpackage-hook #f)
 (define (set-jpackage-hook! f) (set! jpackage-hook f))
 (define jpackage-table (make-hashtable string-hash string=?))
@@ -1025,8 +1027,10 @@
                [p (apply construct "java/lang/Package"
                          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
                          (jstring pn) (append attrs (list seal #f)))])
-          (hashtable-set! jpackage-table pn p)
-          p))))
+          ;; constructing ran Java code, which can let another thread in to
+          ;; define the same package first: keep whichever got there
+          (or (hashtable-ref jpackage-table pn #f)
+              (begin (hashtable-set! jpackage-table pn p) p))))))
 (define-override! "java/lang/Class.getPackage()Ljava/lang/Package;"
   (lambda (this)
     (let ([cn (jclass-cname (mirror-class this))])

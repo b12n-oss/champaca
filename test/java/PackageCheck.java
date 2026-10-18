@@ -20,5 +20,15 @@ public class PackageCheck {
         System.out.println("primitive: " + int.class.getPackage());
         System.out.println("array: " + String[].class.getPackage());
         System.out.println("toString: " + lib);
+        // a package split over two jars takes the attributes of the jar its
+        // first loaded class came from, though lib.jar is first on the path
+        loadSecondHalf();
+        askFirstHalf();
+    }
+    static void loadSecondHalf() { new champaca.split.B(); }
+    static void askFirstHalf() {
+        Package p = champaca.split.A.class.getPackage();
+        System.out.println("split: " + show(p));
+        System.out.println("split same: " + (p == champaca.split.B.class.getPackage()));
     }
 }

@@ -47,8 +47,12 @@
                         (fs/copy f to {:replace-existing true}))
                     ;; with a manifest of its own: a package section, a wrapped value
                     _ (shell "jar cfm target/lib.jar test/jar.mf -C target/lib-classes .")
+                    ;; a second jar sharing one package with the first (PackageCheck)
+                    _ (shell "mkdir -p target/lib2-classes")
+                    _ (apply shell "javac -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
+                    _ (shell "jar cfm target/lib2.jar test/jar2.mf -C target/lib2-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
-                    _ (apply shell "javac -cp target/lib.jar -d target/classes" srcs)
+                    _ (apply shell "javac -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses
@@ -59,7 +63,7 @@
                     fails (doall
                            (for [m mains
                                  :let [{:keys [out exit]} (shell {:out :string :continue true}
-                                                                 (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar" m)
+                                                                 (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
                     ;; jolt programs calling Java, checked against expected output

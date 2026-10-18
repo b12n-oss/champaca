@@ -8,3 +8,5 @@ jdk name: java.util.concurrent
 primitive: null
 array: null
 toString: package champaca.lib
+split: name=champaca.split specT=null specV=null specVendor=null implT=the second jar implV=null implVendor=null
+split same: true

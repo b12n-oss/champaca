@@ -220,14 +220,24 @@
         (swap! state assoc-in [:jars path] zf)
         zf)))
 
-(defn- user-class-bytes [cname]
+(defn- package-dir [cname] (subs cname 0 (or (str/last-index-of cname "/") 0)))
+
+(defn- user-class-bytes
+  "cname's bytes from the first classpath entry that has it. The first class
+  read from a package also decides which entry defines that package, as the
+  JVM's class loaders define a package with the first class they define in
+  it (package-info reads that entry's manifest)."
+  [cname]
   (let [rel (str cname ".class")]
     (some (fn [entry]
-            (if (str/ends-with? (str entry) ".jar")
-              (read-entry (jar entry) rel)
-              (let [f (io/file entry rel)]
-                (when (.exists f)
-                  (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String [])))))))
+            (when-let [bs (if (str/ends-with? (str entry) ".jar")
+                            (read-entry (jar entry) rel)
+                            (let [f (io/file entry rel)]
+                              (when (.exists f)
+                                (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))]
+              (swap! state update :package-entries
+                     (fn [m] (let [d (package-dir cname)] (if (contains? m d) m (assoc m d entry)))))
+              bs))
           (:classpath @state))))
 
 (defn- jdk-class-bytes [cname]
@@ -272,53 +282,82 @@
   (when (plain-resource-path? path)
     (or (jdk-resource-bytes path) (user-resource-bytes path))))
 
+(defn- ascii-lower
+  "Lower case for attribute names, which are ASCII; String.toLowerCase would
+  follow the default locale (a Turkish one maps I to a dotless i)."
+  [s]
+  (apply str (map #(let [c (int %)] (if (<= 65 c 90) (char (+ c 32)) %)) s)))
+
 (defn- manifest-sections
-  "A manifest's attributes by section: the main one under nil, a named one
-  under its Name. Keys are lower case, as attribute names compare without
-  case; a line starting with a space continues the one before."
-  [text]
-  (let [lines (reduce (fn [acc l]
+  "A manifest's attributes by section, as java.util.jar.Manifest reads
+  them: the main one under nil, a named one under its Name, keys in lower
+  case (names compare without case). A line starting with a space continues
+  the one before, joined as bytes so a character split across the wrap
+  survives, and an unterminated last line is dropped. A header without
+  \": \" or a section not opened by Name is the format error the JDK refuses,
+  thrown here."
+  [bs]
+  (let [text (String. bs "ISO-8859-1")
+        ;; the piece after the last line break is empty, or unterminated
+        lines (butlast (str/split text #"\r\n|\r|\n" -1))
+        lines (reduce (fn [acc l]
                         (if (and (str/starts-with? l " ") (seq acc))
                           (conj (pop acc) (str (peek acc) (subs l 1)))
                           (conj acc l)))
-                      [] (str/split-lines text))]
-    (loop [ls lines sec nil after-blank? false out {}]
+                      [] lines)
+        utf8 (fn [s] (String. (.getBytes s "ISO-8859-1") "UTF-8"))]
+    (loop [ls lines sec nil opening? false out {}]
       (if-let [l (first ls)]
         (if (str/blank? l)
           (recur (rest ls) sec true out)
-          (if-let [i (str/index-of l ": ")]
-            (let [k (str/lower-case (subs l 0 i)) v (subs l (+ i 2))]
-              (if (and after-blank? (= k "name"))
-                (recur (rest ls) v false out)
-                (recur (rest ls) sec false (assoc-in out [sec k] v))))
-            (recur (rest ls) sec false out)))
+          (let [i (or (str/index-of l ": ")
+                      (throw (ex-info (str "invalid header: " (utf8 l)) {})))
+                k (ascii-lower (subs l 0 i)) v (utf8 (subs l (+ i 2)))]
+            (cond (not opening?) (recur (rest ls) sec false (assoc-in out [sec k] v))
+                  (= k "name") (recur (rest ls) v false out)
+                  :else (throw (ex-info (str "a section starts with " (utf8 (subs l 0 i)) ", not Name") {})))))
         out))))
 
+(defn- jar-manifest
+  "entry's parsed manifest, read once per jar; nil for a directory, a jar
+  without one, or one the JDK would refuse (said on stderr, then ignored)."
+  [entry]
+  (let [cached (get-in @state [:manifests entry] ::unread)]
+    (if (not= cached ::unread)
+      cached
+      (let [m (when (str/ends-with? (str entry) ".jar")
+                (when-let [bs (read-entry (jar entry) "META-INF/MANIFEST.MF")]
+                  (try (manifest-sections bs)
+                       (catch Exception e
+                         (binding [*out* *err*]
+                           (println (str "champaca: ignoring the invalid manifest of " entry ": " (ex-message e))))
+                         nil))))]
+        (swap! state assoc-in [:manifests entry] m)
+        m))))
+
 (defn- package-info
-  "What Class.getPackage needs about cname, one line each: user or jdk, then
-  Specification-Title, -Version, -Vendor and Implementation-Title, -Version,
-  -Vendor (+value, or - when absent), then the seal base (+url or -). The
-  attributes come from the manifest of the classpath entry the class itself
-  came from, its package's own section winning over the main one, as the
-  JDK's class loaders read them. A directory has no manifest."
+  "What Class.getPackage needs about cname's package, one line each: user or
+  jdk, then Specification-Title, -Version, -Vendor and Implementation-Title,
+  -Version, -Vendor (+value, or - when absent), then the seal base (+url or
+  -). The attributes come from the manifest of the classpath entry that
+  defined the package (its first class read), the package's own section
+  winning over the main one, as the JDK's class loaders read them. A
+  directory has no manifest, and a package no classpath class defined (the
+  JDK's, a generated class's) has no version information."
   [cname]
-  (let [rel (str cname ".class")
-        entry (first (filter #(if (str/ends-with? (str %) ".jar")
-                                (some? (.getEntry (jar %) rel))
-                                (.isFile (io/file % rel)))
-                             (:classpath @state)))]
+  (let [d (package-dir cname)
+        entry (get-in @state [:package-entries d])]
     (if-not entry
       "jdk"
-      (let [m (when (str/ends-with? (str entry) ".jar")
-                (some-> (read-entry (jar entry) "META-INF/MANIFEST.MF") (String. "UTF-8") manifest-sections))
-            section (str (subs cname 0 (or (str/last-index-of cname "/") 0)) "/")
+      (let [m (jar-manifest entry)
+            section (str d "/")
             attr (fn [k] (or (get-in m [section k]) (get-in m [nil k])))
             line (fn [k] (if-let [v (attr k)] (str "+" v) "-"))]
         (str/join "\n"
                   (concat ["user"]
                           (map line ["specification-title" "specification-version" "specification-vendor"
                                      "implementation-title" "implementation-version" "implementation-vendor"])
-                          [(if (= "true" (some-> (attr "sealed") str/lower-case))
+                          [(if (= "true" (some-> (attr "sealed") ascii-lower))
                              (str "+" (.toURI (io/file (.getAbsolutePath (io/file entry)))))
                              "-")]))))))
 
