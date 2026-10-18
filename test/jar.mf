@@ -1,8 +1,13 @@
 Implementation-Title: champaca test library
+Implementation-Version: 1.0
 Specification-Vendor: champaca
 Implementation-Vendor: a vendor name long enough that the jar tool wraps it onto a continuation line
 
 Name: champaca/lib/
 Implementation-Version: 9.9
 Sealed: true
+
+Name: champaca/other/
+Implementation-Title: not this package's
+Specification-Title: nor this
 
