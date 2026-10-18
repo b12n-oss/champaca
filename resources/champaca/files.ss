@@ -31,6 +31,8 @@
     (st_size 96 . integer-64)
     (dirent-name 21 . #f) (dirent-namlen 18 . unsigned-16)
     (space-unit 0 . unsigned-32) (space-total 8 . unsigned-64) (space-free 16 . unsigned-64) (space-usable 24 . unsigned-64)
+    ;; struct statvfs (UnixFileStoreAttributes): 32-bit block counts on macOS
+    (vfs-frsize 8 . unsigned-64) (vfs-blocks 16 . unsigned-32) (vfs-bfree 20 . unsigned-32) (vfs-bavail 24 . unsigned-32)
     (flock-start 0 . integer-64) (flock-len 8 . integer-64) (flock-pid 16 . integer-32)
     (flock-type 20 . integer-16) (flock-whence 22 . integer-16)
     (F_SETLK 8 . #f) (F_SETLKW 9 . #f) (F_RDLCK 1 . #f) (F_WRLCK 3 . #f) (F_UNLCK 2 . #f)))
@@ -44,6 +46,7 @@
     (st_ctime_sec 104 . integer-64) (st_ctime_nsec 112 . integer-64)
     (dirent-name 19 . #f)
     (space-unit 8 . unsigned-64) (space-total 16 . unsigned-64) (space-free 24 . unsigned-64) (space-usable 32 . unsigned-64)
+    (vfs-frsize 8 . unsigned-64) (vfs-blocks 16 . unsigned-64) (vfs-bfree 24 . unsigned-64) (vfs-bavail 32 . unsigned-64)
     (flock-type 0 . integer-16) (flock-whence 2 . integer-16) (flock-start 8 . integer-64)
     (flock-len 16 . integer-64) (flock-pid 24 . integer-32)
     (F_SETLK 6 . #f) (F_SETLKW 7 . #f) (F_RDLCK 0 . #f) (F_WRLCK 1 . #f) (F_UNLCK 2 . #f)))
@@ -145,6 +148,10 @@
 (deflibc libc-getpwuid "getpwuid" #f (unsigned-32) uptr)
 (deflibc libc-getgrgid "getgrgid" #f (unsigned-32) uptr)
 (deflibc libc-clonefile (if fs-macos? "clonefile" "no-clonefile-here") #f (uptr uptr int) int)
+(deflibc libc-statvfs "statvfs" #f (uptr uptr) int)
+;; Linux's birth time comes from statx, as the JDK's Linux native reads it
+(deflibc libc-statx (if fs-linux? "statx" "no-statx-here") #f (int uptr int unsigned-32 uptr) int)
+(define fs-statx? (and fs-linux? fs-libc-loaded (foreign-entry? "statx")))
 
 (define (errno) (foreign-ref 'int (libc-errno-location) 0))
 ;; call thunk again while it fails with EINTR, as the JDK's RESTARTABLE does
@@ -471,7 +478,7 @@
 ;; java.nio.file can work, so it fails here, once, rather than in every stat.
 (defund "init()I" ()
   (need-layout "java.nio.file")
-  (if (fs-has? 'st_birthtime_sec) (fxsll 1 16) 0))
+  (if (or (fs-has? 'st_birthtime_sec) fs-statx?) (fxsll 1 16) 0))
 (defund "fchmodatNoFollowSupported0()Z" () 0)
 
 (defund "getcwd()[B" ()
@@ -516,6 +523,21 @@
   (unix-check (libc-futimens fd fs-scratch)))
 
 (define ufa "sun/nio/fs/UnixFileAttributes")
+;; struct statx is the kernel's own, the same on every architecture
+;; (ci/linux/layout.c's statx section): stx_mask 0, stx_btime 80 and 88
+(define statx-btime #x800)
+(define at-fdcwd -100)
+(define at-symlink-nofollow #x100)
+(define at-empty-path #x1000)
+(define fs-statx-buf (and fs-statx? (foreign-alloc 256)))
+(define fs-empty-cstr (let ([p (foreign-alloc 1)]) (foreign-set! 'unsigned-8 p 0 0) p))
+;; Linux: a birth time where the file system keeps one; dirfd/path/flags as statx takes them
+(define (fill-birthtime! attrs dirfd path flags)
+  (when (and fs-statx? (fx= 0 (libc-statx dirfd path flags statx-btime fs-statx-buf))
+             (fxpositive? (fxlogand (foreign-ref 'unsigned-32 fs-statx-buf 0) statx-btime)))
+    (jslot-set! attrs (jfield-index ufa "st_birthtime_sec") (foreign-ref 'integer-64 fs-statx-buf 80))
+    (jslot-set! attrs (jfield-index ufa "st_birthtime_nsec") (foreign-ref 'unsigned-32 fs-statx-buf 88))
+    (jslot-set! attrs (jfield-index ufa "birthtime_available") 1)))
 (define (fill-attrs! attrs buf)
   (let ([set (lambda (f v) (jslot-set! attrs (jfield-index ufa f) v))]
         [get (lambda (f) (fs-ref buf f))])
@@ -539,15 +561,27 @@
 ;; stat0 answers an errno rather than throwing
 (defund "stat0(JLsun/nio/fs/UnixFileAttributes;)I" (p attrs)
   (need-layout "stat")
-  (if (< (libc-stat p fs-stat-buf) 0) (errno) (begin (fill-attrs! attrs fs-stat-buf) 0)))
+  (if (< (libc-stat p fs-stat-buf) 0)
+      (errno)
+      (begin (fill-attrs! attrs fs-stat-buf) (fill-birthtime! attrs at-fdcwd p 0) 0)))
 (defund "lstat0(JLsun/nio/fs/UnixFileAttributes;)V" (p attrs)
   (need-layout "lstat")
   (unix-check (libc-lstat p fs-stat-buf))
-  (fill-attrs! attrs fs-stat-buf))
+  (fill-attrs! attrs fs-stat-buf)
+  (fill-birthtime! attrs at-fdcwd p at-symlink-nofollow))
 (defund "fstat0(ILsun/nio/fs/UnixFileAttributes;)V" (fd attrs)
   (need-layout "fstat")
   (unix-check (libc-fstat fd fs-stat-buf))
-  (fill-attrs! attrs fs-stat-buf))
+  (fill-attrs! attrs fs-stat-buf)
+  (fill-birthtime! attrs fd fs-empty-cstr at-empty-path))
+
+;; the file system's block size and counts (Files.copy sizes its buffer by it)
+(define ufsa "sun/nio/fs/UnixFileStoreAttributes")
+(defund "statvfs0(JLsun/nio/fs/UnixFileStoreAttributes;)V" (p attrs)
+  (need-layout "statvfs")
+  (unix-check (libc-statvfs p fs-stat-buf))
+  (for-each (lambda (f) (jslot-set! attrs (jfield-index ufsa (car f)) (i64 (fs-ref fs-stat-buf (cdr f)))))
+            '(("f_frsize" . vfs-frsize) ("f_blocks" . vfs-blocks) ("f_bfree" . vfs-bfree) ("f_bavail" . vfs-bavail))))
 
 (defund "opendir0(J)J" (p)
   (let ([d (libc-opendir p)]) (if (eqv? d 0) (unix-error) d)))
