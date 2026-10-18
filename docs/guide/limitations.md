@@ -42,7 +42,9 @@ The startup cache makes boot quick, and plain computation now runs within a few 
 
 ## Other gaps
 
-- `java.nio.file` needs macOS. The file natives read `struct stat`, `struct dirent` and `struct flock` at macOS's offsets, and on any other system `UnixNativeDispatcher.init` throws `UnsupportedOperationException` instead of guessing. `java.io` streams and `RandomAccessFile` don't depend on those layouts and work anywhere libc does. Everything built on `java.nio.file`, `MessageDigest` included, works on macOS only.
+- `java.nio.file` needs macOS or glibc Linux (arm64 or x86_64). The file natives read `struct stat`, `struct dirent`, `struct flock` and `struct statvfs` through a table of offsets measured on each of those systems, and on any other (musl, a BSD) `UnixNativeDispatcher.init` throws `UnsupportedOperationException` instead of guessing. `java.io` streams and `RandomAccessFile` don't depend on those layouts and work anywhere libc does. On Linux the birth time comes from `statx`, as the JVM's does.
+- Linux's container support is off, as with `-XX:-UseContainerSupport`: inside a container champaca reports the host's memory and processor count, where the JVM reports the container's limits.
+- No selectors: `Selector.open()` stops at a missing native, `KQueue`'s on macOS and `EPoll`'s on Linux, so non-blocking channels don't work. File watching works on macOS, where the JDK's `WatchService` polls in plain Java, but not on Linux, where it needs inotify natives champaca doesn't have yet.
 - `Files.getFileStore` and the other mount queries have no natives yet.
 - `available()` on a pipe or a terminal is 0, where the JVM asks the kernel how much is waiting.
 - `Unsafe.copyMemory` between native memory and a `float[]` or `double[]` fails, since those arrays hold Scheme flonums rather than bytes.
