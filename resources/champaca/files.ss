@@ -27,7 +27,7 @@
     (st_atime_sec 32 . integer-64) (st_atime_nsec 40 . integer-64)
     (st_mtime_sec 48 . integer-64) (st_mtime_nsec 56 . integer-64)
     (st_ctime_sec 64 . integer-64) (st_ctime_nsec 72 . integer-64)
-    (st_birthtime_sec 80 . integer-64) (st_birthtime_nsec 88 . integer-64)
+    (st_birthtime_sec 80 . integer-64)
     (st_size 96 . integer-64)
     (dirent-name 21 . #f) (dirent-namlen 18 . unsigned-16)
     (space-unit 0 . unsigned-32) (space-total 8 . unsigned-64) (space-free 16 . unsigned-64) (space-usable 24 . unsigned-64)
@@ -47,10 +47,20 @@
     (flock-type 0 . integer-16) (flock-whence 2 . integer-16) (flock-start 8 . integer-64)
     (flock-len 16 . integer-64) (flock-pid 24 . integer-32)
     (F_SETLK 6 . #f) (F_SETLKW 7 . #f) (F_RDLCK 0 . #f) (F_WRLCK 1 . #f) (F_UNLCK 2 . #f)))
+;; glibc on x86_64: struct stat differs from arm64's (st_nlink is 8 bytes and
+;; comes before st_mode); the rest is the same. From ci/linux/layout.c.
+(define fs-layout-linux-x86_64
+  (append
+   '((st_dev 0 . unsigned-64) (st_ino 8 . unsigned-64) (st_nlink 16 . unsigned-64)
+     (st_mode 24 . unsigned-32) (st_uid 28 . unsigned-32) (st_gid 32 . unsigned-32)
+     (st_rdev 40 . unsigned-64))
+   (filter (lambda (f) (not (memq (car f) '(st_dev st_ino st_mode st_nlink st_uid st_gid st_rdev))))
+           fs-layout-linux-arm64)))
 (define fs-layout
   (case (machine-type)
     [(tarm64osx arm64osx ta6osx a6osx) fs-layout-macos]
     [(tarm64le arm64le) fs-layout-linux-arm64]
+    [(ta6le a6le) fs-layout-linux-x86_64]
     [else #f]))
 ;; whether struct stat and friends can be read here
 (define fs-stat-layout? (and fs-layout #t))
@@ -519,9 +529,10 @@
     (set "st_atime_sec" (get 'st_atime_sec)) (set "st_atime_nsec" (get 'st_atime_nsec))
     (set "st_mtime_sec" (get 'st_mtime_sec)) (set "st_mtime_nsec" (get 'st_mtime_nsec))
     (set "st_ctime_sec" (get 'st_ctime_sec)) (set "st_ctime_nsec" (get 'st_ctime_nsec))
-    ;; only macOS's struct stat carries a birth time
+    ;; only macOS's struct stat carries a birth time, and the JDK's macOS
+    ;; native takes its seconds only: creationTime has no fraction there
     (when (fs-has? 'st_birthtime_sec)
-      (set "st_birthtime_sec" (get 'st_birthtime_sec)) (set "st_birthtime_nsec" (get 'st_birthtime_nsec))
+      (set "st_birthtime_sec" (get 'st_birthtime_sec))
       (set "birthtime_available" 1))
     (set "st_size" (get 'st_size))))
 
@@ -703,6 +714,16 @@
     (vector-set! (jarr-vec finfo) 1 (i64 (fs-ref b 'st_ino)))))
 ;; no sendfile: FileChannel.transferTo copies through a buffer instead
 (defnative "sun/nio/ch/FileDispatcherImpl.transferTo0(Ljava/io/FileDescriptor;JJLjava/io/FileDescriptor;Z)J" (src pos n dst append) -4)
+
+;; Linux's JDK declares these where macOS's doesn't. init0 and init only look
+;; up optional kernel calls (sendfile, copy_file_range); without them the
+;; JDK takes its generic paths, which IOStatus.UNSUPPORTED (-4) asks for, as
+;; transferTo0 above does. posix_fadvise is a hint, and ignoring it is safe.
+(defnative "sun/nio/ch/FileDispatcherImpl.init0()V" () (void))
+(defnative "sun/nio/ch/FileDispatcherImpl.transferFrom0(Ljava/io/FileDescriptor;Ljava/io/FileDescriptor;JJZ)J" (src dst pos n append) -4)
+(defnative "sun/nio/fs/LinuxNativeDispatcher.init()V" () (void))
+(defnative "sun/nio/fs/LinuxNativeDispatcher.directCopy0(IIJ)I" (dst src cancel) -4)
+(defnative "sun/nio/fs/LinuxNativeDispatcher.posix_fadvise(IJJI)I" (fd off len advice) 0)
 (defufd "allocationGranularity0()J" () (libc-getpagesize))
 
 (defnative "sun/nio/ch/IOUtil.fdVal(Ljava/io/FileDescriptor;)I" (fdo) (fdo-fd fdo))

@@ -493,6 +493,13 @@
     (put-u8 port (fxlogand b #xff))
     (flush-output-port port)))
 
+;; --- Linux containers: the JDK's cgroup support stays off, as with
+;; -XX:-UseContainerSupport, so the host's memory and CPU count are reported
+(defnative "jdk/internal/platform/CgroupMetrics.isUseContainerSupport()Z" () 0)
+(defnative "jdk/internal/platform/CgroupMetrics.isContainerized0()Z" () 0)
+(defnative "jdk/internal/platform/CgroupMetrics.getTotalMemorySize0()J" () 0)
+(defnative "jdk/internal/platform/CgroupMetrics.getTotalSwapSize0()J" () 0)
+
 ;; --- signals: none are supported, which Terminator.setup tolerates ------------
 (defnative "jdk/internal/misc/Signal.findSignal0(Ljava/lang/String;)I" (name) -1)
 (defnative "jdk/internal/misc/Signal.handle0(IJ)J" (sig handler) 0)
