@@ -1,0 +1,10 @@
+jar: name=champaca.lib specT=null specV=null specVendor=champaca implT=champaca test library implV=9.9 implVendor=a vendor name long enough that the jar tool wraps it onto a continuation line
+jar sealed: true
+same object: true
+dir: name= specT=null specV=null specVendor=null implT=null implV=null implVendor=null
+dir sealed: false
+jdk: name=java.lang specT=null specV=null specVendor=null implT=null implV=null implVendor=null
+jdk name: java.util.concurrent
+primitive: null
+array: null
+toString: package champaca.lib

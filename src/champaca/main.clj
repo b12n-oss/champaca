@@ -272,6 +272,56 @@
   (when (plain-resource-path? path)
     (or (jdk-resource-bytes path) (user-resource-bytes path))))
 
+(defn- manifest-sections
+  "A manifest's attributes by section: the main one under nil, a named one
+  under its Name. Keys are lower case, as attribute names compare without
+  case; a line starting with a space continues the one before."
+  [text]
+  (let [lines (reduce (fn [acc l]
+                        (if (and (str/starts-with? l " ") (seq acc))
+                          (conj (pop acc) (str (peek acc) (subs l 1)))
+                          (conj acc l)))
+                      [] (str/split-lines text))]
+    (loop [ls lines sec nil after-blank? false out {}]
+      (if-let [l (first ls)]
+        (if (str/blank? l)
+          (recur (rest ls) sec true out)
+          (if-let [i (str/index-of l ": ")]
+            (let [k (str/lower-case (subs l 0 i)) v (subs l (+ i 2))]
+              (if (and after-blank? (= k "name"))
+                (recur (rest ls) v false out)
+                (recur (rest ls) sec false (assoc-in out [sec k] v))))
+            (recur (rest ls) sec false out)))
+        out))))
+
+(defn- package-info
+  "What Class.getPackage needs about cname, one line each: user or jdk, then
+  Specification-Title, -Version, -Vendor and Implementation-Title, -Version,
+  -Vendor (+value, or - when absent), then the seal base (+url or -). The
+  attributes come from the manifest of the classpath entry the class itself
+  came from, its package's own section winning over the main one, as the
+  JDK's class loaders read them. A directory has no manifest."
+  [cname]
+  (let [rel (str cname ".class")
+        entry (first (filter #(if (str/ends-with? (str %) ".jar")
+                                (some? (.getEntry (jar %) rel))
+                                (.isFile (io/file % rel)))
+                             (:classpath @state)))]
+    (if-not entry
+      "jdk"
+      (let [m (when (str/ends-with? (str entry) ".jar")
+                (some-> (read-entry (jar entry) "META-INF/MANIFEST.MF") (String. "UTF-8") manifest-sections))
+            section (str (subs cname 0 (or (str/last-index-of cname "/") 0)) "/")
+            attr (fn [k] (or (get-in m [section k]) (get-in m [nil k])))
+            line (fn [k] (if-let [v (attr k)] (str "+" v) "-"))]
+        (str/join "\n"
+                  (concat ["user"]
+                          (map line ["specification-title" "specification-version" "specification-vendor"
+                                     "implementation-title" "implementation-version" "implementation-vendor"])
+                          [(if (= "true" (some-> (attr "sealed") str/lower-case))
+                             (str "+" (.toURI (io/file (.getAbsolutePath (io/file entry)))))
+                             "-")]))))))
+
 (defn- resource-urls
   "Every classpath entry's URL for path, file: for a directory and jar: for a
   jar, in classpath order. JDK resources have none: their jrt: URLs need the
@@ -894,6 +944,7 @@
   (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false))
           ;; URLs as one string, one per line
           (fn [path] (str/join "\n" (resource-urls path))))
+  (s/call "set-jpackage-hook!" package-info)
   (s/call "set-cp-hook!" (fn [cname i]
                            (let [e (get (:cp (parsed cname)) i)]
                              (let [v (or (:value e) (:name e)

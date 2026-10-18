@@ -45,7 +45,8 @@
                               :let [to (fs/path "target/lib-classes" (str (fs/relativize "test/jar" f)))]]
                         (fs/create-dirs (fs/parent to))
                         (fs/copy f to {:replace-existing true}))
-                    _ (shell "jar cf target/lib.jar -C target/lib-classes .")
+                    ;; with a manifest of its own: a package section, a wrapped value
+                    _ (shell "jar cfm target/lib.jar test/jar.mf -C target/lib-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
                     _ (apply shell "javac -cp target/lib.jar -d target/classes" srcs)
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit

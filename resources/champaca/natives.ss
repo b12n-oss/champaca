@@ -994,6 +994,45 @@
 (define-override! "java/lang/ClassLoader.getSystemResources(Ljava/lang/String;)Ljava/util/Enumeration;"
   (lambda (name) (resource-enumeration (jstring->scheme (nn name)))))
 
+;; Class.getPackage: every class here belongs to the boot loader, whose
+;; packages the JDK finds through a runtime image this runtime doesn't have,
+;; so it answered null for every class. One Package per name instead, built
+;; the way the JDK's class loaders define one: a classpath class's from its
+;; jar's manifest (the hook), a JDK class's with no version information. On
+;; the JVM a JDK package belongs to a named module and reports isSealed;
+;; every module here is unnamed.
+(define jpackage-hook #f)
+(define (set-jpackage-hook! f) (set! jpackage-hook f))
+(define jpackage-table (make-hashtable string-hash string=?))
+(define (text-lines s)
+  (let loop ([i 0] [start 0] [acc '()])
+    (cond [(fx= i (string-length s)) (reverse (cons (substring s start i) acc))]
+          [(char=? (string-ref s i) #\newline) (loop (fx+ i 1) (fx+ i 1) (cons (substring s start i) acc))]
+          [else (loop (fx+ i 1) start acc)])))
+(define (jpackage-of cn)
+  (let* ([slash (let loop ([i (fx- (string-length cn) 1)])
+                  (cond [(fx< i 0) #f] [(char=? (string-ref cn i) #\/) i] [else (loop (fx- i 1))]))]
+         [pn (if slash (slashes->dots (substring cn 0 slash)) "")])
+    (or (hashtable-ref jpackage-table pn #f)
+        (let* ([info (text-lines (jpackage-hook cn))]
+               [given (lambda (s) (and (char=? (string-ref s 0) #\+) (substring s 1 (string-length s))))]
+               [attrs (if (string=? (car info) "jdk")
+                          (make-list 6 #f)
+                          (map (lambda (s) (let ([v (given s)]) (and v (jstring v)))) (list-head (cdr info) 6)))]
+               [seal (and (string=? (car info) "user")
+                          (let ([u (given (list-ref info 7))])
+                            (and u (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring u)))))]
+               [p (apply construct "java/lang/Package"
+                         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
+                         (jstring pn) (append attrs (list seal #f)))])
+          (hashtable-set! jpackage-table pn p)
+          p))))
+(define-override! "java/lang/Class.getPackage()Ljava/lang/Package;"
+  (lambda (this)
+    (let ([cn (jclass-cname (mirror-class this))])
+      (and (not (prim-name? cn)) (not (char=? (string-ref cn 0) #\[))
+           (jpackage-of cn)))))
+
 (defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (void))
 (defnative "jdk/internal/loader/BootLoader.getSystemPackageNames()[Ljava/lang/String;" ()
   (make-jarr "Ljava/lang/String;" (vector)))
