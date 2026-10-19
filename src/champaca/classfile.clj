@@ -186,21 +186,56 @@
            (let [[a b] (:info %)] (:value (cp (+ (* a 256) b)))))
         attrs))
 
+(defn- u2s [info] (map (fn [[a b]] (+ (* a 256) b)) (partition 2 info)))
+
+(defn- exceptions
+  "A method's Exceptions attribute: the class names it declares it throws."
+  [attrs cp]
+  (some #(when (= "Exceptions" (:name %))
+           (mapv (fn [i] (:name (cp i))) (rest (u2s (:info %)))))
+        attrs))
+
+(defn- method-parameters
+  "A method's MethodParameters attribute: [name flags] for each parameter,
+  the name nil where the classfile gives none."
+  [attrs cp]
+  (some #(when (= "MethodParameters" (:name %))
+           (mapv (fn [[ni fl]] [(when (pos? ni) (:value (cp ni))) fl])
+                 (partition 2 (u2s (rest (:info %))))))
+        attrs))
+
 (defn- reflection-attrs
-  "Signature and annotation attributes, as reflection hands them to Field,
-  Method, Constructor and Class."
+  "Signature, annotation and the other attributes reflection hands to Field,
+  Method, Constructor, Class and RecordComponent."
   [attrs cp]
   (let [sig (signature attrs cp)
         ann (attr-bytes attrs "RuntimeVisibleAnnotations")
         pann (attr-bytes attrs "RuntimeVisibleParameterAnnotations")
-        adef (attr-bytes attrs "AnnotationDefault")]
+        adef (attr-bytes attrs "AnnotationDefault")
+        tann (attr-bytes attrs "RuntimeVisibleTypeAnnotations")
+        exs (exceptions attrs cp)
+        params (method-parameters attrs cp)]
     (cond-> {}
       sig (assoc :signature sig)
       ann (assoc :annotations ann)
       pann (assoc :param-annotations pann)
-      adef (assoc :annotation-default adef))))
+      adef (assoc :annotation-default adef)
+      tann (assoc :type-annotations tann)
+      exs (assoc :exceptions exs)
+      params (assoc :parameters params))))
 
-(defn- u2s [info] (map (fn [[a b]] (+ (* a 256) b)) (partition 2 info)))
+(defn- record-components
+  "The Record attribute: {:name :desc} plus each component's reflection
+  attributes, in declaration order; nil when the class is not a record."
+  [attrs cp]
+  (some #(when (= "Record" (:name %))
+           (let [r (reader (:info %))]
+             (vec (repeatedly (u2 r)
+                              (fn [] (let [name (:value (cp (u2 r)))
+                                           desc (:value (cp (u2 r)))]
+                                       (merge {:name name :desc desc}
+                                              (reflection-attrs (read-attributes r cp) cp))))))))
+        attrs))
 
 (defn- nesting
   "This class's own InnerClasses entry, {:outer :simple-name :flags} (outer and
@@ -259,10 +294,12 @@
         interfaces (vec (repeatedly (u2 r) #(:name (cp (u2 r)))))
         fields (vec (repeatedly (u2 r) #(read-member r cp)))
         methods (vec (repeatedly (u2 r) #(read-member r cp)))
-        attrs (read-attributes r cp)]
+        attrs (read-attributes r cp)
+        rec (record-components attrs cp)]
     {:name this :flags flags :super super :interfaces interfaces
      :fields fields :methods methods :cp cp
-     :reflection (merge (reflection-attrs attrs cp) (nesting attrs cp this))
+     :reflection (cond-> (merge (reflection-attrs attrs cp) (nesting attrs cp this))
+                   rec (assoc :record rec))
      :bootstrap-methods (some #(when (= "BootstrapMethods" (:name %))
                                  (parse-bootstrap-methods (:info %)))
                               attrs)}))

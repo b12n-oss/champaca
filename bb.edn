@@ -89,7 +89,7 @@
                     _ (apply shell "javac -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
                     _ (shell "jar cfm target/lib2.jar test/jar2.mf -C target/lib2-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
-                    _ (apply shell "javac -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
+                    _ (apply shell "javac -parameters -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses

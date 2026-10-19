@@ -1,0 +1,35 @@
+Pair record=true components=2
+  java.lang.Object first | first java.lang.Object generic=A sig=TA; accessor=first declaring=Pair annotations=[@Tag("left")] typeAnnotations=[]
+  java.lang.Object second | second java.lang.Object generic=B sig=TB; accessor=second declaring=Pair annotations=[] typeAnnotations=[]
+Range record=true components=2
+  int lo | lo int generic=int sig=null accessor=lo declaring=Range annotations=[] typeAnnotations=[]
+  int hi | hi int generic=int sig=null accessor=hi declaring=Range annotations=[] typeAnnotations=[]
+Empty record=true components=0
+Holder record=true components=3
+  java.lang.String name | name java.lang.String generic=java.lang.String sig=null accessor=name declaring=Holder annotations=[] typeAnnotations=[@NonEmpty()]
+  java.util.List tags | tags java.util.List generic=java.util.List<java.lang.String> sig=Ljava/util/List<Ljava/lang/String;>; accessor=tags declaring=Holder annotations=[] typeAnnotations=[]
+  int[] counts | counts [I generic=int[] sig=null accessor=counts declaring=Holder annotations=[] typeAnnotations=[]
+Ops record=false components=null
+a left false
+Pair[first=a, second=1] true true
+Range(lo:int implicit hi:int implicit) -> Range[lo=2, hi=5]
+ITE lo > hi: 5 2
+Ops(label:String size:int)
+Ops$Inner(this$0:Ops implicit final n:int)
+open(path:String mode:int final)
+name(who:String)
+valueOf(name:String implicit)
+regionMatches(arg0:int? arg1:String? arg2:int? arg3:int?)
+java.lang.String path
+[class java.io.IOException, class java.lang.InterruptedException] public static void Ops.open(java.lang.String,int) throws java.io.IOException,java.lang.InterruptedException
+[class java.lang.Exception] [T] public <T extends java.lang.Exception> void Ops.rethrow(T) throws T
+[class java.lang.InterruptedException]
+[class java.lang.ClassNotFoundException]
+[]
+[@NonEmpty()]
+[@NonEmpty()] [@Tag("who")]
+[@NonEmpty()]
+[@NonEmpty()]
+true false false false 1336837896 true 1335749809 Tag left
+@NonEmpty() 0 true
+true false

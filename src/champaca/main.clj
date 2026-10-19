@@ -482,7 +482,7 @@
      :reflection (:reflection c)
      :fields (mapv (fn [f] (merge {:name (:name f) :desc (:desc f) :flags (:flags f)
                                    :static (cf/static? f) :constant (:constant f)}
-                                  (select-keys f [:signature :annotations])))
+                                  (select-keys f [:signature :annotations :type-annotations])))
                    (:fields c))
      :methods (mapv (fn [m] (assoc m
                                    :native (cf/native? m)
@@ -577,17 +577,26 @@
             (str flags)
             ;; declared members, in classfile order, for reflection:
             ;; methods (name desc flags signature annotations param-annotations
-            ;; annotation-default), fields (name desc flags signature
-            ;; annotations), then the class's own (signature annotations inner
-            ;; enclosing-method)
+            ;; annotation-default type-annotations exceptions parameters),
+            ;; fields (name desc flags signature annotations type-annotations),
+            ;; then the class's own (signature annotations inner
+            ;; enclosing-method record-components type-annotations)
             (str "'" (cg/sx (apply cg/sx (for [m methods]
                                            (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m))
                                                   (refl-lit (:signature m)) (refl-lit (:annotations m))
-                                                  (refl-lit (:param-annotations m)) (refl-lit (:annotation-default m)))))
+                                                  (refl-lit (:param-annotations m)) (refl-lit (:annotation-default m))
+                                                  (refl-lit (:type-annotations m))
+                                                  ;; Exceptions: class names
+                                                  (if-let [exs (:exceptions m)] (apply cg/sx (map cg/str-lit exs)) "#f")
+                                                  ;; MethodParameters: (name flags), name #f when absent
+                                                  (if-let [ps (:parameters m)]
+                                                    (apply cg/sx (for [[n fl] ps] (cg/sx (refl-lit n) (str fl))))
+                                                    "#f"))))
                             (apply cg/sx (for [f fields]
                                            (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))
-                                                  (refl-lit (:signature f)) (refl-lit (:annotations f)))))
-                            (let [{:keys [inner enclosing-method]} reflection]
+                                                  (refl-lit (:signature f)) (refl-lit (:annotations f))
+                                                  (refl-lit (:type-annotations f)))))
+                            (let [{:keys [inner enclosing-method record]} reflection]
                               (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
                                      ;; (outer simple-name flags): InnerClasses' entry for this class
                                      (if inner
@@ -597,7 +606,15 @@
                                      (if enclosing-method
                                        (cg/sx (refl-lit (:class enclosing-method)) (refl-lit (:name enclosing-method))
                                               (refl-lit (:desc enclosing-method)))
-                                       "#f"))))))]
+                                       "#f")
+                                     ;; Record: (name desc signature annotations type-annotations)
+                                     (if record
+                                       (apply cg/sx (for [rc record]
+                                                      (cg/sx (cg/str-lit (:name rc)) (cg/str-lit (:desc rc))
+                                                             (refl-lit (:signature rc)) (refl-lit (:annotations rc))
+                                                             (refl-lit (:type-annotations rc)))))
+                                       "#f")
+                                     (refl-lit (:type-annotations reflection)))))))]
     ;; a conflicting default's stub, with the JVM's message: the interfaces
     ;; in declaration order, dotted, without descriptors
     (for [[k is] (sort conflicts)

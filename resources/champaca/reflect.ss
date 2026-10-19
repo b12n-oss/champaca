@@ -47,18 +47,26 @@
     (apply (method-proc cname (string-append "<init>" desc)) o args)
     o))
 
+;; a method entry's Exceptions, class names, as the Class[] Method and
+;; Constructor take
+(define (exception-mirrors m)
+  (make-jarr "Ljava/lang/Class;" (list->vector (map jmirror-of (or (member-attr m 8) '())))))
+
+;; the Method for (index . entry) of the class whose mirror is mirror
+(define (method-object mirror im)
+  (let* ([m (cdr im)] [name (car m)] [desc (cadr m)] [flags (caddr m)])
+    (construct "java/lang/reflect/Method"
+               "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B[B)V"
+               mirror (jstring-lit name) (mirror-array (desc-args desc)) (desc->mirror (desc-ret desc))
+               (exception-mirrors m) (fxlogand flags #xffff) (car im)
+               (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4))
+               (refl-bytes (member-attr m 5)) (refl-bytes (member-attr m 6)))))
+
 (defnative "java/lang/Class.getDeclaredMethods0(Z)[Ljava/lang/reflect/Method;" (this public-only)
   (let ([c (mirror-class this)])
     (make-jarr "Ljava/lang/reflect/Method;"
      (list->vector
-      (map (lambda (im)
-             (let* ([m (cdr im)] [name (car m)] [desc (cadr m)] [flags (caddr m)])
-               (construct "java/lang/reflect/Method"
-                          "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B[B)V"
-                          this (jstring-lit name) (mirror-array (desc-args desc)) (desc->mirror (desc-ret desc))
-                          (no-classes) (fxlogand flags #xffff) (car im)
-                          (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4))
-                          (refl-bytes (member-attr m 5)) (refl-bytes (member-attr m 6)))))
+      (map (lambda (im) (method-object this im))
            (indexed-members (meta-methods c)
                             (lambda (m) (and (not (char=? (string-ref (car m) 0) #\<))
                                              (or (eqv? public-only 0) (public? (caddr m)))))))))))
@@ -71,7 +79,7 @@
              (let* ([m (cdr im)] [desc (cadr m)] [flags (caddr m)])
                (construct "java/lang/reflect/Constructor"
                           "(Ljava/lang/Class;[Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B)V"
-                          this (mirror-array (desc-args desc)) (no-classes) (fxlogand flags #xffff) (car im)
+                          this (mirror-array (desc-args desc)) (exception-mirrors m) (fxlogand flags #xffff) (car im)
                           (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4)) (refl-bytes (member-attr m 5)))))
            (indexed-members (meta-methods c)
                             (lambda (m) (and (string=? (car m) "<init>")
@@ -111,7 +119,38 @@
   (refl-string (car (meta-class-refl (mirror-class this)))))
 (defnative "java/lang/Class.getRawAnnotations()[B" (this)
   (refl-bytes (cadr (meta-class-refl (mirror-class this)))))
-(defnative "java/lang/Class.getRawTypeAnnotations()[B" (this) #f)
+(defnative "java/lang/Class.getRawTypeAnnotations()[B" (this)
+  (let ([r (meta-class-refl (mirror-class this))])
+    (and (fx> (length r) 5) (refl-bytes (list-ref r 5)))))
+;; Record: (name desc signature annotations type-annotations) per component,
+;; #f for a class that isn't a record
+(define (class-record c)
+  (let ([r (meta-class-refl c)]) (and (fx> (length r) 4) (list-ref r 4))))
+;; as the JVM's: each component with its accessor, the declared method named
+;; after it taking nothing and returning its type
+(defnative "java/lang/Class.getRecordComponents0()[Ljava/lang/reflect/RecordComponent;" (this)
+  (let* ([c (mirror-class this)]
+         [rc-class "java/lang/reflect/RecordComponent"]
+         [set (lambda (o f v) (jslot-set! o (jfield-index rc-class f) v))])
+    (jinit rc-class)
+    (make-jarr "Ljava/lang/reflect/RecordComponent;"
+     (list->vector
+      (map (lambda (rc)
+             (let* ([name (car rc)] [desc (cadr rc)] [getter (string-append "()" desc)]
+                    [im (let loop ([ms (meta-methods c)] [i 0])
+                          (cond [(null? ms) #f]
+                                [(and (string=? (caar ms) name) (string=? (cadar ms) getter)) (cons i (car ms))]
+                                [else (loop (cdr ms) (fx+ i 1))]))]
+                    [o (jnew rc-class)])
+               (set o "clazz" this)
+               (set o "name" (jstring-lit name))
+               (set o "type" (desc->mirror desc))
+               (set o "accessor" (and im (method-object this im)))
+               (set o "signature" (refl-string (caddr rc)))
+               (set o "annotations" (refl-bytes (cadddr rc)))
+               (set o "typeAnnotations" (refl-bytes (list-ref rc 4)))
+               o))
+           (or (class-record c) '()))))))
 ;; The constant pool that AnnotationParser reads names and values from. Its oop
 ;; is the class mirror; entries come from the parsed classfile through a jolt
 ;; callback (set-cp-hook!), which answers the entry's value (a String's text,
@@ -137,7 +176,7 @@
 (defnative "java/lang/Class.getNestHost0()Ljava/lang/Class;" (this) this)
 (defnative "java/lang/Class.getPermittedSubclasses0()[Ljava/lang/Class;" (this) #f)
 (defnative "java/lang/Class.isRecord0()Z" (this)
-  (let ([s (jclass-super (mirror-class this))]) (if (and s (string=? s "java/lang/Record")) 1 0)))
+  (if (class-record (mirror-class this)) 1 0))
 (defnative "java/lang/Class.getClassAccessFlagsRaw0()I" (this) (fxlogand (jclass-flags (mirror-class this)) #xffff))
 (defnative "java/lang/Class.getClassFileVersion0()I" (this) 69)
 
@@ -234,6 +273,28 @@
   (let* ([c (mirror-class (jslot obj (jfield-index obj-class-field "clazz")))]
          [slot (jslot obj (jfield-index obj-class-field "slot"))])
     (values c (list-ref (meta-methods c) slot))))
+
+;; a Method or Constructor's entry in its class's meta
+(define (executable-meta e)
+  (let-values ([(c meta) (reflected-member (class-name-of e) e)]) meta))
+
+;; MethodParameters, or null so that Executable synthesizes arg0, arg1...
+(defnative "java/lang/reflect/Executable.getParameters0()[Ljava/lang/reflect/Parameter;" (this)
+  (let ([ps (member-attr (executable-meta this) 9)])
+    (and ps
+         (make-jarr "Ljava/lang/reflect/Parameter;"
+          (list->vector
+           (let loop ([ps ps] [i 0])
+             (if (null? ps) '()
+                 (cons (construct "java/lang/reflect/Parameter" "(Ljava/lang/String;ILjava/lang/reflect/Executable;I)V"
+                                  (refl-string (caar ps)) (cadar ps) this i)
+                       (loop (cdr ps) (fx+ i 1))))))))))
+(defnative "java/lang/reflect/Executable.getTypeAnnotationBytes0()[B" (this)
+  (refl-bytes (member-attr (executable-meta this) 7)))
+(defnative "java/lang/reflect/Field.getTypeAnnotationBytes0()[B" (this)
+  (let* ([c (mirror-class (jslot this (jfield-index "java/lang/reflect/Field" "clazz")))]
+         [f (list-ref (meta-fields c) (jslot this (jfield-index "java/lang/reflect/Field" "slot")))])
+    (refl-bytes (member-attr f 5))))
 
 (defnative "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
   (m obj args)
@@ -390,7 +451,8 @@
 ;; the annotation interface instead (from the lambda-class machinery, through
 ;; set-annotation-class-hook!), points each element method at a procedure that
 ;; reads the member map, and keeps that map and the annotation type beside the
-;; instance. toString, equals and hashCode are Object's.
+;; instance. toString, equals and hashCode are the JDK's own, from an
+;; AnnotationInvocationHandler kept beside the instance too.
 
 (define annotation-class-hook #f)
 (define (set-annotation-class-hook! f) (set! annotation-class-hook f))
@@ -398,7 +460,7 @@
 
 (define (annotation-member self name ret)
   (let* ([st (eq-hashtable-ref annotation-state self #f)]
-         [m (car st)]
+         [m (vector-ref st 0)]
          [v ((jvirt m "get(Ljava/lang/Object;)Ljava/lang/Object;") m (jstring name))])
     (cond [(jarr? v) (array-clone v)]  ; the JDK hands out a copy of an array member
           [(prim-desc? ret) (junbox ret v)]
@@ -427,8 +489,25 @@
            [c (find-class cname)]
            [o (jnew cname)])
       (for-each (lambda (k) (eq-hashtable-set! (jclass-vtable c) (string->symbol k) (annotation-proc-symbol k))) keys)
-      (let ([at (string->symbol "champaca/Annotation.annotationType")])
-        (set-top-level-value! at (lambda (self) (cdr (eq-hashtable-ref annotation-state self #f))))
-        (eq-hashtable-set! (jclass-vtable c) (string->symbol "annotationType()Ljava/lang/Class;") at))
-      (eq-hashtable-set! annotation-state o (cons values type))
+      (for-each (lambda (key proc)
+                  (let ([sym (string->symbol (string-append "champaca/Annotation." key))])
+                    (set-top-level-value! sym proc)
+                    (eq-hashtable-set! (jclass-vtable c) (string->symbol key) sym)))
+                '("annotationType()Ljava/lang/Class;" "toString()Ljava/lang/String;"
+                  "hashCode()I" "equals(Ljava/lang/Object;)Z")
+                (list (lambda (self) (vector-ref (annotation-of self) 1))
+                      (lambda (self) (annotation-handler-call self "toStringImpl()Ljava/lang/String;"))
+                      (lambda (self) (annotation-handler-call self "hashCodeImpl()I"))
+                      (lambda (self other)
+                        (junbox "Z" (annotation-handler-call self "equalsImpl(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Boolean;"
+                                                             self other)))))
+      (eq-hashtable-set! annotation-state o
+                         (vector values type
+                                 (construct annotation-handler "(Ljava/lang/Class;Ljava/util/Map;)V" type values)))
       o)))
+
+(define annotation-handler "sun/reflect/annotation/AnnotationInvocationHandler")
+(define (annotation-of self) (eq-hashtable-ref annotation-state self #f))
+;; one of the handler's private ...Impl methods, on this instance's handler
+(define (annotation-handler-call self key . args)
+  (apply (method-proc annotation-handler key) (vector-ref (annotation-of self) 2) args))
