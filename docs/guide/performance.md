@@ -38,7 +38,7 @@ Class registrations turned out to be most of a generation's code: 9.4 MB of the 
 
 ### When it's rebuilt
 
-The directory name is a hash of everything the compiled code depends on: the JDK (its `release` file plus the size and mtime of `java.base.jmod`), the translator's own source, the jolt runtime version, and whether `CHAMPACA_BT` is on. Change any of them and the next run builds a fresh cache in a new directory.
+The directory name is a hash of everything the compiled code depends on: the JDK (its `release` file plus the size and mtime of `lib/modules`), the translator's own source, the jolt runtime version, and whether `CHAMPACA_BT` is on. Change any of them and the next run builds a fresh cache in a new directory.
 
 Two switches control it:
 
@@ -49,7 +49,7 @@ CHAMPACA_CACHE_DIR=/tmp/ldk jolt -M -m champaca.main classes Main  # keep it som
 
 ### Upkeep
 
-Old key directories are cleaned up when a new cache is written: any sibling directory no run has loaded for 7 days goes, along with leftovers from an interrupted write. A cache hit marks its directory as used, so another key still in use, such as the `CHAMPACA_BT` one, stays as long as something runs with it every week. Besides the age rule, only the 16 most recently used key directories are kept. That matters when the translator itself is being edited, since every edit makes a new key, and a day of that would otherwise leave gigabytes behind. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jmods/` and `jolt/` beside them unless you mean it: they hold the module index with its copied zips, and the pinned jolt build.
+Old key directories are cleaned up when a new cache is written: any sibling directory no run has loaded for 7 days goes, along with leftovers from an interrupted write. A cache hit marks its directory as used, so another key still in use, such as the `CHAMPACA_BT` one, stays as long as something runs with it every week. Besides the age rule, only the 16 most recently used key directories are kept. That matters when the translator itself is being edited, since every edit makes a new key, and a day of that would otherwise leave gigabytes behind. Deleting a key directory under `~/.cache/champaca` is always safe, since the next run rebuilds what it needs. Leave `jolt/` beside them unless you mean it, since it holds the pinned jolt build. A `jmods/` there is left from versions that copied the JDK's jmods and can go.
 
 ## The call-site cache
 
@@ -87,7 +87,7 @@ Inside this repo, `deps.edn` names a jolt commit, the v0.8.23 tag:
 
 It's the release's own code, built from source. Built that way it ran a warm `Hello` in 0.32 s (median of seven, interleaved), where one release binary of the same commit took 0.45 s and started jolt itself 50 ms slower. A local build of the commit the pin used before, from upstream main, was as fast as the new one, so the slowdown comes from how that release binary was built, not from jolt's code.
 
-0.8.23 is also the first release where `FileInputStream.skip` seeks instead of reading every skipped byte ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), so it's the minimum. Champaca's module index skips to the end of each of the 69 jmods, which drops from 63 ms to 5 to 8 ms with the fix. On a cold `gson` run that's 6.17 s against 6.30 to 6.47 s.
+0.8.23 is also the first release with `java.io.RandomAccessFile` ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), which champaca reads the JDK's runtime image with, so it's the minimum.
 
 `bb jolt` builds the pinned commit:
 

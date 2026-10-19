@@ -56,16 +56,18 @@ Resources inside the JDK's own modules, such as the ICU data the JDK uses for Un
 
 ## JDK modules
 
-The JDK's own classes come from `$JAVA_HOME/jmods`, the same files `jlink` builds runtimes from. `java.base` is where boot starts, but nothing limits you to it:
+The JDK's own classes come from `$JAVA_HOME/lib/modules`, the runtime image that `jlink` writes and the JVM loads its classes from. `java.base` is where boot starts, but nothing limits you to it:
 
 ```clojure
 (ldk/invoke (ldk/construct "java.sql.Date" 0) "getTime")                              ;=> 0       java.sql
 (ldk/invoke (ldk/get-static "java.util.logging.Level" "WARNING") "getName")           ;=> "WARNING"  java.logging
 ```
 
-A jmod is a zip file behind a 4-byte header, so it can't be opened as a zip directly. On its first run champaca reads the zip directory at the end of each of the 69 jmods in JDK 25 and builds an index from package to module (876 packages). It saves the index as `~/.cache/champaca/jmods/<jdk>/packages.edn`. After that a class lookup goes straight to the module that holds its package. The zip inside that one module gets copied out, once, beside the index. `bb test` touches four modules and copies 20 MB.
+The image's format is jimage, read the way the JDK's own `jdk.internal.jimage.BasicImageReader` reads it. A header and an index come first, then every entry's bytes. The index is a perfect hash over full names like `/java.base/java/lang/Object.class`, and each package has an entry of its own, `/packages/java.lang`, naming its module. So a class lookup finds its package's module, then the class, and reads just those bytes from where they lie. Only the index is held in memory, about 1.5 MB for JDK 25, and nothing is copied or indexed beforehand.
 
-Builds disagree on where a jmod's zip offsets count from. The JDK's `jmod` tool counts them from the end of the header, but 30 of the 84 jmods in GraalVM CE 25.0.1 count them from the start of the file. Champaca takes whichever base puts the zip directory where its end record says it is, and copies the zip out from that same point, so both kinds work.
+Every JDK has an image, so any build of JDK 25 works. That includes Temurin's, which ship no jmods (JDK 24's JEP 493 made them optional). The image is also what the JVM runs, which isn't quite what the jmods hold: jlink generates a few classes as it links, such as `jdk.internal.module.SystemModules$all` and the `java.lang.invoke` holder classes, 21 of the roughly 27,850 in JDK 25.0.2.
+
+A runtime built with `jlink` works as `JAVA_HOME` too, as long as it has the modules your code uses. One made with `--compress zip-6` (or any `zip-N`) is inflated as it's read. jlink's older string-sharing compression, `--compress 1`, isn't supported, and champaca says so the first time it reads a class from such an image.
 
 There's no module system on top of that: no `module-info` checks and no export rules. Every class sits in one unnamed module and can see every other.
 

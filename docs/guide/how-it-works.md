@@ -49,7 +49,7 @@ The JDK leaves its `native` methods to the JVM. Champaca writes those in Scheme:
 
 The file natives call libc through Chez's foreign interface (`foreign-procedure`), on real file descriptors, the way the JDK's C code does. The JDK hands its NIO natives paths as addresses of C strings it has copied into native memory with `Unsafe`, so `Unsafe`'s memory calls work on real `malloc`'d memory, and a path's address goes to libc unchanged. The console is the exception: `System.in`, `System.out` and `System.err` keep going through Chez's own ports, which jolt shares, so Java's and jolt's output stay in order. A channel writing to file descriptor 1 or 2 calls libc directly, after flushing those ports. `java.util.zip` calls zlib the same way.
 
-Resources aren't native, but the JDK finds its own in the runtime image, which champaca doesn't read. So `getResourceAsStream`, `getResource` and `getResources` are overridden to ask the loader, which looks in the JDK's jmods first and then the classpath, as it does for classes. A classpath resource gets a `file:` or `jar:` URL, which the JDK's own URL handlers then open.
+Resources aren't native, and the JDK finds its own through the JVM's image reader, which champaca doesn't run. So `getResourceAsStream`, `getResource` and `getResources` are overridden to ask the loader, which looks in the JDK's runtime image first and then the classpath, as it does for classes. A classpath resource gets a `file:` or `jar:` URL, which the JDK's own URL handlers then open.
 
 ## Booting the JDK
 
