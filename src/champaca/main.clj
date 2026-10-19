@@ -2,7 +2,7 @@
   "Class loading, linking and the JIT hook, plus the command-line entry.
 
   Classes come from the user classpath first, then from the JDK's own
-  jmods. Loading a class registers it with the Scheme runtime and
+  runtime image. Loading a class registers it with the Scheme runtime and
   defines every method as a stub; the first call to a stub calls back into
   jit!, which translates that one method and redefines the global in place.
   Native methods are bound by name from resources/champaca/natives.ss.
@@ -13,6 +13,7 @@
             [jolt.scheme :as s]
             [champaca.classfile :as cf]
             [champaca.codegen :as cg]
+            [champaca.jimage :as ji]
             [jolt.image :as img])
   (:import [java.util.zip ZipFile]))
 
@@ -99,126 +100,44 @@
       (do (ensure-loaded! cname) (thaw! cname))))
 
 ;; --- class bytes -----------------------------------------------------------------
-;; JDK classes come from $JAVA_HOME/jmods. A .jmod is a zip behind a 4-byte
-;; "JM" header, and jolt's ZipFile shim wants a plain zip, so each module's
-;; zip part is copied once, the first time a class is looked up in it, under
-;; the cache root. java.base is tried first, then the other modules in name
-;; order. User classes come from the classpath: directories and jars.
+;; JDK classes come from $JAVA_HOME/lib/modules, the runtime image every JDK
+;; has and the JVM itself loads them from (champaca.jimage reads it). A
+;; class's package names its module through the image's /packages entries.
+;; User classes come from the classpath: directories and jars.
 
 (defn- java-home
-  "JAVA_HOME, which must be a JDK that ships its jmods: since JEP 493 (JDK 24)
-  a JDK may be built without them, and Temurin's builds of 25 are."
+  "JAVA_HOME, which must hold a runtime image: every JDK since 9 does, and so
+  does a jlink-built runtime."
   []
   (let [h (or (env "JAVA_HOME") (throw (ex-info "JAVA_HOME is not set" {})))]
-    (when-not (.exists (io/file h "jmods" "java.base.jmod"))
-      (throw (ex-info (str "champaca reads the JDK's classes from $JAVA_HOME/jmods, and " h
-                           " has none: this JDK was built without them, as Temurin's builds of JDK 25 are."
-                           " Use one that ships them, such as an OpenJDK build from jdk.java.net,"
-                           " Oracle's JDK or GraalVM CE.")
+    (when-not (.isFile (io/file h "lib" "modules"))
+      (throw (ex-info (str "champaca reads the JDK's classes from $JAVA_HOME/lib/modules, and " h
+                           " has none. JAVA_HOME must be a JDK 25 (or a runtime jlink built from one).")
                       {:java-home h})))
     h))
 
 (defn- cache-root []
   (io/file (or (env "CHAMPACA_CACHE_DIR") (str (env "HOME") "/.cache/champaca"))))
 
-(defn- jmods-dir []
-  (let [release (io/file (java-home) "release")]
-    (io/file (cache-root) "jmods"
-             (Long/toHexString (bit-and (hash [(java-home) (when (.exists release) (slurp release))])
-                                        0xffffffff)))))
+(defn- jdk-image []
+  (or (:image @state)
+      ;; two threads may both open it: the first stored wins, and the other
+      ;; closes its file
+      (let [i (ji/open (io/file (java-home) "lib" "modules"))
+            kept (:image (swap! state update :image #(or % i)))]
+        (when-not (identical? kept i) (.close ^java.io.RandomAccessFile (:raf i)))
+        kept)))
 
-(declare jmod-zip-base)
-
-(defn- jmod-zip [module]
-  (or (get-in @state [:jmods module])
-      (let [out (io/file (jmods-dir) (str module ".zip"))]
-        (when-not (.exists out)
-          ;; copied beside, then renamed, so a concurrent run never opens half
-          (let [tmp (io/file (str out ".tmp-" (System/nanoTime)))]
-            (io/make-parents tmp)
-            (let [jm (io/file (java-home) "jmods" (str module ".jmod"))]
-              (with-open [in (io/input-stream jm)]
-                ;; from where its offsets count, so they hold in the copy
-                (.skip in (jmod-zip-base jm))
-                (io/copy in tmp)))
-            (when-not (.renameTo tmp out) (.delete tmp))))
-        (let [zf (ZipFile. (str out))]
-          (swap! state assoc-in [:jmods module] zf)
-          zf))))
-
-;; Which module holds a package comes from each jmod's zip central directory,
-;; read in place so no module is copied just to be searched. jlink writes no
-;; zip comment, so the end-of-directory record is the file's last 22 bytes.
-;; The index is saved beside the copies.
-
-(defn- le16 [b i] (bit-or (bit-and (aget b i) 0xff) (bit-shift-left (bit-and (aget b (inc i)) 0xff) 8)))
-(defn- le32 [b i] (bit-or (le16 b i) (bit-shift-left (le16 b (+ i 2)) 16)))
-
-;; skip is an lseek on the jolt pinned in deps.edn (jolt#1375); a released
-;; 0.8.22 reads the skipped bytes, slower but the same answer.
-(defn- read-at [f off n]
-  (with-open [in (java.io.FileInputStream. f)]
-    (.skip in off)
-    (let [b (byte-array n)]
-      (loop [got 0]
-        (if (< got n)
-          (let [r (.read in b got (- n got))]
-            (if (neg? r) (throw (ex-info "short read" {:file (str f) :offset off :wanted n})) (recur (+ got r))))
-          b)))))
-
-(defn- jmod-eocd [f]
-  (let [eocd (read-at f (- (.length f) 22) 22)]
-    (when-not (= 0x06054b50 (le32 eocd 0))
-      (throw (ex-info "jmod has no plain end-of-directory record" {:file (str f)})))
-    eocd))
-
-;; A jmod is a 4-byte header and then a zip. The JDK's jmod tool counts the
-;; zip's offsets from the end of the header, but not every build does: 30 of
-;; GraalVM CE 25.0.1's 84 jmods count them from the start of the file. The
-;; base is whichever puts the central directory's signature at its offset.
-(defn- jmod-zip-base [f]
-  (let [off (le32 (jmod-eocd f) 16)
-        cd-at? (fn [base] (= 0x02014b50 (le32 (read-at f (+ base off) 4) 0)))]
-    (cond (cd-at? 4) 4
-          (cd-at? 0) 0
-          :else (throw (ex-info "jmod's central directory is not where its end record says"
-                                {:file (str f) :offset off})))))
-
-(defn- jmod-packages
-  "The packages with classes in one jmod, as \"java/util/zip\"."
-  [f]
-  (let [eocd (jmod-eocd f)
-        size (le32 eocd 12)
-        cd (read-at f (+ (jmod-zip-base f) (le32 eocd 16)) size)]
-    (loop [i 0 acc (transient #{})]
-      (if (>= i size)
-        (persistent! acc)
-        (let [nl (le16 cd (+ i 28))
-              entry (String. cd (+ i 46) nl "UTF-8")
-              slash (str/last-index-of entry "/")]
-          (recur (+ i 46 nl (le16 cd (+ i 30)) (le16 cd (+ i 32)))
-                 (if (and (str/starts-with? entry "classes/") (str/ends-with? entry ".class") (> slash 7))
-                   (conj! acc (subs entry 8 slash))
-                   acc)))))))
-
-(defn- package-modules []
-  (or (:package-modules @state)
-      (let [f (io/file (jmods-dir) "packages.edn")
-            idx (if (.exists f)
-                  (edn/read-string (slurp f))
-                  (let [idx (into {}
-                                  (for [jm (.listFiles (io/file (java-home) "jmods"))
-                                        :let [n (.getName jm)]
-                                        :when (str/ends-with? n ".jmod")
-                                        pkg (jmod-packages jm)]
-                                    [pkg (subs n 0 (- (count n) 5))]))
-                        tmp (io/file (str f ".tmp-" (System/nanoTime)))]
-                    (io/make-parents tmp)
-                    (spit tmp (pr-str idx))
-                    (when-not (.renameTo tmp f) (.delete tmp))
-                    idx))]
-        (swap! state assoc :package-modules idx)
-        idx)))
+(defn- package-module
+  "The JDK module holding package dir (\"java/util/zip\"), or nil, looked up
+  once per package."
+  [dir]
+  (let [m (:package-modules @state)]
+    (if (contains? m dir)
+      (get m dir)
+      (let [mod (ji/package-module (jdk-image) dir)]
+        (swap! state assoc-in [:package-modules dir] mod)
+        mod))))
 
 (defn- read-entry [zf entry-name]
   (when-let [e (.getEntry zf entry-name)]
@@ -252,8 +171,8 @@
 
 (defn- jdk-class-bytes [cname]
   (when-let [slash (str/last-index-of cname "/")]
-    (when-let [module (get (package-modules) (subs cname 0 slash))]
-      (read-entry (jmod-zip module) (str "classes/" cname ".class")))))
+    (when-let [module (package-module (subs cname 0 slash))]
+      (ji/entry (jdk-image) (str "/" module "/" cname ".class")))))
 
 (defn- class-bytes [cname]
   (or (user-class-bytes cname) (jdk-class-bytes cname)))
@@ -268,15 +187,12 @@
         (:classpath @state)))
 
 (defn- jdk-resource-bytes
-  "path from the module owning the nearest enclosing package. The index
-  lists packages with classes, and a resource directory (ICU's data, say)
-  may have none of its own."
+  "path from the module holding its directory. The image counts a directory
+  of resources alone as a package, so ICU's data has a module too."
   [path]
-  (loop [dir (some->> (str/last-index-of path "/") (subs path 0))]
-    (when dir
-      (or (when-let [module (get (package-modules) dir)]
-            (read-entry (jmod-zip module) (str "classes/" path)))
-          (recur (some->> (str/last-index-of dir "/") (subs dir 0)))))))
+  (when-let [slash (str/last-index-of path "/")]
+    (when-let [module (package-module (subs path 0 slash))]
+      (ji/entry (jdk-image) (str "/" module "/" path)))))
 
 (defn- plain-resource-path?
   "A resource name that stays inside its classpath entry: no empty, . or ..
@@ -523,7 +439,7 @@
                (or (= decl caller-cname) (= :jdk (:origin info)))
                (not (overridden? decl im)))
       ;; only a class already parsed in this run: reading one again from
-      ;; its jmod costs a warm start more than the inlining saves
+      ;; the image costs a warm start more than the inlining saves
       (when-let [p (if (= decl caller-cname) (parsed decl) (:parsed info))]
         {:cls p :method (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))}))))
 
@@ -809,15 +725,15 @@
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
                         (concat runtime-files
-                                ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj"])))))
+                                ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"])))))
 
 (defn- cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
-    (let [jmod (io/file (java-home) "jmods" "java.base.jmod")
+    (let [modules (io/file (java-home) "lib" "modules")
           release (io/file (java-home) "release")
           ;; CHAMPACA_BT changes the generated code (shadow-stack wrappers that
           ;; hide frame names from getCallerClass), so it gets its own cache
-          key (hash [(when (.exists release) (slurp release)) (.length jmod) (.lastModified jmod)
+          key (hash [(when (.exists release) (slurp release)) (.length modules) (.lastModified modules)
                      (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT"))])]
       (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
 
@@ -852,7 +768,8 @@
 ;; A key directory is left behind whenever its key changes (a translator edit,
 ;; a JDK update), so writing a new one removes siblings no run has loaded for a
 ;; week: a hit touches its directory. Other live keys (CHAMPACA_BT, a second
-;; JDK) stay as long as something uses them. jmods/ and jolt/ never match.
+;; JDK) stay as long as something uses them. jolt/ never matches, nor does
+;; jmods/, where older versions kept copies of the JDK's jmods.
 ;; The age rule alone is not enough on a machine where the translator itself
 ;; is edited: every edit is a new key, none a week old, and a day of work
 ;; leaves gigabytes. So the newest few keys survive and the rest go, however

@@ -1,12 +1,12 @@
-# Linux for champaca: OpenJDK 25.0.2 with its jmods (the build this repo's
-# .expected files come from), babashka, and what building jolt from source
+# Linux for champaca: OpenJDK 25.0.2 (the build this repo's .expected files
+# come from), babashka, and what building jolt from source
 # needs (jolt's own make provisions its Chez Scheme). Every download is pinned
 # by SHA-256. Build it with `bb linux:image [arm64|amd64]`, not plain `docker
 # build`: that task fetches the JDK and passes its file name and checksum.
 #
 # The JDK comes from the build context (ci/linux/cache/, which `bb linux:image`
-# fills) because Temurin's builds of 25 ship no jmods and the proxy some
-# machines sit behind refuses download.java.net from inside a container.
+# fills) because the proxy some machines sit behind refuses download.java.net
+# from inside a container.
 # Archives are unpacked with bsdtar: GNU tar on Ubuntu 26.04 fails under x86_64
 # emulation on Apple silicon ("Cannot open: Function not implemented").
 FROM ubuntu:26.04
@@ -27,7 +27,7 @@ RUN --mount=type=bind,source=cache,target=/tmp/jdk \
     test -n "$JDK_FILE" && test -n "$JDK_SHA256" \
  && echo "$JDK_SHA256  /tmp/jdk/$JDK_FILE" | sha256sum -c - \
  && mkdir -p /opt/jdk && bsdtar -xzf "/tmp/jdk/$JDK_FILE" -C /opt/jdk --strip-components 1 \
- && test -f /opt/jdk/jmods/java.base.jmod
+ && test -f /opt/jdk/lib/modules
 ENV JAVA_HOME=/opt/jdk
 ENV PATH=/opt/jdk/bin:$PATH
 
