@@ -35,6 +35,16 @@ public class NpeCheck {
     static int getter(NpeCheck n) { return n.count; }
     static int deep(NpeCheck n) { return n.next.next.name.length(); }
     static String concat(StringBuilder sb, Object[] xs) { return sb.append("x").toString(); }
+    int[] ints;
+    Object obj;
+    int mixed(boolean c) { return (c ? ints : obj).hashCode(); }
+    // p is written later in the loop, but HotSpot's analysis reaches the call
+    // before the write and never revisits it, so p is still <parameter1>
+    static int loopParam(String p, int n) {
+        int t = 0;
+        for (int i = 0; i < n; i++) { t += p.length(); p = null; }
+        return t;
+    }
 
     public static void main(String[] args) throws Exception {
         run("local invoke", () -> { String s = nothing(); s.length(); });
@@ -79,6 +89,20 @@ public class NpeCheck {
             switch (st) { case NEW: System.out.println("new"); break; default: System.out.println("d"); }
         });
         run("for each", () -> { List<String> l = null; for (String s : l) System.out.println(s); });
+        run("mixed ternary", () -> new NpeCheck().mixed(true));
+        run("loop parameter", () -> loopParam("ab", 2));
+        run("in catch", () -> {
+            try { throw new IllegalStateException(); }
+            catch (IllegalStateException e) { String s = nothing(); s.length(); }
+        });
+        run("caught exception", () -> {
+            try { throw new IllegalStateException(); }
+            catch (IllegalStateException e) { e.getCause().getMessage(); }
+        });
+        run("assignment chain", () -> { NpeCheck n = null; String r = (n.name = nothing()); System.out.println(r); });
+        run("long assignment chain", () -> { NpeHolder h = null; long r = (h.big = 5L); System.out.println(r); });
+        run("array assignment chain", () -> { Object[] a = null; Object r = (a[0] = "x"); System.out.println(r); });
+        run("long array assignment chain", () -> { long[] a = null; long r = (a[0] = 5L); System.out.println(r); });
         run("explicit", () -> { throw new NullPointerException(); });
         run("explicit message", () -> { throw new NullPointerException("given"); });
         run("requireNonNull", () -> Objects.requireNonNull(null));

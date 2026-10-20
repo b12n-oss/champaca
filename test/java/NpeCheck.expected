@@ -34,6 +34,14 @@ merged local: Cannot invoke "String.length()" because "<local1>" is null
 string switch: Cannot invoke "String.hashCode()" because "<local1>" is null
 enum switch: Cannot invoke "java.lang.Thread$State.ordinal()" because "<local0>" is null
 for each: Cannot invoke "java.util.List.iterator()" because "<local0>" is null
+mixed ternary: Cannot invoke "Object.hashCode()"
+loop parameter: Cannot invoke "String.length()" because "<parameter1>" is null
+in catch: Cannot invoke "String.length()" because "<local1>" is null
+caught exception: Cannot invoke "java.lang.Throwable.getMessage()" because the return value of "java.lang.IllegalStateException.getCause()" is null
+assignment chain: Cannot assign field "name" because "<local0>" is null
+long assignment chain: Cannot assign field "big" because "<local0>" is null
+array assignment chain: Cannot store to object array because "<local0>" is null
+long array assignment chain: Cannot store to long array because "<local0>" is null
 explicit: null
 explicit message: given
 requireNonNull: null
