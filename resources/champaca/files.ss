@@ -332,17 +332,27 @@
 
 ;; open for java.io: FileNotFoundException with the reason, and a directory
 ;; refused as the JDK refuses it. Opening a FIFO waits for the other end, so
-;; every open goes without the GIL, its path a C string of its own.
+;; that open goes without the GIL, its path a C string of its own; any other
+;; keeps it, since releasing it on every open made opens a quarter slower.
+;; Without struct stat every open is treated as a FIFO's.
+(define s-ififo #o010000)
+(define (fifo-mode? r) (or (< r 0) (fx= (mode-type (stat-mode fs-stat-buf)) s-ififo)))
+(define (path-fifo? path)
+  (or (not fs-stat-layout?) (fifo-mode? (libc-stat-string path fs-stat-buf))))
+(define (cpath-fifo? cpath)
+  (or (not fs-stat-layout?) (fifo-mode? (libc-stat cpath fs-stat-buf))))
 (define (string->c-string s)
   (let* ([bv (string->utf8 s)] [n (bytevector-length bv)] [p (foreign-alloc (fx+ n 1))])
     (do ([i 0 (fx+ i 1)]) ((fx= i n)) (foreign-set! 'unsigned-8 p i (bytevector-u8-ref bv i)))
     (foreign-set! 'unsigned-8 p n 0)
     p))
 (define (java-io-open path flags)
-  (let ([fd (let ([cpath (string->c-string path)])
-              (let ([r (released-call (lambda () (libc-open-blocking cpath flags #o666)))])
-                (foreign-free cpath)
-                r))])
+  (let ([fd (if (path-fifo? path)
+                (let* ([cpath (string->c-string path)]
+                       [r (released-call (lambda () (libc-open-blocking cpath flags #o666)))])
+                  (foreign-free cpath)
+                  r)
+                (restartable (lambda () (libc-open-string path flags #o666))))])
     (when (< fd 0) (file-not-found path))
     (when (file-directory? path)
       (libc-close fd)
@@ -576,7 +586,9 @@
 (defund "dup(I)I" (fd) (unix-check (libc-dup fd)))
 ;; path is the caller's native memory; a FIFO's open waits for the other end
 (defund "open0(JII)I" (path flags mode)
-  (unix-check (released-call (lambda () (libc-open-blocking path flags mode)))))
+  (unix-check (if (cpath-fifo? path)
+                  (released-call (lambda () (libc-open-blocking path flags mode)))
+                  (restartable (lambda () (libc-open path flags mode))))))
 (defund "close0(I)V" (fd)
   (when (and (fx> fd 2) (< (libc-close fd) 0) (not (fx= (errno) 4))) (unix-error)))
 ;; buf is the caller's native memory, which stays put while the GIL is away
