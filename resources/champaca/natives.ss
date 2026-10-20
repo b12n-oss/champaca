@@ -619,6 +619,21 @@
         (set! gil-owner #f)
         (condition-broadcast gil-cv)))))
 
+;; Run thunk without the GIL, for a call that may wait in C indefinitely (a
+;; pipe or terminal read, files.ss): other Java threads run meanwhile. The
+;; thunk must not touch Java objects or runtime state. The GIL is taken back
+;; before anything leaves, a raise included.
+(define (gil-released thunk)
+  (let ([s (self)])
+    (gil-save! s)
+    (with-mutex gil
+      (set! gil-owner #f)
+      (condition-broadcast gil-cv))
+    (let ([retake (lambda () (with-mutex gil (gil-wait! s (lambda () #t) #f)) (gil-restore! s))])
+      (let ([r (guard (e [#t (retake) (raise e)]) (thunk))])
+        (retake)
+        r))))
+
 ;; Tell blocked threads to look again at what they wait for.
 (define (gil-poke!)
   (when (fx> gil-blocked 0)

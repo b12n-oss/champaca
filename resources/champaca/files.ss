@@ -167,6 +167,55 @@
     (let ([r (thunk)])
       (if (and (< r 0) (fx= (errno) 4)) (loop) r))))
 (define (errno-clear!) (foreign-set! 'int (libc-errno-location) 0 0))
+
+;; --- calls that may wait, with the GIL given up -----------------------------------
+;; A read from a pipe, a terminal or a FIFO, a write to a full pipe and a
+;; blocking file lock can wait indefinitely. Holding the GIL through one would
+;; stop every other Java thread, so these give it up (gil-released,
+;; natives.ss) and go through __collect_safe entries, which let other threads
+;; collect while this one waits in C. Such a call touches no Java object and
+;; not fs-scratch, which the GIL guards: it has a buffer of its own. Reads and
+;; writes on a regular file keep the GIL, since they don't wait on anything.
+(define-syntax deflibc-blocking
+  (syntax-rules ()
+    [(_ id name (arg ...) ret)
+     (define id
+       (if (and fs-libc-loaded (foreign-entry? name))
+           (foreign-procedure __collect_safe name (arg ...) ret)
+           (lambda xs (jthrow "java/lang/UnsupportedOperationException" (string-append "libc has no " name)))))]))
+(deflibc-blocking libc-read-blocking "read" (int uptr size_t) ssize_t)
+(deflibc-blocking libc-write-blocking "write" (int uptr size_t) ssize_t)
+(define libc-open-blocking
+  (if (and fs-libc-loaded (foreign-entry? "open"))
+      (foreign-procedure __collect_safe (__varargs_after 2) "open" (uptr int int) int)
+      (lambda xs (jthrow "java/lang/UnsupportedOperationException" "libc has no open"))))
+(define libc-fcntl-lock-blocking
+  (if (and fs-libc-loaded (foreign-entry? "fcntl"))
+      (foreign-procedure __collect_safe (__varargs_after 2) "fcntl" (int int uptr) int)
+      (lambda xs (jthrow "java/lang/UnsupportedOperationException" "libc has no fcntl"))))
+
+(define (fd-may-wait? fd) (not (fd-regular? fd)))
+
+;; (call) without the GIL, again while it fails with EINTR; the result, with
+;; errno as the call left it, read before the GIL is taken back
+(define (released-call call)
+  (let ([r+e (gil-released
+              (lambda ()
+                (let loop ()
+                  (let ([r (call)])
+                    (if (< r 0)
+                        (let ([e (errno)]) (if (fx= e 4) (loop) (cons r e)))
+                        (cons r 0))))))])
+    (when (< (car r+e) 0) (foreign-set! 'int (libc-errno-location) 0 (cdr r+e)))
+    (car r+e)))
+
+;; up to n bytes from fd into a fresh foreign buffer, given to (k buf r)
+(define (released-read fd n k)
+  (let ([buf (foreign-alloc (fxmax n 1))])
+    (guard (e [#t (foreign-free buf) (raise e)])
+      (let ([v (k buf (released-call (lambda () (libc-read-blocking fd buf n))))])
+        (foreign-free buf)
+        v))))
 (define (strerror-text e) (libc-strerror e))
 
 (define (need-layout what)
@@ -248,22 +297,32 @@
     (jthrow "java/lang/IndexOutOfBoundsException" #f)))
 
 (define (fd-read-into fd arr off n)
-  (let* ([want (fxmin n 4096)] [r (restartable (lambda () (libc-read fd fs-scratch want)))])
-    (when (< r 0) (io-error "Read error"))
-    (let ([v (jarr-vec arr)])
-      (do ([i 0 (fx+ i 1)]) ((fx= i r) r)
-        (vector-set! v (fx+ off i) (i2b (foreign-ref 'unsigned-8 fs-scratch i)))))))
+  (let ([want (fxmin n 4096)]
+        [copy (lambda (buf r)
+                (when (< r 0) (io-error "Read error"))
+                (let ([v (jarr-vec arr)])
+                  (do ([i 0 (fx+ i 1)]) ((fx= i r) r)
+                    (vector-set! v (fx+ off i) (i2b (foreign-ref 'unsigned-8 buf i))))))])
+    (if (fd-may-wait? fd)
+        (released-read fd want copy)
+        (copy fs-scratch (restartable (lambda () (libc-read fd fs-scratch want)))))))
 
 (define (fd-write-from fd arr off n)
-  (let ([v (jarr-vec arr)])
-    (let loop ([done 0])
-      (when (fx< done n)
-        (let ([k (fxmin (fx- n done) 4096)])
-          (do ([i 0 (fx+ i 1)]) ((fx= i k))
-            (foreign-set! 'unsigned-8 fs-scratch i (fxlogand (vector-ref v (fx+ off done i)) #xff)))
-          (let ([w (restartable (lambda () (libc-write fd fs-scratch k)))])
-            (when (< w 0) (io-error "Write error"))
-            (loop (fx+ done w))))))))
+  (let* ([v (jarr-vec arr)]
+         [wait? (fd-may-wait? fd)]
+         [buf (if wait? (foreign-alloc 4096) fs-scratch)])
+    (guard (e [#t (when wait? (foreign-free buf)) (raise e)])
+      (let loop ([done 0])
+        (when (fx< done n)
+          (let ([k (fxmin (fx- n done) 4096)])
+            (do ([i 0 (fx+ i 1)]) ((fx= i k))
+              (foreign-set! 'unsigned-8 buf i (fxlogand (vector-ref v (fx+ off done i)) #xff)))
+            (let ([w (if wait?
+                         (released-call (lambda () (libc-write-blocking fd buf k)))
+                         (restartable (lambda () (libc-write fd buf k))))])
+              (when (< w 0) (io-error "Write error"))
+              (loop (fx+ done w))))))
+      (when wait? (foreign-free buf)))))
 
 ;; fds 0-2 stay open: Chez's own ports use them. A failed close is reported,
 ;; except EINTR, after which the fd is gone anyway.
@@ -272,9 +331,18 @@
     (io-error "close failed")))
 
 ;; open for java.io: FileNotFoundException with the reason, and a directory
-;; refused as the JDK refuses it
+;; refused as the JDK refuses it. Opening a FIFO waits for the other end, so
+;; every open goes without the GIL, its path a C string of its own.
+(define (string->c-string s)
+  (let* ([bv (string->utf8 s)] [n (bytevector-length bv)] [p (foreign-alloc (fx+ n 1))])
+    (do ([i 0 (fx+ i 1)]) ((fx= i n)) (foreign-set! 'unsigned-8 p i (bytevector-u8-ref bv i)))
+    (foreign-set! 'unsigned-8 p n 0)
+    p))
 (define (java-io-open path flags)
-  (let ([fd (restartable (lambda () (libc-open-string path flags #o666)))])
+  (let ([fd (let ([cpath (string->c-string path)])
+              (let ([r (released-call (lambda () (libc-open-blocking cpath flags #o666)))])
+                (foreign-free cpath)
+                r))])
     (when (< fd 0) (file-not-found path))
     (when (file-directory? path)
       (libc-close fd)
@@ -289,12 +357,22 @@
 (defnative "java/io/FileInputStream.open0(Ljava/lang/String;)V" (this name)
   (fdo-fd-set! (holder-fdo this fis) (java-io-open (jstring->scheme (nn name)) (fs-const "O_RDONLY"))))
 
+;; Standard input is read through Chez's port, without the GIL (a console
+;; read waits for the user), one reader at a time since the port has no lock
+;; of its own.
+(define stdin-mutex (make-mutex))
+(define (stdin-read proc)
+  (gil-released (lambda () (with-mutex stdin-mutex (proc (standard-input-port))))))
+
 (defnative "java/io/FileInputStream.read0()I" (this)
   (let ([fd (holder-fd this fis)])
     (if (fx= fd 0)
-        (let ([b (get-u8 (standard-input-port))]) (if (eof-object? b) -1 b))
-        (let ([r (restartable (lambda () (libc-read fd fs-scratch 1)))])
-          (cond [(< r 0) (io-error "Read error")] [(fx= r 0) -1] [else (foreign-ref 'unsigned-8 fs-scratch 0)])))))
+        (let ([b (stdin-read get-u8)]) (if (eof-object? b) -1 b))
+        (let ([one (lambda (buf r)
+                     (cond [(< r 0) (io-error "Read error")] [(fx= r 0) -1] [else (foreign-ref 'unsigned-8 buf 0)]))])
+          (if (fd-may-wait? fd)
+              (released-read fd 1 one)
+              (one fs-scratch (restartable (lambda () (libc-read fd fs-scratch 1)))))))))
 
 (defnative "java/io/FileInputStream.readBytes([BII)I" (this bytes off len)
   (check-bounds bytes off len)
@@ -303,7 +381,7 @@
       [(fx= len 0) 0]
       [(fx= fd 0)
        ;; whatever is available, up to len, so a console read returns a line
-       (let* ([bv (make-bytevector len)] [n (get-bytevector-some! (standard-input-port) bv 0 len)])
+       (let* ([bv (make-bytevector len)] [n (stdin-read (lambda (p) (get-bytevector-some! p bv 0 len)))])
          (if (eof-object? n)
              -1
              (let ([v (jarr-vec bytes)])
@@ -496,11 +574,21 @@
   (let ([s (string->utf8 (strerror-text e))])
     (make-jarr "B" (list->vector (map i2b (bytevector->u8-list s))))))
 (defund "dup(I)I" (fd) (unix-check (libc-dup fd)))
-(defund "open0(JII)I" (path flags mode) (unix-check (restartable (lambda () (libc-open path flags mode)))))
+;; path is the caller's native memory; a FIFO's open waits for the other end
+(defund "open0(JII)I" (path flags mode)
+  (unix-check (released-call (lambda () (libc-open-blocking path flags mode)))))
 (defund "close0(I)V" (fd)
   (when (and (fx> fd 2) (< (libc-close fd) 0) (not (fx= (errno) 4))) (unix-error)))
-(defund "read0(IJI)I" (fd buf n) (unix-check (restartable (lambda () (libc-read fd buf n)))))
-(defund "write0(IJI)I" (fd buf n) (console-flush fd) (unix-check (restartable (lambda () (libc-write fd buf n)))))
+;; buf is the caller's native memory, which stays put while the GIL is away
+(defund "read0(IJI)I" (fd buf n)
+  (unix-check (if (fd-may-wait? fd)
+                  (released-call (lambda () (libc-read-blocking fd buf n)))
+                  (restartable (lambda () (libc-read fd buf n))))))
+(defund "write0(IJI)I" (fd buf n)
+  (console-flush fd)
+  (unix-check (if (fd-may-wait? fd)
+                  (released-call (lambda () (libc-write-blocking fd buf n)))
+                  (restartable (lambda () (libc-write fd buf n))))))
 (defund "link0(JJ)V" (a b) (unix-check (libc-link a b)))
 (defund "unlink0(J)V" (p) (unix-check (libc-unlink p)))
 (defund "rename0(JJ)V" (a b) (unix-check (libc-rename a b)))
@@ -658,13 +746,29 @@
 (define (write-status r what)
   (if (fx>= r 0) r (io-status r what)))
 
+;; read and write on fd, without the GIL when fd may wait; addr is native
+;; memory the caller holds, so it stays put meanwhile. EINTR comes back as
+;; -3, as the JDK's natives answer it, so the caller decides about retrying.
+(define (fd-read fd addr n)
+  (if (fd-may-wait? fd)
+      (released-call* (lambda () (libc-read-blocking fd addr n)))
+      (libc-read fd addr n)))
+(define (fd-write fd addr n)
+  (if (fd-may-wait? fd)
+      (released-call* (lambda () (libc-write-blocking fd addr n)))
+      (libc-write fd addr n)))
+(define (released-call* call)
+  (let ([r+e (gil-released (lambda () (let ([r (call)]) (cons r (if (< r 0) (errno) 0)))))])
+    (when (< (car r+e) 0) (foreign-set! 'int (libc-errno-location) 0 (cdr r+e)))
+    (car r+e)))
+
 (defufd "read0(Ljava/io/FileDescriptor;JI)I" (fdo addr n)
-  (if (fx= n 0) 0 (io-status (libc-read (fdo-fd fdo) addr n) "Read failed")))
+  (if (fx= n 0) 0 (io-status (fd-read (fdo-fd fdo) addr n) "Read failed")))
 (defufd "pread0(Ljava/io/FileDescriptor;JIJ)I" (fdo addr n pos)
   (if (fx= n 0) 0 (io-status (libc-pread (fdo-fd fdo) addr n pos) "Read failed")))
 (defufd "write0(Ljava/io/FileDescriptor;JI)I" (fdo addr n)
   (console-flush (fdo-fd fdo))
-  (write-status (libc-write (fdo-fd fdo) addr n) "Write failed"))
+  (write-status (fd-write (fdo-fd fdo) addr n) "Write failed"))
 ;; scattering and gathering: an array of n struct iovec {base, len}, done one
 ;; at a time; a short transfer ends it as readv/writev would
 (define (iov-loop fdo addr n op)
@@ -677,10 +781,10 @@
                 [(< r len) (+ total r)]
                 [else (loop (fx+ i 1) (+ total r))])))))
 (defufd "readv0(Ljava/io/FileDescriptor;JI)J" (fdo addr n)
-  (io-status (iov-loop fdo addr n libc-read) "Read failed"))
+  (io-status (iov-loop fdo addr n fd-read) "Read failed"))
 (defufd "writev0(Ljava/io/FileDescriptor;JI)J" (fdo addr n)
   (console-flush (fdo-fd fdo))
-  (write-status (iov-loop fdo addr n libc-write) "Write failed"))
+  (write-status (iov-loop fdo addr n fd-write) "Write failed"))
 (defufd "pwrite0(Ljava/io/FileDescriptor;JIJ)I" (fdo addr n pos)
   (write-status (libc-pwrite (fdo-fd fdo) addr n pos) "Write failed"))
 ;; a negative offset asks for the position
@@ -730,15 +834,23 @@
 
 ;; locks through fcntl and this system's struct flock. FileDispatcher: 0
 ;; locked, -1 not, 2 interrupted. cmd and type are layout names (F_SETLK ...).
+;; F_SETLKW waits for another process's lock, so it goes without the GIL,
+;; with a struct flock of its own.
 (define (fcntl-lock fd cmd type pos size)
   (need-layout "file locks")
-  (do ([i 0 (fx+ i 1)]) ((fx= i 32)) (foreign-set! 'unsigned-8 fs-scratch i 0))
-  (fs-set! fs-scratch 'flock-start pos)
-  ;; Long.MAX_VALUE means to the end of the file, as l_len 0 does
-  (fs-set! fs-scratch 'flock-len (if (= size #x7fffffffffffffff) 0 size))
-  (fs-set! fs-scratch 'flock-type (fs-off type))
-  (fs-set! fs-scratch 'flock-whence seek-set)
-  (libc-fcntl-lock fd (fs-off cmd) fs-scratch))
+  (let* ([wait? (eq? cmd 'F_SETLKW)]
+         [buf (if wait? (foreign-alloc 64) fs-scratch)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i 32)) (foreign-set! 'unsigned-8 buf i 0))
+    (fs-set! buf 'flock-start pos)
+    ;; Long.MAX_VALUE means to the end of the file, as l_len 0 does
+    (fs-set! buf 'flock-len (if (= size #x7fffffffffffffff) 0 size))
+    (fs-set! buf 'flock-type (fs-off type))
+    (fs-set! buf 'flock-whence seek-set)
+    (if wait?
+        (let ([r (released-call* (lambda () (libc-fcntl-lock-blocking fd (fs-off cmd) buf)))])
+          (foreign-free buf)
+          r)
+        (libc-fcntl-lock fd (fs-off cmd) buf))))
 (defufd "lock0(Ljava/io/FileDescriptor;ZJJZ)I" (fdo blocking pos size shared)
   (if (fx= 0 (fcntl-lock (fdo-fd fdo) (if (eqv? blocking 1) 'F_SETLKW 'F_SETLK) (if (eqv? shared 1) 'F_RDLCK 'F_WRLCK) pos size))
       0
