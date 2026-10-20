@@ -52,5 +52,5 @@ The startup cache makes boot quick, and plain computation now runs within a few 
 - `sun.misc.Unsafe` runs with `sun.misc.unsafe.memory.access=allow`, because the default warning finds its caller through `StackWalker`, which has no natives yet.
 - No `module-info` checks and no export rules: every class sits in one unnamed module.
 - Stack traces under `CHAMPACA_BT` name methods by descriptor and have no line numbers.
-- A `NullPointerException` the JVM would describe has a `null` message: where the JVM says `Cannot invoke "String.length()" because "<local1>" is null`, champaca says nothing, because `getExtendedNPEMessage` needs the JVM's analysis of the failing bytecode. Messages champaca's own runtime code builds, such as the array ones, do match.
+- A `NullPointerException` raised in champaca's own Scheme code, which stands in for some of the JDK's Java (the method handle layer, for one), has a `null` message where the JVM's might describe the failing bytecode. One the program's or the JDK's bytecode raises carries the JVM's message, such as `Cannot invoke "String.length()" because "<local1>" is null` (`test/java/NpeCheck.java`).
 

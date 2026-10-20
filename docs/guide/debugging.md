@@ -60,7 +60,7 @@ The JDK declares many of its methods `native` and leaves them to the JVM. Champa
 champaca: missing native java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;
 ```
 
-That one was real; this guide turned it up. The fix was one line:
+That one was real; this guide turned it up. The first fix was one line, answering null, which is what HotSpot answers when it has nothing to say (the JVM's full message came later, in `npe.clj`):
 
 ```scheme
 (defnative "java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;" (this) #f)

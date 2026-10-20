@@ -118,6 +118,8 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 | `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
 | `src/champaca/main.clj` | loads classes from the classpath (directories and jars) or the JDK's runtime image, lays out fields, builds vtables (interface defaults included), boots the JDK |
 | `src/champaca/api.clj` | the jolt-facing API |
+| `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
+| `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (a port of HotSpot's) |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
 | `resources/champaca/natives.ss` | JDK native methods (121 named, plus pattern rules for `Unsafe`), resources, a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
