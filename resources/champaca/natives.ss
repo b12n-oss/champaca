@@ -174,7 +174,8 @@
 (defnative "java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;" (this)
   (let ([site (eq-hashtable-ref npe-sites this #f)])
     (and site npe-hook
-         (let ([m (npe-hook (symbol->string site))]) (and m (jstring m))))))
+         (let ([m (npe-hook (string-append (symbol->string (car site)) "@" (number->string (cdr site))))])
+           (and m (jstring m))))))
 
 ;; --- Unsafe -------------------------------------------------------------------------
 ;; An object field offset is its slot index; an array offset is the element

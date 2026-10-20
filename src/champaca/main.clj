@@ -14,7 +14,6 @@
             [champaca.classfile :as cf]
             [champaca.codegen :as cg]
             [champaca.jimage :as ji]
-            [champaca.npe :as npe]
             [jolt.image :as img])
   (:import [java.util.zip ZipFile]))
 
@@ -741,9 +740,10 @@
   ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"])
 
 ;; The text of a helpful NPE message, from the failing method's bytecode
-;; (champaca.npe). The class is parsed again with its local variable names,
-;; which a normal parse skips, so the work happens only when a message is
-;; asked for; a site always gives the same text, so it is kept.
+;; (champaca.npe, loaded on the first message so other runs don't pay for
+;; it). The class is parsed again with its local variable names, which a
+;; normal parse skips, so the work happens only when a message is asked
+;; for; a site always gives the same text, so it is kept.
 (defn- npe-message* [site]
   (let [at (str/last-index-of site "@")
         tag (subs site 0 at)
@@ -758,7 +758,7 @@
     (when (:code m)
       ;; HotSpot gives up silently on bytecode its analysis can't follow;
       ;; CHAMPACA_BT shows why this one did
-      (try (npe/message (:cp p) m bci)
+      (try ((requiring-resolve 'champaca.npe/message) (:cp p) m bci)
            (catch Exception e
              (when (env "CHAMPACA_BT")
                (binding [*out* *err*] (println "champaca: no NPE message for" site (ex-message e))))

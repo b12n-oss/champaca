@@ -215,9 +215,10 @@
 
 (defn- label [pc] (sym (str *method-tag* "#B" pc)))
 
-;; the instruction at pc as a quoted symbol, Class.name(desc)@pc: what a null
-;; check passes to npe-at so the NPE's message can be built from its bytecode
-(defn- site [pc] (str "'" (sym (str *method-tag* "@" pc))))
+;; what a null check passes to npe-at so the NPE's message can be built from
+;; its bytecode: npe-tag, the method's Class.name(desc), which each compiled
+;; method (an inlined callee too) binds once in its lambda, and the bci
+(defn- site [pc] (str "npe-tag " pc))
 
 (defn desc->t
   "Stack type of a field or return descriptor: I J F D or A."
@@ -890,8 +891,11 @@
                            (sx "lambda" "()" (sx "jmonitor-exit" "lock")))))
                  body*)]
       (sx "lambda" (apply sx (map #(str "l" %) params))
-          ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
-          (if (System/getenv "CHAMPACA_BT")
-            (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
-                body)
-            body)))))
+          ;; npe-tag, a constant Chez folds into each site that uses it,
+          ;; inside the lambda so the method stays a plain lambda to Chez
+          (sx "let" (sx (sx "npe-tag" (str "'" (sym *method-tag*))))
+              ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+              (if (System/getenv "CHAMPACA_BT")
+                (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                    body)
+                body))))))
