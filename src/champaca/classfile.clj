@@ -160,6 +160,25 @@
                    (fn [] {:name (:value (cp (u2 r)))
                            :info (take-bytes r (u4 r))}))))
 
+(def ^:dynamic *locals*
+  "When true, parse also reads each method's LocalVariableTable into
+  :locals, {:start :length :index :name} per entry. Only the helpful NPE
+  messages want it, so a normal parse skips it by length."
+  false)
+
+(defn- local-variable-table [r cp]
+  (let [n (u2 r)]
+    (loop [i 0 found nil]
+      (if (= i n)
+        found
+        (let [name (:value (cp (u2 r))) len (u4 r)]
+          (if (and (nil? found) (= "LocalVariableTable" name))
+            (recur (inc i) (vec (repeatedly (u2 r)
+                                            (fn [] (let [start (u2 r) length (u2 r) nm (:value (cp (u2 r)))
+                                                         _desc (u2 r) index (u2 r)]
+                                                     {:start start :length length :name nm :index index})))))
+            (do (vswap! (:pos r) + len) (recur (inc i) found))))))))
+
 (defn- parse-code [info cp]
   (let [r (reader info)
         max-stack (u2 r)
@@ -167,8 +186,10 @@
         code (take-bytes r (u4 r))
         handlers (vec (repeatedly (u2 r)
                                   (fn [] {:start (u2 r) :end (u2 r) :handler (u2 r)
-                                          :type (let [i (u2 r)] (when (pos? i) (:name (cp i))))})))]
-    {:max-stack max-stack :max-locals max-locals :code code :handlers handlers}))
+                                          :type (let [i (u2 r)] (when (pos? i) (:name (cp i))))})))
+        locals (when *locals* (local-variable-table r cp))]
+    (cond-> {:max-stack max-stack :max-locals max-locals :code code :handlers handlers}
+      locals (assoc :locals locals))))
 
 (defn- parse-bootstrap-methods [info]
   (let [r (reader info)]

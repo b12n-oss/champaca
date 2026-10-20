@@ -1,0 +1,50 @@
+local invoke: Cannot invoke "String.length()" because "<local0>" is null
+parameter: Cannot invoke "String.length()" because "<parameter1>" is null
+wide parameter: Cannot invoke "String.length()" because "<parameter3>" is null
+instance parameter: Cannot invoke "Object.hashCode()" because "<parameter1>" is null
+written parameter: Cannot invoke "String.length()" because "<local0>" is null
+this field: Cannot invoke "String.length()" because "name" is null
+static field: Cannot invoke "String.length()" because "NpeCheck.sf" is null
+static array field: Cannot load from int array because "NpeCheck.sints" is null
+return value: Cannot invoke "String.length()" because the return value of "NpeCheck.nothing()" is null
+chained return: Cannot invoke "NpeCheck.self()" because "NpeCheck.self().next" is null
+deep fields: Cannot read field "name" because "<parameter1>.next.next" is null
+read field: Cannot read field "count" because "<parameter1>" is null
+assign field: Cannot assign field "count" because "<local0>" is null
+assign long field: Cannot assign field "big" because "<local0>" is null
+int array load: Cannot load from int array because "<local0>" is null
+long array load: Cannot load from long array because "<local0>" is null
+byte array load: Cannot load from byte/boolean array because "<local0>" is null
+char array store: Cannot store to char array because "<local0>" is null
+double array store: Cannot store to double array because "<local0>" is null
+object array store: Cannot store to object array because "<local0>" is null
+array length: Cannot read the array length because "<local0>" is null
+array element: Cannot invoke "String.length()" because "<local0>[2]" is null
+array element sipush: Cannot invoke "String.length()" because "<local0>[300]" is null
+array element local index: Cannot invoke "String.length()" because "<local0>[<local1>]" is null
+array of arrays: Cannot load from int array because "<local0>[1]" is null
+field array element: Cannot invoke "Object.hashCode()" because "<local0>.items[1]" is null
+throw null: Cannot throw exception because "<local0>" is null
+synchronized null: Cannot enter synchronized block because "<local0>" is null
+unboxing: Cannot invoke "java.lang.Integer.intValue()" because "<local0>" is null
+interface call: Cannot invoke "java.util.List.size()" because "<local0>" is null
+parameter types: Cannot invoke "java.lang.StringBuilder.append(String)" because "<parameter1>" is null
+ternary: Cannot invoke "String.length()"
+merged local: Cannot invoke "String.length()" because "<local1>" is null
+string switch: Cannot invoke "String.hashCode()" because "<local1>" is null
+enum switch: Cannot invoke "java.lang.Thread$State.ordinal()" because "<local0>" is null
+for each: Cannot invoke "java.util.List.iterator()" because "<local0>" is null
+explicit: null
+explicit message: given
+requireNonNull: null
+requireNonNull message: must not be null
+jdk ArrayList: Cannot invoke "java.util.Collection.toArray()" because "c" is null
+jdk String.join: null
+jdk Optional: null
+jdk TreeMap: Cannot invoke "java.lang.Comparable.compareTo(Object)" because "k1" is null
+jdk lambda: null
+jdk stream: null
+java.lang.NullPointerException: Cannot invoke "String.isEmpty()" because "<local1>" is null
+same
+Cannot invoke "String.isEmpty()" because "<local1>" is null
+after fillInStackTrace: Cannot invoke "Object.toString()" because "<local2>" is null

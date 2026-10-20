@@ -14,6 +14,7 @@
             [champaca.classfile :as cf]
             [champaca.codegen :as cg]
             [champaca.jimage :as ji]
+            [champaca.npe :as npe]
             [jolt.image :as img])
   (:import [java.util.zip ZipFile]))
 
@@ -739,6 +740,38 @@
   "The Scheme runtime, in load order."
   ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"])
 
+;; The text of a helpful NPE message, from the failing method's bytecode
+;; (champaca.npe). The class is parsed again with its local variable names,
+;; which a normal parse skips, so the work happens only when a message is
+;; asked for; a site always gives the same text, so it is kept.
+(defn- npe-message* [site]
+  (let [at (str/last-index-of site "@")
+        tag (subs site 0 at)
+        bci (parse-long (subs site (inc at)))
+        paren (str/index-of tag "(")
+        dot (str/last-index-of tag "." paren)
+        cname (subs tag 0 dot)
+        mname (subs tag (inc dot) paren)
+        desc (subs tag paren)
+        p (binding [cf/*locals* true] (cf/parse (class-bytes cname)))
+        m (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (:methods p))]
+    (when (:code m)
+      ;; HotSpot gives up silently on bytecode its analysis can't follow;
+      ;; CHAMPACA_BT shows why this one did
+      (try (npe/message (:cp p) m bci)
+           (catch Exception e
+             (when (env "CHAMPACA_BT")
+               (binding [*out* *err*] (println "champaca: no NPE message for" site (ex-message e))))
+             nil)))))
+
+(defn- npe-message [site]
+  (let [cache (:npe-messages @state)]
+    (if (contains? cache site)
+      (get cache site)
+      (let [msg (npe-message* site)]
+        (swap! state assoc-in [:npe-messages site] msg)
+        msg))))
+
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
                         (concat runtime-files
@@ -935,6 +968,8 @@
                                ;; a lone surrogate's code units (classfile/decode-mutf8)
                                ;; go over as a Scheme vector, which jstring takes
                                (if (vector? v) (apply s/call "vector" v) v)))))
+  ;; helpful NPE messages: site "pkg/Cls.name(desc)@bci" -> text, or false
+  (s/call "set-npe-hook!" (fn [site] (or (npe-message site) false)))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
     (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))

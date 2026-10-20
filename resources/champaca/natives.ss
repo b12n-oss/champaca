@@ -165,9 +165,16 @@
   (eq-hashtable-set! throw-stacks this jstack)
   this)
 
-;; JEP 358's "Cannot invoke ... because ..." text needs the faulting bytecode;
-;; null is what HotSpot answers when it has none, so getMessage stays null
-(defnative "java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;" (this) #f)
+;; JEP 358's "Cannot invoke ... because ..." text, from the bytecode at the
+;; site npe-at recorded (runtime.ss), through a jolt callback (champaca.npe).
+;; An NPE without a site gets null, which is what HotSpot answers for one the
+;; program constructed itself.
+(define npe-hook #f)
+(define (set-npe-hook! f) (set! npe-hook f))
+(defnative "java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;" (this)
+  (let ([site (eq-hashtable-ref npe-sites this #f)])
+    (and site npe-hook
+         (let ([m (npe-hook (symbol->string site))]) (and m (jstring m))))))
 
 ;; --- Unsafe -------------------------------------------------------------------------
 ;; An object field offset is its slot index; an array offset is the element

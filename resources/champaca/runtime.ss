@@ -289,6 +289,22 @@
 
 (define (nn x) (if x x (jthrow "java/lang/NullPointerException" #f)))
 
+;; An NPE that generated code raises carries its site, the quoted symbol
+;; Class.name(desc)@bci, which appears in the failing branch only, so the
+;; fast path pays nothing. getExtendedNPEMessage (natives.ss) builds the
+;; JVM's message from the site's bytecode. Any other NPE has no site and
+;; keeps a null message.
+(define npe-sites (make-weak-eq-hashtable))
+(define (npe-at site)
+  (jinit "java/lang/NullPointerException")
+  (let ([e (jnew "java/lang/NullPointerException")])
+    ((method-proc "java/lang/NullPointerException" "<init>()V") e)
+    (eq-hashtable-set! npe-sites e site)
+    (raise e)))
+(define-syntax nn-at
+  (syntax-rules () [(_ x site) (let ([o x]) (if o o (npe-at site)))]))
+(define (jathrow-at x site) (raise (nn-at x site)))
+
 (define (jcheckcast x target)
   (if (or (not x) (jinstance? x target))
       x
@@ -352,11 +368,11 @@
 ;; procedure that replaces it is what the site should keep.
 (define-syntax jvirt-ic
   (syntax-rules ()
-    [(_ ic x key)
+    [(_ ic x key site)
      (let ([o x])
        (if (and (jobj? o) (eq? (jobj-cls o) (car ic)))
            (cdr ic)
-           (jvirt-miss ic o key)))]))
+           (if o (jvirt-miss ic o key) (npe-at site))))]))
 (define (jvirt-miss ic o key)
   (let ([proc (jvirt o key)])
     (when (and (jobj? o) (not (eq-hashtable-contains? stub-procs proc)))
@@ -431,28 +447,29 @@
 (define (jarraylength a) (vector-length (jarr-vec (nn a))))
 
 ;; Generated code's field and array access, inline: a call to jslot or jaload
-;; costs more than the access itself. A null object throws as nn does.
+;; costs more than the access itself. A null object throws through npe-at
+;; with the site's symbol.
 (define-syntax field-ref
-  (syntax-rules () [(_ x i) (let ([o x]) (if o (vector-ref (jobj-slots o) i) (nn o)))]))
+  (syntax-rules () [(_ x i site) (let ([o x]) (if o (vector-ref (jobj-slots o) i) (npe-at site)))]))
 (define-syntax field-set!
-  (syntax-rules () [(_ x i v) (let ([o x]) (if o (vector-set! (jobj-slots o) i v) (nn o)))]))
+  (syntax-rules () [(_ x i v site) (let ([o x]) (if o (vector-set! (jobj-slots o) i v) (npe-at site)))]))
 ;; jarr-vec is always a vector and the index has just been checked against
 ;; it, so the vector access itself can skip Chez's checks (#3%): safe code
 ;; checks the type and bounds again, which more than doubles a byte loop.
 (define-syntax array-ref
   (syntax-rules ()
-    [(_ a i) (let ([arr a] [j i])
-               (if arr
-                   (let ([v (jarr-vec arr)])
-                     (if (fx< -1 j (#3%vector-length v)) (#3%vector-ref v j) (bounds-error j v)))
-                   (nn arr)))]))
+    [(_ a i site) (let ([arr a] [j i])
+                    (if arr
+                        (let ([v (jarr-vec arr)])
+                          (if (fx< -1 j (#3%vector-length v)) (#3%vector-ref v j) (bounds-error j v)))
+                        (npe-at site)))]))
 (define-syntax array-set!
   (syntax-rules ()
-    [(_ a i x) (let ([arr a] [j i])
-                 (if arr
-                     (let ([v (jarr-vec arr)])
-                       (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v)))
-                     (nn arr)))]))
+    [(_ a i x site) (let ([arr a] [j i])
+                      (if arr
+                          (let ([v (jarr-vec arr)])
+                            (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v)))
+                          (npe-at site)))]))
 ;; aastore: a reference array checks a non-null value against its element
 ;; type after the index, as the JVM does. Each site has a cell: its car is the
 ;; (interned) element descriptor it last stored into, its cdr #t when that is
@@ -463,7 +480,7 @@
   (syntax-rules () [(_ o) (cond [(jobj? o) (jobj-cls o)] [(jarr? o) (jarr-elem o)] [else #f])]))
 (define-syntax array-store!
   (syntax-rules ()
-    [(_ ic a i x) (let ([arr a] [j i] [o x])
+    [(_ ic a i x site) (let ([arr a] [j i] [o x])
                     (if arr
                         (let ([v (jarr-vec arr)])
                           (if (fx< -1 j (#3%vector-length v))
@@ -477,7 +494,7 @@
                                   (array-store-miss ic arr o))
                                 (#3%vector-set! v j o))
                               (bounds-error j v)))
-                        (nn arr)))]))
+                        (npe-at site)))]))
 (define (array-store-ok? arr o)
   (let ([e (jarr-elem arr)])
     (or (string=? e "Ljava/lang/Object;") (jinstance? o (desc->class-name e)))))
@@ -493,7 +510,7 @@
           [(and (eq? (car ic) e) c (not (eq? c #t))) (set-cdr! ic (cons k c))]
           [else (set-car! ic #f) (set-cdr! ic k) (set-car! ic e)])))
 (define-syntax array-length
-  (syntax-rules () [(_ a) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (nn arr)))]))
+  (syntax-rules () [(_ a site) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (npe-at site)))]))
 (define-syntax wrap-byte (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80)]))
 (define-syntax wrap-short (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000)]))
 

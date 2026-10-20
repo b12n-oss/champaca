@@ -215,6 +215,10 @@
 
 (defn- label [pc] (sym (str *method-tag* "#B" pc)))
 
+;; the instruction at pc as a quoted symbol, Class.name(desc)@pc: what a null
+;; check passes to npe-at so the NPE's message can be built from its bytecode
+(defn- site [pc] (str "'" (sym (str *method-tag* "@" pc))))
+
 (defn desc->t
   "Stack type of a field or return descriptor: I J F D or A."
   [d]
@@ -457,18 +461,19 @@
           :aload (push! (str "l" a0) "A")
           (:istore :lstore :fstore :dstore :astore) (store! a0 (pop!))
           :iinc (store! a0 (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
-          (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i)) "I")
-          :laload (bin (fn [a i] (sx "array-ref" a i)) "J")
-          :faload (bin (fn [a i] (sx "array-ref" a i)) "F")
-          :daload (bin (fn [a i] (sx "array-ref" a i)) "D")
-          :aaload (bin (fn [a i] (sx "array-ref" a i)) "A")
+          (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i (site pc))) "I")
+          :laload (bin (fn [a i] (sx "array-ref" a i (site pc))) "J")
+          :faload (bin (fn [a i] (sx "array-ref" a i (site pc))) "F")
+          :daload (bin (fn [a i] (sx "array-ref" a i (site pc))) "D")
+          :aaload (bin (fn [a i] (sx "array-ref" a i (site pc))) "A")
           :aastore
           (let [[a i v] (popn! 3)]
-            (stmt! (sx "array-store!" ((:ic! ctx)) a i v)))
+            (stmt! (sx "array-store!" ((:ic! ctx)) a i v (site pc))))
           (:iastore :lastore :fastore :dastore :bastore :castore :sastore)
           (let [[a i v] (popn! 3)]
             (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "fxlogand" v "#xffff")
-                                       :sastore (sx "wrap-short" v) v))))
+                                       :sastore (sx "wrap-short" v) v)
+                       (site pc))))
           :pop (pop!)
           :pop2 (if (cat2? (top-t)) (pop!) (do (pop!) (pop!)))
           :dup (shuffle! 1 0)
@@ -547,9 +552,9 @@
                                     [(sx "else" (goto dflt))]))))
           (:ireturn :lreturn :freturn :dreturn :areturn) (vreset! terminal (pop!))
           :return (vreset! terminal "(void)")
-          :athrow (vreset! terminal (sx "jathrow" (pop!)))
-          :monitorenter (stmt! (sx "jmonitor-enter" (pop!)))
-          :monitorexit (stmt! (sx "jmonitor-exit" (pop!)))
+          :athrow (vreset! terminal (sx "jathrow-at" (pop!) (site pc)))
+          :monitorenter (stmt! (sx "jmonitor-enter" (sx "nn-at" (pop!) (site pc))))
+          :monitorexit (stmt! (sx "jmonitor-exit" (sx "nn-at" (pop!) (site pc))))
           :getstatic (let [{:keys [class name desc]} (cp a0)
                            decl ((:resolve-static-field resolve) class name)]
                        (init decl) (push! (static-global decl name) (desc->t desc)))
@@ -558,11 +563,11 @@
                        (init decl) (stmt! (sx "set!" (static-global decl name) (pop!))))
           :getfield (let [{:keys [class name desc]} (cp a0)
                           idx ((:field-index resolve) class name)]
-                      (un #(sx "field-ref" % (str idx)) (desc->t desc)))
+                      (un #(sx "field-ref" % (str idx) (site pc)) (desc->t desc)))
           :putfield (let [{:keys [class name]} (cp a0)
                           idx ((:field-index resolve) class name)
                           v (pop!) o (pop!)]
-                      (stmt! (sx "field-set!" o (str idx) v)))
+                      (stmt! (sx "field-set!" o (str idx) v (site pc))))
           (:invokevirtual :invokeinterface :invokespecial :invokestatic)
           (let [{:keys [class name desc]} (cp a0)
                 {:keys [args ret]} (parse-desc desc)
@@ -585,8 +590,8 @@
                                ;; invokeinterface that is a private interface
                                ;; method, which javac calls this way
                                (apply sx (callee decl name desc)
-                                      (sx "let" (sx (sx "r" recv)) (sx "if" "r" "r" (sx "nn" "r"))) argv)
-                               (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc)))) recv argv))))
+                                      (sx "nn-at" recv (site pc)) argv)
+                               (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc)) recv argv))))
                        :invokespecial
                        (let [decl ((:resolve-method resolve) class name desc)]
                          ;; Object's constructor does nothing
@@ -659,7 +664,7 @@
                        (un #(sx "jnewarray-interned" el % "#f") "A"))
           :multianewarray (let [c (:name (cp a0)) dims (popn! (second args))]
                             (push! (sx "jmultiarray" (str-lit c) (apply sx "list" dims)) "A"))
-          :arraylength (un #(sx "array-length" %) "I")
+          :arraylength (un #(sx "array-length" % (site pc)) "I")
           :checkcast (let [c (:name (cp a0))]
                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                        (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast-ic" ((:ic! ctx)) v (str-lit c)))))
