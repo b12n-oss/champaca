@@ -2,8 +2,9 @@ import java.io.*;
 
 // Opening, reading and writing a FIFO wait on the other end. Other threads
 // keep running meanwhile, as on the JVM: here the reader's open waits for
-// the writer, which first sleeps, and the writer's writes wait on the full
-// pipe while the reader sleeps. bb test makes the FIFO.
+// the writer, which first sleeps; the writer's writes wait on the full pipe
+// while the reader sleeps; and the reader's reads wait on the empty pipe
+// while the writer sleeps halfway. bb test makes the FIFO.
 public class BlockingIoCheck {
     static final String FIFO = "target/blocking-io.fifo";
     static final int SIZE = 200_000;
@@ -16,7 +17,10 @@ public class BlockingIoCheck {
                 byte[] chunk = new byte[1000];
                 for (int i = 0; i < chunk.length; i++) chunk[i] = (byte) ('a' + i % 26);
                 try (FileOutputStream out = new FileOutputStream(FIFO)) {
-                    for (int n = 0; n < SIZE; n += chunk.length) out.write(chunk);
+                    for (int n = 0; n < SIZE; n += chunk.length) {
+                        if (n == SIZE / 2) Thread.sleep(300);
+                        out.write(chunk);
+                    }
                 }
             } catch (Exception e) { System.out.println("writer: " + e); }
         });
