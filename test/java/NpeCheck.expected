@@ -42,6 +42,10 @@ assignment chain: Cannot assign field "name" because "<local0>" is null
 long assignment chain: Cannot assign field "big" because "<local0>" is null
 array assignment chain: Cannot store to object array because "<local0>" is null
 long array assignment chain: Cannot store to long array because "<local0>" is null
+private method: Cannot invoke "NpeCheck.priv()" because "<local0>" is null
+array clone: Cannot invoke "[I.clone()" because "<local0>" is null
+method handle: Cannot invoke "java.lang.invoke.MethodHandle.invokeExact()" because "<local0>" is null
+var handle: Cannot invoke "java.lang.invoke.VarHandle.get()" because "<local0>" is null
 explicit: null
 explicit message: given
 requireNonNull: null

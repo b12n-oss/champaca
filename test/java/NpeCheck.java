@@ -1,3 +1,4 @@
+import java.lang.invoke.*;
 import java.util.*;
 import java.util.function.*;
 
@@ -16,6 +17,7 @@ public class NpeCheck {
     static String nothing() { return null; }
     NpeCheck self() { return this; }
     static NpeCheck make() { return new NpeCheck(); }
+    private int priv() { return count; }
 
     static void run(String label, Runnable r) {
         try {
@@ -103,6 +105,13 @@ public class NpeCheck {
         run("long assignment chain", () -> { NpeHolder h = null; long r = (h.big = 5L); System.out.println(r); });
         run("array assignment chain", () -> { Object[] a = null; Object r = (a[0] = "x"); System.out.println(r); });
         run("long array assignment chain", () -> { long[] a = null; long r = (a[0] = 5L); System.out.println(r); });
+        run("private method", () -> { NpeCheck n = null; n.priv(); });
+        run("array clone", () -> { int[] a = null; a.clone(); });
+        run("method handle", () -> {
+            MethodHandle mh = null;
+            try { mh.invokeExact(); } catch (RuntimeException e) { throw e; } catch (Throwable t) { throw new IllegalStateException(t); }
+        });
+        run("var handle", () -> { VarHandle vh = null; vh.get(); });
         run("explicit", () -> { throw new NullPointerException(); });
         run("explicit message", () -> { throw new NullPointerException("given"); });
         run("requireNonNull", () -> Objects.requireNonNull(null));

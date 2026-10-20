@@ -580,9 +580,9 @@
                          (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
                          ;; signature-polymorphic: the runtime adapts the call site's
                          ;; types to the access mode's, as asType would
-                         (apply sx "vh-call" recv (str-lit name) (str-lit desc) argv)
+                         (apply sx "vh-call" (sx "nn-at" recv (site pc)) (str-lit name) (str-lit desc) argv)
                          (and (= class "java/lang/invoke/MethodHandle") (#{"invokeExact" "invoke"} name))
-                         (apply sx "mh-call" recv (str-lit desc) argv)
+                         (apply sx "mh-call" (sx "nn-at" recv (site pc)) (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
                              (if-let [decl ((:direct-target resolve) class name desc)]
