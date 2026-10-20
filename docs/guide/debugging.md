@@ -6,11 +6,12 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 
 | Variable | What it does |
 |---|---|
-| `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception or a missing native prints where it happened |
+| `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception or a missing native prints where it happened, and says on stderr why an NPE got no message |
 | `CHAMPACA_STATS=1` | prints how many classes were loaded, methods compiled and cached units loaded, after boot and at exit |
 | `CHAMPACA_PROF=1` | prints how long each boot phase took |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
+| `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `bb test` and `bb libs` set it |
 | `CHAMPACA_CACHE=off` | ignores the startup cache ([performance](performance.md)) |
 | `CHAMPACA_CALL_CACHE=off` | chooses the overload again on every call ([performance](performance.md#the-call-site-cache)) |
 

@@ -103,9 +103,11 @@ bb libs:fetch && bb libs                              # the eight real libraries
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
+                        # (and say why an NPE got no message)
 CHAMPACA_STATS=1 ...    # print classes loaded, methods compiled, cached units loaded
 CHAMPACA_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
 CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
+CHAMPACA_NPE_STRICT=1 ...    # throw when an NPE message can't be built, instead of a null message (bb test sets it)
 CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss
 CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke-static and construct
 ```

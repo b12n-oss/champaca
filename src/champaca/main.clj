@@ -744,7 +744,7 @@
 ;; it). The class is parsed again with its local variable names, which a
 ;; normal parse skips, so the work happens only when a message is asked
 ;; for; a site always gives the same text, so it is kept.
-(defn- npe-message* [site]
+(defn- npe-message** [site]
   (let [at (str/last-index-of site "@")
         tag (subs site 0 at)
         bci (parse-long (subs site (inc at)))
@@ -753,16 +753,23 @@
         cname (subs tag 0 dot)
         mname (subs tag (inc dot) paren)
         desc (subs tag paren)
-        p (binding [cf/*locals* true] (cf/parse (class-bytes cname)))
+        bytes (or (class-bytes cname) (throw (ex-info (str cname " is no longer on the classpath") {:class cname})))
+        p (binding [cf/*locals* true] (cf/parse bytes))
         m (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (:methods p))]
     (when (:code m)
-      ;; HotSpot gives up silently on bytecode its analysis can't follow;
-      ;; CHAMPACA_BT shows why this one did
-      (try ((requiring-resolve 'champaca.npe/message) (:cp p) m bci)
-           (catch Exception e
-             (when (env "CHAMPACA_BT")
-               (binding [*out* *err*] (println "champaca: no NPE message for" site (ex-message e))))
-             nil)))))
+      ((requiring-resolve 'champaca.npe/message) (:cp p) m bci))))
+
+;; Whatever goes wrong gives no message, as HotSpot gives none for bytecode
+;; its analysis can't follow: getMessage must not throw. CHAMPACA_BT says
+;; why on stderr, and CHAMPACA_NPE_STRICT (set by bb test) rethrows, so a
+;; bug in the port fails the suite instead of passing as a missing message.
+(defn- npe-message* [site]
+  (try (npe-message** site)
+       (catch Exception e
+         (when (env "CHAMPACA_NPE_STRICT") (throw e))
+         (when (env "CHAMPACA_BT")
+           (binding [*out* *err*] (println "champaca: no NPE message for" site (ex-message e))))
+         nil)))
 
 (defn- npe-message [site]
   (let [cache (:npe-messages @state)]

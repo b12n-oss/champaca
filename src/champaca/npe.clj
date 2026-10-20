@@ -45,6 +45,9 @@
     (if (= ab bb) a [nil at])))
 
 (defn- merge-stack [a b]
+  ;; HotSpot asserts the sizes agree; a mismatch is a bug in a stack effect
+  (when-not (= (count (:s a)) (count (:s b)))
+    (throw (ex-info "simulated stacks of different sizes meet" {:sizes [(count (:s a)) (count (:s b))]})))
   {:s (mapv merge-slot (:s a) (:s b)) :w (bit-or (:w a) (:w b))})
 
 ;; --- what each instruction does to the stack ----------------------------------
