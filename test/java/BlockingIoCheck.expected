@@ -1,2 +1,3 @@
-read 200000 bytes, hash -4718710034739936096
-main kept running: true
+FileInputStream: read 200000 bytes, hash -4718710034739936096, main kept running: true
+RandomAccessFile: read 200000 bytes, hash -4718710034739936096, main kept running: true
+Files.copy: read 200000 bytes, hash -4718710034739936096, main kept running: true

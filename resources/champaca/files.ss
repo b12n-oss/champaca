@@ -367,12 +367,14 @@
 (defnative "java/io/FileInputStream.open0(Ljava/lang/String;)V" (this name)
   (fdo-fd-set! (holder-fdo this fis) (java-io-open (jstring->scheme (nn name)) (fs-const "O_RDONLY"))))
 
-;; Standard input is read through Chez's port, without the GIL (a console
+;; Standard input is read through one Chez port, without the GIL (a console
 ;; read waits for the user), one reader at a time since the port has no lock
-;; of its own.
+;; of its own. One port for the process: (standard-input-port) makes a new
+;; buffered port per call, and bytes buffered in a dropped one were lost.
+(define stdin-port (standard-input-port))
 (define stdin-mutex (make-mutex))
 (define (stdin-read proc)
-  (gil-released (lambda () (with-mutex stdin-mutex (proc (standard-input-port))))))
+  (gil-released (lambda () (with-mutex stdin-mutex (proc stdin-port)))))
 
 (defnative "java/io/FileInputStream.read0()I" (this)
   (let ([fd (holder-fd this fis)])
@@ -459,8 +461,12 @@
                               (if (fxpositive? (fxlogand mode 4)) (fs-const "O_SYNC") 0)
                               (if (fxpositive? (fxlogand mode 8)) (fs-const "O_DSYNC") 0)))))
 (defnative "java/io/RandomAccessFile.read0()I" (this)
-  (let* ([fd (holder-fd this raf)] [r (restartable (lambda () (libc-read fd fs-scratch 1)))])
-    (cond [(< r 0) (io-error "Read error")] [(fx= r 0) -1] [else (foreign-ref 'unsigned-8 fs-scratch 0)])))
+  (let ([fd (holder-fd this raf)]
+        [one (lambda (buf r)
+               (cond [(< r 0) (io-error "Read error")] [(fx= r 0) -1] [else (foreign-ref 'unsigned-8 buf 0)]))])
+    (if (fd-may-wait? fd)
+        (released-read fd 1 one)
+        (one fs-scratch (restartable (lambda () (libc-read fd fs-scratch 1)))))))
 (defnative "java/io/RandomAccessFile.readBytes0([BII)I" (this bytes off len)
   (check-bounds bytes off len)
   (if (fx= len 0) 0 (let ([r (fd-read-into (holder-fd this raf) bytes off len)]) (if (fx= r 0) -1 r))))
@@ -720,18 +726,29 @@
 (defnative "sun/nio/fs/BsdNativeDispatcher.clonefile0(JJI)I" (src dst flags)
   (unix-check (libc-clonefile src dst flags))
   0)
-;; a plain read/write loop
+;; a plain read/write loop; with a pipe or FIFO on either side it runs
+;; without the GIL, in a buffer of its own
 (define (copy-fd-to-fd dst src)
-  (let loop ()
-    (let ([n (libc-read src fs-scratch 4096)])
-      (cond [(< n 0) (unix-error)]
-            [(> n 0)
-             (let wloop ([done 0])
-               (when (< done n)
-                 (let ([w (libc-write dst (+ fs-scratch done) (- n done))])
-                   (when (< w 0) (unix-error))
-                   (wloop (+ done w)))))
-             (loop)]))))
+  (let* ([wait? (or (fd-may-wait? src) (fd-may-wait? dst))]
+         [buf (if wait? (foreign-alloc 4096) fs-scratch)]
+         [rd (if wait?
+                 (lambda () (released-call (lambda () (libc-read-blocking src buf 4096))))
+                 (lambda () (libc-read src buf 4096)))]
+         [wr (if wait?
+                 (lambda (p k) (released-call (lambda () (libc-write-blocking dst p k))))
+                 (lambda (p k) (libc-write dst p k)))])
+    (guard (e [#t (when wait? (foreign-free buf)) (raise e)])
+      (let loop ()
+        (let ([n (rd)])
+          (cond [(< n 0) (unix-error)]
+                [(> n 0)
+                 (let wloop ([done 0])
+                   (when (< done n)
+                     (let ([w (wr (+ buf done) (- n done))])
+                       (when (< w 0) (unix-error))
+                       (wloop (+ done w)))))
+                 (loop)])))
+      (when wait? (foreign-free buf)))))
 (defnative "sun/nio/fs/BsdFileSystem.directCopy0(IIJ)I" (dst src cancel) (copy-fd-to-fd dst src) 0)
 (defnative "sun/nio/fs/UnixFileSystem.bufferedCopy0(IIJIJ)V" (dst src buf size cancel) (copy-fd-to-fd dst src))
 
