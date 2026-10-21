@@ -63,7 +63,7 @@ Call `init!` once per process, before any other champaca function. A second call
 bb test
 ```
 
-It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. Then it runs the `examples/*.clj` programs and checks them the same way. The first line says which jolt it used.
+It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, and one that runs past five minutes fails. Then it runs the `examples/*.clj` programs and checks them the same way. The first line says which jolt it used.
 
 ## Where next
 

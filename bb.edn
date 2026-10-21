@@ -1,5 +1,5 @@
 {:tasks
- {:requires ([babashka.fs :as fs] [clojure.string :as str] [clojure.edn :as edn])
+ {:requires ([babashka.fs :as fs] [babashka.process :as process] [clojure.string :as str] [clojure.edn :as edn])
   :init (do
           ;; deps.edn :champaca/jolt pins an upstream jolt commit; `bb jolt` builds
           ;; it to ~/.cache/champaca/jolt/<sha>/jolt from a jolt checkout
@@ -10,6 +10,15 @@
           ;; $JOLT wins, then the pinned build, then jolt on PATH
           (defn jolt-bin []
             (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt"))
+          ;; a command with a time limit, so a test that hangs fails instead
+          (defn run-limited [secs opts & cmd]
+            (let [proc (apply process/process (merge {:out :string :err :inherit :in :inherit} opts) cmd)
+                  r (deref proc (* 1000 secs) :timed-out)]
+              (if (= r :timed-out)
+                (do (process/destroy-tree proc)
+                    (println (str "timed out after " secs " s"))
+                    {:out "" :exit 124})
+                r)))
           ;; test/libs: a Maven coordinate's path in a repository, and a file's SHA-1
           (defn m2-path [coord]
             (let [[g a v] (str/split coord (re-pattern ":"))]
@@ -102,8 +111,10 @@
                                sort)
                     fails (doall
                            (for [m mains
-                                 :let [{:keys [out exit]} (shell {:out :string :continue true :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
-                                                                 (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
+                                 :let [stdin (str "test/java/" m ".stdin")
+                                       {:keys [out exit]} (run-limited 300 (cond-> {:extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                                                             (fs/exists? stdin) (assoc :in (fs/file stdin)))
+                                                                       (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
                     ;; jolt programs calling Java, checked against expected output
