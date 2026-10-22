@@ -267,9 +267,16 @@
         (and (jclass-super c) (loop (find-class (jclass-super c))))
         (error 'champaca "no such field" cname fname))))
 
+;; A Throwable's backtrace field holds its raw frames (natives.ss), the one
+;; Scheme value a Java field keeps. To Java it is an opaque java.lang.Object,
+;; as HotSpot's own backtrace is, so reflection reading the field gets
+;; getClass, hashCode and toString and nothing else.
+(define-record-type backtrace (fields frames) (sealed #t) (nongenerative champaca-backtrace))
+
 (define (class-name-of x)
   (cond [(jobj? x) (jclass-cname (jobj-cls x))]
         [(jarr? x) (string-append "[" (jarr-elem x))]
+        [(backtrace? x) "java/lang/Object"]
         [else (error 'champaca "not a Java value" x)]))
 
 (define (class-of x) (find-class (class-name-of x)))
@@ -368,8 +375,8 @@
         (let ([sym (eq-hashtable-ref (jclass-vtable (jobj-cls x)) k #f)])
           (if sym (top-level-value sym) (no-such-virtual (jobj-cls x) k)))
         (cond
-          [(not (jarr? x)) (error 'champaca "virtual call on something that isn't a Java value" x (symbol->string k))]
-          [(eq? k clone-key) array-clone]
+          [(not (or (jarr? x) (backtrace? x))) (error 'champaca "virtual call on something that isn't a Java value" x (symbol->string k))]
+          [(and (eq? k clone-key) (jarr? x)) array-clone]
           [else (let* ([c (find-class "java/lang/Object")] [sym (eq-hashtable-ref (jclass-vtable c) k #f)])
                   (if sym (top-level-value sym) (no-such-virtual c k)))]))))
 ;; a vtable miss is an abstract method nothing implemented; the message is

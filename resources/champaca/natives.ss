@@ -308,21 +308,22 @@
 ;; --- Throwable ------------------------------------------------------------------
 
 ;; fillInStackTrace keeps the raw frames (reflect.ss raw-frames, a pair per
-;; frame, about as cheap as HotSpot's own backtrace) in a weak table under
-;; the Throwable, whose backtrace field is set to the Throwable itself: non
-;; null, which is all the JDK asks of it, and a Java value, which reflection
-;; may read. getOurStackTrace turns the frames into StackTraceElements when
-;; something asks, with the file, line, module and hidden flag from a jolt
-;; hook (main.clj frame-info). Nothing else keeps the stack alive.
+;; frame, about as cheap as HotSpot's own backtrace) in the Throwable's
+;; backtrace field, in a backtrace record (runtime.ss: an opaque Object to
+;; Java). A weak table under the Throwable instead kept each dead
+;; throwable's frames alive until a collection swept its entry, which cost
+;; another 1.5 us a throw over 100k of them. getOurStackTrace turns the
+;; frames into StackTraceElements when something asks, with the file, line,
+;; module and hidden flag from a jolt hook (main.clj frame-info).
 (define frame-hook #f)
 (define (set-frame-hook! f) (set! frame-hook f))
-(define throw-frames (make-weak-eq-hashtable))
 (define (slot-of cname fname) (jfield-index cname fname))
 
 (defnative "java/lang/Throwable.fillInStackTrace(I)Ljava/lang/Throwable;" (this dummy)
-  (eq-hashtable-set! throw-stacks this jstack)   ; CHAMPACA_BT's shadow stack
-  (eq-hashtable-set! throw-frames this (call/1cc (lambda (k) (raw-frames k))))
-  (jslot-set! this (slot-of "java/lang/Throwable" "backtrace") this)
+  ;; CHAMPACA_BT's shadow stack, empty without it: a weak-table insert per
+  ;; throw costs about as much as the walk, so none for an empty one
+  (unless (null? jstack) (eq-hashtable-set! throw-stacks this jstack))
+  (jslot-set! this (slot-of "java/lang/Throwable" "backtrace") (make-backtrace (call/1cc (lambda (k) (raw-frames k)))))
   this)
 
 ;; HotSpot leaves out fillInStackTrace and the constructors of the
@@ -380,12 +381,11 @@
            [cur (jslot this slot)]
            [unassigned (begin (jinit "java/lang/Throwable") (top-level-value 'java/lang/Throwable:UNASSIGNED_STACK))])
       (if (or (not cur) (eq? cur unassigned))
-          (let ([raw (eq-hashtable-ref throw-frames this #f)])
-            (if raw
-                (let* ([fs (visible-frames (trace-frames (java-frames-of raw) this))]
+          (let ([bt (jslot this (slot-of "java/lang/Throwable" "backtrace"))])
+            (if (backtrace? bt)
+                (let* ([fs (visible-frames (trace-frames (java-frames-of (backtrace-frames bt)) this))]
                        [arr (stack-trace-array (if (fx> (length fs) 1024) (list-head fs 1024) fs))])
                   (jslot-set! this slot arr)
-                  (eq-hashtable-delete! throw-frames this)
                   arr)
                 unassigned))
           cur))))
