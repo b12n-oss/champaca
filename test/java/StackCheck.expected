@@ -7,17 +7,18 @@ java.lang.IllegalStateException: from c
 	at StackCheck.a(StackCheck.java:13)
 	at StackCheck.main(StackCheck.java:47)
 custom: StackCheck.throwsCustom(StackCheck.java:19) < StackCheck.main(StackCheck.java:55)
-jdk: java.lang.NumberFormatException.forInputString < java.lang.Integer.parseInt < java.lang.Integer.parseInt < StackCheck.main(StackCheck.java:57)
-lambda: StackCheck.lambda$main$0(StackCheck.java:59) < StackCheck.main(StackCheck.java:59)
-in catch: StackCheck.main(StackCheck.java:62) cause StackCheck.c(StackCheck.java:11) < StackCheck.main(StackCheck.java:62)
-in synchronized: StackCheck.c(StackCheck.java:11) < StackCheck.b(StackCheck.java:12) < StackCheck.main(StackCheck.java:65)
-in loop: StackCheck.c(StackCheck.java:11) < StackCheck.main(StackCheck.java:68)
-rethrown: StackCheck.c(StackCheck.java:11) < StackCheck.main(StackCheck.java:71)
-refilled: StackCheck.main(StackCheck.java:72)
+jdk: java.lang.NumberFormatException.forInputString < java.lang.Integer.parseInt < java.lang.Integer.parseInt < StackCheck.main(StackCheck.java:57) / java.base NumberFormatException.java
+lambda: StackCheck.lambda$main$0(StackCheck.java:62) < StackCheck.main(StackCheck.java:62)
+in catch: StackCheck.main(StackCheck.java:65) cause StackCheck.c(StackCheck.java:11) < StackCheck.main(StackCheck.java:65)
+in synchronized: StackCheck.c(StackCheck.java:11) < StackCheck.b(StackCheck.java:12) < StackCheck.main(StackCheck.java:68)
+in loop: StackCheck.c(StackCheck.java:11) < StackCheck.main(StackCheck.java:71)
+rethrown: StackCheck.c(StackCheck.java:11) < StackCheck.main(StackCheck.java:74)
+refilled: StackCheck.main(StackCheck.java:75)
 set: X.y(X.java:7) 1
-thread: StackCheck.lambda$main$1(StackCheck.java:79) < java.lang.Thread
-current thread: StackCheck.main(StackCheck.java:83)
+thread: StackCheck.lambda$main$1(StackCheck.java:82) < java.lang.Thread
+current thread: StackCheck.main(StackCheck.java:86)
 caller: Other StackCheck
-walked: [walked:39:StackCheck.java, main:85:StackCheck.java]
+walked: [walked:39:StackCheck.java, main:88:StackCheck.java]
 logged from: StackCheck.main
 recursion frames: 301
+walked deep: 301

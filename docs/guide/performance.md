@@ -158,6 +158,8 @@ Three things were left that every program pays for, found by timing each piece o
 | `StringBuffer.append(char)` | 112 ns | 62 ns | 12.6 ns |
 | Throwing and catching an exception | 600 ns | 340 ns | 380 ns |
 
+Stack traces made a throw dearer again: `fillInStackTrace` walks the continuation and keeps a pair per frame, about what HotSpot pays for its backtrace. Measured with 100,000 of each: constructing a `Throwable` 20 frames deep went from 220 ns to 1.4 us (JVM 550 ns), and throwing and catching across 20 frames from 500 ns to 1.5 us (JVM 1.3 us). A `try` entry costs 25 ns against 23, since `jtry` now takes a full continuation ([how-it-works](how-it-works.md#stack-traces)). The cache still compiles JDK code without Chez's inspector information, which the line numbers come from: with it the cache was 6.5 MB against 4.2, and a warm start 0.02 to 0.04 s slower (Hello 0.30 to 0.32 s, JdkLib 0.34 to 0.38 s, medians of 5 alternating rounds), so JDK frames carry no line numbers.
+
 ### Arrays and small calls
 
 A loop comparing two 100-byte arrays took 7.0 ns per element. Measured on its own, a plain Chez loop over two vectors takes 2.4 ns per element in safe mode and 0.6 ns unchecked, so most of the 7 ns was checks, and several ran twice: `array-ref` checked the index against the vector and then `vector-ref` checked it again, and `array-length` made a procedure call for its null check. The array macros now check null and bounds once and then use Chez's unchecked vector access (`#3%vector-ref`), which is safe because the index has just been checked against that vector. That brought the loop to 4.4 ns per element, against 0.6 ns on the JVM.

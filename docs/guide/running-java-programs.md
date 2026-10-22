@@ -44,7 +44,7 @@ jolt -M -m champaca.main classes Main > main.ldk
 diff main.jvm main.ldk
 ```
 
-A stack trace matches frame for frame, except that champaca's natives have no frames where the JVM prints `Native Method`. Output from several threads can interleave differently than on a JVM, as it can between two JVM runs.
+A stack trace matches frame for frame, except that champaca's natives have no frames where the JVM prints `Native Method`, and JDK frames carry no line numbers. Output from several threads can interleave differently than on a JVM, as it can between two JVM runs.
 
 ## Speed
 

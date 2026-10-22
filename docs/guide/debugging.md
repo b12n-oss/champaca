@@ -17,29 +17,23 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 
 ## Java stack traces
 
-By default an uncaught exception prints just its `toString`, because recording frames costs time on every call. With `CHAMPACA_BT=1` you get the frames, innermost first. For the `Boom` program from [running-java-programs](running-java-programs.md):
+An exception carries its stack trace as on the JVM: `printStackTrace`, `getStackTrace`, `Thread.currentThread().getStackTrace()`, `StackWalker` and the source location `java.util.logging` infers all work, and an uncaught exception prints its trace on stderr the way the JVM's default handler does. For the `Boom` program from [running-java-programs](running-java-programs.md):
 
 ```console
-$ CHAMPACA_BT=1 jolt -M -m champaca.main classes Boom
+$ jolt -M -m champaca.main classes Boom
 3
 Exception in thread "main" java.lang.NumberFormatException: For input string: "four"
-	at java/lang/Throwable.fillInStackTrace()Ljava/lang/Throwable;
-	at java/lang/Throwable.<init>(Ljava/lang/String;)V
-	at java/lang/Exception.<init>(Ljava/lang/String;)V
-	at java/lang/RuntimeException.<init>(Ljava/lang/String;)V
-	at java/lang/IllegalArgumentException.<init>(Ljava/lang/String;)V
-	at java/lang/NumberFormatException.<init>(Ljava/lang/String;)V
-	at java/lang/NumberFormatException.forInputString(Ljava/lang/String;I)Ljava/lang/NumberFormatException;
-	at java/lang/Integer.parseInt(Ljava/lang/String;I)I
-	at java/lang/Integer.parseInt(Ljava/lang/String;)I
-	at Boom.parse(Ljava/lang/String;)I
-	at Boom.total([Ljava/lang/String;)I
-	at Boom.main([Ljava/lang/String;)V
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java)
+	at java.base/java.lang.Integer.parseInt(Integer.java)
+	at java.base/java.lang.Integer.parseInt(Integer.java)
+	at Boom.parse(Boom.java:2)
+	at Boom.total(Boom.java:3)
+	at Boom.main(Boom.java:6)
 ```
 
-Frames name the method by its JVM descriptor and carry no line numbers. The JVM hides the frames of the exception's own constructors, and champaca shows them, so the frame you care about sits a few lines further down than you'd expect. The trace stops at 25 frames.
+Your own frames carry their line numbers, which come from the class file's `LineNumberTable` through Chez's record of each frame's pending call ([how-it-works](how-it-works.md#stack-traces)). JDK frames name their file but no line: the startup cache compiles JDK code without that record, because keeping it cost 0.02 to 0.04 s on every warm start ([performance](performance.md#exception-handlers)). Two other differences from the JVM: a native champaca wrote in Scheme has no frame, where the JVM prints `Native Method`, and the stacks of other threads aren't available.
 
-`CHAMPACA_BT` changes the generated code, so it gets its own startup cache. The first run with it on is a cold one.
+`CHAMPACA_BT=1` is for errors in champaca itself. It keeps a shadow stack of Java frames, so a Chez error inside a native, which has no Java trace, still prints where in the Java program it happened, and it names each missing native on stderr as it's hit. It changes the generated code, so it gets its own startup cache, and the first run with it on is a cold one.
 
 ## Errors on the jolt side
 

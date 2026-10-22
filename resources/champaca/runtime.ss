@@ -853,8 +853,9 @@
 
 ;; --- backtraces (CHAMPACA_BT) ------------------------------------------------------
 ;; Stack traces read each frame's pending call from Chez's inspector
-;; information (reflect.ss return-sexpr), so generated code is compiled with
-;; it whatever the jolt build's default.
+;; information (reflect.ss return-sexpr), so code evaluated in the process
+;; (user classes) is compiled with it whatever the jolt build's default. The
+;; cache's compiles (JDK code) turn it off: quiet-compile-file says why.
 (generate-inspector-information #t)
 (define jstack '())
 (define (jbt-frame x) x)   ; codegen's non-tail wrapper under CHAMPACA_BT
@@ -942,8 +943,11 @@
 ;; compile-file announces itself on stdout, which belongs to the Java program.
 ;; The cache's code carries no inspector information (free-variable names,
 ;; source): it nearly doubled boot.so (12.1 MB -> 6.8 MB without) and the time
-;; to load it. Procedure names stay, and getCallerClass reads those. (Turning
-;; it off for run-time JIT compiles saved nothing measurable.)
+;; to load it. Procedure names stay, and getCallerClass reads those. Stack
+;; traces read a frame's line from that information (reflect.ss), so JDK
+;; frames, whose code the cache holds, have none: keeping it for them made a
+;; 6.5 MB cache of 4.2 and a warm start 0.02 to 0.04 s slower (Hello 0.30 to
+;; 0.32 s, JdkLib 0.34 to 0.38 s, medians of 5 alternating rounds).
 (define (quiet-compile-file in out)
   (parameterize ([current-output-port (open-output-string)]
                  [generate-inspector-information #f])
@@ -966,7 +970,7 @@
 
 (define (add-unit! text)
   (let ([start (port-position unit-out)])
-    (parameterize ([generate-inspector-information #f])
+    (parameterize ([generate-inspector-information #f])   ; see quiet-compile-file
       (compile-to-port (read-all text) unit-out))
     start))
 
@@ -981,7 +985,7 @@
 ;; text and compiling it again for the cache cost a second compile per method.
 (define (compile-unit text)
   (let-values ([(p get) (open-bytevector-output-port)])
-    (parameterize ([generate-inspector-information #f])
+    (parameterize ([generate-inspector-information #f])   ; see quiet-compile-file
       (compile-to-port (read-all text) p))
     (let ([bv (get)])
       (load-compiled-from-port (open-bytevector-input-port bv))

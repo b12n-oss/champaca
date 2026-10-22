@@ -5,8 +5,8 @@ import java.util.logging.*;
 
 // Stack traces: getStackTrace, printStackTrace, Thread.getStackTrace,
 // StackWalker and the logging source location, with file names and line
-// numbers as the JVM reports them. JDK frames print without line numbers,
-// since a JDK patch release may move them.
+// numbers as the JVM reports them. JDK frames print without line numbers:
+// a JDK patch release may move them, and champaca gives none for them.
 public class StackCheck {
     static int c() { throw new IllegalStateException("from c"); }
     static int b() { return c() + 1; }
@@ -54,7 +54,10 @@ public class StackCheck {
         // the exception's own constructors are left out, as on the JVM
         try { throwsCustom(); } catch (Custom e) { System.out.println("custom: " + all(e.getStackTrace())); }
         // a JDK method throwing: JDK frames by name, ours with lines
-        try { Integer.parseInt("x"); } catch (NumberFormatException e) { System.out.println("jdk: " + all(e.getStackTrace())); }
+        try { Integer.parseInt("x"); } catch (NumberFormatException e) {
+            StackTraceElement top = e.getStackTrace()[0];
+            System.out.println("jdk: " + all(e.getStackTrace()) + " / " + top.getModuleName() + " " + top.getFileName());
+        }
         // inside a lambda and a stream
         try { List.of(1).forEach(x -> { throw new UnsupportedOperationException("in lambda"); }); }
         catch (UnsupportedOperationException e) { System.out.println("lambda: " + ours(e.getStackTrace())); }
@@ -90,11 +93,17 @@ public class StackCheck {
             public void flush() {} public void close() {} });
         lg.info("where");
         System.out.println("logged from: " + src[0]);
-        // deep recursion: every activation is a frame
+        // deep recursion: every activation is a frame, and a StackWalker gets
+        // them in several batches
         try { depth(300); } catch (IllegalStateException e) {
             int n = 0; for (StackTraceElement f : e.getStackTrace()) if (f.getMethodName().equals("depth")) n++;
             System.out.println("recursion frames: " + n);
         }
+        System.out.println("walked deep: " + walkDeep(300));
     }
     static int depth(int n) { if (n == 0) throw new IllegalStateException(); return depth(n - 1) + 1; }
+    static long walkDeep(int n) {
+        if (n == 0) return StackWalker.getInstance().walk(s -> s.filter(f -> f.getMethodName().equals("walkDeep")).count());
+        return walkDeep(n - 1);
+    }
 }
