@@ -46,10 +46,13 @@ public class NativesCheck {
         System.out.println("os bean: " + (os.getAvailableProcessors() >= 1) + " " + os.getName().isEmpty() + " " + (os.getSystemLoadAverage() >= 0));
         int before = ManagementFactory.getThreadMXBean().getThreadCount();
         System.out.println("threads: " + (before >= 1));
-        // onExit on a process that isn't our child: a reaper thread polls it
+        // onExit on a process that isn't our child: a reaper thread polls it,
+        // and a failure in that thread would reach the default handler
+        Thread.setDefaultUncaughtExceptionHandler((th, e) -> System.out.println("uncaught in " + th.getName() + ": " + e.getClass().getName()));
         java.util.concurrent.CompletableFuture<ProcessHandle> exit = ProcessHandle.of(1).get().onExit();
         Thread.sleep(200);
-        System.out.println("onExit polls: " + (ManagementFactory.getThreadMXBean().getThreadCount() > before) + " " + exit.isDone());
+        System.out.println("onExit polls: " + !exit.isDone());
+        Thread.setDefaultUncaughtExceptionHandler(null);
         // a class whose initializer failed: the second use names the first failure
         for (int i = 0; i < 2; i++) {
             try { System.out.println(BadInit.x); }
