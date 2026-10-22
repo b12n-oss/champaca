@@ -122,7 +122,7 @@
                     fails (doall
                            (for [m mains
                                  :let [stdin (str "test/java/" m ".stdin")
-                                       {:keys [out exit]} (run-limited 300 (cond-> {:extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                       {:keys [out exit]} (run-limited 300 (cond-> {:extra-env {"CHAMPACA_NPE_STRICT" "1" "CHAMPACA_TEST_VAR" "a=b=c"}}
                                                                              (fs/exists? stdin) (assoc :in (fs/file stdin)))
                                                                        (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]

@@ -729,7 +729,13 @@
     ((method-proc "java/lang/Module" "<init>(Ljava/lang/ClassLoader;)V") m #f)
     (set! unnamed-module m)
     (vector-for-each (lambda (mirror) (vector-set! (jobj-slots mirror) slot m))
-                     (hashtable-keys mirror->class))))
+                     (hashtable-keys mirror->class)))
+  ;; ModuleLayer.boot() is System.bootLayer, which initPhase2 would set; an
+  ;; empty layer until then, so code asking it for a module gets an empty
+  ;; Optional (ManagementFactory does) instead of an NPE
+  (jinit "java/lang/ModuleLayer")
+  (set-top-level-value! 'java/lang/System:bootLayer
+                        ((method-proc "java/lang/ModuleLayer" "empty()Ljava/lang/ModuleLayer;"))))
 
 (define (jmirror-of name) (jmirror (find-class name)))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'champaca "not a mirror" m)))
@@ -755,15 +761,21 @@
 (define native-rules '())   ; list of (pred . make-proc) over the full name
 (define (define-native-rule! pred make) (set! native-rules (append native-rules (list (cons pred make)))))
 
-(define-record-type missing-native (fields name stack))
-
+;; A native champaca lacks throws UnsatisfiedLinkError where it's called, as
+;; the JVM does for a JNI method whose library isn't loaded, so a library's
+;; try/catch around an optional feature behaves the same. Under CHAMPACA_BT
+;; the name is also printed as it's hit, which is what finding the gap needs.
+(define report-missing-natives? (and (getenv "CHAMPACA_BT") #t))
 (define (native-ref name)
   (or (hashtable-ref natives name #f)
       (let loop ([rs native-rules])
         (cond [(null? rs) #f]
               [((caar rs) name) ((cdar rs) name)]
               [else (loop (cdr rs))]))
-      (lambda args (raise (make-missing-native name jstack)))))
+      (lambda args
+        (when report-missing-natives?
+          (put-string (current-error-port) (string-append "champaca: missing native " name "\n")))
+        (jthrow "java/lang/UnsatisfiedLinkError" name))))
 
 ;; --- entry --------------------------------------------------------------------
 
@@ -774,10 +786,6 @@
       [(jobj? e)
        (put-string err (string-append "Exception in thread \"main\" "
                                       (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
-       (print-jstack e err)]
-      [(missing-native? e)
-       (put-string err (string-append "champaca: missing native " (missing-native-name e) "\n"))
-       (eq-hashtable-set! throw-stacks e (missing-native-stack e))
        (print-jstack e err)]
       [else
        (put-string err "champaca: Scheme error: ")

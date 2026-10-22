@@ -109,10 +109,125 @@
 (defnative "java/lang/System.setOut0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:out| s))
 (defnative "java/lang/System.setErr0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:err| s))
 
+;; --- java.management ---------------------------------------------------------------------
+;; Enough of sun.management for the Runtime, Memory, OperatingSystem and
+;; ClassLoading beans and ThreadMXBean's counts: the VM's counters, from what
+;; the runtime keeps, and zeros for the HotSpot-only ones (safepoints, JIT
+;; and class-verification times). ThreadInfo, CPU times and deadlock
+;; detection stay missing.
+(define vm-start-ms (quotient (now-nanos) 1000000))
+(let ()
+  (define cls "sun/management/VMManagementImpl")
+  (define (def name proc) (define-native! (string-append cls "." name) proc))
+  (def "getVersion0()Ljava/lang/String;" (lambda () (jstring "4.0")))
+  (def "initOptionalSupportFields()V" (lambda () (void)))
+  (for-each (lambda (n) (def n (lambda (this) 0)))
+            '("isThreadContentionMonitoringEnabled()Z" "isThreadCpuTimeEnabled()Z"
+              "isThreadAllocatedMemoryEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
+              "getUnloadedClassCount()J" "getTotalCompileTime()J" "getSafepointCount()J"
+              "getTotalSafepointTime()J" "getSafepointSyncTime()J" "getTotalApplicationNonStoppedTime()J"
+              "getLoadedClassSize()J" "getUnloadedClassSize()J" "getClassLoadingTime()J"
+              "getMethodDataSize()J" "getClassInitializationTime()J" "getClassVerificationTime()J"))
+  (def "getProcessId()I" (lambda (this) (libc-getpid)))
+  (def "getVmArguments0()[Ljava/lang/String;" (lambda (this) (make-jarr "Ljava/lang/String;" (vector))))
+  (def "getStartupTime()J" (lambda (this) vm-start-ms))
+  (def "getUptime0()J" (lambda (this) (- (quotient (now-nanos) 1000000) vm-start-ms)))
+  (def "getAvailableProcessors()I" (lambda (this) 1))   ; as Runtime says
+  (def "getTotalClassCount()J" (lambda (this) (hashtable-size classes)))
+  (def "getInitializedClassCount()J"
+       (lambda (this) (length (filter (lambda (c) (eq? (jclass-state c) 'initialized)) (vector->list (hashtable-values classes))))))
+  (def "getTotalThreadCount()J" (lambda (this) (fx+ 1 threads-started)))
+  (def "getLiveThreadCount()I" (lambda (this) (fx+ 1 (length java-live-threads))))
+  (def "getPeakThreadCount()I" (lambda (this) threads-peak))
+  (def "getDaemonThreadCount()I" (lambda (this) (length (filter thread-daemon? java-live-threads)))))
+
+;; heap: Chez's allocated and committed bytes, no limit; non-heap: nothing
+(define (memory-usage init used committed max)
+  (jinit "java/lang/management/MemoryUsage")
+  (let ([u (jnew "java/lang/management/MemoryUsage")])
+    ((method-proc "java/lang/management/MemoryUsage" "<init>(JJJJ)V") u init used committed max)
+    u))
+(defnative "sun/management/MemoryImpl.getMemoryUsage0(Z)Ljava/lang/management/MemoryUsage;" (this heap)
+  (if (eqv? heap 1)
+      (let ([used (bytes-allocated)]) (memory-usage -1 used (max used (current-memory-bytes)) -1))
+      (memory-usage -1 0 0 -1)))
+(defnative "sun/management/MemoryImpl.getMemoryPools0()[Ljava/lang/management/MemoryPoolMXBean;" ()
+  (make-jarr "Ljava/lang/management/MemoryPoolMXBean;" (vector)))
+(defnative "sun/management/MemoryImpl.getMemoryManagers0()[Ljava/lang/management/MemoryManagerMXBean;" ()
+  (make-jarr "Ljava/lang/management/MemoryManagerMXBean;" (vector)))
+(defnative "sun/management/MemoryImpl.setVerboseGC(Z)V" (this on) (void))
+(defnative "sun/management/ClassLoadingImpl.setVerboseClass(Z)V" (on) (void))
+;; OperatingSystemMXBean.getSystemLoadAverage: the 1, 5 and 15 minute figures
+(define libc-getloadavg (foreign-procedure "getloadavg" (uptr int) int))
+(defnative "jdk/internal/misc/Unsafe.getLoadAverage0([DI)I" (this arr n)
+  (let* ([n (fxmin n 3 (vector-length (jarr-vec (nn arr))))] [buf (foreign-alloc 24)])
+    (let ([got (libc-getloadavg buf n)])
+      (do ([i 0 (fx+ i 1)]) ((fx>= i got)) (vector-set! (jarr-vec arr) i (foreign-ref 'double buf (fx* i 8))))
+      (foreign-free buf)
+      got)))
+(defnative "sun/management/ThreadImpl.getThreads()[Ljava/lang/Thread;" ()
+  (make-jarr "Ljava/lang/Thread;" (list->vector (cons main-thread (reverse java-live-threads)))))
+
+;; --- environment, process ids, native libraries ----------------------------------------
+
+(define natives-macos? (and (memq (machine-type) '(tarm64osx arm64osx ta6osx a6osx)) #t))
+(define java-home-dir (or (getenv "JAVA_HOME") "/"))   ; the java.home property too
+
+;; The environment as ProcessEnvironment wants it: name and value bytes
+;; alternating, each entry split at its first '='. macOS reaches environ
+;; through _NSGetEnviron(); Linux exports the variable itself.
+(define (environ-pointer)
+  (cond [(foreign-entry? "_NSGetEnviron") (foreign-ref 'uptr ((foreign-procedure "_NSGetEnviron" () uptr)) 0)]
+        [(foreign-entry? "environ") (foreign-ref 'uptr (foreign-entry "environ") 0)]
+        [else 0]))
+(defnative "java/lang/ProcessEnvironment.environ()[[B" ()
+  (let ([envp (environ-pointer)])
+    (let loop ([i 0] [acc '()])
+      (let ([p (if (eqv? envp 0) 0 (foreign-ref 'uptr envp (fx* i (foreign-sizeof 'uptr))))])
+        (if (eqv? p 0)
+            (make-jarr "[B" (list->vector (reverse acc)))
+            (let* ([n (cstring-length p)]
+                   [eq (let find ([j 0])
+                         (cond [(fx= j n) #f] [(fx= (foreign-ref 'unsigned-8 p j) 61) j] [else (find (fx+ j 1))]))])
+              (loop (fx+ i 1)
+                    (if eq
+                        (cons (cbytes (+ p eq 1) (fx- n eq 1)) (cons (cbytes p eq) acc))
+                        acc))))))))
+
+(define libc-getpid (foreign-procedure "getpid" () int))
+(define libc-getppid (foreign-procedure "getppid" () int))
+(define libc-kill (foreign-procedure "kill" (int int) int))
+;; ProcessImpl's class setup; its launch natives stay missing, so starting a
+;; process throws UnsatisfiedLinkError. ProcessEnvironment needs its charset.
+(defnative "java/lang/ProcessImpl.init()V" () (void))
+(defnative "java/lang/ProcessHandleImpl.initNative()V" () (void))
+(defnative "java/lang/ProcessHandleImpl.getCurrentPid0()J" () (libc-getpid))
+;; The JVM answers a live process's start time, or -1 for one that is gone;
+;; 0 is a start time ProcessHandleImpl treats as unknown. kill(pid, 0) tells
+;; the two apart, and EPERM still means the process exists.
+(defnative "java/lang/ProcessHandleImpl.isAlive0(J)J" (pid)
+  (if (or (eqv? 0 (libc-kill pid 0)) (eqv? (errno) 1)) 0 -1))
+(defnative "java/lang/ProcessHandleImpl.parent0(JJ)J" (pid start)
+  (if (eqv? pid (libc-getpid)) (libc-getppid) -1))
+
+(defnative "java/lang/System.mapLibraryName(Ljava/lang/String;)Ljava/lang/String;" (name)
+  (jstring (string-append "lib" (jstring->scheme (nn name)) (if natives-macos? ".dylib" ".so"))))
+;; The JDK's own libraries are champaca's natives, so loading one is a no-op.
+;; Nothing else can load (there is no JNI), which is the JVM's error for a
+;; library that isn't on java.library.path.
+(define-override! "java/lang/ClassLoader.loadLibrary(Ljava/lang/Class;Ljava/lang/String;)Ljdk/internal/loader/NativeLibrary;"
+  (lambda (from name)
+    (let ([n (jstring->scheme (nn name))])
+      (if (file-exists? (string-append java-home-dir "/lib/lib" n (if natives-macos? ".dylib" ".so")))
+          #f   ; Runtime.loadLibrary0 drops the result
+          (jthrow "java/lang/UnsatisfiedLinkError"
+                  (string-append "no " n " in java.library.path, and champaca loads no JNI libraries"))))))
+
 (defnative "java/lang/Runtime.availableProcessors()I" (this) 1)
 (defnative "java/lang/Runtime.maxMemory()J" (this) 4294967296)
-(defnative "java/lang/Runtime.totalMemory()J" (this) 1073741824)
-(defnative "java/lang/Runtime.freeMemory()J" (this) 536870912)
+;; Chez's heap: committed and allocated bytes; max stays a nominal 4 GB
+(defnative "java/lang/Runtime.totalMemory()J" (this) (current-memory-bytes))
+(defnative "java/lang/Runtime.freeMemory()J" (this) (max 0 (- (current-memory-bytes) (bytes-allocated))))
 (defnative "java/lang/Runtime.gc()V" (this) (collect))
 
 ;; --- java.lang.Class --------------------------------------------------------------
@@ -402,7 +517,7 @@
 
 (defnative "jdk/internal/util/SystemProps$Raw.vmProperties()[Ljava/lang/String;" ()
   (props-array
-   `(("java.home" . ,(or (getenv "JAVA_HOME") "/"))
+   `(("java.home" . ,java-home-dir)
      ("java.vm.name" . "champaca")
      ("java.vm.vendor" . "champaca")
      ("java.vm.version" . "0.0-spike")
@@ -825,7 +940,7 @@
 
 ;; A started thread: run(), then what HotSpot does on the way out. An
 ;; uncaught exception goes to dispatchUncaughtException, which prints it the
-;; JDK's way; anything else (a missing native) is reported here. Then
+;; JDK's way; anything else (a runtime bug) is reported here. Then
 ;; Thread.exit(), and the thread is marked terminated and its monitor
 ;; notified, which is what join() waits on.
 (define (thread-body t)
@@ -848,11 +963,15 @@
   (set! java-live-threads (remq t java-live-threads))
   (flush-output-port (current-output-port)))
 
+(define threads-started 0)   ; for the management beans; main isn't counted
+(define threads-peak 1)
 (defnative "java/lang/Thread.start0()V" (this)
   (let ([s (make-jthread-state this '() #f #f 0 #f)])
     (eq-hashtable-set! jthread-states this s)
     (thread-alive! this #t)
     (set! java-live-threads (cons this java-live-threads))
+    (set! threads-started (fx+ threads-started 1))
+    (set! threads-peak (fxmax threads-peak (fx+ 1 (length java-live-threads))))
     ;; jolt's fork-thread/daemon, so jolt's own exit waits for the thread
     ;; exactly when a JVM would: a daemon thread doesn't hold the process open
     (fork-thread/daemon

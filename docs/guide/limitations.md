@@ -22,7 +22,13 @@ Methods, fields, constructors, `Method.invoke`, `newInstance` and field get and 
 
 ## Native code
 
-A JDK library load (`zip`, `net` and so on) is a no-op, because those natives are Scheme here. A Java library's own JNI code can't load at all. Natives champaca hasn't written yet fail as `:missing-native` ([debugging](debugging.md#a-missing-native)).
+A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because those natives are Scheme here. A Java library's own JNI code can't load: `System.loadLibrary` throws `UnsatisfiedLinkError` for any library the JDK doesn't ship, as the JVM does for one that isn't on `java.library.path`. A native champaca hasn't written yet throws `UnsatisfiedLinkError` too ([debugging](debugging.md#a-missing-native)), so a library's try/catch around an optional feature works as on the JVM, and a program that needs the native stops there. The ones known to be missing, roughly in the order a library meets them:
+
+- `java.net` has no natives at all, so sockets, HTTP clients and JDBC drivers stop at `InetAddress.init`.
+- `ProcessBuilder.start()` stops at `ProcessImpl.forkAndExec`. `System.getenv()` and `ProcessHandle.current()` work (pid, parent, liveness), and `ProcessHandle.Info` stops at `info0`.
+- `StackWalker` stops at `StackStreamFactory.checkStackWalkModes`, and `Throwable.getStackTrace()` is empty ([debugging](debugging.md)).
+- `java.management`: the Runtime, Memory, OperatingSystem and ClassLoading beans answer, and `ThreadMXBean` counts and lists threads. `ThreadInfo` stops at `getThreadInfo1`; CPU times and deadlock detection say they're unsupported, as the JDK does when the VM reports no support; the garbage collector and memory pool lists are empty; `RuntimeMXBean.getName()` needs `InetAddress`. Memory figures are Chez's own heap counters, the same ones `Runtime.totalMemory()` and `freeMemory()` report.
+- `ModuleLayer.boot()` is an empty layer rather than null, so asking it for a module gives an empty `Optional`; the module system itself never boots ([jars-and-modules](jars-and-modules.md)), which is also why `java.lang.reflect.Proxy` throws `InternalError` and `ServiceLoader` doesn't see the JDK's own providers (`jdk.localedata`, `jdk.charsets`).
 
 ## The calling API
 
@@ -42,7 +48,7 @@ The startup cache makes boot quick, and plain computation now runs within a few 
 
 - `java.nio.file` needs macOS, or Linux with glibc 2.33 or newer, on arm64 or x86_64. The file natives read `struct stat`, `struct dirent`, `struct flock` and `struct statvfs` through a table of offsets measured on each of those systems, and call `stat`, which glibc only exports itself since 2.33 (RHEL 8 and Debian 11 are older). On anything else, a BSD, musl or an older glibc, `UnixNativeDispatcher.init` throws `UnsupportedOperationException` instead of guessing. Only Ubuntu 26.04 (glibc 2.43) has been tested. `java.io` streams and `RandomAccessFile` don't depend on those layouts and work anywhere libc does. On Linux the birth time comes from `statx`, as the JVM's does.
 - Linux's container support is off, as with `-XX:-UseContainerSupport`: inside a container champaca reports the host's memory and processor count, where the JVM reports the container's limits.
-- No selectors: `Selector.open()` stops at a missing native, `KQueue`'s on macOS and `EPoll`'s on Linux, so non-blocking channels don't work. File watching works on macOS, where the JDK's `WatchService` polls in plain Java, but not on Linux, where it needs inotify natives champaca doesn't have yet.
+- No selectors: `Selector.open()` throws `UnsatisfiedLinkError` at a missing native, `KQueue`'s on macOS and `EPoll`'s on Linux, so non-blocking channels don't work. File watching works on macOS, where the JDK's `WatchService` polls in plain Java, but not on Linux, where it needs inotify natives champaca doesn't have yet.
 - `Files.getFileStore` and the other mount queries have no natives yet.
 - `available()` on a pipe or a terminal is 0, where the JVM asks the kernel how much is waiting.
 - `Unsafe.copyMemory` between native memory and a `float[]` or `double[]` fails, since those arrays hold Scheme flonums rather than bytes.

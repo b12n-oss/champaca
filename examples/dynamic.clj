@@ -47,3 +47,6 @@
                               (ldk/invoke-static "java.lang.String" "valueOf" (ldk/invoke-static "java.lang.Character" "toChars" 0xD800)))))
 (try (ldk/invoke-static "java.lang.Integer" "parseInt" "x")
      (catch Exception e (p "caught" (ex-message e))))
+;; a native champaca lacks is an UnsatisfiedLinkError, caught like any Java exception
+(p "missing native" (try (ldk/invoke-static "java.net.InetAddress" "getByName" "localhost")
+                         (catch Exception e [(subs (ex-message e) 0 30) (contains? (ex-data e) :java/exception)])))

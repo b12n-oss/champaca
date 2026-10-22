@@ -6,7 +6,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 
 | Variable | What it does |
 |---|---|
-| `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception or a missing native prints where it happened, and says on stderr why an NPE got no message |
+| `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception prints where it happened; names each native champaca lacks on stderr as it's hit; says why an NPE got no message |
 | `CHAMPACA_STATS=1` | prints how many classes were loaded, methods compiled and cached units loaded, after boot and at exit |
 | `CHAMPACA_PROF=1` | prints how long each boot phase took |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
@@ -43,25 +43,24 @@ Frames name the method by its JVM descriptor and carry no line numbers. The JVM 
 
 ## Errors on the jolt side
 
-Calls through `champaca.api` raise an `ex-info` of one of three kinds:
+Calls through `champaca.api` raise an `ex-info` of one of two kinds:
 
 | Kind | How to tell | Message |
 |---|---|---|
 | a Java exception | `(:java/exception (ex-data e))` is the exception object | the exception's `toString` |
 | no overload fits, or two fit equally | `(:champaca/error (ex-data e))` is `:lookup` | the method name and every candidate's descriptor |
-| a JDK native champaca lacks | `(:champaca/error (ex-data e))` is `:missing-native` | `champaca: missing native <class>.<name><descriptor>` |
 
-The first two are covered in [calling-java](calling-java.md#exceptions).
+Both are covered in [calling-java](calling-java.md#exceptions). A native champaca lacks is the first kind: it throws `java.lang.UnsatisfiedLinkError` named after the native, as below.
 
 ### A missing native
 
-The JDK declares many of its methods `native` and leaves them to the JVM. Champaca writes the ones the tested paths reach in Scheme, in `resources/champaca/natives.ss` (and `reflect.ss` for reflection), and adds more as programs need them. Reaching one that isn't there looks like this:
+The JDK declares many of its methods `native` and leaves them to the JVM. Champaca writes the ones the tested paths reach in Scheme, in `resources/champaca/natives.ss` (and `reflect.ss` for reflection, `files.ss` for files), and adds more as programs need them. Calling one that isn't there throws `UnsatisfiedLinkError`, which is what the JVM throws for a `native` method whose library was never loaded, so a library that wraps an optional feature in a try/catch keeps going. Uncaught, it ends the program like any other exception:
 
 ```text
-champaca: missing native java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;
+Exception in thread "main" java.lang.UnsatisfiedLinkError: java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;
 ```
 
-That one was real; this guide turned it up. The first fix was one line, answering null, which is what HotSpot answers when it has nothing to say (the JVM's full message came later, in `npe.clj`):
+With `CHAMPACA_BT=1` the name is also printed on stderr the moment the native is hit, whether or not something catches the error, which is the quickest way to list what a new library needs. That example was real; this guide turned it up. The first fix was one line, answering null, which is what HotSpot answers when it has nothing to say (the JVM's full message came later, in `npe.clj`):
 
 ```scheme
 (defnative "java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;" (this) #f)

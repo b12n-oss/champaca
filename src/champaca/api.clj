@@ -36,9 +36,6 @@
                            {:java/exception (s/call "ldk-exception-object" e)}))
            (and @dynamic-loaded (s/call "ldk-api-error?" e))
            (throw (ex-info (s/call "ldk-api-error-message" e) {:champaca/error :lookup}))
-           ;; the runtime's own records; jolt wraps real Chez errors itself
-           (s/call "ldk-missing-native?" e)
-           (throw (ex-info (s/call "ldk-condition-message" e) {:champaca/error :missing-native}))
            :else (throw e)))))
 
 (defn- rethrow

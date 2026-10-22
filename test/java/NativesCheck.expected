@@ -1,0 +1,11 @@
+env: true a=b=c a=b=c true true true
+env is read-only: java.lang.UnsupportedOperationException
+pid: true true true true false
+mapLibraryName: true true
+no such library: java.lang.UnsatisfiedLinkError
+missing native: java.lang.UnsatisfiedLinkError
+in thread native-less: java.lang.UnsatisfiedLinkError
+runtime bean: true true Java Virtual Machine Specification
+heap: true true true
+os bean: true false true
+threads: true
