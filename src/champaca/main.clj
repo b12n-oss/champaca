@@ -785,6 +785,30 @@
 ;; classfile/*lines* the first time a class is asked (a normal parse skips
 ;; the table), the module from the image's package index for a JDK class.
 
+;; jdk.internal.vm.annotation.Hidden marks methods the JVM leaves out of
+;; stack traces (Thread.runWith, lambda forms). It has no elements, but the
+;; method's other annotations may, so their values are skipped by the
+;; element_value grammar (JVMS 4.7.16.1).
+(declare ann-skip)
+(defn- ann-u2 [b i] (+ (* 256 (bit-and (nth b i) 0xff)) (bit-and (nth b (inc i)) 0xff)))
+(defn- ann-skip-annotation [b i]
+  (let [n (ann-u2 b (+ i 2))]
+    (loop [j (+ i 4) k 0] (if (= k n) j (recur (ann-skip b (+ j 2)) (inc k))))))
+(defn- ann-skip [b i]
+  (case (char (bit-and (nth b i) 0xff))
+    (\B \C \D \F \I \J \S \Z \s \c) (+ i 3)
+    \e (+ i 5)
+    \@ (ann-skip-annotation b (inc i))
+    \[ (let [n (ann-u2 b (inc i))] (loop [j (+ i 3) k 0] (if (= k n) j (recur (ann-skip b j) (inc k)))))))
+(defn- hidden-method? [cp m]
+  (when-let [b (:annotations m)]
+    (try (let [n (ann-u2 b 0)]
+           (loop [i 2 k 0]
+             (cond (= k n) false
+                   (= "Ljdk/internal/vm/annotation/Hidden;" (:value (cp (ann-u2 b i)))) true
+                   :else (recur (ann-skip-annotation b i) (inc k)))))
+         (catch Exception _ false))))
+
 (defn- frame-class [cname]
   (let [cache (:frame-classes @state)]
     (if (contains? cache cname)
@@ -796,7 +820,9 @@
                            :module (when (= :jdk (:origin (class-info cname)))
                                      (package-module (if slash (subs cname 0 slash) "")))
                            :lines (into {} (for [m (:methods p) :when (:code m)]
-                                             [(str (:name m) (:desc m)) (:lines (:code m))]))}))
+                                             [(str (:name m) (:desc m)) (:lines (:code m))]))
+                           :hidden (set (for [m (:methods p) :when (hidden-method? (:cp p) m)]
+                                          (str (:name m) (:desc m))))}))
                       (catch Exception e
                         (when (env "CHAMPACA_BT")
                           (binding [*out* *err*] (println "champaca: no source lines for" cname (ex-message e))))
@@ -805,15 +831,16 @@
         info))))
 
 (defn- frame-info
-  "[file line module] for cname.mname desc at bytecode pc, with \"\" and -1
-  where unknown; pc -1 is a frame whose pc wasn't recorded."
+  "[file line module hidden] for cname.mname desc at bytecode pc, with \"\"
+  and -1 where unknown (pc -1 is a frame whose pc wasn't recorded), hidden
+  1 for a method the JVM leaves out of traces."
   [cname mname desc pc]
-  (let [{:keys [source module lines]} (frame-class cname)
+  (let [{:keys [source module lines hidden]} (frame-class cname)
         table (get lines (str mname desc))
         line (if (and (seq table) (>= pc 0))
                (or (some (fn [[start l]] (when (<= start pc) l)) (rseq table)) -1)
                -1)]
-    [(or source "") line (or module "")]))
+    [(or source "") line (or module "") (if (contains? hidden (str mname desc)) 1 0)]))
 
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
@@ -1015,7 +1042,7 @@
   (s/call "set-npe-hook!" (fn [site] (or (npe-message site) false)))
   ;; stack traces: a frame's file, line and module as a Scheme vector
   (s/call "set-frame-hook!" (fn [cname mname desc pc]
-                              (let [[f l m] (frame-info cname mname desc pc)] (s/call "vector" f l m))))
+                              (let [[f l m h] (frame-info cname mname desc pc)] (s/call "vector" f l m h))))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
     (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))

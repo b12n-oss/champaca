@@ -202,7 +202,7 @@
 ;; rather than the next segment. About 12 ns a frame.
 (define (raw-frames k)
   (let loop ([k k] [n 0] [acc '()])
-    (if (or (eq? k #%$null-continuation) (not (#%$continuation? k)) (fx= n 1024))
+    (if (or (eq? k #%$null-continuation) (not (#%$continuation? k)) (fx= n 8192))
         (reverse acc)
         (begin
           (#%$split-continuation k 0)
@@ -243,67 +243,104 @@
   (let ([n (string-length s)] [m (string-length sub)])
     (let loop ([i 0])
       (cond [(fx> (fx+ i m) n) #f]
-            [(string=? (substring s i (fx+ i m)) sub) i]
+            [(let same ([j 0]) (or (fx= j m) (and (char=? (string-ref s (fx+ i j)) (string-ref sub j)) (same (fx+ j 1))))) i]
             [else (loop (fx+ i 1))]))))
 
 ;; a code name -> (cname mname desc block?), or #f for a frame that isn't a
 ;; Java method's; block? for a "#B", "#E" or "#T" procedure of the method
-;; rather than its own lambda. champaca's own classes (lambda bodies) aren't
-;; frames the JVM has.
+;; rather than its own lambda. An inlined leaf is "Caller#I:Callee@pc" (one
+;; copy per call site), the callee's own activation. champaca's own classes
+;; (lambda bodies) aren't frames the JVM has. Cached per name.
+(define frame-methods (make-hashtable string-hash string=?))
 (define (frame-method name)
+  (let ([hit (hashtable-ref frame-methods name 'none)])
+    (if (eq? hit 'none)
+        (let ([m (parse-frame-method name)]) (hashtable-set! frame-methods name m) m)
+        hit)))
+(define (parse-frame-method name)
   (let* ([inl (string-find-sub name "#I:")]
          [name (if inl (substring name (fx+ inl 3) (string-length name)) name)]
          [paren (string-find name #\( 0)])
     (and paren
          (let ([dot (let back ([i (fx- paren 1)])
                       (cond [(fx< i 0) #f] [(char=? (string-ref name i) #\.) i] [else (back (fx- i 1))]))]
-               [hash (string-find name #\# paren)])
+               [hash (string-find name #\# paren)]
+               [at (string-find name #\@ paren)])
            (and dot
-                (let ([cname (substring name 0 dot)])
+                (let ([cname (substring name 0 dot)]
+                      [end (cond [(and hash at) (fxmin hash at)] [hash hash] [at at] [else (string-length name)])])
                   (and (not (and (fx>= (string-length cname) 9) (string=? (substring cname 0 9) "champaca/")))
                        (list cname (substring name (fx+ dot 1) paren)
-                             (substring name paren (or hash (string-length name)))
+                             (substring name paren end)
                              (and hash #t)))))))))
 
-;; the pc in a pending call's recorded expression, or #f
-(define (marker-pc v)
-  (let ()
-    (and (pair? v)
-         (let ([op (car v)])
-           (and (pair? op) (eq? (car op) 'begin) (pair? (cdr op))
-                (let ([q (cadr op)])
-                  (and (pair? q) (eq? (car q) 'quote) (pair? (cdr q))
-                       (let ([m (cadr q)])
-                         (and (pair? m) (eq? (car m) 'jpc) (fixnum? (cdr m)) (cdr m))))))))))
+;; The marker in a pending call's recorded expression, in its operator or
+;; one of its arguments: a pc, or (site-pc callee-tag . pc) inside an
+;; inlined leaf (codegen's jpc), or #f.
+(define (jpc-datum x)
+  (and (pair? x) (eq? (car x) 'begin) (pair? (cdr x))
+       (let ([q (cadr x)])
+         (and (pair? q) (eq? (car q) 'quote) (pair? (cdr q))
+              (let ([m (cadr q)])
+                (and (pair? m) (eq? (car m) 'jpc)
+                     (let ([d (cdr m)]) (and (or (fixnum? d) (pair? d)) d))))))))
+(define (frame-marker v)
+  (and (pair? v) (list? v)
+       (let loop ([xs v])
+         (cond [(null? xs) #f]
+               [(jpc-datum (car xs)) => (lambda (d) d)]
+               [else (loop (cdr xs))]))))
 
-;; the Java stack of continuation k, innermost first: (cname mname desc pc)
-;; per activation, pc -1 for a frame that recorded none. A method with
-;; handlers runs its blocks through a trampoline, so an activation is a
-;; block frame and then the method's own: the two merge, the block's pc
-;; winning since its call is the pending one. A block frame on its own (a
-;; block Chez didn't fold, tail-called) is an activation by itself.
+;; a marker for the frame of method m (cname mname desc ...): its own pc,
+;; and the callee activation to put above it when the marker is an inlined
+;; leaf's and this frame isn't the leaf's own (a copy Chez didn't fold keeps
+;; a frame of its own, named for the callee)
+(define (marker-pcs d m)
+  (cond [(not d) (values -1 #f)]
+        [(fixnum? d) (values d #f)]
+        [else (let* ([spc (car d)] [tag (symbol->string (cadr d))] [cpc (cddr d)]
+                     [callee (frame-method tag)])
+                (if (and callee (string=? (car callee) (car m)) (string=? (cadr callee) (cadr m)) (string=? (caddr callee) (caddr m)))
+                    (values cpc #f)
+                    (values spc (and callee (list (car callee) (cadr callee) (caddr callee) cpc)))))]))
+
+;; the Java stack of raw frames, innermost first: (cname mname desc pc) per
+;; activation, pc -1 for a frame that recorded none (getOurStackTrace keeps
+;; 1024 of them, as HotSpot does). A method with handlers runs its blocks through a
+;; trampoline, so an activation is a block frame and then the method's own:
+;; the two merge, the block's pc winning since its call is the pending one.
+;; A block frame on its own (a block Chez didn't fold, tail-called) is an
+;; activation by itself. An inlined leaf's marker adds the leaf's activation
+;; above the frame it was folded into.
 (define (java-frames-of frames)   ; frames from raw-frames
-  (let loop ([fs frames] [pending #f] [acc '()])
-    (if (null? fs)
+  (let loop ([fs frames] [pending #f] [acc '()] [n 0])
+    (if (or (null? fs) (fx>= n 4096))
         (reverse (map (lambda (f) (list-head f 4)) acc))
         (let* ([code (caar fs)]
                [name (#%$code-name code)]
                [m (and (string? name) (frame-method name))]
-               [pc (marker-pc (return-sexpr code (cdar fs)))])
+               [d (frame-marker (return-sexpr code (cdar fs)))])
           (cond
-            [(not m) (loop (cdr fs) (or pending pc) acc)]
+            [(not m) (loop (cdr fs) (or pending d) acc n)]
             [(and (not (cadddr m)) (pair? acc)
                   (let ([last (car acc)])
                     (and (car (cddddr last))   ; a block frame of this same method
                          (string=? (car last) (car m)) (string=? (cadr last) (cadr m)) (string=? (caddr last) (caddr m)))))
+             ;; the block's pc and any callee above it stay as they are
              (let ([last (car acc)])
+               (if (fx>= (cadddr last) 0)
+                   (loop (cdr fs) #f (cons (list (car m) (cadr m) (caddr m) (cadddr last) #f) (cdr acc)) n)
+                   (let-values ([(pc callee) (marker-pcs (or d pending) m)])
+                     (loop (cdr fs) #f
+                           (cons (list (car m) (cadr m) (caddr m) pc #f)
+                                 (if callee (cons (append callee (list #f)) (cdr acc)) (cdr acc)))
+                           (if callee (fx+ n 1) n)))))]
+            [else
+             (let-values ([(pc callee) (marker-pcs (or d pending) m)])
                (loop (cdr fs) #f
-                     (cons (list (car m) (cadr m) (caddr m)
-                                 (if (fx>= (cadddr last) 0) (cadddr last) (or pc pending -1))
-                                 #f)
-                           (cdr acc))))]
-            [else (loop (cdr fs) #f
-                        (cons (list (car m) (cadr m) (caddr m) (or pc pending -1) (cadddr m)) acc))])))))
+                     (cons (list (car m) (cadr m) (caddr m) pc (cadddr m))
+                           (if callee (cons (append callee (list #f)) acc) acc))
+                     (fx+ n (if callee 2 1))))])))))
 
 (define (java-frame-class name)
   ;; "pkg/Cls.meth(desc)#B4" -> "pkg/Cls"

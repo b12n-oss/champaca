@@ -308,28 +308,50 @@
 ;; --- Throwable ------------------------------------------------------------------
 
 ;; fillInStackTrace keeps the raw frames (reflect.ss raw-frames, a pair per
-;; frame, about as cheap as HotSpot's own backtrace) in the Throwable's
-;; backtrace field, and getOurStackTrace turns them into StackTraceElements
-;; when something asks, with the file, line and module from a jolt hook
-;; (main.clj frame-info). Nothing else keeps the stack alive.
+;; frame, about as cheap as HotSpot's own backtrace) in a weak table under
+;; the Throwable, whose backtrace field is set to the Throwable itself: non
+;; null, which is all the JDK asks of it, and a Java value, which reflection
+;; may read. getOurStackTrace turns the frames into StackTraceElements when
+;; something asks, with the file, line, module and hidden flag from a jolt
+;; hook (main.clj frame-info). Nothing else keeps the stack alive.
 (define frame-hook #f)
 (define (set-frame-hook! f) (set! frame-hook f))
+(define throw-frames (make-weak-eq-hashtable))
 (define (slot-of cname fname) (jfield-index cname fname))
 
 (defnative "java/lang/Throwable.fillInStackTrace(I)Ljava/lang/Throwable;" (this dummy)
   (eq-hashtable-set! throw-stacks this jstack)   ; CHAMPACA_BT's shadow stack
-  (jslot-set! this (slot-of "java/lang/Throwable" "backtrace") (call/1cc (lambda (k) (raw-frames k))))
+  (eq-hashtable-set! throw-frames this (call/1cc (lambda (k) (raw-frames k))))
+  (jslot-set! this (slot-of "java/lang/Throwable" "backtrace") this)
   this)
 
-;; HotSpot leaves out fillInStackTrace and the throwable's own constructors
-(define (trace-frames frames)
-  (let loop ([fs frames])
-    (if (and (pair? fs)
-             (let ([cname (caar fs)] [mname (cadar fs)])
-               (or (string=? mname "fillInStackTrace")
-                   (and (string=? mname "<init>") (class-assignable? cname "java/lang/Throwable")))))
-        (loop (cdr fs))
-        fs)))
+;; HotSpot leaves out fillInStackTrace and the constructors of the
+;; throwable's own class and its superclasses, not of a throwable it makes
+;; inside one of its constructors
+(define (trace-frames frames this)
+  (let ([tc (class-name-of this)])
+    (let loop ([fs frames])
+      (if (and (pair? fs)
+               (let ([cname (caar fs)] [mname (cadar fs)])
+                 (or (string=? mname "fillInStackTrace")
+                     (and (string=? mname "<init>") (class-assignable? tc cname)))))
+          (loop (cdr fs))
+          fs))))
+
+;; frames of methods the JVM hides (@Hidden: Thread.runWith, lambda forms),
+;; asked of the hook once per method
+(define hidden-methods (make-hashtable string-hash string=?))
+(define (frame-hidden? f)
+  (let ([key (string-append (car f) "." (cadr f) (caddr f))])
+    (let ([hit (hashtable-ref hidden-methods key 'none)])
+      (if (eq? hit 'none)
+          (let ([h (and frame-hook
+                        (let ([info (frame-hook (car f) (cadr f) (caddr f) -1)])
+                          (and (fx> (vector-length info) 3) (eqv? 1 (vector-ref info 3)))))])
+            (hashtable-set! hidden-methods key h)
+            h)
+          hit))))
+(define (visible-frames frames) (filter (lambda (f) (not (frame-hidden? f))) frames))
 
 ;; ste for cname.mname desc at pc, its format bits still to compute
 (define (fill-ste! ste cname mname desc pc)
@@ -358,21 +380,24 @@
            [cur (jslot this slot)]
            [unassigned (begin (jinit "java/lang/Throwable") (top-level-value 'java/lang/Throwable:UNASSIGNED_STACK))])
       (if (or (not cur) (eq? cur unassigned))
-          (let ([raw (jslot this (slot-of "java/lang/Throwable" "backtrace"))])
-            (if (or (pair? raw) (null? raw))
-                (let ([arr (stack-trace-array (trace-frames (java-frames-of raw)))])
+          (let ([raw (eq-hashtable-ref throw-frames this #f)])
+            (if raw
+                (let* ([fs (visible-frames (trace-frames (java-frames-of raw) this))]
+                       [arr (stack-trace-array (if (fx> (length fs) 1024) (list-head fs 1024) fs))])
                   (jslot-set! this slot arr)
+                  (eq-hashtable-delete! throw-frames this)
                   arr)
                 unassigned))
           cur))))
 
 ;; StackWalker: callStackWalk hands the first batch of frames to Java's
-;; doStackWalk and keeps the rest under an anchor for fetchStackFrames. A
-;; frame is a ClassFrameInfo (its Class) or a StackFrameInfo (a
-;; ResolvedMethodName holding the Class, plus name, descriptor and bci).
+;; doStackWalk and keeps the rest under the walker (one per walk, weakly: a
+;; walk the JDK abandons before the end, limit(1) say, leaves nothing behind)
+;; for fetchStackFrames. A frame is a ClassFrameInfo (its Class) or a
+;; StackFrameInfo (a ResolvedMethodName holding the Class, plus name,
+;; descriptor and bci).
 (defnative "java/lang/StackStreamFactory.checkStackWalkModes()Z" () 1)
-(define walk-anchors (make-eqv-hashtable))
-(define walk-anchor-next 1)
+(define walk-anchors (make-weak-eq-hashtable))
 (define (list-tail* ls n) (if (or (fx= n 0) (null? ls)) ls (list-tail* (cdr ls) (fx- n 1))))
 (define (fill-frames! frames start size fs)
   (let ([v (jarr-vec frames)] [cmn (slot-of "java/lang/ClassFrameInfo" "classOrMemberName")])
@@ -391,20 +416,18 @@
             (loop (fx+ i 1) (cdr fs) (fx+ n 1)))))))
 (defnative "java/lang/StackStreamFactory$AbstractStackWalker.callStackWalk(IILjdk/internal/vm/ContinuationScope;Ljdk/internal/vm/Continuation;II[Ljava/lang/Object;)Ljava/lang/Object;"
   (this mode skip scope cont size start frames)
-  (let* ([fs (list-tail* (call/1cc (lambda (k) (java-frames-of (raw-frames k)))) skip)]
-         [anchor walk-anchor-next]
+  (let* ([fs (list-tail* (visible-frames (call/1cc (lambda (k) (java-frames-of (raw-frames k))))) skip)]
          [n (fill-frames! frames start size fs)])
-    (set! walk-anchor-next (fx+ anchor 1))
-    (hashtable-set! walk-anchors anchor (list-tail* fs n))
+    (eq-hashtable-set! walk-anchors this (list-tail* fs n))
     ((method-proc "java/lang/StackStreamFactory$AbstractStackWalker" "doStackWalk(JIIII)Ljava/lang/Object;")
-     this anchor skip n start (fx+ start n))))
+     this 1 skip n start (fx+ start n))))
 (defnative "java/lang/StackStreamFactory$AbstractStackWalker.fetchStackFrames(IJIII[Ljava/lang/Object;)I"
   (this mode anchor last size start frames)
-  (let* ([fs (hashtable-ref walk-anchors anchor '())]
+  (let* ([fs (eq-hashtable-ref walk-anchors this '())]
          [n (fill-frames! frames start size fs)])
     (if (fx= n 0)
-        (hashtable-delete! walk-anchors anchor)
-        (hashtable-set! walk-anchors anchor (list-tail* fs n)))
+        (eq-hashtable-delete! walk-anchors this)
+        (eq-hashtable-set! walk-anchors this (list-tail* fs n)))
     n))
 (defnative "java/lang/StackStreamFactory$AbstractStackWalker.setContinuation(J[Ljava/lang/Object;Ljdk/internal/vm/Continuation;)V"
   (this anchor frames cont) (void))

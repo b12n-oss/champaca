@@ -325,7 +325,7 @@
   (syntax-rules () [(_ x tag pc) (let ([o x]) (if o o (npe-at tag pc)))]))
 (define (jathrow-at x tag pc) (raise (nn-at x tag pc)))
 
-(define (jcheckcast x target)
+(define (jcheckcast x target . site)   ; site: codegen's tag and pc, for the trace
   (if (or (not x) (jinstance? x target))
       x
       (jthrow "java/lang/ClassCastException"
@@ -347,11 +347,12 @@
     r))
 (define-syntax jcheckcast-ic
   (syntax-rules ()
-    [(_ ic x target)
+    [(_ ic x target) (jcheckcast-ic ic x target #f -1)]
+    [(_ ic x target tag pc)
      (let ([o x])
        (if (or (not o) (and (jobj? o) (eq? (jobj-cls o) (car ic)) (cdr ic)))
            o
-           (begin (unless (jinstance-miss ic o target) (jcheckcast o target)) o)))]))
+           (begin (unless (jinstance-miss ic o target) (jcheckcast o target tag pc)) o)))]))
 
 (define (jslot x i) (vector-ref (jobj-slots (nn x)) i))
 (define (jslot-set! x i v) (vector-set! (jobj-slots (nn x)) i v))
@@ -414,18 +415,23 @@
   (let ([c (symbol-class s)]) (make-jobj c (vector-copy (jclass-template c)))))
 ;; The same from generated code, through a per-site cell that holds the class
 ;; once it is initialized, which it then stays: the check becomes one car.
+;; The trailing tag and pc (codegen's site) ride into the slow path's call,
+;; where a stack trace of an initializer's failure reads the pc (reflect.ss)
 (define-syntax jinit-ic
-  (syntax-rules () [(_ cell s) (unless (car cell) (jinit-cell! cell s))]))
-(define (jinit-cell! cell s)
+  (syntax-rules ()
+    [(_ cell s) (unless (car cell) (jinit-cell! cell s))]
+    [(_ cell s tag pc) (unless (car cell) (jinit-cell! cell s tag pc))]))
+(define (jinit-cell! cell s . site)
   (jinit-sym s)
   (let ([c (symbol-class s)])
     (when (eq? (jclass-state c) 'initialized) (set-car! cell c))))
 (define-syntax jnew-ic
   (syntax-rules ()
-    [(_ cell s) (let ([c (car cell)])
-                  (if c
-                      (make-jobj c (vector-copy (jclass-template c)))
-                      (begin (jinit-cell! cell s) (jnew-sym s))))]))
+    [(_ cell s) (jnew-ic cell s #f -1)]
+    [(_ cell s tag pc) (let ([c (car cell)])
+                         (if c
+                             (make-jobj c (vector-copy (jclass-template c)))
+                             (begin (jinit-cell! cell s tag pc) (jnew-sym s))))]))
 
 ;; --- arrays -------------------------------------------------------------------
 
@@ -451,7 +457,7 @@
           (do ([i 0 (fx+ i 1)]) ((fx= i (car dims)) a)
             (vector-set! (jarr-vec a) i (jmultiarray elem (cdr dims))))))))
 
-(define (bounds-error i v)
+(define (bounds-error i v . site)   ; site: codegen's tag and pc, for the trace
   (jthrow "java/lang/ArrayIndexOutOfBoundsException"
           (string-append "Index " (number->string i) " out of bounds for length "
                          (number->string (vector-length v)))))
@@ -481,14 +487,14 @@
     [(_ a i tag pc) (let ([arr a] [j i])
                     (if arr
                         (let ([v (jarr-vec arr)])
-                          (if (fx< -1 j (#3%vector-length v)) (#3%vector-ref v j) (bounds-error j v)))
+                          (if (fx< -1 j (#3%vector-length v)) (#3%vector-ref v j) (bounds-error j v tag pc)))
                         (npe-at tag pc)))]))
 (define-syntax array-set!
   (syntax-rules ()
     [(_ a i x tag pc) (let ([arr a] [j i])
                       (if arr
                           (let ([v (jarr-vec arr)])
-                            (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v)))
+                            (if (fx< -1 j (#3%vector-length v)) (#3%vector-set! v j x) (bounds-error j v tag pc)))
                           (npe-at tag pc)))]))
 ;; aastore: a reference array checks a non-null value against its element
 ;; type after the index, as the JVM does. Each site has a cell: its car is the
@@ -512,16 +518,16 @@
                                                 (let ([k (store-key o)])
                                                   (or (eq? c k)
                                                       (and (pair? c) (or (eq? (car c) k) (eq? (cdr c) k))))))))))
-                     (array-store-miss ic arr o))
+                     (array-store-miss ic arr o tag pc))
                    (#3%vector-set! v j o))
-                 (bounds-error j v)))
+                 (bounds-error j v tag pc)))
            (npe-at tag pc)))]))
 (define (array-store-ok? arr o)
   (let ([e (jarr-elem arr)])
     (or (string=? e "Ljava/lang/Object;") (jinstance? o (desc->class-name e)))))
 ;; The cell's car is cleared while it changes, so no store in between can
 ;; pair one element type with another's keys.
-(define (array-store-miss ic arr o)
+(define (array-store-miss ic arr o . site)   ; site: codegen's tag and pc, for the trace
   (unless (array-store-ok? arr o)
     (jthrow "java/lang/ArrayStoreException" (slashes->dots (class-name-of o))))
   (let ([e (jarr-elem arr)] [k (store-key o)] [c (cdr ic)])
@@ -803,19 +809,23 @@
   (let ([err (current-error-port)])
     (cond
       [(jobj? e)
-       ;; as ThreadGroup.uncaughtException prints it, trace included; the
+       ;; through the thread's own uncaught handler, as HotSpot does for main
+       ;; (ThreadGroup's prints "Exception in thread" and the trace); the
        ;; shadow stack only if that fails (an error during boot, say)
+       (flush-output-port err)   ; Java's System.err shares the fd
        (unless (guard (x [#t #f])
-                 (put-string err "Exception in thread \"main\" ")
-                 (flush-output-port err)   ; Java's System.err shares the fd
-                 ((jvirt e "printStackTrace()V") e)
+                 ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") current-jthread e)
                  #t)
-         (put-string err (string-append (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
+         (put-string err (string-append "Exception in thread \"main\" " (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
          (print-jstack e err))]
       [else
+       ;; the handler runs before the stack unwinds, so under CHAMPACA_BT
+       ;; jstack still says where in the Java program this happened
        (put-string err "champaca: Scheme error: ")
        (display-condition e err)
-       (newline err)])))
+       (newline err)
+       (for-each (lambda (f) (put-string err (string-append "\tat " f "\n")))
+                 (list-head jstack (min 25 (length jstack))))])))
 
 ;; Run thunk; report an escaping Java exception or Scheme error and return 1,
 ;; otherwise return 0.
@@ -856,7 +866,7 @@
 ;; cache's compiles (JDK code) turn it off: quiet-compile-file says why.
 (generate-inspector-information #t)
 (define jstack '())
-(define (jbt-frame x) x)   ; codegen's non-tail wrapper under CHAMPACA_BT
+(define (jframe x) x)   ; codegen's non-tail wrapper for synchronized and CHAMPACA_BT methods
 (define throw-stacks (make-weak-eq-hashtable))
 (define (print-jstack e port)
   (let ([frames (eq-hashtable-ref throw-stacks e #f)])

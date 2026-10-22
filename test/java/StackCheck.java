@@ -17,6 +17,19 @@ public class StackCheck {
         Custom() { this("chained"); }
     }
     static void throwsCustom() { throw new Custom(); }
+    // a throwable made inside another throwable's constructor keeps that frame
+    static class Wrapper extends RuntimeException { final Throwable made; Wrapper() { made = new IllegalArgumentException(); } }
+    // synchronized methods, and leaves whose only call is a throwing helper
+    static synchronized void syncStatic() { throw new IllegalStateException("sync"); }
+    synchronized void syncRec(int n) { if (n == 0) throw new IllegalStateException("sync n"); syncRec(n - 1); }
+    static int div(int a, int b) { return a / b; }
+    static long rem(long a, long b) { return a % b; }
+    static int idx(int[] a, int i) { return a[i]; }
+    static String cast(Object o) { return (String) o; }
+    static int[] arr(int n) { return new int[n]; }
+    static void store(Object[] a) { a[0] = 1; }
+    static int len(String s) { return s.length(); }
+    static class BadInit { static int x = 1 / Integer.parseInt("0"); }
 
     static String frames(StackTraceElement[] st, Predicate<StackTraceElement> keep) {
         StringBuilder sb = new StringBuilder();
@@ -53,6 +66,20 @@ public class StackCheck {
         }
         // the exception's own constructors are left out, as on the JVM
         try { throwsCustom(); } catch (Custom e) { System.out.println("custom: " + all(e.getStackTrace())); }
+        // the frame of a synchronized method, and recursion through one
+        try { syncStatic(); } catch (IllegalStateException e) { System.out.println("sync static: " + ours(e.getStackTrace())); }
+        try { new StackCheck().syncRec(2); } catch (IllegalStateException e) { System.out.println("sync recursion: " + ours(e.getStackTrace())); }
+        // exceptions the runtime throws itself, from small leaf methods
+        try { div(1, 0); } catch (ArithmeticException e) { System.out.println("div: " + ours(e.getStackTrace())); }
+        try { rem(1L, 0L); } catch (ArithmeticException e) { System.out.println("rem: " + ours(e.getStackTrace())); }
+        try { idx(new int[1], 5); } catch (ArrayIndexOutOfBoundsException e) { System.out.println("index: " + ours(e.getStackTrace())); }
+        try { cast(42); } catch (ClassCastException e) { System.out.println("cast: " + ours(e.getStackTrace())); }
+        try { arr(-1); } catch (NegativeArraySizeException e) { System.out.println("size: " + ours(e.getStackTrace())); }
+        try { store(new String[1]); } catch (ArrayStoreException e) { System.out.println("store: " + ours(e.getStackTrace())); }
+        try { len(null); } catch (NullPointerException e) { System.out.println("null: " + ours(e.getStackTrace())); }
+        try { System.out.println(BadInit.x); }
+        catch (ExceptionInInitializerError e) { System.out.println("init: " + ours(e.getStackTrace()) + " cause " + ours(e.getCause().getStackTrace())); }
+        System.out.println("constructor kept: " + ours(new Wrapper().made.getStackTrace()));
         // a JDK method throwing: JDK frames by name, ours with lines
         try { Integer.parseInt("x"); } catch (NumberFormatException e) {
             StackTraceElement top = e.getStackTrace()[0];
@@ -81,7 +108,7 @@ public class StackCheck {
         Throwable[] made = new Throwable[1];
         Thread th = new Thread(() -> made[0] = new Throwable(), "maker");
         th.start(); th.join();
-        System.out.println("thread: " + ours(made[0].getStackTrace()) + " < " + made[0].getStackTrace()[made[0].getStackTrace().length - 1].getClassName());
+        System.out.println("thread: " + ours(made[0].getStackTrace()) + " / " + frames(made[0].getStackTrace(), e -> !e.getClassName().startsWith("StackCheck")));
         // Thread.getStackTrace, StackWalker, the caller class, logging
         System.out.println("current thread: " + ours(Thread.currentThread().getStackTrace()));
         System.out.println("caller: " + Other.askCaller().getSimpleName() + " " + caller().getSimpleName());
@@ -100,6 +127,8 @@ public class StackCheck {
             System.out.println("recursion frames: " + n);
         }
         System.out.println("walked deep: " + walkDeep(300));
+        // a trace stops at 1024 frames
+        try { depth(1500); } catch (IllegalStateException e) { System.out.println("cap: " + e.getStackTrace().length); }
     }
     static int depth(int n) { if (n == 0) throw new IllegalStateException(); return depth(n - 1) + 1; }
     static long walkDeep(int n) {

@@ -220,13 +220,25 @@
 ;; what a null check passes to npe-at so the NPE's message can be built from
 ;; its bytecode: npe-tag, the method's Class.name(desc), which each compiled
 ;; method (an inlined callee too) binds once in its lambda, and the bci
-(defn- site [pc] (str "npe-tag " pc))
-
-;; A call's operator wrapped as (begin '(jpc . pc) op): Chez drops the
-;; constant, so the call costs the same, but the frame's recorded source
+;; Every call that can end up pending in a frame, and every helper that can
+;; throw, carries its bytecode pc as a constant (begin '(jpc . pc) x): Chez
+;; drops it, so the code costs the same, but the frame's recorded source
 ;; keeps it, and a stack trace reads the pc, hence the line, off the frame
-;; (reflect.ss java-frames-of).
-(defn- at [pc op] (sx "begin" (str "'(jpc . " pc ")") op))
+;; (reflect.ss java-frames-of). at wraps a call's operator; site is the
+;; "tag pc" argument pair of the null-check, array, class-init and cast
+;; helpers, its tag reference wrapped the same way.
+(def ^:dynamic *inline-site*
+  "[pc tag] of the call site a leaf callee is being compiled for. Markers
+  in its body then name the site and the callee, (jpc site-pc callee . pc),
+  so the walk shows the callee as a frame of its own above the caller's
+  line, as HotSpot does for an inlined method."
+  nil)
+(defn- jpc [pc]
+  (if-let [[spc] *inline-site*]
+    (str "'(jpc " spc " " (sym *method-tag*) " . " pc ")")
+    (str "'(jpc . " pc ")")))
+(defn- at [pc op] (sx "begin" (jpc pc) op))
+(defn- site [pc] (str (sx "begin" (jpc pc) "npe-tag") " " pc))
 
 (defn desc->t
   "Stack type of a field or return descriptor: I J F D or A."
@@ -393,7 +405,9 @@
   (let [{:keys [cls resolve next-pc live boxed jump]} ctx
         ;; what a direct call names: the callee inlined into this method when
         ;; it is a small leaf (compile-method), else its top-level definition
-        callee (fn [decl name desc] (or ((:inline! ctx) decl name desc) (method-global decl name desc)))
+        callee (fn [pc decl name desc]
+                 (or (binding [*inline-site* [pc *method-tag*]] ((:inline! ctx) decl name desc))
+                     (method-global decl name desc)))
         cp (:cp cls)
         this-class (:name cls)
         st (volatile! entry)
@@ -418,7 +432,7 @@
                ;; a jump passes the live locals and the stack as arguments
                (let [j (jump pc (concat (map #(str "l" %) live) (map s (range (count @st)))))]
                  (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
-        init (fn [c] (when (not= c this-class) (stmt! (sx "jinit-ic" ((:ic! ctx)) (str "'" (sym c))))))
+        init (fn [c pc] (when (not= c this-class) (stmt! (sx "jinit-ic" ((:ic! ctx)) (str "'" (sym c)) (site pc)))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
         un (fn [f t] (push! (f (pop!)) t))
         ;; copy the top k values to below the m values under them (dup family)
@@ -498,8 +512,8 @@
           :iadd (bin #(sx "wrap-int" (sx "fx+" %1 %2)) "I")
           :isub (bin #(sx "wrap-int" (sx "fx-" %1 %2)) "I")
           :imul (bin #(sx "wrap-int" (sx "*" %1 %2)) "I")
-          :idiv (bin #(sx "idiv" %1 %2) "I")
-          :irem (bin #(sx "irem" %1 %2) "I")
+          :idiv (bin #(sx (at pc "idiv") %1 %2) "I")
+          :irem (bin #(sx (at pc "irem") %1 %2) "I")
           :ineg (un #(sx "wrap-int" (sx "fx-" "0" %)) "I")
           :ishl (bin #(sx "int-shl" %1 %2) "I")
           :ishr (bin #(sx "int-shr" %1 %2) "I")
@@ -510,8 +524,8 @@
           :ladd (bin #(sx "wrap-long" (sx "+" %1 %2)) "J")
           :lsub (bin #(sx "wrap-long" (sx "-" %1 %2)) "J")
           :lmul (bin #(sx "wrap-long" (sx "*" %1 %2)) "J")
-          :ldiv (bin #(sx "ldiv" %1 %2) "J")
-          :lrem (bin #(sx "lrem" %1 %2) "J")
+          :ldiv (bin #(sx (at pc "ldiv") %1 %2) "J")
+          :lrem (bin #(sx (at pc "lrem") %1 %2) "J")
           :lneg (un #(sx "wrap-long" (sx "-" %)) "J")
           :lshl (bin #(sx "lshl" %1 %2) "J")
           :lshr (bin #(sx "lshr" %1 %2) "J")
@@ -566,10 +580,10 @@
           :monitorexit (stmt! (sx "jmonitor-exit" (sx "nn-at" (pop!) (site pc))))
           :getstatic (let [{:keys [class name desc]} (cp a0)
                            decl ((:resolve-static-field resolve) class name)]
-                       (init decl) (push! (static-global decl name) (desc->t desc)))
+                       (init decl pc) (push! (static-global decl name) (desc->t desc)))
           :putstatic (let [{:keys [class name]} (cp a0)
                            decl ((:resolve-static-field resolve) class name)]
-                       (init decl) (stmt! (sx "set!" (static-global decl name) (pop!))))
+                       (init decl pc) (stmt! (sx "set!" (static-global decl name) (pop!))))
           :getfield (let [{:keys [class name desc]} (cp a0)
                           idx ((:field-index resolve) class name)]
                       (un #(sx "field-ref" % (str idx) (site pc)) (desc->t desc)))
@@ -598,18 +612,18 @@
                                ;; after the null check dispatch would do. For
                                ;; invokeinterface that is a private interface
                                ;; method, which javac calls this way
-                               (apply sx (at pc (callee decl name desc))
+                               (apply sx (at pc (callee pc decl name desc))
                                       (sx "nn-at" recv (site pc)) argv)
                                (apply sx (at pc (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc))) recv argv))))
                        :invokespecial
                        (let [decl ((:resolve-method resolve) class name desc)]
                          ;; Object's constructor does nothing
                          (when-not (and (= decl "java/lang/Object") (= name "<init>"))
-                           (apply sx (at pc (callee decl name desc)) recv argv)))
+                           (apply sx (at pc (callee pc decl name desc)) recv argv)))
                        :invokestatic
                        (let [decl ((:resolve-method resolve) class name desc)]
-                         (init decl)
-                         (apply sx (at pc (callee decl name desc)) argv)))]
+                         (init decl pc)
+                         (apply sx (at pc (callee pc decl name desc)) argv)))]
             (cond (nil? call) nil
                   (= ret "V") (stmt! call)
                   :else (push! call (desc->t ret))))
@@ -663,20 +677,20 @@
                 (if (= ret "V") (stmt! call) (push! call (desc->t ret))))))
           :new (let [c (:name (cp a0))]
                  ((:ensure-loaded resolve) c)
-                 (push! (sx "jnew-ic" ((:ic! ctx)) (str "'" (sym c))) "A"))
+                 (push! (sx "jnew-ic" ((:ic! ctx)) (str "'" (sym c)) (site pc)) "A"))
           ;; the element descriptor is interned once per method (runtime.ss)
           :newarray (let [e (newarray-elem a0) el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
-                      (un #(sx "jnewarray-interned" el % (if (#{"F" "D"} e) "0.0" "0")) "A"))
+                      (un #(sx (at pc "jnewarray-interned") el % (if (#{"F" "D"} e) "0.0" "0")) "A"))
           :anewarray (let [c (:name (cp a0))
                            e (if (str/starts-with? c "[") c (str "L" c ";"))
                            el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
-                       (un #(sx "jnewarray-interned" el % "#f") "A"))
+                       (un #(sx (at pc "jnewarray-interned") el % "#f") "A"))
           :multianewarray (let [c (:name (cp a0)) dims (popn! (second args))]
-                            (push! (sx "jmultiarray" (str-lit c) (apply sx "list" dims)) "A"))
+                            (push! (sx (at pc "jmultiarray") (str-lit c) (apply sx "list" dims)) "A"))
           :arraylength (un #(sx "array-length" % (site pc)) "I")
           :checkcast (let [c (:name (cp a0))]
                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
-                       (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast-ic" ((:ic! ctx)) v (str-lit c)))))
+                       (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast-ic" ((:ic! ctx)) v (str-lit c) (site pc)))))
           :instanceof (let [c (:name (cp a0))]
                         (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                         (let [ic ((:ic! ctx))] (un #(sx "if" (sx "jinstance-ic?" ic % (str-lit c)) "1" "0") "I")))
@@ -767,9 +781,12 @@
         bt? (System/getenv "CHAMPACA_BT")
         inline! (fn [decl name desc]
                   (when-not bt?
-                    (let [ctag (str decl "." name desc)]
-                      (if (contains? @inlined ctag)
-                        (get @inlined ctag)
+                    ;; one copy per call site (*inline-site*), since the
+                    ;; copy's markers name the site for stack traces
+                    (let [ctag (str decl "." name desc)
+                          key [ctag (first *inline-site*)]]
+                      (if (contains? @inlined key)
+                        (get @inlined key)
                         (let [{c :cls m :method} ((:inline-candidate resolve) (:name cls) decl name desc)
                               lbl (when (and m (leaf? c m))
                                     ;; a callee that fails to translate (a
@@ -778,10 +795,10 @@
                                     (when-let [text (try (binding [*method-tag* ctag]
                                                            (compile-method* c m resolve ic! (constantly nil)))
                                                          (catch Exception _ nil))]
-                                      (let [l (sym (str tag "#I:" ctag))]
+                                      (let [l (sym (str tag "#I:" ctag "@" (first *inline-site*)))]
                                         (vswap! defs conj [l text])
                                         l)))]
-                          (vswap! inlined assoc ctag (or lbl false))
+                          (vswap! inlined assoc key (or lbl false))
                           lbl)))))
         f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
         f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
@@ -880,9 +897,10 @@
           ;; dynamic-wind rather than guard: an exception leaves through a
           ;; handler further out, whose escape runs the exit before that
           ;; handler's clauses, and installing a guard costs about four times
-          ;; as much. The blocks are named, so this method's frames stay
-          ;; recognizable on the stack (getCallerClass).
-          body (if (pos? (bit-and (:flags method) 0x0020))
+          ;; as much. jframe below keeps a frame named after the method.
+          sync? (pos? (bit-and (:flags method) 0x0020))
+          bt? (System/getenv "CHAMPACA_BT")
+          body (if sync?
                  (let [lock (if (pos? (bit-and (:flags method) 0x0008))
                               ;; the class mirror, found once: a cell like the
                               ;; inline caches, since cached code loads before
@@ -897,17 +915,20 @@
                            (sx "lambda" "()" (sx "jmonitor-enter" "lock"))
                            (sx "lambda" "()" body*)
                            (sx "lambda" "()" (sx "jmonitor-exit" "lock")))))
-                 body*)]
+                 body*)
+          ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+          body (if bt?
+                 (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                     body)
+                 body)
+          ;; a synchronized method's dynamic-wind and BT's fluid-let would be
+          ;; tail calls out of the method's own lambda, leaving it no frame of
+          ;; its own; jframe, an identity the optimizer can't see through,
+          ;; makes the one call a non-tail call, and the stack walk then finds
+          ;; the method's frame with the pending pc of the unnamed thunk inside
+          body (if (or sync? bt?) (sx "jframe" body) body)]
       (sx "lambda" (apply sx (map #(str "l" %) params))
           ;; npe-tag, a constant Chez folds into each site that uses it,
           ;; inside the lambda so the method stays a plain lambda to Chez
           (sx "let" (sx (sx "npe-tag" (str "'" (sym *method-tag*))))
-              ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces.
-              ;; jbt-frame (an identity the optimizer can't see through) makes
-              ;; the fluid-let a non-tail call, so the method keeps a frame of
-              ;; its own for the continuation walk; fluid-let's thunk has no name
-              (if (System/getenv "CHAMPACA_BT")
-                (sx "jbt-frame"
-                    (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
-                        body))
-                body))))))
+              body)))))

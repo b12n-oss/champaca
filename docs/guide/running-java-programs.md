@@ -28,6 +28,12 @@ public class Boom {
 $ jolt -M -m champaca.main classes Boom
 3
 Exception in thread "main" java.lang.NumberFormatException: For input string: "four"
+	at java.base/java.lang.NumberFormatException.forInputString(NumberFormatException.java)
+	at java.base/java.lang.Integer.parseInt(Integer.java)
+	at java.base/java.lang.Integer.parseInt(Integer.java)
+	at Boom.parse(Boom.java:2)
+	at Boom.total(Boom.java:3)
+	at Boom.main(Boom.java:6)
 $ echo $?
 1
 ```

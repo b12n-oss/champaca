@@ -180,7 +180,8 @@
   (let [n (u2 r)]
     (loop [i 0 found {}]
       (if (= i n)
-        (cond-> found (:lines found) (update :lines #(vec (sort-by first %))))
+        ;; in pc order, the first entry for a pc winning as in HotSpot
+        (cond-> found (:lines found) (update :lines #(vec (sort-by first (vals (reduce (fn [m [s l]] (if (contains? m s) m (assoc m s [s l]))) {} %))))))
         (let [name (:value (cp (u2 r))) len (u4 r)]
           (cond
             (and *locals* (= "LocalVariableTable" name) (not (contains? found :locals)))
