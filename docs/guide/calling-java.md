@@ -38,7 +38,7 @@ The field getters take a field name. `get-field` reads instance fields, walking 
 
 Neither getter checks access, so they'll read a private field too (`(ldk/get-field sb "count")` on a `StringBuilder` holding `"abc"` gives `3`).
 
-`set-field!` and `set-static!` store into a field, found the same way, and return `nil`. The value is converted as an argument of the field's type would be ([data-conversion](data-conversion.md)), and an integer also goes into a `byte`, `short` or `char` field when it's in range, the way Java lets a constant narrow on assignment:
+`set-field!` and `set-static!` store into a field, found the same way, and return `nil`. The value is converted as an argument of the field's type would be ([data-conversion](data-conversion.md)), and an integer also goes into a `byte`, `short` or `char` field when it's in range, the way Java lets a constant narrow on assignment. An integer stored in a `float` or `double` field widens as in Java, so `16777217` in a `float` reads back as `1.6777216E7`:
 
 ```clojure
 (let [t (ldk/construct "java.io.StreamTokenizer" (ldk/construct "java.io.StringReader" ""))]

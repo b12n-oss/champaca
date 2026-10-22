@@ -159,7 +159,8 @@
   "Copy Java data into jolt data, deeply: an array or a List (any Collection)
   becomes a vector, a Set a set, a Map a map, with strings and boxed numbers
   converted. Anything else is returned as is. Options: :key-fn, applied to
-  every map key that is a string, e.g. keyword."
+  every map key that is a string, e.g. keyword; two keys it maps to the
+  same key throw."
   ([x] (->clj x nil))
   ([x {:keys [key-fn]}]
    (with-gil #(->clj* x (or key-fn identity)))))
@@ -170,9 +171,14 @@
     (mapv #(->clj* (s/call "dyn-aref" x %) key-fn) (range (s/call "dyn-alength" x)))
     (s/call "dyn-instance?" x "java/util/Map")
     (let [a (s/call "dyn-map-array" x)]
-      (into {} (for [i (range 0 (s/call "dyn-alength" a) 2)
-                     :let [k (->clj* (s/call "dyn-aref" a i) key-fn)]]
-                 [(if (string? k) (key-fn k) k) (->clj* (s/call "dyn-aref" a (inc i)) key-fn)])))
+      ;; a key-fn can map two keys to one; that throws rather than drop one
+      (reduce (fn [m i]
+                (let [k (->clj* (s/call "dyn-aref" a i) key-fn)
+                      k' (if (string? k) (key-fn k) k)]
+                  (when (contains? m k')
+                    (throw (ex-info (str "->clj: :key-fn maps two keys to " (pr-str k')) {:key k'})))
+                  (assoc m k' (->clj* (s/call "dyn-aref" a (inc i)) key-fn))))
+              {} (range 0 (s/call "dyn-alength" a) 2)))
     (s/call "dyn-instance?" x "java/util/Set") (set (->clj* (s/call "dyn-coll-array" x) key-fn))
     (s/call "dyn-instance?" x "java/util/Collection") (->clj* (s/call "dyn-coll-array" x) key-fn)
     :else x))

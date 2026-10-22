@@ -56,3 +56,5 @@
 (p "keys" (ldk/->clj m {:key-fn keyword}))
 (p "plain" (ldk/->clj m))
 (p "non-string keys" (ldk/->clj (ldk/->java {1 "one" "k" 2}) {:key-fn keyword}))
+(p "key clash" (err #(ldk/->clj (ldk/->java {"a" 1 "A" 2}) {:key-fn (comp keyword clojure.string/lower-case)})))
+(p "no clash without key-fn" (ldk/->clj (ldk/->java {"a" 1 "A" 2})))

@@ -21,3 +21,5 @@ unchanged -7 12345678901 -128 300 A 2.5 1.25 true null 3 [1, two, three] 2:4
 keys {:a 1, :b {:c [{:d 2}]}}
 plain {a 1, b {c [{d 2}]}}
 non-string keys {1 one, :k 2}
+key clash ->clj: :key-fn maps two keys to :a
+no clash without key-fn {a 1, A 2}

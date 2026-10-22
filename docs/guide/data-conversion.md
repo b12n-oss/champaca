@@ -74,7 +74,7 @@ A result converts only if it's a string or a box: `String`, `Integer`, `Long`, `
 (ldk/->clj (ldk/invoke-static "java.util.Map" "of" "k" 1))       ;=> {"k" 1}
 ```
 
-Map keys stay strings unless you pass `:key-fn`, which `->clj` applies to every string key at any depth. Keys of other types are left alone, so `keyword` can't turn `1` into `nil`:
+Map keys stay strings unless you pass `:key-fn`, which `->clj` applies to every string key at any depth. Keys of other types are left alone, so `keyword` can't turn `1` into `nil`. Two keys that `:key-fn` maps to the same key throw instead of one being dropped:
 
 ```clojure
 (ldk/->clj (ldk/invoke-static "java.util.Map" "of" "k" 1) {:key-fn keyword})   ;=> {:k 1}
