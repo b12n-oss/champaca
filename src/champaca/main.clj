@@ -779,6 +779,42 @@
         (swap! state assoc-in [:npe-messages site] msg)
         msg))))
 
+;; --- stack traces ---------------------------------------------------------------
+;; A frame's source file, line and module for StackTraceElement. The file and
+;; the LineNumberTable come from the class file, re-read with
+;; classfile/*lines* the first time a class is asked (a normal parse skips
+;; the table), the module from the image's package index for a JDK class.
+
+(defn- frame-class [cname]
+  (let [cache (:frame-classes @state)]
+    (if (contains? cache cname)
+      (get cache cname)
+      (let [info (try (when-let [bytes (class-bytes cname)]
+                        (let [p (binding [cf/*lines* true] (cf/parse bytes))
+                              slash (str/last-index-of cname "/")]
+                          {:source (:source p)
+                           :module (when (= :jdk (:origin (class-info cname)))
+                                     (package-module (if slash (subs cname 0 slash) "")))
+                           :lines (into {} (for [m (:methods p) :when (:code m)]
+                                             [(str (:name m) (:desc m)) (:lines (:code m))]))}))
+                      (catch Exception e
+                        (when (env "CHAMPACA_BT")
+                          (binding [*out* *err*] (println "champaca: no source lines for" cname (ex-message e))))
+                        nil))]
+        (swap! state assoc-in [:frame-classes cname] info)
+        info))))
+
+(defn- frame-info
+  "[file line module] for cname.mname desc at bytecode pc, with \"\" and -1
+  where unknown; pc -1 is a frame whose pc wasn't recorded."
+  [cname mname desc pc]
+  (let [{:keys [source module lines]} (frame-class cname)
+        table (get lines (str mname desc))
+        line (if (and (seq table) (>= pc 0))
+               (or (some (fn [[start l]] (when (<= start pc) l)) (rseq table)) -1)
+               -1)]
+    [(or source "") line (or module "")]))
+
 (defn- translator-fingerprint []
   (hash (apply str (map #(slurp (io/resource %))
                         (concat runtime-files
@@ -977,6 +1013,9 @@
                                (if (vector? v) (apply s/call "vector" v) v)))))
   ;; helpful NPE messages: site "pkg/Cls.name(desc)@bci" -> text, or false
   (s/call "set-npe-hook!" (fn [site] (or (npe-message site) false)))
+  ;; stack traces: a frame's file, line and module as a Scheme vector
+  (s/call "set-frame-hook!" (fn [cname mname desc pc]
+                              (let [[f l m] (frame-info cname mname desc pc)] (s/call "vector" f l m))))
   (let [dir (cache-dir)
         hit? (load-cache! dir)]
     (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))

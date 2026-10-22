@@ -73,6 +73,12 @@ One global lock (the GIL, in `natives.ss`) lets one thread at a time run Java co
 
 When `main` returns, `champaca.main` waits for the other non-daemon threads and then calls `Shutdown.shutdown()`, which runs the shutdown hooks, as the `java` launcher does.
 
+## Stack traces
+
+A Java activation is a Chez frame whose code object is named after the method (`Class.name(desc)`, or a block or trampoline of it carrying the same name), so the Java stack is a walk of the continuation, and ordinary calls record nothing. `Throwable.fillInStackTrace` takes that walk with Chez's own continuation primitives, splitting off one frame at a time and keeping a pair per frame, the code object and its return offset. `getOurStackTrace` turns the pairs into `StackTraceElement`s when a trace is asked for, leaving out `fillInStackTrace` and the exception's own constructors as HotSpot does. `StackWalker`'s natives feed the same walk to the JDK's batching protocol a batch at a time.
+
+The line number is read off the frame. Chez's inspector information records, for each return point, the expression of the call it's waiting on, and the generated code wraps every call's operator as `(begin '(jpc . pc) op)`, a constant the optimizer drops before any code is generated. So the recorded call carries its bytecode pc, and `main.clj` maps that to a line through the class file's `LineNumberTable`, read on demand like the local variable names behind NPE messages, with the file from its `SourceFile` attribute and the module from the image's package index. A `try` or `synchronized` body runs in an unnamed thunk under `dynamic-wind`, so its pending call counts for the next named frame out. `jtry` takes a full continuation rather than a one-shot one because the walk follows continuation links, and a one-shot continuation ends the chain. The runtime turns inspector information on for the code it compiles whatever the jolt build's default, so line numbers don't depend on which jolt runs the program.
+
 ## Method handles
 
 The JDK builds a method handle from a `MemberName` the VM resolves and a `LambdaForm` it compiles to a hidden class, and neither exists here. So `handles.ss` replaces the layer above them. A method handle is a bare `MethodHandle` object, allocated without running a constructor, whose `type` field holds a real `MethodType`. A weak table maps it to a Scheme procedure and the descriptor that procedure takes. The `Lookup.find*` and `unreflect*` methods, `asType`, `bindTo`, `invokeWithArguments` and the `MethodHandles` combinators short of the loop builders are overridden to build and combine those. Everything else in `java.lang.invoke`, `MethodType` included, is the JDK's own code.
@@ -97,7 +103,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/npe.clj` | helpful `NullPointerException` messages |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, strings, `Class` mirrors, lambdas, records |
 | `resources/champaca/natives.ss` | JDK native methods and a few overrides |
-| `resources/champaca/reflect.ss` | reflection natives and `getCallerClass` |
+| `resources/champaca/reflect.ss` | reflection natives, `getCallerClass` and the frame walk behind stack traces |
 | `resources/champaca/handles.ss` | method handles, bootstraps run for real, pattern switches |
 | `resources/champaca/files.ss` | file, channel and zlib natives through libc |
 | `resources/champaca/interop.ss` | conversions behind the descriptor-based API |

@@ -73,7 +73,7 @@ Classes outside `java.base` come from the same image: `java.sql`, `java.logging`
 
 JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with method handles or with two VM natives, `invoke0` and `newInstance0`. It falls back to the natives while `java.lang.invoke` isn't initialized (it never is here) or when `jdk.reflect.useNativeAccessorOnly=true` (set here too). So the runtime supplies those natives, plus `Class.getDeclaredMethods0`, `getDeclaredFields0`, `getDeclaredConstructors0` and the rest, and builds real `java.lang.reflect` objects through their own constructors. Field access has no native path in JDK 25, so `Field.get`/`set` and the typed variants are overridden.
 
-`Reflection.getCallerClass` walks the Chez continuation. A translated method is a top-level `define` named `Class.name(desc)`, and its blocks and trampoline loop carry that name too, so each frame says which Java method it belongs to. Nothing is recorded on ordinary calls. Under `CHAMPACA_BT` the shadow stack answers instead, because its wrapper hides frame names.
+`Reflection.getCallerClass` and stack traces walk the Chez continuation. A translated method is a top-level `define` named `Class.name(desc)`, and its blocks and trampoline loop carry that name too, so each frame says which Java method it belongs to, and nothing is recorded on ordinary calls. `fillInStackTrace` keeps a pair per frame, the code object and the return offset, about as cheaply as HotSpot keeps its backtrace, and the elements are built when a trace is asked for. The line number comes from Chez's inspector information: every return point records the call it's waiting on, and the generated code wraps each call's operator as `(begin '(jpc . pc) op)`, a constant Chez drops, so the bytecode pc, and from the class file's `LineNumberTable` the line, is read off the frame.
 
 ## Startup cache
 
@@ -102,7 +102,7 @@ JOLT=jolt bb test                                     # the same suite on the jo
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
-CHAMPACA_BT=1 ...       # keep a shadow stack, so uncaught exceptions and missing natives print Java frames
+CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit
                         # (and say why an NPE got no message)
 CHAMPACA_STATS=1 ...    # print classes loaded, methods compiled, cached units loaded
 CHAMPACA_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
@@ -124,7 +124,7 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (a port of HotSpot's) |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
 | `resources/champaca/natives.ss` | JDK native methods (121 named, plus pattern rules for `Unsafe`), resources, a few overrides |
-| `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` |
+| `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` and the frame walk behind stack traces |
 | `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
 | `resources/champaca/files.ss` | file, channel and zlib natives (127) through libc, `UnsafeConstants` |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
@@ -138,8 +138,9 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 - **Method handles cover the combinator surface.** The `Lookup.find*` and `unreflect*` methods, `invokeExact`, `invoke`, `invokeWithArguments`, `asType`, `bindTo`, the spreaders and collectors, the array element handles, the invokers and the `MethodHandles` combinators from `zero` to `tryFinally` work with the JVM's conversions and exception texts (`test/java/MethodHandleCheck.java`, `test/java/MethodHandleCombinatorCheck.java`). The loop builders (`countedLoop` and friends) don't, `invokeExact` doesn't insist on an exact type match, and lookups skip access checks.
 - **VarHandles work for fields and arrays.** `findVarHandle`, `findStaticVarHandle`, `unreflectVarHandle`, `arrayElementVarHandle` and `byteArrayViewVarHandle` return handles that support the same access modes as the JVM's, throwing `UnsupportedOperationException` for the rest (`test/java/VarHandleCheck.java`, `test/java/VarHandleModes.java`), so `java.util.concurrent.atomic` and `ConcurrentHashMap` run. Memory-ordering modes all act the same, which is safe while one thread runs Java at a time. The six coordinate combinators (`insertCoordinates` and friends) work too (`test/java/VarHandleCombinatorCheck.java`); `byteBufferViewVarHandle` doesn't exist.
 - **Files go through libc, on macOS and Linux.** `java.io`, `java.nio.file`, `FileChannel` (locks and memory maps included) and `java.util.zip` call libc and zlib through Chez's foreign interface, on real file descriptors (`test/java/FilesCheck.java`). `struct stat` and its relatives are read through a table of offsets measured on each system: macOS (arm64 and x86_64) and Linux with glibc 2.33 or newer on arm64 and x86_64 (`ci/linux/layout.c` prints Linux's). Elsewhere, a BSD, musl, or a glibc older than 2.33 (which doesn't export `stat` itself), `java.nio.file` stops with an `UnsupportedOperationException` at its first use, while `java.io` streams still work. `ci/linux` has a Docker image that runs the suite and the libraries on Linux (`bb linux`), and `.github/workflows/linux.yml` runs the same on GitHub's x86_64 runners when started by hand.
+- **Stack traces are the JVM's.** `getStackTrace`, `printStackTrace`, `Thread.currentThread().getStackTrace()`, `StackWalker` and the source location `java.util.logging` infers give the same frames, file names and line numbers as the JVM (`test/java/StackCheck.java`), and an uncaught exception prints its trace the way the JVM's default handler does. A native champaca wrote in Scheme has no frame, where the JVM prints `Native Method`.
 - **No native libraries.** A JDK library load (`zip`, `net`, `management`) is a no-op, since its natives are Scheme code (or libc calls) here. A Java library's own JNI code can't load, and a JDK native champaca hasn't written yet throws `UnsatisfiedLinkError`, as the JVM does for an unloaded one, so a program can catch it (`test/java/NativesCheck.java`).
-- **`sun.misc.Unsafe` doesn't warn.** `sun.misc.unsafe.memory.access` is `allow`, because the default `warn` finds its caller with `StackWalker`, which has no natives yet.
+- **`sun.misc.Unsafe` doesn't warn.** `sun.misc.unsafe.memory.access` is `allow`, so Caffeine and Guava, which still use it, run without the JDK's warning on stderr.
 
 ## The name
 

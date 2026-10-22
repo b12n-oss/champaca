@@ -32,7 +32,7 @@ $ echo $?
 1
 ```
 
-There's no stack trace by default, because keeping one costs time on every call. [debugging](debugging.md#java-stack-traces) shows how to turn it on.
+The trace is the JVM's, file names and line numbers included; [debugging](debugging.md#java-stack-traces) has more.
 
 ## Checking output against the JVM
 
@@ -44,7 +44,7 @@ jolt -M -m champaca.main classes Main > main.ldk
 diff main.jvm main.ldk
 ```
 
-Stack traces never match, since champaca's frames name methods by descriptor and have no line numbers. Output from several threads can interleave differently than on a JVM, as it can between two JVM runs.
+A stack trace matches frame for frame, except that champaca's natives have no frames where the JVM prints `Native Method`. Output from several threads can interleave differently than on a JVM, as it can between two JVM runs.
 
 ## Speed
 

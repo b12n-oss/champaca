@@ -307,9 +307,115 @@
 
 ;; --- Throwable ------------------------------------------------------------------
 
+;; fillInStackTrace keeps the raw frames (reflect.ss raw-frames, a pair per
+;; frame, about as cheap as HotSpot's own backtrace) in the Throwable's
+;; backtrace field, and getOurStackTrace turns them into StackTraceElements
+;; when something asks, with the file, line and module from a jolt hook
+;; (main.clj frame-info). Nothing else keeps the stack alive.
+(define frame-hook #f)
+(define (set-frame-hook! f) (set! frame-hook f))
+(define (slot-of cname fname) (jfield-index cname fname))
+
 (defnative "java/lang/Throwable.fillInStackTrace(I)Ljava/lang/Throwable;" (this dummy)
-  (eq-hashtable-set! throw-stacks this jstack)
+  (eq-hashtable-set! throw-stacks this jstack)   ; CHAMPACA_BT's shadow stack
+  (jslot-set! this (slot-of "java/lang/Throwable" "backtrace") (call/1cc (lambda (k) (raw-frames k))))
   this)
+
+;; HotSpot leaves out fillInStackTrace and the throwable's own constructors
+(define (trace-frames frames)
+  (let loop ([fs frames])
+    (if (and (pair? fs)
+             (let ([cname (caar fs)] [mname (cadar fs)])
+               (or (string=? mname "fillInStackTrace")
+                   (and (string=? mname "<init>") (class-assignable? cname "java/lang/Throwable")))))
+        (loop (cdr fs))
+        fs)))
+
+;; ste for cname.mname desc at pc, its format bits still to compute
+(define (fill-ste! ste cname mname desc pc)
+  (let* ([info (if frame-hook (frame-hook cname mname desc pc) (vector "" -1 ""))]
+         [file (vector-ref info 0)] [line (vector-ref info 1)] [module (vector-ref info 2)]
+         [set (lambda (f v) (jslot-set! ste (slot-of "java/lang/StackTraceElement" f) v))])
+    (set "declaringClassObject" (jmirror-of cname))
+    (set "declaringClass" (jstring (slashes->dots cname)))
+    (set "methodName" (jstring mname))
+    (set "fileName" (and (fx> (string-length file) 0) (jstring file)))
+    (set "lineNumber" line)
+    (set "moduleName" (and (fx> (string-length module) 0) (jstring module)))
+    ste))
+
+(define (stack-trace-array frames)
+  (jinit "java/lang/StackTraceElement")
+  (let ([arr (make-jarr "Ljava/lang/StackTraceElement;"
+                        (list->vector (map (lambda (f) (fill-ste! (jnew "java/lang/StackTraceElement") (car f) (cadr f) (caddr f) (cadddr f)))
+                                           frames)))])
+    ;; of() computes each element's format: how the module and loader print
+    ((method-proc "java/lang/StackTraceElement" "of([Ljava/lang/StackTraceElement;)[Ljava/lang/StackTraceElement;") arr)))
+
+(define-override! "java/lang/Throwable.getOurStackTrace()[Ljava/lang/StackTraceElement;"
+  (lambda (this)
+    (let* ([slot (slot-of "java/lang/Throwable" "stackTrace")]
+           [cur (jslot this slot)]
+           [unassigned (begin (jinit "java/lang/Throwable") (top-level-value 'java/lang/Throwable:UNASSIGNED_STACK))])
+      (if (or (not cur) (eq? cur unassigned))
+          (let ([raw (jslot this (slot-of "java/lang/Throwable" "backtrace"))])
+            (if (or (pair? raw) (null? raw))
+                (let ([arr (stack-trace-array (trace-frames (java-frames-of raw)))])
+                  (jslot-set! this slot arr)
+                  arr)
+                unassigned))
+          cur))))
+
+;; StackWalker: callStackWalk hands the first batch of frames to Java's
+;; doStackWalk and keeps the rest under an anchor for fetchStackFrames. A
+;; frame is a ClassFrameInfo (its Class) or a StackFrameInfo (a
+;; ResolvedMethodName holding the Class, plus name, descriptor and bci).
+(defnative "java/lang/StackStreamFactory.checkStackWalkModes()Z" () 1)
+(define walk-anchors (make-eqv-hashtable))
+(define walk-anchor-next 1)
+(define (list-tail* ls n) (if (or (fx= n 0) (null? ls)) ls (list-tail* (cdr ls) (fx- n 1))))
+(define (fill-frames! frames start size fs)
+  (let ([v (jarr-vec frames)] [cmn (slot-of "java/lang/ClassFrameInfo" "classOrMemberName")])
+    (let loop ([i start] [fs fs] [n 0])
+      (if (or (fx>= i size) (null? fs))
+          n
+          (let* ([f (car fs)] [obj (vector-ref v i)] [mirror (jmirror-of (car f))])
+            (if (jinstance? obj "java/lang/StackFrameInfo")
+                (let ([rmn (jnew "java/lang/invoke/ResolvedMethodName")])
+                  (jslot-set! rmn (slot-of "java/lang/invoke/ResolvedMethodName" "vmholder") mirror)
+                  (jslot-set! obj cmn rmn)
+                  (jslot-set! obj (slot-of "java/lang/StackFrameInfo" "name") (jstring (cadr f)))
+                  (jslot-set! obj (slot-of "java/lang/StackFrameInfo" "type") (jstring (caddr f)))
+                  (jslot-set! obj (slot-of "java/lang/StackFrameInfo" "bci") (cadddr f)))
+                (jslot-set! obj cmn mirror))
+            (loop (fx+ i 1) (cdr fs) (fx+ n 1)))))))
+(defnative "java/lang/StackStreamFactory$AbstractStackWalker.callStackWalk(IILjdk/internal/vm/ContinuationScope;Ljdk/internal/vm/Continuation;II[Ljava/lang/Object;)Ljava/lang/Object;"
+  (this mode skip scope cont size start frames)
+  (let* ([fs (list-tail* (call/1cc (lambda (k) (java-frames-of (raw-frames k)))) skip)]
+         [anchor walk-anchor-next]
+         [n (fill-frames! frames start size fs)])
+    (set! walk-anchor-next (fx+ anchor 1))
+    (hashtable-set! walk-anchors anchor (list-tail* fs n))
+    ((method-proc "java/lang/StackStreamFactory$AbstractStackWalker" "doStackWalk(JIIII)Ljava/lang/Object;")
+     this anchor skip n start (fx+ start n))))
+(defnative "java/lang/StackStreamFactory$AbstractStackWalker.fetchStackFrames(IJIII[Ljava/lang/Object;)I"
+  (this mode anchor last size start frames)
+  (let* ([fs (hashtable-ref walk-anchors anchor '())]
+         [n (fill-frames! frames start size fs)])
+    (if (fx= n 0)
+        (hashtable-delete! walk-anchors anchor)
+        (hashtable-set! walk-anchors anchor (list-tail* fs n)))
+    n))
+(defnative "java/lang/StackStreamFactory$AbstractStackWalker.setContinuation(J[Ljava/lang/Object;Ljdk/internal/vm/Continuation;)V"
+  (this anchor frames cont) (void))
+(defnative "java/lang/StackFrameInfo.expandStackFrameInfo()V" (this) (void))   ; name and type are set already
+(defnative "java/lang/StackTraceElement.initStackTraceElement(Ljava/lang/StackTraceElement;Ljava/lang/StackFrameInfo;)V" (ste sfi)
+  (let* ([rmn (jslot sfi (slot-of "java/lang/ClassFrameInfo" "classOrMemberName"))]
+         [cname (jclass-cname (mirror-class (jslot rmn (slot-of "java/lang/invoke/ResolvedMethodName" "vmholder"))))])
+    (fill-ste! ste cname
+               (jstring->scheme (jslot sfi (slot-of "java/lang/StackFrameInfo" "name")))
+               (jstring->scheme (jslot sfi (slot-of "java/lang/StackFrameInfo" "type")))
+               (jslot sfi (slot-of "java/lang/StackFrameInfo" "bci")))))
 
 ;; JEP 358's "Cannot invoke ... because ..." text, from the bytecode at the
 ;; site npe-at recorded (runtime.ss), through a jolt callback (champaca.npe).

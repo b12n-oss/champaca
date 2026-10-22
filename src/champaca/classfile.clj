@@ -166,18 +166,32 @@
   messages want it, so a normal parse skips it by length."
   false)
 
-(defn- local-variable-table [r cp]
+(def ^:dynamic *lines*
+  "When true, parse also reads each method's LineNumberTable into :lines,
+  [[start-pc line] ...] in pc order. Only stack traces want it, so a normal
+  parse skips it by length."
+  false)
+
+(defn- code-tables
+  "The Code attribute's own attributes: :locals (the LocalVariableTable)
+  under *locals*, :lines (the LineNumberTable, several allowed) under
+  *lines*; everything else skipped by length."
+  [r cp]
   (let [n (u2 r)]
-    (loop [i 0 found nil]
+    (loop [i 0 found {}]
       (if (= i n)
-        found
+        (cond-> found (:lines found) (update :lines #(vec (sort-by first %))))
         (let [name (:value (cp (u2 r))) len (u4 r)]
-          (if (and (nil? found) (= "LocalVariableTable" name))
-            (recur (inc i) (vec (repeatedly (u2 r)
-                                            (fn [] (let [start (u2 r) length (u2 r) nm (:value (cp (u2 r)))
-                                                         _desc (u2 r) index (u2 r)]
-                                                     {:start start :length length :name nm :index index})))))
-            (do (vswap! (:pos r) + len) (recur (inc i) found))))))))
+          (cond
+            (and *locals* (= "LocalVariableTable" name) (not (contains? found :locals)))
+            (recur (inc i) (assoc found :locals
+                                  (vec (repeatedly (u2 r)
+                                                   (fn [] (let [start (u2 r) length (u2 r) nm (:value (cp (u2 r)))
+                                                                _desc (u2 r) index (u2 r)]
+                                                            {:start start :length length :name nm :index index}))))))
+            (and *lines* (= "LineNumberTable" name))
+            (recur (inc i) (update found :lines (fnil into []) (vec (repeatedly (u2 r) (fn [] [(u2 r) (u2 r)])))))
+            :else (do (vswap! (:pos r) + len) (recur (inc i) found))))))))
 
 (defn- parse-code [info cp]
   (let [r (reader info)
@@ -187,9 +201,8 @@
         handlers (vec (repeatedly (u2 r)
                                   (fn [] {:start (u2 r) :end (u2 r) :handler (u2 r)
                                           :type (let [i (u2 r)] (when (pos? i) (:name (cp i))))})))
-        locals (when *locals* (local-variable-table r cp))]
-    (cond-> {:max-stack max-stack :max-locals max-locals :code code :handlers handlers}
-      locals (assoc :locals locals))))
+        tables (when (or *locals* *lines*) (code-tables r cp))]
+    (merge {:max-stack max-stack :max-locals max-locals :code code :handlers handlers} tables)))
 
 (defn- parse-bootstrap-methods [info]
   (let [r (reader info)]
@@ -319,6 +332,8 @@
         rec (record-components attrs cp)]
     {:name this :flags flags :super super :interfaces interfaces
      :fields fields :methods methods :cp cp
+     ;; the SourceFile attribute, for stack traces
+     :source (some #(when (= "SourceFile" (:name %)) (let [[a b] (:info %)] (:value (cp (+ (* a 256) b))))) attrs)
      :reflection (cond-> (merge (reflection-attrs attrs cp) (nesting attrs cp this))
                    rec (assoc :record rec))
      :bootstrap-methods (some #(when (= "BootstrapMethods" (:name %))

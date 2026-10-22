@@ -222,6 +222,12 @@
 ;; method (an inlined callee too) binds once in its lambda, and the bci
 (defn- site [pc] (str "npe-tag " pc))
 
+;; A call's operator wrapped as (begin '(jpc . pc) op): Chez drops the
+;; constant, so the call costs the same, but the frame's recorded source
+;; keeps it, and a stack trace reads the pc, hence the line, off the frame
+;; (reflect.ss java-frames-of).
+(defn- at [pc op] (sx "begin" (str "'(jpc . " pc ")") op))
+
 (defn desc->t
   "Stack type of a field or return descriptor: I J F D or A."
   [d]
@@ -582,9 +588,9 @@
                          (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
                          ;; signature-polymorphic: the runtime adapts the call site's
                          ;; types to the access mode's, as asType would
-                         (apply sx "vh-call" (sx "nn-at" recv (site pc)) (str-lit name) (str-lit desc) argv)
+                         (apply sx (at pc "vh-call") (sx "nn-at" recv (site pc)) (str-lit name) (str-lit desc) argv)
                          (and (= class "java/lang/invoke/MethodHandle") (#{"invokeExact" "invoke"} name))
-                         (apply sx "mh-call" (sx "nn-at" recv (site pc)) (str-lit desc) argv)
+                         (apply sx (at pc "mh-call") (sx "nn-at" recv (site pc)) (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
                              (if-let [decl ((:direct-target resolve) class name desc)]
@@ -592,18 +598,18 @@
                                ;; after the null check dispatch would do. For
                                ;; invokeinterface that is a private interface
                                ;; method, which javac calls this way
-                               (apply sx (callee decl name desc)
+                               (apply sx (at pc (callee decl name desc))
                                       (sx "nn-at" recv (site pc)) argv)
-                               (apply sx (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc)) recv argv))))
+                               (apply sx (at pc (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc))) recv argv))))
                        :invokespecial
                        (let [decl ((:resolve-method resolve) class name desc)]
                          ;; Object's constructor does nothing
                          (when-not (and (= decl "java/lang/Object") (= name "<init>"))
-                           (apply sx (callee decl name desc) recv argv)))
+                           (apply sx (at pc (callee decl name desc)) recv argv)))
                        :invokestatic
                        (let [decl ((:resolve-method resolve) class name desc)]
                          (init decl)
-                         (apply sx (callee decl name desc) argv)))]
+                         (apply sx (at pc (callee decl name desc)) argv)))]
             (cond (nil? call) nil
                   (= ret "V") (stmt! call)
                   :else (push! call (desc->t ret))))
@@ -650,7 +656,7 @@
               ("typeSwitch" "enumSwitch") ; java.lang.runtime.SwitchBootstraps: pattern switches
               (push! (sx "jswitch-index" (first argv) (second argv) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm))) "I")
               ;; any other bootstrap runs for real, once per call site (handles.ss)
-              (let [call (apply sx "indy-call" (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
+              (let [call (apply sx (at pc "indy-call") (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
                                 (str "'" (sx (const-datum cls (:ref-idx bsm))
                                              (apply sx (map #(const-datum cls %) (:args bsm)))))
                                 (str-lit name) (str-lit desc) argv)]
@@ -896,8 +902,12 @@
           ;; npe-tag, a constant Chez folds into each site that uses it,
           ;; inside the lambda so the method stays a plain lambda to Chez
           (sx "let" (sx (sx "npe-tag" (str "'" (sym *method-tag*))))
-              ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+              ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces.
+              ;; jbt-frame (an identity the optimizer can't see through) makes
+              ;; the fluid-let a non-tail call, so the method keeps a frame of
+              ;; its own for the continuation walk; fluid-let's thunk has no name
               (if (System/getenv "CHAMPACA_BT")
-                (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
-                    body)
+                (sx "jbt-frame"
+                    (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                        body))
                 body))))))

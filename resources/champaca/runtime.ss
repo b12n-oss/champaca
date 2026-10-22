@@ -43,11 +43,15 @@
 ;; call/cc and reads the continuation marks, about twice the cost. A clause whose
 ;; test holds escapes and returns (lambda () next) for the method's trampoline.
 ;; With no clause for it the exception goes on to the next handler from right
-;; where it was raised, so nothing between is unwound and wound again.
+;; where it was raised, so nothing between is unwound and wound again. A full
+;; call/cc rather than call/1cc: the stack walk behind stack traces
+;; (reflect.ss raw-frames) follows continuation links, and a one-shot
+;; continuation ends the chain, which hid every frame below a try. Entering a
+;; region costs the same either way (0.17 against 0.21 us at depth 20).
 (define-syntax jtry
   (syntax-rules ()
     [(_ e ([test next] ...) body)
-     (call/1cc
+     (call/cc
       (lambda (k)
         (let* ([old (#%$current-handler-stack)]
                [new (cons (lambda (e)
@@ -801,9 +805,15 @@
   (let ([err (current-error-port)])
     (cond
       [(jobj? e)
-       (put-string err (string-append "Exception in thread \"main\" "
-                                      (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
-       (print-jstack e err)]
+       ;; as ThreadGroup.uncaughtException prints it, trace included; the
+       ;; shadow stack only if that fails (an error during boot, say)
+       (unless (guard (x [#t #f])
+                 (put-string err "Exception in thread \"main\" ")
+                 (flush-output-port err)   ; Java's System.err shares the fd
+                 ((jvirt e "printStackTrace()V") e)
+                 #t)
+         (put-string err (string-append (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
+         (print-jstack e err))]
       [else
        (put-string err "champaca: Scheme error: ")
        (display-condition e err)
@@ -842,7 +852,12 @@
           (if halted s status)))))
 
 ;; --- backtraces (CHAMPACA_BT) ------------------------------------------------------
+;; Stack traces read each frame's pending call from Chez's inspector
+;; information (reflect.ss return-sexpr), so generated code is compiled with
+;; it whatever the jolt build's default.
+(generate-inspector-information #t)
 (define jstack '())
+(define (jbt-frame x) x)   ; codegen's non-tail wrapper under CHAMPACA_BT
 (define throw-stacks (make-weak-eq-hashtable))
 (define (print-jstack e port)
   (let ([frames (eq-hashtable-ref throw-stacks e #f)])

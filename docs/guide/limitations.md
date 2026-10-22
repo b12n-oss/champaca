@@ -26,7 +26,7 @@ A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because th
 
 - `java.net` has no natives at all, so sockets, HTTP clients and JDBC drivers stop at `InetAddress.init`.
 - `ProcessBuilder.start()` stops at `ProcessImpl.forkAndExec`. `System.getenv()` and `ProcessHandle.current()` work (pid, parent, liveness), and `ProcessHandle.Info` stops at `info0`.
-- `StackWalker` stops at `StackStreamFactory.checkStackWalkModes`, and `Throwable.getStackTrace()` is empty ([debugging](debugging.md)).
+- A stack trace lists translated methods only: a native champaca wrote in Scheme has no frame, where the JVM prints one as `Native Method`. `Thread.getStackTrace()` on another thread and `Thread.getAllStackTraces()` stop at missing natives.
 - `java.management`: the Runtime, Memory, OperatingSystem and ClassLoading beans answer, and `ThreadMXBean` counts and lists threads. `ThreadInfo` stops at `getThreadInfo1` and thread dumps at `dumpThreads0`; CPU times and `findDeadlockedThreads` say they're unsupported, as the JDK does when the VM reports no support, while `findMonitorDeadlockedThreads` stops at its native; the garbage collector and memory pool lists are empty; `RuntimeMXBean.getName()` needs `InetAddress`. Memory figures are Chez's own heap counters, the same ones `Runtime.totalMemory()` and `freeMemory()` report.
 - `ModuleLayer.boot()` is an empty layer rather than null, so asking it for a module gives an empty `Optional`; the module system itself never boots ([jars-and-modules](jars-and-modules.md)), which is also why `java.lang.reflect.Proxy` throws `InternalError` and `ServiceLoader` doesn't see the JDK's own providers (`jdk.localedata`, `jdk.charsets`).
 
@@ -53,8 +53,7 @@ The startup cache makes boot quick, and plain computation now runs within a few 
 - `available()` on a pipe or a terminal is 0, where the JVM asks the kernel how much is waiting.
 - `Unsafe.copyMemory` between native memory and a `float[]` or `double[]` fails, since those arrays hold Scheme flonums rather than bytes.
 - Resources from the JDK's own modules can be read as streams but have no URL: `getResource` answers `file:` and `jar:` URLs for the classpath only.
-- `sun.misc.Unsafe` runs with `sun.misc.unsafe.memory.access=allow`, because the default warning finds its caller through `StackWalker`, which has no natives yet.
+- `sun.misc.Unsafe` runs with `sun.misc.unsafe.memory.access=allow`, so Caffeine and Guava run without the JDK's warning on stderr.
 - No `module-info` checks and no export rules: every class sits in one unnamed module.
-- Stack traces under `CHAMPACA_BT` name methods by descriptor and have no line numbers.
 - A `NullPointerException` raised in champaca's own Scheme code, which stands in for some of the JDK's Java (the method handle layer, for one), has a `null` message where the JVM's might describe the failing bytecode. One the program's or the JDK's bytecode raises carries the JVM's message, such as `Cannot invoke "String.length()" because "<local1>" is null` (`test/java/NpeCheck.java`).
 

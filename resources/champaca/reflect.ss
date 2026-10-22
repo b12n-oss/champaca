@@ -180,22 +180,130 @@
 (defnative "java/lang/Class.getClassAccessFlagsRaw0()I" (this) (fxlogand (jclass-flags (mirror-class this)) #xffff))
 (defnative "java/lang/Class.getClassFileVersion0()I" (this) 69)
 
-;; getCallerClass walks the Chez continuation. Every translated method is a
-;; top-level define named "Class.name(desc)" and its blocks are labelled
-;; "Class.name(desc)#Bn", so a frame's code name says which Java method it
-;; is. Nothing is tracked on normal calls; the walk only happens here.
-(define (frame-java-classes)
-  (call/cc
-   (lambda (k)
-     (let loop ([o (inspect/object k)] [acc '()] [n 0])
-       (if (or (not (eq? (o 'type) 'continuation)) (fx= n 256))
-           (reverse acc)
-           (let* ([code (o 'code)]
-                  [name (and code (code 'name))]
-                  [cls (and (string? name) (java-frame-class name))])
-             (loop (o 'link)
-                   (if cls (cons (cons cls name) acc) acc)
-                   (fx+ n 1))))))))
+;; --- Java frames ---------------------------------------------------------------------
+;; Every translated method is a top-level define named "Class.name(desc)", an
+;; inlined leaf callee a let-bound "Caller.m(desc)#I:Class.name(desc)", and a
+;; block within either "...#Bpc" (a method with handlers runs its blocks
+;; through a trampoline; a method without usually has them folded into its
+;; own code object). A Java activation is a Chez frame carrying such a name,
+;; so a walk of the continuation is the Java stack, and nothing is tracked on
+;; calls. raw-frames takes the walk cheaply, a (code . return-offset) pair
+;; per frame, which is what fillInStackTrace keeps; names and pcs are read
+;; off the code objects only when a trace is asked for. The pc comes from
+;; Chez's inspector information: the return point's recorded expression is
+;; the pending call, whose operator codegen wraps as (begin '(jpc . pc) op),
+;; so the pc of that call, hence its line, is right there. A try or
+;; synchronized body (and a CHAMPACA_BT method body) runs in an unnamed thunk
+;; under dynamic-wind, so its pending pc belongs to the next named frame
+;; out. getCallerClass and the stack traces (natives.ss) both read this.
+
+;; A continuation object covers a stack segment of several frames; splitting
+;; the first frame off, as the inspector does, makes the link the next frame
+;; rather than the next segment. About 12 ns a frame.
+(define (raw-frames k)
+  (let loop ([k k] [n 0] [acc '()])
+    (if (or (eq? k #%$null-continuation) (not (#%$continuation? k)) (fx= n 1024))
+        (reverse acc)
+        (begin
+          (#%$split-continuation k 0)
+          (loop (#%$continuation-link k) (fx+ n 1)
+                (cons (cons (#%$continuation-return-code k) (#%$continuation-return-offset k)) acc))))))
+
+;; The return point at offset in code: its recorded expression, or #f. The
+;; code-info and rp-info records are Chez's own (fields rpis; offset, sexpr),
+;; read through record reflection, their accessors found once.
+(define rp-accessors #f)
+(define (record-field-accessor rtd name)
+  (let loop ([i 0] [ns (vector->list (record-type-field-names rtd))])
+    (cond [(null? ns) #f] [(eq? (car ns) name) (record-accessor rtd i)] [else (loop (fx+ i 1) (cdr ns))])))
+(define (return-sexpr code offset)
+  (let ([info (#%$code-info code)])
+    (and (record? info)
+         (begin
+           (unless rp-accessors
+             (let* ([rpis-of (record-field-accessor (record-rtd info) 'rpis)]
+                    [rpis (and rpis-of (rpis-of info))]
+                    [rp (and (vector? rpis) (fx> (vector-length rpis) 0) (vector-ref rpis 0))])
+               (when (and rp (record? rp))
+                 (set! rp-accessors (list rpis-of
+                                          (record-field-accessor (record-rtd rp) 'offset)
+                                          (record-field-accessor (record-rtd rp) 'sexpr))))))
+           (and rp-accessors
+                (let ([rpis ((car rp-accessors) info)] [offset-of (cadr rp-accessors)] [sexpr-of (caddr rp-accessors)])
+                  (and (vector? rpis)
+                       (let loop ([i 0])
+                         (cond [(fx= i (vector-length rpis)) #f]
+                               [(eqv? (offset-of (vector-ref rpis i)) offset) (sexpr-of (vector-ref rpis i))]
+                               [else (loop (fx+ i 1))])))))))))
+
+(define (string-find s ch start)
+  (let loop ([i start])
+    (cond [(fx>= i (string-length s)) #f] [(char=? (string-ref s i) ch) i] [else (loop (fx+ i 1))])))
+(define (string-find-sub s sub)
+  (let ([n (string-length s)] [m (string-length sub)])
+    (let loop ([i 0])
+      (cond [(fx> (fx+ i m) n) #f]
+            [(string=? (substring s i (fx+ i m)) sub) i]
+            [else (loop (fx+ i 1))]))))
+
+;; a code name -> (cname mname desc block?), or #f for a frame that isn't a
+;; Java method's; block? for a "#B", "#E" or "#T" procedure of the method
+;; rather than its own lambda. champaca's own classes (lambda bodies) aren't
+;; frames the JVM has.
+(define (frame-method name)
+  (let* ([inl (string-find-sub name "#I:")]
+         [name (if inl (substring name (fx+ inl 3) (string-length name)) name)]
+         [paren (string-find name #\( 0)])
+    (and paren
+         (let ([dot (let back ([i (fx- paren 1)])
+                      (cond [(fx< i 0) #f] [(char=? (string-ref name i) #\.) i] [else (back (fx- i 1))]))]
+               [hash (string-find name #\# paren)])
+           (and dot
+                (let ([cname (substring name 0 dot)])
+                  (and (not (and (fx>= (string-length cname) 9) (string=? (substring cname 0 9) "champaca/")))
+                       (list cname (substring name (fx+ dot 1) paren)
+                             (substring name paren (or hash (string-length name)))
+                             (and hash #t)))))))))
+
+;; the pc in a pending call's recorded expression, or #f
+(define (marker-pc v)
+  (let ()
+    (and (pair? v)
+         (let ([op (car v)])
+           (and (pair? op) (eq? (car op) 'begin) (pair? (cdr op))
+                (let ([q (cadr op)])
+                  (and (pair? q) (eq? (car q) 'quote) (pair? (cdr q))
+                       (let ([m (cadr q)])
+                         (and (pair? m) (eq? (car m) 'jpc) (fixnum? (cdr m)) (cdr m))))))))))
+
+;; the Java stack of continuation k, innermost first: (cname mname desc pc)
+;; per activation, pc -1 for a frame that recorded none. A method with
+;; handlers runs its blocks through a trampoline, so an activation is a
+;; block frame and then the method's own: the two merge, the block's pc
+;; winning since its call is the pending one. A block frame on its own (a
+;; block Chez didn't fold, tail-called) is an activation by itself.
+(define (java-frames-of frames)   ; frames from raw-frames
+  (let loop ([fs frames] [pending #f] [acc '()])
+    (if (null? fs)
+        (reverse (map (lambda (f) (list-head f 4)) acc))
+        (let* ([code (caar fs)]
+               [name (#%$code-name code)]
+               [m (and (string? name) (frame-method name))]
+               [pc (marker-pc (return-sexpr code (cdar fs)))])
+          (cond
+            [(not m) (loop (cdr fs) (or pending pc) acc)]
+            [(and (not (cadddr m)) (pair? acc)
+                  (let ([last (car acc)])
+                    (and (car (cddddr last))   ; a block frame of this same method
+                         (string=? (car last) (car m)) (string=? (cadr last) (cadr m)) (string=? (caddr last) (caddr m)))))
+             (let ([last (car acc)])
+               (loop (cdr fs) #f
+                     (cons (list (car m) (cadr m) (caddr m)
+                                 (if (fx>= (cadddr last) 0) (cadddr last) (or pc pending -1))
+                                 #f)
+                           (cdr acc))))]
+            [else (loop (cdr fs) #f
+                        (cons (list (car m) (cadr m) (caddr m) (or pc pending -1) (cadddr m)) acc))])))))
 
 (define (java-frame-class name)
   ;; "pkg/Cls.meth(desc)#B4" -> "pkg/Cls"
@@ -208,31 +316,20 @@
                  [(char=? (string-ref name i) #\.) (substring name 0 i)]
                  [else (back (fx- i 1))])))))
 
-(define (method-of frame-name)
-  ;; strip the "#Bn" block suffix so frames of one method compare equal
-  (let loop ([i 0]) (cond [(fx= i (string-length frame-name)) frame-name]
-                          [(char=? (string-ref frame-name i) #\#) (substring frame-name 0 i)]
-                          [else (loop (fx+ i 1))])))
-
 (define (reflection-frame? cls)
   (or (string=? cls "java/lang/reflect/Method")
       (string=? cls "java/lang/reflect/Constructor")
       (let ([p "jdk/internal/reflect/"]) (and (fx>= (string-length cls) (string-length p))
                                               (string=? p (substring cls 0 (string-length p)))))))
 
-;; Java frames, innermost first, one entry per method activation. Under
-;; CHAMPACA_BT the shadow stack (jstack) is exact, and its fluid-let wrapper
-;; hides frame names from the continuation walk, so it wins when present.
+;; Java frames for getCallerClass, innermost first, as (cname . "cname.name(desc)").
+;; Under CHAMPACA_BT the shadow stack (jstack) is used, as before the walk
+;; could see through its wrapper.
 (define (java-frames)
   (if (pair? jstack)
       (map (lambda (n) (cons (java-frame-class n) n)) jstack)
-      (frames-from-continuation)))
-
-(define (frames-from-continuation)
-  (let loop ([fs (frame-java-classes)] [acc '()])
-    (cond [(null? fs) (reverse acc)]
-          [(and (pair? acc) (string=? (method-of (cdar fs)) (cdar acc))) (loop (cdr fs) acc)]
-          [else (loop (cdr fs) (cons (cons (caar fs) (method-of (cdar fs))) acc))])))
+      (map (lambda (f) (cons (car f) (string-append (car f) "." (cadr f) (caddr f))))
+           (java-frames-of (call/1cc (lambda (k) (raw-frames k)))))))
 
 ;; The JVM answers the caller of the method that called getCallerClass,
 ;; skipping reflection's own frames.
