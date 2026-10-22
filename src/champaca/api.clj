@@ -130,28 +130,51 @@
   [cls mname & args]
   (rethrow #(apply s/call "dyn-invoke-static" cls mname (map ->arg args))))
 
-(defn get-static [cls fname] (rethrow #(s/call "dyn-get-static" cls fname)))
-(defn get-field [obj fname] (rethrow #(s/call "dyn-get-field" obj fname)))
+(defn get-static
+  "The static field fname of cls, or of the superinterface or superclass
+  that declares it. Initializes the declaring class first."
+  [cls fname]
+  (rethrow #(s/call "dyn-get-static" cls fname)))
+(defn get-field
+  "The instance field fname of obj, from obj's class up."
+  [obj fname]
+  (rethrow #(s/call "dyn-get-field" obj fname)))
+
+(defn set-static!
+  "Store v in the static field fname of cls (found as get-static finds it),
+  converted as an argument of the field's type would be. Refuses a final
+  field and a value that doesn't fit. Returns nil."
+  [cls fname v]
+  (rethrow #(s/call "dyn-set-static!" cls fname (->arg v)))
+  nil)
+(defn set-field!
+  "Store v in the instance field fname of obj, as set-static! does."
+  [obj fname v]
+  (rethrow #(s/call "dyn-set-field!" obj fname (->arg v)))
+  nil)
 
 (declare ->clj*)
 
 (defn ->clj
   "Copy Java data into jolt data, deeply: an array or a List (any Collection)
   becomes a vector, a Set a set, a Map a map, with strings and boxed numbers
-  converted. Anything else is returned as is."
-  [x]
-  (with-gil #(->clj* x)))
+  converted. Anything else is returned as is. Options: :key-fn, applied to
+  every map key that is a string, e.g. keyword."
+  ([x] (->clj x nil))
+  ([x {:keys [key-fn]}]
+   (with-gil #(->clj* x (or key-fn identity)))))
 
-(defn- ->clj* [x]
+(defn- ->clj* [x key-fn]
   (cond
     (s/call "dyn-array?" x)
-    (mapv #(->clj* (s/call "dyn-aref" x %)) (range (s/call "dyn-alength" x)))
+    (mapv #(->clj* (s/call "dyn-aref" x %) key-fn) (range (s/call "dyn-alength" x)))
     (s/call "dyn-instance?" x "java/util/Map")
     (let [a (s/call "dyn-map-array" x)]
-      (into {} (for [i (range 0 (s/call "dyn-alength" a) 2)]
-                 [(->clj* (s/call "dyn-aref" a i)) (->clj* (s/call "dyn-aref" a (inc i)))])))
-    (s/call "dyn-instance?" x "java/util/Set") (set (->clj* (s/call "dyn-coll-array" x)))
-    (s/call "dyn-instance?" x "java/util/Collection") (->clj* (s/call "dyn-coll-array" x))
+      (into {} (for [i (range 0 (s/call "dyn-alength" a) 2)
+                     :let [k (->clj* (s/call "dyn-aref" a i) key-fn)]]
+                 [(if (string? k) (key-fn k) k) (->clj* (s/call "dyn-aref" a (inc i)) key-fn)])))
+    (s/call "dyn-instance?" x "java/util/Set") (set (->clj* (s/call "dyn-coll-array" x) key-fn))
+    (s/call "dyn-instance?" x "java/util/Collection") (->clj* (s/call "dyn-coll-array" x) key-fn)
     :else x))
 
 (defn ->java

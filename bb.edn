@@ -125,11 +125,12 @@
                               ["callsite" "the call-site cache"]
                               ["jolt-after-init" "jolt itself still works after init!"]
                               ["threads" "Java threads started from jolt"]
-                              ["files" "files and MessageDigest from jolt"]]
+                              ["files" "files and MessageDigest from jolt"]
+                              ["fields" "Java fields read and written from jolt"]]
                     ex-fails (doall
                               (for [[n what] examples
-                                    :let [{:keys [out exit]} (shell {:out :string :continue true :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
-                                                                    (jolt-bin) "-M" (str "examples/" n ".clj"))
+                                    :let [{:keys [out exit]} (run-limited 300 {:extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                                                          (jolt-bin) "-M" (str "examples/" n ".clj"))
                                           ok (and (zero? exit) (= out (slurp (str "examples/" n ".expected"))))]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok n))))

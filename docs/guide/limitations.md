@@ -29,9 +29,7 @@ A JDK library load (`zip`, `net` and so on) is a no-op, because those natives ar
 - `init!` takes effect once per process. A second call, with a different `:classpath` or not, does nothing.
 - Until `save-cache!` runs, each JDK method the process compiles keeps its generated source in memory (a few KB per method) so a save can write it. A long-lived program should call `save-cache!` once its working set is warm, which also empties that list.
 - The user classpath is searched before the JDK's modules, the reverse of Java's order.
-- There are getters for fields but no setters.
 - Every conversion copies. A Java method that changes a collection you passed it changes the copy, and a big collection is copied again on each call ([data-conversion](data-conversion.md#conversions-copy)).
-- `->clj` returns map keys as strings, with no option to turn them into keywords.
 - A vector passed to a plain `Object` parameter becomes an array, not a `List`.
 - A Java object prints as `#object[:object]` in jolt. Use `ldk/to-string`.
 - A Java string can hold a lone surrogate (half of a UTF-16 pair) and a jolt string can't, so one comes back to jolt with U+FFFD in its place. Inside Java nothing is lost: string constants, concatenation and `switch` keep the code units exactly.

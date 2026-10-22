@@ -32,13 +32,13 @@ Java objects live in jolt's own heap as Chez records, so calling into Java is a 
 (ldk/->clj (ldk/invoke "a,b,c" "split" ","))                     ;=> ["a" "b" "c"]
 ```
 
-- **`construct`, `invoke`, `invoke-static`, `get-static`, `get-field`.** Class names take dots or slashes, and a jolt string can be the target of `invoke`.
+- **`construct`, `invoke`, `invoke-static`, `get-static`, `get-field`, `set-static!`, `set-field!`.** Class names take dots or slashes, and a jolt string can be the target of `invoke`. The setters convert the value to the field's type and refuse a `final` field.
 - **Overloads** go to the best fit: exact primitive, then widening, then boxing, then a supertype. Ties go to the most specific method (JLS 15.12.2.5), so `String.valueOf(nil)` picks `valueOf(char[])` and throws an NPE, just like Java. Only public members count. A call that fits nothing, or two methods equally, throws an `ex-info` listing the candidates.
 - **A jolt fn** passed where Java wants a single-method interface (`Comparator`, `Predicate`, `Function`, ...) becomes an implementation of it.
 - **Varargs** work the way javac does them: fixed-arity overloads first, then varargs methods with the trailing arguments packed into the array. So `(ldk/invoke-static "java.lang.String" "format" "%s: %.2f" "x" 2.5)` and `(ldk/invoke-static "java.util.List" "of" 1 2 3)` just work.
 - **A jolt vector** passed for an array parameter becomes a Java array of that element type. Where the parameter is only `Object`, the contents pick the type: `int[]`, `long[]`, `double[]`, `String[]`, nested arrays, or `Object[]`.
 - **jolt collections** go where Java wants a `Map`, `Set`, `List`, `Collection`, `Iterable` or plain `Object`. A map becomes a `LinkedHashMap`, a set a `LinkedHashSet`, and a seq an `ArrayList`, keeping jolt's order. A vector becomes an `ArrayList` too, unless the parameter is an array or plain `Object`, where it stays an array as above. The copy is deep, so a nested vector inside a collection is an `ArrayList`, and keywords become their names as strings. `(ldk/->java x)` does the same conversion by hand.
-- **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays and collections stay Java objects, so you can keep calling methods on them. `->clj` copies one into jolt data, deeply: arrays and lists to vectors, sets to sets, maps to maps.
+- **Results** come back with Strings as jolt strings and boxed numbers, Booleans and Characters unwrapped. Java arrays and collections stay Java objects, so you can keep calling methods on them. `->clj` copies one into jolt data, deeply: arrays and lists to vectors, sets to sets, maps to maps, with `{:key-fn keyword}` for keyword keys.
 
 So a jolt map can go straight into a JSON library and come back:
 

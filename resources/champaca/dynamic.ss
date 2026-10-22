@@ -443,21 +443,76 @@
        (dyn-out (call-site-ret-d site)
                 (apply (top-level-value (call-site-sym site)) (map convert-arg args (call-site-arg-ds site))))))))
 
-(define (dyn-get-static cname fname)
-  (let* ([cname (slashes cname)] [c (find-class cname)]
-         [f (find (lambda (f) (and (string=? (car f) fname) (static-flag? (caddr f)))) (meta-fields c))])
+;; A static field as (owner desc flags), found as getstatic resolves it
+;; (JVMS 5.4.3.2): the class, then its superinterfaces depth first, then its
+;; superclass. An instance field the same way up the superclasses only.
+(define (find-static-field cname fname)
+  (let loop ([todo (list cname)] [seen '()])
+    (and (pair? todo)
+         (let ([o (car todo)])
+           (if (member o seen)
+               (loop (cdr todo) seen)
+               (let* ([c (find-class o)]
+                      [f (find (lambda (f) (and (string=? (car f) fname) (static-flag? (caddr f)))) (meta-fields c))])
+                 (if f
+                     (list o (cadr f) (caddr f))
+                     (loop (append (jclass-interfaces c) (if (jclass-super c) (list (jclass-super c)) '()) (cdr todo))
+                           (cons o seen)))))))))
+(define (find-instance-field cname fname)
+  (let loop ([n cname])
+    (let* ([c (find-class n)]
+           [f (find (lambda (f) (and (string=? (car f) fname) (not (static-flag? (caddr f))))) (meta-fields c))])
+      (cond [f (list n (cadr f) (caddr f))] [(jclass-super c) (loop (jclass-super c))] [else #f]))))
+
+(define (static-field cname fname)
+  (let* ([cname (slashes cname)] [f (begin (find-class cname) (find-static-field cname fname))])
     (unless f (api-fail (string-append "no static field " fname " in " cname)))
-    (with-java-errors (lambda () (jinit cname)))
-    (dyn-out (cadr f) (top-level-value (string->symbol (string-append cname ":" fname))))))
+    ;; only the declaring class is initialized, as getstatic does
+    (with-java-errors (lambda () (jinit (car f))))
+    f))
+(define (instance-field obj fname)
+  (let* ([cname (class-name-of (nn obj))] [f (find-instance-field cname fname)])
+    (unless f (api-fail (string-append "no field " fname " in " cname)))
+    f))
+(define (static-sym-of f fname) (string->symbol (string-append (car f) ":" fname)))
+
+;; a descriptor as Java writes the type: int, java.lang.String, int[]
+(define (desc-java-name d)
+  (case (string-ref d 0)
+    [(#\[) (string-append (desc-java-name (substring d 1 (string-length d))) "[]")]
+    [(#\L) (slashes->dots (substring d 1 (fx- (string-length d) 1)))]
+    [else (cdr (assoc d prim-names))]))
+
+;; v as the value of a field of type d: what a parameter of type d accepts,
+;; plus an in-range integer for byte, short and char (an assignment's
+;; narrowing of a constant, JLS 5.2)
+(define (field-value f fname v)
+  (let ([d (cadr f)])
+    (when (fxpositive? (fxlogand (caddr f) #x10))
+      (api-fail (string-append "field " fname " in " (car f) " is final")))
+    (unless (or (fit v d)
+                (and (exact-int? v)
+                     (case (string-ref d 0)
+                       [(#\B) (<= -128 v 127)] [(#\S) (<= -32768 v 32767)] [(#\C) (<= 0 v 65535)]
+                       [else #f])))
+      (api-fail (string-append "field " fname " in " (car f) " has type " (desc-java-name d) ", which the value doesn't fit")))
+    (convert-arg v d)))
+
+(define (dyn-get-static cname fname)
+  (let ([f (static-field cname fname)])
+    (dyn-out (cadr f) (top-level-value (static-sym-of f fname)))))
+(define (dyn-set-static! cname fname v)
+  (let* ([f (static-field cname fname)] [x (field-value f fname v)])
+    (set-top-level-value! (static-sym-of f fname) x)
+    (void)))
 
 (define (dyn-get-field obj fname)
-  (let* ([cname (class-name-of (nn obj))]
-         [desc (let loop ([n cname])
-                 (let* ([c (find-class n)]
-                        [f (find (lambda (f) (and (string=? (car f) fname) (not (static-flag? (caddr f))))) (meta-fields c))])
-                   (cond [f (cadr f)] [(jclass-super c) (loop (jclass-super c))]
-                         [else (api-fail (string-append "no field " fname " in " cname))])))])
-    (dyn-out desc (vector-ref (jobj-slots obj) (jfield-index cname fname)))))
+  (let ([f (instance-field obj fname)])
+    (dyn-out (cadr f) (vector-ref (jobj-slots obj) (jfield-index (car f) fname)))))
+(define (dyn-set-field! obj fname v)
+  (let* ([f (instance-field obj fname)] [x (field-value f fname v)])
+    (vector-set! (jobj-slots obj) (jfield-index (car f) fname) x)
+    (void)))
 
 ;; arrays stay Java arrays across the boundary; ->clj copies one out
 (define (dyn-array? v) (jarr? v))

@@ -2,7 +2,7 @@
 
 Everything here lives in `champaca.api`, required as `ldk` throughout. Run `(ldk/init!)` first. Each result shown in a comment came from running the line.
 
-## Five functions
+## The core functions
 
 ```clojure
 (ldk/construct "java.lang.StringBuilder" "jolt")            ; new StringBuilder("jolt")
@@ -10,6 +10,7 @@ Everything here lives in `champaca.api`, required as `ldk` throughout. Run `(ldk
 (ldk/invoke-static "java.lang.Math" "max" 3 7)              ;=> 7
 (ldk/get-static "java.lang.Integer" "MAX_VALUE")            ;=> 2147483647
 (ldk/get-field tokenizer "sval")                            ; an instance field
+(ldk/set-field! tokenizer "sval" "jolt")                    ; and its setter
 ```
 
 Class names take dots or slashes (`"java.util.ArrayList"` and `"java/util/ArrayList"` both work). The receiver of `invoke` is a Java object, or a jolt string, which acts as a `java.lang.String`. Anything else, a jolt vector for instance, fails with `champaca: not a Java value`.
@@ -26,7 +27,7 @@ A longer run, using a `StringBuilder`:
 
 `to-string` calls the object's own `toString`. Use it to look at a Java object, because jolt prints one as `#object[:object]`, which tells you nothing.
 
-The field getters take a field name. `get-field` reads instance fields, walking up the superclasses, and `get-static` reads static ones, running the class's static initializer first if it hasn't run:
+The field getters take a field name. `get-field` reads instance fields, walking up the superclasses. `get-static` reads static ones, found the way Java resolves `Sub.FIELD`: the class itself, then its interfaces, then its superclass. Only the class that declares the field gets initialized, as on the JVM, so `(ldk/get-static "java.io.ObjectOutputStream" "STREAM_MAGIC")` gives `-21267` from the `ObjectStreamConstants` interface. A `StreamTokenizer` keeps its current token in public fields:
 
 ```clojure
 (let [t (ldk/construct "java.io.StreamTokenizer" (ldk/construct "java.io.StringReader" "tepals 12"))]
@@ -35,7 +36,19 @@ The field getters take a field name. `get-field` reads instance fields, walking 
 ;=> [-3 "tepals" -2 12.0]        (-3 is TT_WORD, -2 is TT_NUMBER)
 ```
 
-Neither getter checks access, so they'll read a private field too (`(ldk/get-field sb "count")` on a `StringBuilder` holding `"abc"` gives `3`). There are no setters yet.
+Neither getter checks access, so they'll read a private field too (`(ldk/get-field sb "count")` on a `StringBuilder` holding `"abc"` gives `3`).
+
+`set-field!` and `set-static!` store into a field, found the same way, and return `nil`. The value is converted as an argument of the field's type would be ([data-conversion](data-conversion.md)), and an integer also goes into a `byte`, `short` or `char` field when it's in range, the way Java lets a constant narrow on assignment:
+
+```clojure
+(let [t (ldk/construct "java.io.StreamTokenizer" (ldk/construct "java.io.StringReader" ""))]
+  (ldk/set-field! t "ttype" -3)
+  (ldk/set-field! t "sval" "jolt")
+  (ldk/to-string t))
+;=> "Token[jolt], line 1"
+```
+
+They refuse a `final` field (`field MAX_VALUE in java/lang/Integer is final`) and a value the type can't hold (`field nval in java/io/StreamTokenizer has type double, which the value doesn't fit`). Like the getters they skip access checks, so a private field can be written too.
 
 ## Which overload runs
 
