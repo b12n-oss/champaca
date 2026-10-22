@@ -45,6 +45,8 @@ public class StringConstCheck {
 
     public static void main(String[] args) throws Exception {
         System.out.println(units("a\uD83D\uDE00b"));
+        // line endings Chez would fold to \n inside a literal: NEL, LS, CR NEL
+        System.out.println(units("a\u0085b") + " / " + units("a\u2028b") + " / " + units("a\r\u0085b") + " / " + units("a\r\nb"));
         System.out.println("a\uD83D\uDE00b".codePointAt(1) == 0x1F600);
         System.out.println(units("\uD800"));
         System.out.println(units(lone1()));

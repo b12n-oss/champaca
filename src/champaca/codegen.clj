@@ -33,7 +33,9 @@
                            (let [i (int c)]
                              (cond (= c \\) "\\\\"
                                    (= c \") "\\\""
-                                   (< i 32) (str "\\x" (Integer/toHexString i) ";")
+                                   ;; Chez reads any line ending inside a literal as \n, NEL
+                                   ;; and LS included (R6RS 4.2.7); escaped, they stay themselves
+                                   (or (< i 32) (= i 0x85) (= i 0x2028)) (str "\\x" (Integer/toHexString i) ";")
                                    :else (str c))))
                          s))
          "\"")))
