@@ -116,6 +116,10 @@
 ;; and class-verification times). ThreadInfo, CPU times and deadlock
 ;; detection stay missing.
 (define vm-start-ms (quotient (now-nanos) 1000000))
+(define vm-start-mono (current-time 'time-monotonic))   ; uptime survives a clock step
+(define (uptime-ms)
+  (let ([d (time-difference (current-time 'time-monotonic) vm-start-mono)])
+    (+ (* 1000 (time-second d)) (quotient (time-nanosecond d) 1000000))))
 (let ()
   (define cls "sun/management/VMManagementImpl")
   (define (def name proc) (define-native! (string-append cls "." name) proc))
@@ -131,7 +135,7 @@
   (def "getProcessId()I" (lambda (this) (libc-getpid)))
   (def "getVmArguments0()[Ljava/lang/String;" (lambda (this) (make-jarr "Ljava/lang/String;" (vector))))
   (def "getStartupTime()J" (lambda (this) vm-start-ms))
-  (def "getUptime0()J" (lambda (this) (- (quotient (now-nanos) 1000000) vm-start-ms)))
+  (def "getUptime0()J" (lambda (this) (uptime-ms)))
   (def "getAvailableProcessors()I" (lambda (this) 1))   ; as Runtime says
   (def "getTotalClassCount()J" (lambda (this) (hashtable-size classes)))
   (def "getInitializedClassCount()J"
@@ -205,10 +209,36 @@
 ;; The JVM answers a live process's start time, or -1 for one that is gone;
 ;; 0 is a start time ProcessHandleImpl treats as unknown. kill(pid, 0) tells
 ;; the two apart, and EPERM still means the process exists.
+;; A pid is a positive int; kill would read 0 and -1 as process groups, and
+;; a long outside int range can't even be passed.
+(define (pid-ok? pid) (and (>= pid 1) (<= pid 2147483647)))
 (defnative "java/lang/ProcessHandleImpl.isAlive0(J)J" (pid)
-  (if (or (eqv? 0 (libc-kill pid 0)) (eqv? (errno) 1)) 0 -1))
+  (if (and (pid-ok? pid) (or (eqv? 0 (libc-kill pid 0)) (eqv? (errno) 1))) 0 -1))
+;; The parent of any process: proc_pidinfo's proc_bsdinfo on macOS (ppid is
+;; the 32-bit field at byte 16, size 136, measured on arm64 and x86_64), or
+;; /proc/<pid>/stat on Linux, whose ppid follows the parenthesized command
+;; name (which may itself hold spaces and parens) and the state letter.
+(define libc-proc-pidinfo
+  (and natives-macos? (foreign-procedure "proc_pidinfo" (int int unsigned-64 uptr int) int)))
+(define (parent-pid pid)
+  (if natives-macos?
+      (let* ([buf (foreign-alloc 136)]
+             [n (libc-proc-pidinfo pid 3 0 buf 136)]   ; 3 = PROC_PIDTBSDINFO
+             [ppid (if (fx= n 136) (foreign-ref 'unsigned-32 buf 16) -1)])
+        (foreign-free buf)
+        ppid)
+      (guard (e [#t -1])
+        (let* ([text (call-with-port (open-input-file (string-append "/proc/" (number->string pid) "/stat")) get-string-all)]
+               [start (let loop ([i (fx- (string-length text) 1)])
+                        (if (char=? (string-ref text i) #\)) (fx+ i 4) (loop (fx- i 1))))]
+               [end (let loop ([j start]) (if (char-numeric? (string-ref text j)) (loop (fx+ j 1)) j))])
+          (string->number (substring text start end))))))
 (defnative "java/lang/ProcessHandleImpl.parent0(JJ)J" (pid start)
-  (if (eqv? pid (libc-getpid)) (libc-getppid) -1))
+  (cond [(not (pid-ok? pid)) -1]
+        [(eqv? pid (libc-getpid)) (libc-getppid)]
+        [else (parent-pid pid)]))
+;; -2 is NOT_A_CHILD: ProcessHandleImpl then polls isAlive0 for onExit
+(defnative "java/lang/ProcessHandleImpl.waitForProcessExit0(JZ)I" (pid reap) -2)
 
 (defnative "java/lang/System.mapLibraryName(Ljava/lang/String;)Ljava/lang/String;" (name)
   (jstring (string-append "lib" (jstring->scheme (nn name)) (if natives-macos? ".dylib" ".so"))))
@@ -224,8 +254,9 @@
                   (string-append "no " n " in java.library.path, and champaca loads no JNI libraries"))))))
 
 (defnative "java/lang/Runtime.availableProcessors()I" (this) 1)
-(defnative "java/lang/Runtime.maxMemory()J" (this) 4294967296)
-;; Chez's heap: committed and allocated bytes; max stays a nominal 4 GB
+;; Chez's heap: committed and allocated bytes; max is a nominal 4 GB, or
+;; the heap once it's bigger
+(defnative "java/lang/Runtime.maxMemory()J" (this) (max 4294967296 (current-memory-bytes)))
 (defnative "java/lang/Runtime.totalMemory()J" (this) (current-memory-bytes))
 (defnative "java/lang/Runtime.freeMemory()J" (this) (max 0 (- (current-memory-bytes) (bytes-allocated))))
 (defnative "java/lang/Runtime.gc()V" (this) (collect))

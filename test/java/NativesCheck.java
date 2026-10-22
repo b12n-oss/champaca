@@ -22,6 +22,12 @@ public class NativesCheck {
         ProcessHandle me = ProcessHandle.current();
         System.out.println("pid: " + (me.pid() > 0) + " " + me.isAlive() + " " + me.parent().isPresent()
                            + " " + ProcessHandle.of(me.pid()).isPresent() + " " + ProcessHandle.of(Integer.MAX_VALUE - 7).isPresent());
+        // a pid kill() would read as a process group, and one beyond int range
+        // (HotSpot truncates it; the point here is that nothing crashes)
+        System.out.println("odd pids: " + ProcessHandle.of(-1).isPresent() + " " + fails(() -> ProcessHandle.of(1L << 40)));
+        // the parent of another process, here of our parent (absent only under an init process)
+        ProcessHandle parent = me.parent().get();
+        System.out.println("grandparent: " + (parent.parent().isPresent() == (parent.pid() != 1)));
         String lib = System.mapLibraryName("champaca");
         System.out.println("mapLibraryName: " + lib.startsWith("libchampaca.") + " " + (lib.endsWith(".so") || lib.endsWith(".dylib")));
         System.out.println("no such library: " + fails(() -> System.loadLibrary("nosuchlib_champaca")));
@@ -38,6 +44,17 @@ public class NativesCheck {
                            + " " + (heap.getMax() == -1 || heap.getMax() >= heap.getCommitted()));
         OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
         System.out.println("os bean: " + (os.getAvailableProcessors() >= 1) + " " + os.getName().isEmpty() + " " + (os.getSystemLoadAverage() >= 0));
-        System.out.println("threads: " + (ManagementFactory.getThreadMXBean().getThreadCount() >= 1));
+        int before = ManagementFactory.getThreadMXBean().getThreadCount();
+        System.out.println("threads: " + (before >= 1));
+        // onExit on a process that isn't our child: a reaper thread polls it
+        java.util.concurrent.CompletableFuture<ProcessHandle> exit = ProcessHandle.of(1).get().onExit();
+        Thread.sleep(200);
+        System.out.println("onExit polls: " + (ManagementFactory.getThreadMXBean().getThreadCount() > before) + " " + exit.isDone());
+        // a class whose initializer failed: the second use names the first failure
+        for (int i = 0; i < 2; i++) {
+            try { System.out.println(BadInit.x); }
+            catch (Throwable err) { System.out.println("bad init " + i + ": " + err.getClass().getName() + " / " + err.getCause()); }
+        }
     }
+    static class BadInit { static int x = 1 / Integer.parseInt("0"); }
 }

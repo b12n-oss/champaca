@@ -198,6 +198,7 @@
 ;; another thread waits for it to finish (JVMS 5.5). A <clinit> that throws
 ;; leaves the class 'erroneous, and any later use throws NoClassDefFoundError.
 (define init-owners (make-weak-eq-hashtable))
+(define init-errors (make-weak-eq-hashtable))   ; class -> (first failure . thread name)
 (define init-waiters 0)
 
 (define (jinit name)
@@ -215,8 +216,14 @@
                    (eq-hashtable-delete! init-owners c)
                    (when (fx> init-waiters 0) (gil-poke!)))])
        ;; anything but an Error reaches the caller wrapped in an
-       ;; ExceptionInInitializerError (JVMS 5.5 step 11)
+       ;; ExceptionInInitializerError (JVMS 5.5 step 11); the failure and
+       ;; its thread are kept for the NoClassDefFoundError of later uses
        (guard (e [#t (done 'erroneous)
+                     (when (jobj? e)
+                       (eq-hashtable-set! init-errors c
+                                          (cons e (if current-jthread
+                                                      (jstring->scheme ((method-proc "java/lang/Thread" "getName()Ljava/lang/String;") current-jthread))
+                                                      "main"))))
                      (raise (if (and (jobj? e) (not (jinstance? e "java/lang/Error")))
                                 (let ([w (begin (jinit "java/lang/ExceptionInInitializerError")
                                                 (jnew "java/lang/ExceptionInInitializerError"))])
@@ -234,8 +241,18 @@
        (set! init-waiters (fx- init-waiters 1))
        (jinit-slow c name))]
     [(erroneous)
-     (jthrow "java/lang/NoClassDefFoundError"
-             (string-append "Could not initialize class " (slashes->dots name)))]
+     ;; with HotSpot's cause: an ExceptionInInitializerError naming the
+     ;; first failure and its thread
+     (let ([first (eq-hashtable-ref init-errors c #f)]
+           [e (begin (jinit "java/lang/NoClassDefFoundError") (jnew "java/lang/NoClassDefFoundError"))])
+       ((method-proc "java/lang/NoClassDefFoundError" "<init>(Ljava/lang/String;)V")
+        e (jstring (string-append "Could not initialize class " (slashes->dots name))))
+       (when first
+         (let ([w (begin (jinit "java/lang/ExceptionInInitializerError") (jnew "java/lang/ExceptionInInitializerError"))])
+           ((method-proc "java/lang/ExceptionInInitializerError" "<init>(Ljava/lang/String;)V")
+            w (jstring (string-append "Exception " (jstring-of (car first)) " [in thread \"" (cdr first) "\"]")))
+           ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;") e w)))
+       (raise e))]
     [else (void)]))
 
 (define (jnew name)

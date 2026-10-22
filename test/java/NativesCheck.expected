@@ -1,6 +1,8 @@
 env: true a=b=c a=b=c true true true
 env is read-only: java.lang.UnsupportedOperationException
 pid: true true true true false
+odd pids: false no exception
+grandparent: true
 mapLibraryName: true true
 no such library: java.lang.UnsatisfiedLinkError
 missing native: java.lang.UnsatisfiedLinkError
@@ -9,3 +11,6 @@ runtime bean: true true Java Virtual Machine Specification
 heap: true true true
 os bean: true false true
 threads: true
+onExit polls: true false
+bad init 0: java.lang.ExceptionInInitializerError / java.lang.ArithmeticException: / by zero
+bad init 1: java.lang.NoClassDefFoundError / java.lang.ExceptionInInitializerError: Exception java.lang.ArithmeticException: / by zero [in thread "main"]

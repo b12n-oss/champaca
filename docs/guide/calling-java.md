@@ -168,7 +168,7 @@ A Java exception that escapes a call turns into an `ex-info`. Its message is the
 ;    "For input string: \"nope\""]
 ```
 
-There are two other kinds, told apart by `:champaca/error`: `:lookup` for a call nothing fits (above), and `:missing-native` when Java code reaches a JDK native method champaca doesn't provide yet. [debugging](debugging.md) covers the second.
+There is one other kind, `:lookup` under `:champaca/error`, for a call nothing fits (above). A JDK native method champaca doesn't provide yet throws `java.lang.UnsatisfiedLinkError`, so it arrives as a Java exception like any other; [debugging](debugging.md) covers it.
 
 ## With descriptors
 
