@@ -43,15 +43,13 @@
 ;; call/cc and reads the continuation marks, about twice the cost. A clause whose
 ;; test holds escapes and returns (lambda () next) for the method's trampoline.
 ;; With no clause for it the exception goes on to the next handler from right
-;; where it was raised, so nothing between is unwound and wound again. A full
-;; call/cc rather than call/1cc: the stack walk behind stack traces
-;; (reflect.ss raw-frames) follows continuation links, and a one-shot
-;; continuation ends the chain, which hid every frame below a try. Entering a
-;; region costs the same either way (0.17 against 0.21 us at depth 20).
+;; where it was raised, so nothing between is unwound and wound again. The
+;; stack walk behind stack traces (reflect.ss raw-frames) crosses this
+;; one-shot continuation because it splits each frame off first.
 (define-syntax jtry
   (syntax-rules ()
     [(_ e ([test next] ...) body)
-     (call/cc
+     (call/1cc
       (lambda (k)
         (let* ([old (#%$current-handler-stack)]
                [new (cons (lambda (e)
