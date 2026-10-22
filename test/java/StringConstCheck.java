@@ -47,6 +47,8 @@ public class StringConstCheck {
         System.out.println(units("a\uD83D\uDE00b"));
         // line endings Chez would fold to \n inside a literal: NEL, LS, CR NEL
         System.out.println(units("a\u0085b") + " / " + units("a\u2028b") + " / " + units("a\r\u0085b") + " / " + units("a\r\nb"));
+        // a backslash before a line ending would be a Scheme line continuation
+        System.out.println(units("\\\n") + " / " + units("\\\u0085") + " / " + switch ("a\u0085b") { case "a\u0085b" -> "nel key"; case "a\nb" -> "folded"; default -> "missed"; });
         System.out.println("a\uD83D\uDE00b".codePointAt(1) == 0x1F600);
         System.out.println(units("\uD800"));
         System.out.println(units(lone1()));
