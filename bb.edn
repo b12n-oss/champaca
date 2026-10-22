@@ -10,15 +10,25 @@
           ;; $JOLT wins, then the pinned build, then jolt on PATH
           (defn jolt-bin []
             (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt"))
-          ;; a command with a time limit, so a test that hangs fails instead
+          ;; a command with a time limit, so a test that hangs fails instead.
+          ;; A hang leaves its output so far, and on macOS a native stack
+          ;; sample, in target/hangs/<program>-<ms>/.
           (defn run-limited [secs opts & cmd]
-            (let [proc (apply process/process (merge {:out :string :err :inherit :in :inherit} opts) cmd)
+            (let [outf (str (fs/create-temp-file {:prefix "champaca-out-"}))
+                  proc (apply process/process (merge {:out (fs/file outf) :err :inherit :in :inherit} opts) cmd)
                   r (deref proc (* 1000 secs) :timed-out)]
-              (if (= r :timed-out)
-                (do (process/destroy-tree proc)
-                    (println (str "timed out after " secs " s"))
+              (try
+                (if (= r :timed-out)
+                  (let [d (str "target/hangs/" (fs/file-name (last cmd)) "-" (System/currentTimeMillis))]
+                    (fs/create-dirs d)
+                    (when (fs/which "sample")
+                      (shell {:continue true :out (str d "/sample.txt") :err :string} "sample" (str (.pid (:proc proc))) "5"))
+                    (fs/copy outf (str d "/partial.out"))
+                    (process/destroy-tree proc)
+                    (println (str "timed out after " secs " s; output so far and a stack sample in " d))
                     {:out "" :exit 124})
-                r)))
+                  (assoc r :out (slurp outf)))
+                (finally (fs/delete-if-exists outf)))))
           ;; test/libs: a Maven coordinate's path in a repository, and a file's SHA-1
           (defn m2-path [coord]
             (let [[g a v] (str/split coord (re-pattern ":"))]
