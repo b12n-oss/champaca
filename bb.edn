@@ -113,6 +113,8 @@
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses
                     _ (shell "java test/gen/DefaultConflictGen.java target/classes")
+                    ;; ModuleCheck's Truncated.class: present but unloadable
+                    _ (shell "java test/gen/TruncatedGen.java target/classes")
                     ;; BlockingIoCheck's FIFO
                     _ (fs/delete-if-exists "target/blocking-io.fifo")
                     _ (shell "mkfifo target/blocking-io.fifo")

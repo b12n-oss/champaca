@@ -1400,18 +1400,27 @@
 
 ;; A class that can be loaded: registered already, an array, or a class file
 ;; the loader can find (the resource hook looks where classes come from). Only
-;; that is "not found"; a class that exists but fails to translate is an
-;; error, as it is when a call reaches it, rather than a
-;; ClassNotFoundException hiding the cause. A primitive's name is not a
-;; class's, as on the JVM.
+;; that is "not found". A class that exists but can't be loaded (an opcode or
+;; attribute the translator lacks, a superclass that is missing) is a
+;; NoClassDefFoundError naming the cause, as a class the JVM can't define is
+;; a LinkageError: code catching Throwable or LinkageError around a probe for
+;; an optional class goes on, code catching ClassNotFoundException alone stops
+;; with the cause in front of it, and nothing is reported as absent that
+;; isn't. A primitive's name is not a class's, as on the JVM.
 (define (class-exists? n)
   (and (fx> (string-length n) 0)
        (not (prim-name? n))
        (or (hashtable-ref classes n #f)
            (char=? (string-ref n 0) #\[)
            (and (resource-hook (string-append n ".class")) #t))))
+(define (condition-text e)
+  (let ([p (open-output-string)]) (display-condition e p) (get-output-string p)))
 (define (try-class n)
-  (and (class-exists? n) (find-class n)))
+  (and (class-exists? n)
+       (guard (e [(not (jobj? e))
+                  (jthrow "java/lang/NoClassDefFoundError"
+                          (string-append (slashes->dots n) ": champaca could not load it: " (condition-text e)))])
+         (find-class n))))
 ;; HotSpot's boot loader: the classes of the modules defined to it (a null
 ;; loader), never the classpath's, so a loader with no parent that delegates
 ;; up finds what it would on the JVM

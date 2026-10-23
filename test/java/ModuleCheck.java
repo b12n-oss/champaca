@@ -20,6 +20,12 @@ public class ModuleCheck {
         try { c.call(); return "no exception"; } catch (Throwable t) { return t.getClass().getName(); }
     }
 
+    // a class that exists but can't be loaded is a LinkageError (the JVM's ClassFormatError,
+    // champaca's NoClassDefFoundError), never "not found"
+    static String loads(Callable<?> c) {
+        try { c.call(); return "loaded"; } catch (LinkageError e) { return "LinkageError"; } catch (Throwable t) { return t.getClass().getName(); }
+    }
+
     public static void main(String[] args) throws Exception {
         ModuleLayer boot = ModuleLayer.boot();
         System.out.println("boot layer: " + (boot != null) + " " + boot.findModule("java.base").isPresent()
@@ -72,6 +78,9 @@ public class ModuleCheck {
                            + " " + platform.loadClass("java.util.zip.CRC32").getName() + " " + fails(() -> platform.loadClass("sun.tools.jar.JarToolProvider"))
                            + " " + fails(() -> Class.forName("java/lang/String")) + " " + fails(() -> Class.forName("int"))
                            + " " + Class.forName("[Ljava.lang.String;").getSimpleName());
+        // Truncated.class (test/gen/TruncatedGen.java) is half a class file: present, unloadable
+        System.out.println("exists but can't load: " + loads(() -> Class.forName("Truncated")) + " " + loads(() -> scl.loadClass("Truncated"))
+                           + " " + loads(() -> Class.forName("Truncated", false, scl)) + " " + loads(() -> Class.forName("NoSuchClassAtAll")));
         // a loader with no parent delegates to the bootstrap loader, which has the boot modules only
         ClassLoader parentless = new ClassLoader(null) {};
         System.out.println("bootstrap delegation: " + parentless.loadClass("java.lang.String").getName() + " " + fails(() -> parentless.loadClass("java.sql.Date"))
