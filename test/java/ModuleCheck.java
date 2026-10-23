@@ -39,6 +39,9 @@ public class ModuleCheck {
         System.out.println("unnamed: " + mine.isNamed() + " " + (mine.getName() == null) + " " + (mine == Inner.class.getModule())
                            + " " + ModuleCheck[].class.getModule().isNamed() + " " + (mine.getLayer() == null)
                            + " " + mine.getDescriptor());
+        System.out.println("packages: " + String.class.getPackage().isSealed() + " " + String.class.getPackage().getImplementationVersion()
+                           + " " + (String.class.getPackage() == Object.class.getPackage()) + " " + ModuleCheck.class.getPackage().isSealed()
+                           + " " + java.sql.Date.class.getPackage().isSealed() + " " + java.sql.Date.class.getPackage().getName());
         System.out.println("exports: " + base.isExported("java.lang") + " " + base.isExported("jdk.internal.misc")
                            + " " + base.isExported("jdk.internal.misc", mine) + " " + base.isOpen("java.lang") + " " + mine.isExported("anything")
                            + " " + base.getPackages().contains("java.util.zip") + " " + mine.canRead(base) + " " + base.canRead(mine)

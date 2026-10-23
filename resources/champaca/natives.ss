@@ -1338,11 +1338,11 @@
 ;; packages the JDK finds through a runtime image this runtime doesn't have,
 ;; so it answered null for every class. One Package per name instead, built
 ;; the way the JDK's class loaders define one: a classpath class's from its
-;; jar's manifest (the hook), a JDK class's with no version information. On
-;; the JVM a JDK package belongs to a named module and reports isSealed;
-;; every module here is unnamed. A lambda class is champaca/Lambda$..., shared
-;; by every call site with the same interface, so its package is champaca, in
-;; step with its getName (the JVM's lambda lives in its caller's package).
+;; jar's manifest (the hook), a JDK class's as a package of its named module
+;; (no version information, sealed), as BootLoader.definePackage builds it. A
+;; lambda class is champaca/Lambda$..., shared by every call site with the
+;; same interface, so its package is champaca, in step with its getName (the
+;; JVM's lambda lives in its caller's package).
 (define jpackage-hook #f)
 (define (set-jpackage-hook! f) (set! jpackage-hook f))
 (define jpackage-table (make-hashtable string-hash string=?))
@@ -1358,15 +1358,18 @@
     (or (hashtable-ref jpackage-table pn #f)
         (let* ([info (text-lines (jpackage-hook cn))]
                [given (lambda (s) (and (char=? (string-ref s 0) #\+) (substring s 1 (string-length s))))]
+               [module (and slash (string=? (car info) "jdk") (hashtable-ref package-modules (substring cn 0 slash) #f))]
                [attrs (if (string=? (car info) "jdk")
                           (make-list 6 #f)
                           (map (lambda (s) (let ([v (given s)]) (and v (jstring v)))) (list-head (cdr info) 6)))]
                [seal (and (string=? (car info) "user")
                           (let ([u (given (list-ref info 7))])
                             (and u (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring u)))))]
-               [p (apply construct "java/lang/Package"
-                         "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
-                         (jstring pn) (append attrs (list seal #f)))])
+               [p (if module
+                      (construct "java/lang/Package" "(Ljava/lang/String;Ljava/lang/Module;)V" (jstring pn) module)
+                      (apply construct "java/lang/Package"
+                             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
+                             (jstring pn) (append attrs (list seal #f))))])
           ;; constructing ran Java code, which can let another thread in to
           ;; define the same package first: keep whichever got there
           (or (hashtable-ref jpackage-table pn #f)

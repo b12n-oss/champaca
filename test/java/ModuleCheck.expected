@@ -3,6 +3,7 @@ java.base: java.base true true true false true true
 other modules: java.logging java.sql java.xml jdk.internal.loader.ClassLoaders$PlatformClassLoader
 arrays and primitives: java.base java.base java.base java.sql
 unnamed: false true true false true null
+packages: true null true false true java.sql
 exports: true false false false true true true false true
 internal access: java.lang.IllegalAccessException java.lang.reflect.InaccessibleObjectException no exception java.base no exception
 loaders: jdk.internal.loader.ClassLoaders$AppClassLoader true jdk.internal.loader.ClassLoaders$PlatformClassLoader true true app platform true
