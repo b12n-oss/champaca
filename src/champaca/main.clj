@@ -1022,6 +1022,7 @@
           (swap! state assoc :cache-tmp tmp))
         (doseq [f runtime-files] (scheme! (slurp (io/resource f)))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
+  (s/call "set-classpath!" (str/join ":" (:classpath @state)))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
   (s/call "set-annotation-class-hook!" (fn [iface keys]
@@ -1062,7 +1063,14 @@
                      ;; ReflectionFactory needs (OpenLDK %initialize-system-phase1)
                      (jinit \"java/lang/reflect/AccessibleObject\")
                      ((method-proc \"java/lang/System\" \"initPhase1()V\"))
-                     (install-unnamed-module!)))")]
+                     ;; initPhase2 builds the boot layer from the image's
+                     ;; pre-generated module graph (SystemModules$default, no
+                     ;; resolution) and initPhase3 makes the app class loader the
+                     ;; system and context loader, as the JVM does before main; a
+                     ;; failing phase 2 has printed its cause to stderr already
+                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 1 1))
+                       (error 'champaca \"the boot layer failed to initialize\"))
+                     ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
         (when (and (not hit?) (zero? status))
           (timed :cache-write #(write-cache! dir @rec)))
@@ -1087,7 +1095,7 @@
   (let [t0 (System/nanoTime)
         status (init! classpath)
         _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
-    (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after initPhase1: ")) (stats))
+    (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
       (let [status (apply s/call "run-main" cname args)]
         (when (env "CHAMPACA_STATS") (stats))

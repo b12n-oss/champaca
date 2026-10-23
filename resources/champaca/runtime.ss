@@ -733,8 +733,7 @@
                      (if (eq? (jclass-kind c) 'prim) 1 0))
         (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "modifiers")
                      (class-modifiers c))
-        (when unnamed-module
-          (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "module") unnamed-module))
+        (set-mirror-module! m c)
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
                        (jmirror (find-class (desc->class-name (substring (jclass-cname c) 1 (string-length (jclass-cname c))))))))
@@ -749,25 +748,45 @@
          [inner (and (pair? (cddr m)) (fx> (length (caddr m)) 2) (caddr (caddr m)))])
     (fxlogand (if inner (caddr inner) (jclass-flags c)) #x761f)))
 
-;; Every class lives in one unnamed module, as in OpenLDK: Class.getModule()
-;; must not be null (resource bundles, getResourceAsStream), and an unnamed
-;; module skips module access checks. Created after initPhase1, then set on
-;; the mirrors made before it existed.
+;; --- modules ---------------------------------------------------------------------
+;; Class.getModule() is the boot layer's named module for a JDK class, found
+;; by package, and the boot loader's unnamed module for everything else: every
+;; class here has a null class loader, so the classpath is that module, as it
+;; is for -Xbootclasspath/a classes on the JVM. Module.defineModule0 records
+;; each module's packages while initPhase2 builds the layer and BootLoader's
+;; <clinit> hands over the unnamed module; both refresh the mirrors made
+;; before them, as HotSpot patches the classes loaded before java.base is
+;; defined. Until then a mirror's module is null, as on the JVM.
 (define unnamed-module #f)
-(define (install-unnamed-module!)
-  (jinit "java/lang/Module")
-  (let ([m (jnew "java/lang/Module")]
-        [slot (jfield-index "java/lang/Class" "module")])
-    ((method-proc "java/lang/Module" "<init>(Ljava/lang/ClassLoader;)V") m #f)
-    (set! unnamed-module m)
-    (vector-for-each (lambda (mirror) (vector-set! (jobj-slots mirror) slot m))
-                     (hashtable-keys mirror->class)))
-  ;; ModuleLayer.boot() is System.bootLayer, which initPhase2 would set; an
-  ;; empty layer until then, so code asking it for a module gets an empty
-  ;; Optional (ManagementFactory does) instead of an NPE
-  (jinit "java/lang/ModuleLayer")
-  (set-top-level-value! 'java/lang/System:bootLayer
-                        ((method-proc "java/lang/ModuleLayer" "empty()Ljava/lang/ModuleLayer;"))))
+(define package-modules (make-hashtable string-hash string=?))   ; "java/util" -> Module
+(define (package-dir cname)
+  (let loop ([i (fx- (string-length cname) 1)])
+    (cond [(fx< i 0) ""]
+          [(char=? (string-ref cname i) #\/) (substring cname 0 i)]
+          [else (loop (fx- i 1))])))
+;; an array's module is its element type's; a primitive's is java.base
+(define (class-module c)
+  (let* ([n (jclass-cname c)]
+         [pkg (case (jclass-kind c)
+                [(prim) "java/lang"]
+                [(array) (let skip ([i 0])
+                           (cond [(char=? (string-ref n i) #\[) (skip (fx+ i 1))]
+                                 [(char=? (string-ref n i) #\L)
+                                  (package-dir (substring n (fx+ i 1) (fx- (string-length n) 1)))]
+                                 [else "java/lang"]))]
+                [else (package-dir n)])])
+    (hashtable-ref package-modules pkg unnamed-module)))
+(define (set-mirror-module! m c)
+  (let ([mod (class-module c)])
+    (when mod (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "module") mod))))
+(define (refresh-mirror-modules!)
+  (vector-for-each (lambda (m) (set-mirror-module! m (mirror-class m))) (hashtable-keys mirror->class)))
+(define (set-unnamed-module! m)
+  (set! unnamed-module m)
+  (refresh-mirror-modules!))
+(define (define-module! m package-names)   ; names with dots, as Module.defineModule0 gets them
+  (for-each (lambda (pn) (hashtable-set! package-modules (slashes pn) m)) package-names)
+  (refresh-mirror-modules!))
 
 (define (jmirror-of name) (jmirror (find-class name)))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'champaca "not a mirror" m)))

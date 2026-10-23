@@ -171,11 +171,36 @@
       got)))
 (defnative "sun/management/ThreadImpl.getThreads()[Ljava/lang/Thread;" ()
   (make-jarr "Ljava/lang/Thread;" (list->vector (cons main-thread (reverse java-live-threads)))))
+;; jdk.management's OperatingSystemImpl is the OS bean once the module system
+;; has booted (ManagementFactory finds its provider in the boot layer, as the
+;; JVM does): process CPU time from the runtime, the host's CPU counts from
+;; sysconf, and -1 for what isn't measured here (memory and swap sizes, CPU
+;; loads, file descriptor counts), which the bean's contract allows.
+(let ()
+  (define cls "com/sun/management/internal/OperatingSystemImpl")
+  (define (def name proc) (define-native! (string-append cls "." name) proc))
+  (define libc-sysconf (foreign-procedure "sysconf" (int) long))
+  (define (cpu-count online?)   ; _SC_NPROCESSORS_CONF / _SC_NPROCESSORS_ONLN
+    (max 1 (libc-sysconf (if natives-macos? (if online? 58 57) (if online? 84 83)))))
+  (def "initialize0()V" (lambda () (void)))
+  (def "getProcessCpuTime0()J"
+       (lambda (this) (let ([t (current-time 'time-process)]) (+ (* 1000000000 (time-second t)) (time-nanosecond t)))))
+  (def "getHostConfiguredCpuCount0()I" (lambda (this) (cpu-count #f)))
+  (def "getHostOnlineCpuCount0()I" (lambda (this) (cpu-count #t)))
+  (for-each (lambda (n) (def n (lambda (this) -1)))
+            '("getCommittedVirtualMemorySize0()J" "getFreeMemorySize0()J" "getFreeSwapSpaceSize0()J"
+              "getMaxFileDescriptorCount0()J" "getOpenFileDescriptorCount0()J" "getTotalMemorySize0()J"
+              "getTotalSwapSpaceSize0()J" "getHostTotalCpuTicks0()J"))
+  (for-each (lambda (n) (def n (lambda (this) -1.0))) '("getProcessCpuLoad0()D" "getCpuLoad0()D"))
+  (def "getSingleCpuLoad0(I)D" (lambda (this cpu) -1.0)))
 
 ;; --- environment, process ids, native libraries ----------------------------------------
 
 (define natives-macos? (and (memq (machine-type) '(tarm64osx arm64osx ta6osx a6osx)) #t))
 (define java-home-dir (or (getenv "JAVA_HOME") "/"))   ; the java.home property too
+;; the user classpath as given, for java.class.path (the launcher's -cp)
+(define classpath-string "")
+(define (set-classpath! s) (set! classpath-string s))
 
 ;; The environment as ProcessEnvironment wants it: name and value bytes
 ;; alternating, each entry split at its first '='. macOS reaches environ
@@ -684,7 +709,7 @@
      ("java.vm.specification.name" . "Java Virtual Machine Specification")
      ("java.vm.specification.vendor" . "Oracle Corporation")
      ("java.vm.specification.version" . "25")
-     ("java.class.path" . "")
+     ("java.class.path" . ,classpath-string)
      ("sun.boot.library.path" . "")
      ("java.library.path" . "")
      ("jdk.debug" . "release")
@@ -1352,12 +1377,13 @@
       (and (not (prim-name? cn)) (not (char=? (string-ref cn 0) #\[))
            (jpackage-of cn)))))
 
-(defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (void))
+(defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (set-unnamed-module! m))
 (defnative "jdk/internal/loader/BootLoader.getSystemPackageNames()[Ljava/lang/String;" ()
   (make-jarr "Ljava/lang/String;" (vector)))
 (defnative "jdk/internal/loader/BootLoader.getSystemPackageLocation(Ljava/lang/String;)Ljava/lang/String;" (n) #f)
 (defnative "java/lang/Module.defineModule0(Ljava/lang/Module;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V"
-  (m open? version location pns) (void))
+  (m open? version location pns)
+  (define-module! m (map jstring->scheme (vector->list (jarr-vec pns)))))
 (defnative "java/lang/Module.addReads0(Ljava/lang/Module;Ljava/lang/Module;)V" (from to) (void))
 (defnative "java/lang/Module.addExports0(Ljava/lang/Module;Ljava/lang/String;Ljava/lang/Module;)V" (from pn to) (void))
 (defnative "java/lang/Module.addExportsToAll0(Ljava/lang/Module;Ljava/lang/String;)V" (from pn) (void))
@@ -1369,6 +1395,25 @@
   (let ([c (try-class (slashes (jstring->scheme name)))]) (and c (jmirror c))))
 (defnative "java/lang/ClassLoader.findLoadedClass0(Ljava/lang/String;)Ljava/lang/Class;" (this name)
   (let ([c (hashtable-ref classes (slashes (jstring->scheme name)) #f)]) (and c (jmirror c))))
+
+;; The built-in loaders (boot, platform, app) are this runtime's one class
+;; table in disguise: each finds any class the runtime can load and never
+;; defines one from bytes itself, which is how the JDK's path would go (the
+;; module's reader over jrt, then ClassLoader.defineClass). The
+;; module-qualified lookups (Class.forName(Module, String), ServiceLoader
+;; providers, resource bundles in jdk.localedata) land here too, and a
+;; resource stream from a named module (Module.getResourceAsStream) comes
+;; from the same lookup as a classpath one. Class.getResource and the
+;; ClassLoader resource methods are overridden above, so the module-qualified
+;; findResource is never reached.
+(define (class-or-null name)
+  (let ([c (try-class (slashes (jstring->scheme (nn name))))]) (and c (jmirror c))))
+(define-override! "jdk/internal/loader/BuiltinClassLoader.loadClassOrNull(Ljava/lang/String;Z)Ljava/lang/Class;"
+  (lambda (this name resolve) (class-or-null name)))
+(define-override! "jdk/internal/loader/BuiltinClassLoader.findClass(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Class;"
+  (lambda (this mn name) (class-or-null name)))
+(define-override! "jdk/internal/loader/BuiltinClassLoader.findResourceAsStream(Ljava/lang/String;Ljava/lang/String;)Ljava/io/InputStream;"
+  (lambda (this mn name) (resource-stream (jstring->scheme (nn name)))))
 
 ;; --- jdk.internal.util.ByteArray and ByteArrayLittleEndian -------------------------
 ;; The JDK reads multi-byte values out of a byte[] through VarHandles

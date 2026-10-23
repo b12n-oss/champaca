@@ -383,16 +383,42 @@
   push binds a fresh variable, shadowing the old one, so Chez can keep values
   in registers (an assigned variable is boxed even when no closure captures
   it). A :set step assigns one of the few method-wide locals an exception
-  handler has to see (compile-method*)."
+  handler has to see (compile-method*).
+
+  A binding's let closes as soon as its value is dead, and what follows is a
+  sibling statement in the enclosing let's begin rather than more nesting.
+  A :depth step (emit-block, after each instruction) says how deep the stack
+  is: a bound stack slot at or above it has been popped, so its let closes,
+  innermost first, down to the first slot still live. A local (a set!-free
+  store) stays open for the rest of the block, which reads it. Chez's expander
+  walks the enclosing bindings for each variable it resolves, which made a
+  straight-line method of thousands of pushes quadratic to compile:
+  SystemModules' 21 KB module-descriptor builder took 4.6 s as one nest."
   [steps term]
-  (reduce (fn [inner [k a b]]
-            (case k
-              :bind (sx "let" (sx (sx a b)) inner)
-              :set (sx "begin" (sx "set!" a b) inner)
-              :pbind (sx "let" (apply sx (map (fn [[v e]] (sx v e)) a)) inner)
-              :do (sx "begin" a inner)))
-          term
-          (reverse steps)))
+  (let [slot (fn [v] (if (str/starts-with? v "s") (parse-long (subs v 1)) -1))
+        seq-form (fn [xs] (if (= 1 (count xs)) (first xs) (apply sx "begin" xs)))
+        ;; a scope: [slot binding-text children], the root [-1 nil children]
+        close (fn [[_ head children]] (sx "let" head (seq-form (if (seq children) children ["(void)"]))))
+        add-child (fn [scopes x] (update scopes (dec (count scopes)) update 2 conj x))]
+    (loop [steps steps scopes [[-1 nil []]]]
+      (if-let [[k a b] (first steps)]
+        (recur (rest steps)
+               (case k
+                 :bind (conj scopes [(slot a) (sx (sx a b)) []])
+                 :pbind (conj scopes [(reduce min (map (comp slot first) a)) (apply sx (map (fn [[v e]] (sx v e)) a)) []])
+                 :set (add-child scopes (sx "set!" a b))
+                 :do (add-child scopes a)
+                 :depth (loop [scopes scopes]
+                          (let [[s :as top] (peek scopes)]
+                            (if (and (> (count scopes) 1) (>= s a))
+                              (recur (add-child (pop scopes) (close top)))
+                              scopes)))))
+        ;; the terminal expression is the last statement of the innermost
+        ;; scope, which reads what the last instruction popped
+        (loop [scopes (add-child scopes term)]
+          (if (= 1 (count scopes))
+            (seq-form (nth (first scopes) 2))
+            (recur (add-child (pop scopes) (close (peek scopes))))))))))
 
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
@@ -441,8 +467,12 @@
                          base (- n k m)
                          items (subvec @st base)
                          order (concat (range (- (count items) k) (count items)) (range (count items)))
-                         slots (map #(s (+ base %)) (range (count items)))]
-                     (conj! stmts [:pbind (map-indexed (fn [j src] [(s (+ base j)) (nth slots src)]) order)])
+                         slots (map #(s (+ base %)) (range (count items)))
+                         ;; a slot that keeps its own value (dup's original) isn't
+                         ;; rebound, so its let can close while the copy lives
+                         moves (remove (fn [[v e]] (= v e))
+                                       (map-indexed (fn [j src] [(s (+ base j)) (nth slots src)]) order))]
+                     (when (seq moves) (conj! stmts [:pbind moves]))
                      (vreset! st (into (subvec @st 0 base) (map items order)))))
         cmp0 {:ifeq "fx=" :ifne "fx<>" :iflt "fx<" :ifge "fx>=" :ifgt "fx>" :ifle "fx<="}
         cmp2 {:if_icmpeq "fx=" :if_icmpne "fx<>" :if_icmplt "fx<" :if_icmpge "fx>="
@@ -495,7 +525,7 @@
           (:iastore :lastore :fastore :dastore :bastore :castore :sastore)
           (let [[a i v] (popn! 3)]
             (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "fxlogand" v "#xffff")
-                                       :sastore (sx "wrap-short" v) v)
+                                              :sastore (sx "wrap-short" v) v)
                        (site pc))))
           :pop (pop!)
           :pop2 (if (cat2? (top-t)) (pop!) (do (pop!) (pop!)))
@@ -694,7 +724,12 @@
           :instanceof (let [c (:name (cp a0))]
                         (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                         (let [ic ((:ic! ctx))] (un #(sx "if" (sx "jinstance-ic?" ic % (str-lit c)) "1" "0") "I")))
-          (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))))
+          (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))
+        ;; the stack depth after the instruction, which lets render-steps
+        ;; close the lets of the slots it popped. Not after the block's last
+        ;; instruction, whose terminal expression (a branch test, a return
+        ;; value) reads what it popped.
+        (when (nil? @terminal) (conj! stmts [:depth (count @st)]))))
     (let [term (or @terminal (goto next-pc))]
       {:code (render-steps (persistent! stmts) term)
        :succ @succ})))
@@ -743,6 +778,11 @@
   "Bytecode bytes in the largest method inlined into its callers."
   40)
 
+(def ic-vector-limit
+  "Bytecode bytes above which a method's inline-cache cells live in one vector
+  rather than one variable each (compile-method)."
+  4000)
+
 (defn- leaf?
   "Whether method is small enough to inline: no calls but Object's empty
   constructor, no backward branches, no exception handlers, not synchronized
@@ -773,9 +813,16 @@
         ;; method and shared with the methods inlined into it; given an
         ;; expression, a variable holding its value, computed once the same way
         ics (volatile! [])
+        ;; a giant method keeps its cells in one vector: Chez's expander scans
+        ;; a let's bindings linearly for every variable it resolves, and
+        ;; SystemModules' 21 KB module-descriptor builder has 2900 sites, which
+        ;; cost it a second of compile time as variables. One more load per
+        ;; site is nothing in code that runs once.
+        vector-ics? (> (count (:code (:code method))) ic-vector-limit)
         ic! (fn ic!
               ([] (ic! "(cons #f #f)"))
-              ([init] (str "ic" (dec (count (vswap! ics conj init))))))
+              ([init] (let [i (dec (count (vswap! ics conj init)))]
+                        (if vector-ics? (str "(vector-ref ics " i ")") (str "ic" i)))))
         inlined (volatile! {})          ; callee tag -> label, or false
         defs (volatile! [])             ; [label lambda-text], in order
         bt? (System/getenv "CHAMPACA_BT")
@@ -803,9 +850,9 @@
         f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
         f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
     (sx "define" (method-global (:name cls) (:name method) (:desc method))
-        (if (seq @ics)
-          (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f)
-          f))))
+        (cond (empty? @ics) f
+              vector-ics? (sx "let" (sx (sx "ics" (apply sx "vector" @ics))) f)
+              :else (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f)))))
 
 (defn- compile-method*
   "The method as a lambda. ic! names a fresh inline-cache cell, inline! the
