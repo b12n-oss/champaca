@@ -8,6 +8,8 @@ exports: true false false false true true true false true
 internal access: java.lang.IllegalAccessException java.lang.reflect.InaccessibleObjectException no exception java.base no exception
 loaders: jdk.internal.loader.ClassLoaders$AppClassLoader true jdk.internal.loader.ClassLoaders$PlatformClassLoader true true app platform true
 inherited context loader: true
+class loaders: true true true true true true true true true true true true
+forName by loader: true true java.lang.ClassNotFoundException java.lang.ClassNotFoundException true java.lang.ClassNotFoundException java.lang.ClassNotFoundException true java.lang.ClassNotFoundException
 load through loaders: true true true java.sql.Savepoint java.base true java.lang.ClassNotFoundException java.lang.ClassNotFoundException true true true
 loader visibility: java.lang.ClassNotFoundException java.lang.ClassNotFoundException java.lang.ClassNotFoundException java.lang.ClassNotFoundException java.util.zip.CRC32 no exception java.lang.ClassNotFoundException java.lang.ClassNotFoundException String[]
 exists but can't load: LinkageError LinkageError LinkageError java.lang.ClassNotFoundException

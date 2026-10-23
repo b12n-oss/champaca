@@ -540,11 +540,8 @@
 ;; for a stack of JDK code alone, which here also gets the application
 ;; loader: a Timer or common-pool thread deserializing from JDK code alone
 ;; sees more than on the JVM, never less. ObjectInputStream resolves class
-;; names through it. APP_LOADER is bound by the time any program runs:
-;; initPhase3 initializes ClassLoaders at boot.
-(define (app-loader)
-  (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
-    (and (top-level-bound? s) (top-level-value s))))
+;; names through it. app-loader (runtime.ss) is bound by the time any
+;; program runs: initPhase2 initializes ClassLoaders.
 (defnative "jdk/internal/misc/VM.latestUserDefinedLoader0()Ljava/lang/ClassLoader;" ()
   (let loop ([fs (java-frames)])
     (cond [(null? fs) (app-loader)]

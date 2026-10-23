@@ -735,9 +735,9 @@
                      (class-modifiers c))
         (set-mirror-module! m c)
         (index-mirror! m c)
-        ;; a class a loader defined reports that loader; every other class null
-        (let ([ld (hashtable-ref class-loaders (element-name c) #f)])
-          (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld)))
+        ;; a class a loader defined reports that loader, a classpath class the
+        ;; application loader (an array its element's), a JDK class null
+        (set-mirror-loader! m c)
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
                        (jmirror (find-class (desc->class-name (substring (jclass-cname c) 1 (string-length (jclass-cname c))))))))
@@ -754,14 +754,23 @@
 
 ;; --- modules ---------------------------------------------------------------------
 ;; Class.getModule() is the boot layer's named module for a JDK class, found
-;; by package, and the boot loader's unnamed module for everything else: every
-;; class here has a null class loader, so the classpath is that module, as it
-;; is for -Xbootclasspath/a classes on the JVM. Module.defineModule0 records
+;; by package; the application loader's unnamed module for a classpath class,
+;; as on the JVM, once that loader exists (initPhase2 makes it); the boot
+;; loader's unnamed module for anything else. Module.defineModule0 records
 ;; each module's packages while initPhase2 builds the layer and BootLoader's
 ;; <clinit> hands over the unnamed module; both refresh the mirrors made
 ;; before them, as HotSpot patches the classes loaded before java.base is
-;; defined. Until then a mirror's module is null, as on the JVM.
+;; defined, and adopt-app-loader! (after initPhase3) does the same for
+;; classpath classes mirrored during the boot. Until then a mirror's module
+;; is null, as on the JVM.
 (define unnamed-module #f)
+;; the application class loader, once ClassLoaders' <clinit> has run
+;; (initPhase2), and its unnamed module; #f before
+(define (app-loader)
+  (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
+    (and (top-level-bound? s) (top-level-value s))))
+(define (app-unnamed-module)
+  (let ([l (app-loader)]) (and l (jslot l (jfield-index "java/lang/ClassLoader" "unnamedModule")))))
 (define package-modules (make-hashtable string-hash string=?))   ; "java/util" -> Module
 ;; classes read from the classpath (main.clj registration-text): they stay in
 ;; the unnamed module whatever their package, as a classpath class does on the
@@ -801,12 +810,13 @@
 ;; the package a class's module is looked up by: primitives count as java.lang
 (define (class-package c)
   (let ([e (element-name c)]) (if (prim-name? e) "java/lang" (package-dir e))))
-;; a classpath class is in the (boot loader's) unnamed module; a class in a
-;; package a module owns (a JDK class, a proxy in its dynamic module) is in
-;; that module; a class a loader defined is in that loader's unnamed module
+;; a classpath class is in the application loader's unnamed module (the boot
+;; loader's until the application loader exists); a class in a package a
+;; module owns (a JDK class, a proxy in its dynamic module) is in that module;
+;; a class a loader defined is in that loader's unnamed module
 (define (class-module c)
   (let ([e (element-name c)])
-    (cond [(user-class? e) unnamed-module]
+    (cond [(user-class? e) (or (app-unnamed-module) unnamed-module)]
           [(hashtable-ref package-modules (class-package c) #f)]
           [(hashtable-ref class-loaders e #f)
            => (lambda (ld) ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld))]
@@ -826,12 +836,41 @@
 (define (set-unnamed-module! m)
   (set! unnamed-module m)
   (vector-for-each (lambda (mirror) (set-mirror-module! mirror (mirror-class mirror))) (hashtable-keys mirror->class)))
+;; a class's loader as Class.getClassLoader answers it: a defined class's
+;; definer, a classpath class's the application loader, a JDK class's the
+;; loader its module is defined to (null for the boot modules, the platform
+;; loader for java.sql and the like), an array's its element's
+(define (module-loader m) (and m (jslot m (jfield-index "java/lang/Module" "loader"))))
+(define (class-loader-of c)
+  (let ([e (element-name c)])
+    (or (hashtable-ref class-loaders e #f)
+        (if (user-class? e)
+            (app-loader)
+            (module-loader (hashtable-ref package-modules (class-package c) #f))))))
+(define (set-mirror-loader! m c)
+  (let ([ld (class-loader-of c)])
+    (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld))))
+;; after initPhase3: the classpath classes mirrored while the application
+;; loader didn't exist yet get it, and its unnamed module
+(define (adopt-app-loader!)
+  (vector-for-each (lambda (mirror)
+                     (let ([c (mirror-class mirror)])
+                       (when (user-class? (element-name c))
+                         (set-mirror-loader! mirror c)
+                         (set-mirror-module! mirror c))))
+                   (hashtable-keys mirror->class)))
 (define (define-module! m package-names)   ; names with dots, as Module.defineModule0 gets them
-  (let ([slot (jfield-index "java/lang/Class" "module")])
+  (let ([slot (jfield-index "java/lang/Class" "module")]
+        [lslot (jfield-index "java/lang/Class" "classLoader")]
+        [ld (module-loader m)])
     (for-each (lambda (pn)
                 (let ([d (slashes pn)])
                   (hashtable-set! package-modules d m)
-                  (for-each (lambda (mirror) (vector-set! (jobj-slots mirror) slot m))
+                  (for-each (lambda (mirror)
+                              (vector-set! (jobj-slots mirror) slot m)
+                              ;; a class a loader defined keeps its definer
+                              (unless (hashtable-ref class-loaders (element-name (mirror-class mirror)) #f)
+                                (vector-set! (jobj-slots mirror) lslot ld)))
                             (hashtable-ref package-mirrors d '()))))
               package-names)))
 

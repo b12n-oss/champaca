@@ -317,7 +317,10 @@
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
   ;; of the program's own answers through its loadClass, as the JVM asks it
   ;; to (a loader that defines classes on demand needs that); the built-in
-  ;; ones and arrays go straight to the class table
+  ;; ones (null is the boot loader) and arrays go to the class table and see
+  ;; what that loader would load: a classpath class is the application
+  ;; loader's alone, a class another loader defined that loader's, unless it
+  ;; sits in a named module (a proxy's dynamic module)
   (let* ([s (jstring->scheme name)]
          [n (slashes s)]
          [c (cond [(or (fxzero? (string-length s)) (memv #\/ (string->list s))) #f]
@@ -325,14 +328,8 @@
                         (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
                    (let ([m ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader name)])
                      (and m (mirror-class m)))]
-                  ;; a class another loader defined is that loader's alone,
-                  ;; unless it sits in a named module (a proxy's dynamic module)
                   [else (let ([c (try-class n)])
-                          (and c
-                               (let ([dl (hashtable-ref class-loaders (element-name c) #f)])
-                                 (or (not dl) (eq? dl loader)
-                                     (let ([m (class-module c)]) (and m (jslot m (jfield-index "java/lang/Module" "name")) #t))))
-                               c))])])
+                          (and c (builtin-loader-sees? loader c) c))])])
     (unless c (jthrow "java/lang/ClassNotFoundException" s))
     (when (eqv? init 1) (jinit (jclass-cname c)))
     (jmirror c)))
@@ -1447,12 +1444,7 @@
 (defnative "java/lang/ClassLoader.findBootstrapClass(Ljava/lang/String;)Ljava/lang/Class;" (name)
   (let* ([n (slashes (jstring->scheme name))]
          [c (and (or (hashtable-ref classes n #f) (jdk-package? n)) (try-class n))])
-    (and c
-         (not (user-class? (element-name c)))
-         (not (hashtable-ref class-loaders (element-name c) #f))
-         (let ([m (class-module c)])
-           (or (not m) (not (jslot m (jfield-index "java/lang/Module" "loader")))))
-         (jmirror c))))
+    (and c (builtin-loader-sees? #f c) (jmirror c))))
 ;; the classes a loader has loaded: for a built-in loader, those it can see
 ;; (below); any other loader has defined none, and finds what its parents
 ;; have by delegating, as ClassLoader.loadClass does next
@@ -1479,15 +1471,19 @@
 ;; one, for the module's own packages. Class.getResource and the ClassLoader
 ;; resource methods are overridden above, so the module-qualified
 ;; findResource is never reached.
+;; What a built-in loader (this; #f is the boot loader) would load, an array
+;; going by its element: a class another loader defined is that loader's
+;; alone, unless it sits in a named module (a proxy's dynamic module), whose
+;; loader every built-in loader delegates to; a classpath class is the
+;; application loader's; a JDK class is every built-in loader's, except that
+;; the boot loader, which delegates to no one, sees the boot modules only.
 (define (builtin-loader-sees? this c)
-  (let ([dl (hashtable-ref class-loaders (jclass-cname c) #f)])
+  (let* ([e (element-name c)] [dl (hashtable-ref class-loaders e #f)])
     (cond [dl (or (eq? dl this)
-                  ;; defined into a named module (a proxy's dynamic module): every
-                  ;; built-in loader delegates to that module's loader
                   (let ([m (class-module c)]) (and m (jslot m (jfield-index "java/lang/Module" "name")) #t)))]
-          [(not (user-class? (jclass-cname c))) #t]
-          [else (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
-                  (and (top-level-bound? s) (eq? this (top-level-value s))))])))
+          [(user-class? e) (eq? this (app-loader))]
+          [this #t]
+          [else (not (module-loader (class-module c)))])))
 ;; whether a class not loaded yet would be a JDK class: its package is one
 ;; the boot layer's modules own (before the layer exists, anything may be)
 (define (jdk-package? n)

@@ -10,9 +10,9 @@ import java.util.spi.ToolProvider;
 // holds the JDK's modules, so ServiceLoader sees their providers
 // (jdk.localedata, jdk.charsets, jdk.jartool), a JDK class reports its named
 // module and the exports are checked as on the JVM, and the application
-// class loader is the system and context class loader. User classes sit in
-// the boot loader's unnamed module here (they have no class loader), which
-// is unnamed on the JVM too, so the rows read the same.
+// class loader is the system and context class loader. A classpath class
+// reports the application loader and sits in its unnamed module, as on the
+// JVM; the built-in loaders see what the JVM's do.
 public class ModuleCheck {
     static class Inner {}
 
@@ -64,6 +64,20 @@ public class ModuleCheck {
                            + " " + scl.getName() + " " + platform.getName() + " " + (scl.getUnnamedModule().getClassLoader() == scl));
         Thread t = new Thread(() -> {});
         System.out.println("inherited context loader: " + (t.getContextClassLoader() == scl));
+        // a classpath class's loader is the application loader, its module that loader's unnamed one
+        System.out.println("class loaders: " + (ModuleCheck.class.getClassLoader() == scl) + " " + (Inner.class.getClassLoader() == scl)
+                           + " " + (ModuleCheck[].class.getClassLoader() == scl) + " " + (String.class.getClassLoader() == null)
+                           + " " + (int[].class.getClassLoader() == null) + " " + (java.sql.Date.class.getClassLoader() == platform)
+                           + " " + (mine == scl.getUnnamedModule()) + " " + (mine.getClassLoader() == scl) + " " + (Inner.class.getModule() == mine)
+                           + " " + (ModuleCheck.class.getClassLoader().getResourceAsStream("ModuleCheck.class") != null)
+                           + " " + (ModuleCheck.class.getClassLoader().getResource("ModuleCheck.class") != null)
+                           + " " + (ModuleCheck.class.getResourceAsStream("ModuleCheck.class") != null));
+        // Class.forName through each built-in loader: null is the boot loader
+        System.out.println("forName by loader: " + (Class.forName("ModuleCheck") == ModuleCheck.class) + " " + (Class.forName("ModuleCheck", false, scl) == ModuleCheck.class)
+                           + " " + fails(() -> Class.forName("ModuleCheck", false, platform)) + " " + fails(() -> Class.forName("ModuleCheck", false, null))
+                           + " " + (Class.forName("java.lang.String", false, null) == String.class) + " " + fails(() -> Class.forName("java.sql.Date", false, null))
+                           + " " + fails(() -> Class.forName("sun.tools.jar.JarToolProvider", false, null)) + " " + (Class.forName("[LModuleCheck;", false, scl) == ModuleCheck[].class)
+                           + " " + fails(() -> Class.forName("[LModuleCheck;", false, platform)));
         System.out.println("load through loaders: " + (scl.loadClass("ModuleCheck") == ModuleCheck.class)
                            + " " + (scl.loadClass("java.util.ArrayList") == ArrayList.class)
                            + " " + (Class.forName("java.sql.Date", false, platform) == java.sql.Date.class)
