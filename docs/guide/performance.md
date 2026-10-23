@@ -6,7 +6,7 @@ All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`
 
 ## The startup cache
 
-Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 201 classes and 362 methods before `main` can start. The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (1.5 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The runtime's own Scheme (`runtime.ss`, `natives.ss` and the rest) is compiled into the same directory as `runtime.so`, which loads in about 8 ms where compiling the source took about 130 ms on every start. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
+Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 387 classes and 819 methods before `main` can start, about half of them for the module system (below). The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (4.9 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The runtime's own Scheme (`runtime.ss`, `natives.ss` and the rest) is compiled into the same directory as `runtime.so`, which loads in about 8 ms where compiling the source took about 130 ms on every start. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
 
 | Program | Cache off | Cold, writing the cache | Warm cache |
 |---|---|---|---|
@@ -14,11 +14,27 @@ Booting the JDK means parsing classes, translating their methods to Scheme and c
 | `Streams` | 1.68 s | 2.20 s | 0.47 s |
 | `examples/interop.clj` | 1.48 s | 1.82 s | 0.36 s |
 
-Each is the median of five runs, measured right after the version before the last change below on the same machine, so read them for the comparison more than the absolute values. A cold run is the first after the cache key changes, with the JDK's modules already extracted (that happens once per JDK). Without compiling each method once, the cold column read 1.87, 2.65 and 2.28 s, with the other two columns the same. Before the earlier changes, on a busier machine, it read 3.15, 4.79 and 4.29 s.
+Each is the median of five runs, measured right after the version before the last change below on the same machine, so read them for the comparison more than the absolute values. The module system's boot came later and made every column dearer: see [the module system's share](#the-module-systems-share) below. A cold run is the first after the cache key changes, with the JDK's modules already extracted (that happens once per JDK). Without compiling each method once, the cold column read 1.87, 2.65 and 2.28 s, with the other two columns the same. Before the earlier changes, on a busier machine, it read 3.15, 4.79 and 4.29 s.
 
 A cold start used to spend half its time writing the cache, and most of that compiling the class registrations into `boot.so`. Each method stub was its own top-level `define`, several thousand of them, and Chez's cost per top-level form is far above that of a quoted list, so a class's methods are now defined by one form holding a list (`define-methods!`). Each class's vtable also repeated every inherited entry, about a third of the registration text, and it's now registered as changes to its superclass's. Together they took `boot.so` from 6.8 MB to 1.5 MB, which warm starts load whole. A cold start also used to evaluate the runtime's source and then compile it again for the cache; it now compiles `runtime.so` first and loads that. And class files parse about twice as fast: ASCII constant-pool strings are decoded in Scheme, straight from the byte array.
 
 Each JDK method a cold start compiled was also compiled twice: once to run it, then again from its text when `boot.so` was written, about 200 ms for `Hello`. Now the JIT compiles such a method to object code once, runs that code, and keeps the same bytes for the cache, which appends them to `boot.so` as they are. Compiling to bytes and loading them costs a bit more than compiling straight into memory, about 290 µs against 225 µs for a method-sized form, so champaca does it only when the bytes will be written: during boot, in a `champaca.main` run, which saves a generation at exit, and after a jolt program's first `save-cache!`. Before that first call a jolt program records the text instead, which is compiled when `save-cache!` writes it. Methods compiled this way, like everything loaded from the cache, carry no inspector information.
+
+### The module system's share
+
+Booting the module system (`System.initPhase2()` and `initPhase3()`, [how it works](how-it-works.md#booting-the-jdk)) loads 181 more classes before `main`: `ModuleBootstrap`, `ModuleDescriptor` and its builders, the class loaders and `URLClassPath`, and `SystemModules$default`, the class jlink generates with the image's module graph. Measured against the version just before it, medians of five alternating rounds on macOS arm64:
+
+| | Before | With the module system |
+|---|---|---|
+| Warm `Hello` | 0.38 s | 0.45 s |
+| Warm `JdkLib` | 0.44 s | 0.50 s |
+| Cold `Hello` (new cache key) | 1.7 s | 6.7 s |
+| `boot.so` | 1.7 MB | 4.9 MB |
+| The cache key directory | 3.4 MB | 6.9 MB |
+
+A warm start pays for loading the extra code (`boot.so` takes 88 ms to load instead of 35) and reading a bigger class table, then about 15 ms running the boot itself. The JVM pays for the same boot too, but it archives the result (class data sharing): run with `-Xshare:off` it starts 15 ms slower, since it parses classes rather than compiling them. An archived boot layer is the way to get the 70 ms back, and the cold start with it: the generated `SystemModules$default` would then run once, when the archive is built, instead of being compiled into the cache.
+
+Most of the cold start's five seconds is Chez compiling `SystemModules$default`. Its `moduleDescriptors()` method is 21 KB of straight-line bytecode, 2,000 calls building 70 descriptors, and the Scheme for it is 890 KB. As one nest of 12,000 lets it took Chez's expander 4.6 s, since the expander walks the enclosing bindings for every variable it resolves; the translator now closes each `let` as soon as its value is dead ([how it works](how-it-works.md#the-shape-of-a-translated-method)), which cut that to 2.8 s and the whole cold boot from 14 s to 6.7 s. The rest of its time is the compiler's back end on a form that size; replacing its 2,900 inline caches with plain calls, dropping the stack-trace markers, or giving the collector a bigger trip (2.7 s to 2.0 s at a 1.4 GB heap) changed little, and interpreting a cached expanded form instead would cost every warm start 340 ms.
 
 ### What's in it, and what isn't
 

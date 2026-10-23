@@ -13,7 +13,7 @@ Classes load lazily too: a class is found and parsed the first time something na
 
 ## The shape of a translated method
 
-Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot becomes `s0`, `s1`, .... The translator tracks the stack's types at compile time, so it knows what every slot holds. The method's code splits into basic blocks, each a `letrec`-bound procedure that takes the method's live locals and whatever the stack holds on entry. A jump is a tail call passing the current values, which Chez compiles to a plain jump. Inside a block nothing is assigned: a store or a push binds a fresh variable in a `let`, shadowing the old one. That matters because Chez keeps an assigned variable in a heap box, even when no closure captures it, while a `let`-bound one can live in a register. `Hello.main` is a single block:
+Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot becomes `s0`, `s1`, .... The translator tracks the stack's types at compile time, so it knows what every slot holds. The method's code splits into basic blocks, each a `letrec`-bound procedure that takes the method's live locals and whatever the stack holds on entry. A jump is a tail call passing the current values, which Chez compiles to a plain jump. Inside a block nothing is assigned: a store or a push binds a fresh variable in a `let`, shadowing the old one. That matters because Chez keeps an assigned variable in a heap box, even when no closure captures it, while a `let`-bound one can live in a register. A `let` closes as soon as its value is dead, so a method reads as a sequence of statements rather than one nest. `Hello.main` is a single block:
 
 ```scheme
 (define |Hello.main([Ljava/lang/String;)V|
@@ -24,10 +24,12 @@ Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot
                   (begin (jinit-ic ic0 '|java/lang/System|)
                          (let ((s0 |java/lang/System:out|))
                            (let ((s1 (jstring-lit "Hello, World!")))
-                             (begin ((jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V|) s0 s1)
-                                    (void))))))))
+                             ((jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V|) s0 s1)))
+                         (void)))))
         (|Hello.main([Ljava/lang/String;)V#B0| l0)))))
 ```
+
+The two arguments to `println` are scoped to that one call, and the `return` follows it. Closing the lets this way is what makes a long straight-line method compile in reasonable time: the module system's generated descriptor builder, 21 KB of bytecode, nested 12,000 lets deep, and Chez's expander, which walks the enclosing bindings for every variable it resolves, took 4.6 s on it; closed as it goes, it's 53 deep. A method over 4,000 bytes of bytecode also keeps its inline-cache cells in one vector rather than one variable each, for the same reason.
 
 `getstatic` became an initialization check plus a top-level variable. The check goes through a cell of its own, `ic0`, which holds the class once it's initialized, so after the first time it costs one `car`. `invokevirtual` became a call through `jvirt-ic`, an inline cache: `ic1` remembers the receiver class this call site saw last and the procedure it found for it, so a repeat call costs one `eq?` test, and a new class looks the method up in that class's vtable, keyed by interned symbols. A static call is a call to the target's top-level name. `new`, `instanceof` and `checkcast` get cells too: `new` keeps the initialized class, and the two type tests keep the last class they saw with its answer, since the full test compares class names up the hierarchy. A store into a reference array (`aastore`) gets one as well. It checks the value against the array's element type as the JVM does, throwing `ArrayStoreException`. The cell remembers the element type it last stored into and up to two kinds of value that passed (an object's class, or an array value's element type), so a repeat costs a few `eq?` tests. That works across arrays because each element descriptor is interned: every `String[]` shares one descriptor string, and a method interns the ones it allocates with once, when it's defined. An `Object[]` takes any value, so its cell skips the value test.
 
@@ -61,7 +63,8 @@ Resources aren't native, and the JDK finds its own through the JVM's image reade
 4. Run `System.<clinit>`, then build the main thread and its thread group.
 5. Run `Reference.<clinit>` and `AccessibleObject.<clinit>`, which install the shared-secrets hooks `initPhase1` reaches for.
 6. Run `System.initPhase1()`, which sets up properties, `System.out` and `System.err`.
-7. Give every `Class` one unnamed `Module`.
+7. Run `System.initPhase2()`, which builds the boot layer. `ModuleBootstrap` takes the module graph jlink resolved into the image (`SystemModules$default`, so no resolution runs), defines each module to the VM through `Module.defineModule0` and registers its service providers. champaca's `defineModule0` records the module's packages, and from then on a `Class` mirror's `getModule()` is the module of its package, as HotSpot patches the classes it loaded before `java.base` existed. A class in no JDK module, which is every class on your classpath, is in the boot loader's unnamed module, which `BootLoader`'s initializer hands over; every class here has a null class loader, so that is where the JVM would put them too had they come from `-Xbootclasspath/a`.
+8. Run `System.initPhase3()`, which makes the application class loader the system class loader and the main thread's context class loader. The built-in loaders (boot, platform, application) are champaca's one class table in disguise: their `loadClassOrNull`, module-qualified `findClass` and `findResourceAsStream` answer from it, so no class is ever defined from bytes through them, where the JDK's own path would read the image through `jrt:` and `ClassLoader.defineClass`.
 
 After that, `System.out.println` goes through the JDK's own `PrintStream`, `StreamEncoder` and UTF-8 encoder down to a native `FileOutputStream.writeBytes`. The startup cache ([performance](performance.md)) saves the result of all this, so a warm start loads it rather than repeating it.
 

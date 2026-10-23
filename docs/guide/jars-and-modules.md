@@ -69,7 +69,7 @@ Every JDK has an image, so any build of JDK 25 works. That includes Temurin's, w
 
 A runtime built with `jlink` works as `JAVA_HOME` too, as long as it has the modules your code uses. One made with `--compress zip-6` (or any `zip-N`) is inflated as it's read. jlink's older string-sharing compression, `--compress 1`, isn't supported, and champaca says so the first time it reads a class from such an image.
 
-There's no module system on top of that: no `module-info` checks and no export rules. Every class sits in one unnamed module and can see every other.
+The module system boots on top of that, as on the JVM: `System.initPhase2()` builds the boot layer from the module graph jlink resolved into the image, so `ModuleLayer.boot().modules()` lists what the JVM's does for the same JDK, `ServiceLoader` finds the providers those modules declare (`jdk.localedata`'s locale data, `jdk.charsets`' charsets, `jdk.jartool`'s `ToolProvider`), a JDK class's `getModule()` is its named module, and reflection into a package the module doesn't export or open fails the way it does on the JVM. Your own classes are the exception: they're in the boot loader's unnamed module (every class here has a null class loader), and nothing reads a `module-info` from your jars, so there's no module path and no checks between your own packages ([limitations](limitations.md#other-gaps)).
 
 ## `sun.misc.Unsafe`
 
