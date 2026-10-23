@@ -273,8 +273,14 @@
   [cname]
   (let [d (package-dir cname)
         entry (get-in @state [:package-entries d])]
-    (if-not entry
-      "jdk"
+    (cond
+      ;; jdk means a package the runtime image owns, whose module the boot
+      ;; layer defines; anything else without a classpath entry (a class a
+      ;; loader defined, a generated one) has no version information either
+      ;; but gets a plain package, cached, like a classpath class's
+      (and (not entry) (not= :defined (get-in @state [:classes cname :origin])) (package-module d)) "jdk"
+      (not entry) (str/join "\n" (concat ["user"] (repeat 6 "-") ["-"]))
+      :else
       (let [m (jar-manifest entry)
             section (str d "/")
             attr (fn [k] (or (get-in m [section k]) (get-in m [nil k])))
@@ -695,16 +701,24 @@
     n))
 
 (defn- rename-class
-  "The parsed class c under a new name: its own and every constant-pool
-  reference to itself. A hidden class keeps the name its bytes carry inside,
-  and two hidden classes from the same bytes would otherwise share the
-  methods and statics compiled under it."
+  "The parsed class c under a new name: its own, every constant-pool class
+  entry and member reference naming it, and the exception-table types
+  parse-code resolved to names. A hidden class keeps the name its bytes carry
+  inside, and two hidden classes from the same bytes would otherwise share the
+  methods and statics compiled under it. Descriptors keep the old name, and so
+  does an array type naming the class ([Lold;), which the JVM resolves to the
+  original class too (DefineCheck's hidden self-references row)."
   [c new]
   (let [old (:name c)
-        fix (fn [e] (cond (and (= :class (:tag e)) (= old (:name e))) (assoc e :name new)
-                          (= old (:class e)) (assoc e :class new)
+        fix-name (fn [s] (if (= s old) new s))
+        fix (fn [e] (cond (= :class (:tag e)) (update e :name fix-name)
+                          (contains? e :class) (update e :class fix-name)
                           :else e))]
-    (-> c (assoc :name new) (update :cp #(into {} (map (fn [[i e]] [i (fix e)])) %)))))
+    (-> c
+        (assoc :name new)
+        (update :cp #(into {} (map (fn [[i e]] [i (fix e)])) %))
+        (update :methods (fn [ms] (mapv (fn [m] (cond-> m (:code m) (update-in [:code :handlers] (fn [hs] (mapv #(update % :type fix-name) hs)))))
+                                        ms))))))
 
 (def ^:private hidden-counter (atom 0x1000))
 

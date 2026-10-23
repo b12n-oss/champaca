@@ -16,6 +16,14 @@ public class DefineCheck {
     public static class Tiny5 { public static int v() { return 5; } }
     public static class Tiny6 { public static int v() { return 6; } }
     public static class Tiny7 { public static int v() { return 7; } }
+    public static class Tiny8 { public static int v() { return 8; } }
+    // a class that names itself in a catch clause and in an array type: a hidden
+    // copy must find itself under its new name in both
+    public static class TinyEx extends RuntimeException {
+        public static String t() { try { throw new TinyEx(); } catch (TinyEx e) { return "caught"; } }
+        public static Object arr() { return new TinyEx[2][]; }
+    }
+    public static class Orphan extends Tiny8 {}
 
     // defines one class the first time anyone asks for it; its parent (the
     // bootstrap or platform loader) never finds the classpath's copy first
@@ -65,10 +73,16 @@ public class DefineCheck {
         System.out.println("defined on demand: " + c6.getName() + " " + (c6.getClassLoader() == lazy) + " " + (lazy.loadClass("DefineCheck$Tiny6") == c6)
                            + " " + c6.getMethod("v").invoke(null) + " " + fails(() -> Class.forName("DefineCheck$Other", false, lazy))
                            + " " + (Class.forName("DefineCheck$Tiny7", false, lazy7).getClassLoader() == lazy7));
-        // the ByteBuffer form, through the protected defineClass(String, ByteBuffer, ProtectionDomain)
+        // the ByteBuffer form, through the protected defineClass(String, ByteBuffer, ProtectionDomain):
+        // a heap buffer (copied to a byte[] by the JDK) and a direct one (read from native memory)
         Loader cl2 = new Loader(scl);
         Class<?> c3 = cl2.define("DefineCheck$Tiny3", ByteBuffer.wrap(bytes("Tiny3")));
-        System.out.println("from a buffer: " + c3.getName() + " " + c3.getMethod("v").invoke(null) + " " + (c3.getClassLoader() == cl2));
+        byte[] t8 = bytes("Tiny8");
+        ByteBuffer direct = ByteBuffer.allocateDirect(t8.length + 4);
+        direct.putInt(0).put(t8).flip().position(4);
+        Class<?> c8 = cl2.define("DefineCheck$Tiny8", direct);
+        System.out.println("from a buffer: " + c3.getName() + " " + c3.getMethod("v").invoke(null) + " " + (c3.getClassLoader() == cl2)
+                           + " " + c8.getName() + " " + c8.getMethod("v").invoke(null) + " " + direct.isDirect() + " " + direct.remaining());
         // Lookup.defineClass: a class of this package, strongly linked to this class's loader
         MethodHandles.Lookup lookup = MethodHandles.lookup();
         Class<?> c4 = lookup.defineClass(bytes("Tiny4"));
@@ -84,6 +98,17 @@ public class DefineCheck {
                            + " " + (h1.getModule() == DefineCheck.class.getModule()) + " " + (h1.getClassLoader() == DefineCheck.class.getClassLoader()));
         MethodHandles.Lookup hl = lookup.defineHiddenClassWithClassData(t5, "the data", true);
         System.out.println("class data: " + MethodHandles.classData(hl, "_", String.class) + " " + hl.lookupClass().isHidden());
+        Class<?> hx = lookup.defineHiddenClass(bytes("TinyEx"), true).lookupClass();
+        System.out.println("hidden self-references: " + hx.getMethod("t").invoke(null)
+                           + " " + (hx.getMethod("arr").invoke(null).getClass().getComponentType().getComponentType() == hx));
+        // a definition whose superclass can't be found: the bytes of Orphan with its super's name changed
+        byte[] orphan = bytes("Orphan");
+        String sup = "DefineCheck$Tiny8", gone = "DefineCheck$Gone8";
+        int at = new String(orphan, "ISO-8859-1").indexOf(sup);
+        System.arraycopy(gone.getBytes("ISO-8859-1"), 0, orphan, at, sup.length());
+        Loader cl3 = new Loader(scl);
+        System.out.println("missing super: " + fails(() -> cl3.define("DefineCheck$Orphan", orphan)) + " " + fails(() -> Class.forName("", false, scl))
+                           + " " + fails(() -> Class.forName("", false, cl3)));
         // Proxy: interfaces implemented by a generated class the JDK defines through the same native
         List<String> calls = new ArrayList<>();
         InvocationHandler h = (p, m, a) -> {

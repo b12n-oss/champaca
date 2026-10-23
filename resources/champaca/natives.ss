@@ -320,7 +320,7 @@
   ;; ones and arrays go straight to the class table
   (let* ([s (jstring->scheme name)]
          [n (slashes s)]
-         [c (cond [(memv #\/ (string->list s)) #f]
+         [c (cond [(or (fxzero? (string-length s)) (memv #\/ (string->list s))) #f]
                   [(and loader (not (char=? (string-ref s 0) #\[))
                         (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
                    (let ([m ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader name)])
@@ -329,7 +329,7 @@
                   ;; unless it sits in a named module (a proxy's dynamic module)
                   [else (let ([c (try-class n)])
                           (and c
-                               (let ([dl (hashtable-ref class-loaders (jclass-cname c) #f)])
+                               (let ([dl (hashtable-ref class-loaders (element-name c) #f)])
                                  (or (not dl) (eq? dl loader)
                                      (let ([m (class-module c)]) (and m (jslot m (jfield-index "java/lang/Module" "name")) #t))))
                                c))])])
@@ -1391,9 +1391,14 @@
                              "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
                              (jstring pn) (append attrs (list seal #f))))])
           ;; constructing ran Java code, which can let another thread in to
-          ;; define the same package first: keep whichever got there
-          (or (hashtable-ref jpackage-table pn #f)
-              (begin (hashtable-set! jpackage-table pn p) p))))))
+          ;; define the same package first: keep whichever got there. A JDK
+          ;; package asked for before its module is defined (the hook says
+          ;; jdk only for a package the runtime image owns) isn't kept, so a
+          ;; later call gets the sealed one
+          (if (and (string=? (car info) "jdk") (not module))
+              p
+              (or (hashtable-ref jpackage-table pn #f)
+                  (begin (hashtable-set! jpackage-table pn p) p)))))))
 (define-override! "java/lang/Class.getPackage()Ljava/lang/Package;"
   (lambda (this)
     (let ([cn (jclass-cname (mirror-class this))])
@@ -1444,8 +1449,8 @@
   (let* ([n (slashes (jstring->scheme name))]
          [c (and (or (hashtable-ref classes n #f) (jdk-package? n)) (try-class n))])
     (and c
-         (not (user-class? (jclass-cname c)))
-         (not (hashtable-ref class-loaders (jclass-cname c) #f))
+         (not (user-class? (element-name c)))
+         (not (hashtable-ref class-loaders (element-name c) #f))
          (let ([m (class-module c)])
            (or (not m) (not (jslot m (jfield-index "java/lang/Module" "loader")))))
          (jmirror c))))
@@ -1521,16 +1526,20 @@
       (string-set! s i (integer->char (fxlogand (vector-ref v (fx+ off i)) #xff))))))
 (define (define-class! loader given v off len hidden? classdata)
   (unless (and (fx>= off 0) (fx>= len 0) (fx<= (fx+ off len) (vector-length v)))
-    (jthrow "java/lang/ArrayIndexOutOfBoundsException" #f))
+    (jthrow "java/lang/ArrayIndexOutOfBoundsException"
+            (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
   (let* ([name (and given (slashes (jstring->scheme given)))]
-         [r (define-class-hook name (bytes->latin1 v off len) hidden?)]
+         ;; what fails past parsing (a superclass that isn't there, a link
+         ;; error) is a NoClassDefFoundError naming the cause, as a class
+         ;; the JVM can't define is a LinkageError
+         [r (guard (e [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
+              (define-class-hook name (bytes->latin1 v off len) hidden?))]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])
     (cond [(string=? kind "bad") (jthrow "java/lang/ClassFormatError" arg)]
-          [(string=? kind "wrong")
-           (jthrow "java/lang/NoClassDefFoundError"
-                   (string-append (slashes->dots name) " (wrong name: " (slashes->dots arg) ")"))]
+          [(string=? kind "wrong")   ; the JVM's message keeps both names slashed
+           (jthrow "java/lang/NoClassDefFoundError" (string-append name " (wrong name: " arg ")"))]
           [(string=? kind "dup")
            (jthrow "java/lang/LinkageError"
                    (string-append "loader attempted duplicate class definition for " (slashes->dots arg)
@@ -1546,10 +1555,17 @@
   (define-class! loader name (jarr-vec (nn b)) off len #f #f))
 (defnative "java/lang/ClassLoader.defineClass2(Ljava/lang/ClassLoader;Ljava/lang/String;Ljava/nio/ByteBuffer;IILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
-  ;; a heap buffer's array, from its offset plus the position given
+  ;; only a direct buffer gets here (ClassLoader.defineClass copies a heap
+  ;; one into a byte[] first): its bytes sit in native memory at address,
+  ;; from the position given, which is what Unsafe gave it
   (let ([hb (jslot (nn b) (jfield-index "java/nio/ByteBuffer" "hb"))])
-    (unless hb (jthrow "java/lang/UnsupportedOperationException" "champaca defines classes from heap buffers only"))
-    (define-class! loader name (jarr-vec hb) (fx+ off (jslot b (jfield-index "java/nio/ByteBuffer" "offset"))) len #f #f)))
+    (if hb
+        (define-class! loader name (jarr-vec hb) (fx+ off (jslot b (jfield-index "java/nio/ByteBuffer" "offset"))) len #f #f)
+        (let* ([addr (jslot b (jfield-index "java/nio/Buffer" "address"))]
+               [v (make-vector len)])
+          (do ([i 0 (fx+ i 1)]) ((fx= i len))
+            (vector-set! v i (foreign-ref 'unsigned-8 addr (fx+ off i))))
+          (define-class! loader name v 0 len #f #f)))))
 (defnative "java/lang/ClassLoader.defineClass0(Ljava/lang/ClassLoader;Ljava/lang/Class;Ljava/lang/String;[BIILjava/security/ProtectionDomain;ZILjava/lang/Object;)Ljava/lang/Class;"
   (loader lookup name b off len pd initialize flags classdata)
   ;; flags: 1 nestmate (the lookup class's nest, not kept here), 2 hidden, 4 strong, 8 vm annotations
