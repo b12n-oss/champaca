@@ -1,0 +1,34 @@
+pt suid: -2706334174872871033
+pt bytes: aced00057372000e53657269616c436865636b245074da712b681f33df8702000444000164490001785b00036172727400025b494c0001737400124c6a6176612f6c616e672f537472696e673b7870400000000000000000000004757200025b494dba602676eab2a50200007870000000020000000400000005740004666f7572
+pt: Pt(4,2.0,four,[4, 5],t=0)
+list bytes: aced0005737200136a6176612e7574696c2e41727261794c6973747881d21d99c7619d03000149000473697a6578700000000377040000000374000161737200116a6176612e6c616e672e496e746567657212e2a0a4f781873802000149000576616c7565787200106a6176612e6c616e672e4e756d62657286ac951d0b94e08b020000787000000001737200106a6176612e6c616e672e446f75626c6580b3c24a296bfb0402000144000576616c75657871007e0004400400000000000078
+list: [a, 1, 2.5]
+map: {k=[1, 2], z=[]}
+sub: base 7 5
+custom: Custom(3,r30)
+single suid: 7446414742994809244
+singleton: true
+replaced: replaced:8
+ext: Ext(2,ok)
+enum: true
+class: class java.lang.String
+record: Pair[k=k, v=1]
+record suid: 0
+declared suid: 42
+arrays: [[1, 2], [1.5], [s, null], [[n]]]
+boxed: [1, 2.5, 3, 4, c, true]
+shared: true
+chain: 1/2
+jdk types: 1234 [1.50, 2026-10-23, 123e4567-e89b-12d3-a456-426614174000, {a=1}, PT5S, sb, class java.util.Optional, 9]
+throwable: java.lang.IllegalStateException: boom / java.lang.RuntimeException: why / SerialCheck.main(SerialCheck.java:162)
+private super: SerialCheck$PrivSub; no valid constructor
+LazyInit.<clinit>
+lazy init: 7625939067143734986
+objenesis: null 0 0
+wrong super: java.lang.UnsupportedOperationException: public java.lang.String() not a superclass of SerialCheck$Sub
+plain: java.io.NotSerializableException: SerialCheck$Plain
+holder: java.io.NotSerializableException: SerialCheck$Plain
+suid mismatch: SerialCheck$Declared; local class incompatible: stream classdesc serialVersionUID = 43, local class serialVersionUID = 42
+proxy: hi x true true
+remote: 77
+remote from main: gen.Remote

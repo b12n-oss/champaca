@@ -448,14 +448,68 @@
 (defnative "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;"
   (ctor args)
   (let-values ([(c meta) (reflected-member "java/lang/reflect/Constructor" ctor)])
-    (let ([cname (jclass-cname c)] [desc (cadr meta)])
-      (jinit cname)
+    (let* ([cname (jclass-cname c)] [desc (cadr meta)]
+           ;; a serialization constructor allocates the serializable class and
+           ;; runs its first non-serializable superclass's constructor on it
+           [alloc (or (eq-hashtable-ref serial-allocs ctor #f) cname)])
+      (jinit alloc)
       (let ([argv (reflect-arg-list (desc-args desc) args)])
         (invoke-wrapped
          (lambda ()
-           (let ([o (jnew cname)])
+           (let ([o (jnew alloc)])
              (apply (method-proc cname (string-append "<init>" desc)) o argv)
              o)))))))
+
+;; --- serialization ---------------------------------------------------------------
+;; ObjectStreamClass asks ReflectionFactory for a constructor that allocates
+;; the serializable class and then runs the no-arg constructor of its first
+;; non-serializable superclass (Java Object Serialization Specification 3.1,
+;; step 11). The JDK builds that from a method handle on a MemberName, which
+;; needs MethodHandleNatives; here the accessor is the JDK's own native one
+;; (newInstance0 above), and this table tells it which class to allocate in
+;; place of the constructor's.
+(define serial-allocs (make-weak-eq-hashtable))   ; Constructor -> class name to allocate
+
+(define-override! "jdk/internal/reflect/MethodHandleAccessorFactory.newSerializableConstructorAccessor(Ljava/lang/Class;Ljava/lang/reflect/Constructor;)Ljdk/internal/reflect/ConstructorAccessorImpl;"
+  (lambda (decl ctor)
+    (let ([dn (jclass-cname (mirror-class decl))]
+          [cn (jclass-cname (mirror-class (jslot ctor (jfield-index "java/lang/reflect/Constructor" "clazz"))))])
+      (unless (class-assignable? dn cn)
+        (jthrow "java/lang/UnsupportedOperationException"
+                (string-append (jstring->scheme ((jvirt ctor "toString()Ljava/lang/String;") ctor))
+                               " not a superclass of " (slashes->dots dn))))
+      ;; as the JDK: initialized here, so an ExceptionInInitializerError
+      ;; isn't wrapped in an InvocationTargetException later
+      (jinit dn)
+      (eq-hashtable-set! serial-allocs ctor dn)
+      (jinit "jdk/internal/reflect/DirectConstructorHandleAccessor")
+      ((method-proc "jdk/internal/reflect/DirectConstructorHandleAccessor"
+                    "nativeAccessor(Ljava/lang/reflect/Constructor;)Ljdk/internal/reflect/ConstructorAccessorImpl;")
+       ctor))))
+
+;; A class's <clinit> is bound as its method global when it has one (jinit
+;; calls it the same way). Part of the default serialVersionUID.
+(defnative "java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;)Z" (c)
+  (if (top-level-bound? (string->symbol (string-append (jclass-cname (mirror-class c)) ".<clinit>()V"))) 1 0))
+
+;; The first frame up the stack whose class has a loader other than the boot
+;; and platform ones, as HotSpot answers it: a class defined at run time has
+;; its defining loader, a classpath class the application loader. Null when
+;; there is none; VM.latestUserDefinedLoader makes that the platform loader.
+;; ObjectInputStream resolves class names through it.
+(defnative "jdk/internal/misc/VM.latestUserDefinedLoader0()Ljava/lang/ClassLoader;" ()
+  (let loop ([fs (java-frames)])
+    (cond [(null? fs) #f]
+          [(hashtable-ref class-loaders (caar fs) #f)]
+          [(user-class? (caar fs))
+           (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
+             (and (top-level-bound? s) (top-level-value s)))]
+          [else (loop (cdr fs))])))
+
+;; Every class is its own nest host here (getNestHost0 above), so two classes
+;; are nestmates only when they are one class.
+(defnative "jdk/internal/reflect/Reflection.areNestMates(Ljava/lang/Class;Ljava/lang/Class;)Z" (a b)
+  (if (eq? a b) 1 0))
 
 ;; --- field access (overrides of java.lang.reflect.Field) -----------------------------
 
