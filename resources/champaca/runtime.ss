@@ -759,10 +759,11 @@
 ;; loader's unnamed module for anything else. Module.defineModule0 records
 ;; each module's packages while initPhase2 builds the layer and BootLoader's
 ;; <clinit> hands over the unnamed module; both refresh the mirrors made
-;; before them, as HotSpot patches the classes loaded before java.base is
-;; defined, and adopt-app-loader! (after initPhase3) does the same for
-;; classpath classes mirrored during the boot. Until then a mirror's module
-;; is null, as on the JVM.
+;; before them (module and loader), as HotSpot patches the classes loaded
+;; before java.base is defined. No classpath class is mirrored during the
+;; boot (measured: none of the 100 mirrors at its end), so none needs the
+;; application loader patched in. Until then a mirror's module is null, as
+;; on the JVM.
 (define unnamed-module #f)
 ;; the application class loader, once ClassLoaders' <clinit> has run
 ;; (initPhase2), and its unnamed module; #f before
@@ -850,15 +851,6 @@
 (define (set-mirror-loader! m c)
   (let ([ld (class-loader-of c)])
     (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld))))
-;; after initPhase3: the classpath classes mirrored while the application
-;; loader didn't exist yet get it, and its unnamed module
-(define (adopt-app-loader!)
-  (vector-for-each (lambda (mirror)
-                     (let ([c (mirror-class mirror)])
-                       (when (user-class? (element-name c))
-                         (set-mirror-loader! mirror c)
-                         (set-mirror-module! mirror c))))
-                   (hashtable-keys mirror->class)))
 (define (define-module! m package-names)   ; names with dots, as Module.defineModule0 gets them
   (let ([slot (jfield-index "java/lang/Class" "module")]
         [lslot (jfield-index "java/lang/Class" "classLoader")]

@@ -312,22 +312,31 @@
   (if (jinstance? x (jclass-cname (mirror-class this))) 1 0))
 (defnative "java/lang/Class.isAssignableFrom(Ljava/lang/Class;)Z" (this other)
   (if (class-assignable? (jclass-cname (mirror-class other)) (jclass-cname (mirror-class this))) 1 0))
+;; the binary name of an array descriptor's element class ("[[Lp.Foo;" ->
+;; "p.Foo"), or #f for a primitive element
+(define (array-element-binary-name s)
+  (let skip ([i 0])
+    (cond [(char=? (string-ref s i) #\[) (skip (fx+ i 1))]
+          [(and (char=? (string-ref s i) #\L) (char=? (string-ref s (fx- (string-length s) 1)) #\;))
+           (substring s (fx+ i 1) (fx- (string-length s) 1))]
+          [else #f])))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
   ;; of the program's own answers through its loadClass, as the JVM asks it
-  ;; to (a loader that defines classes on demand needs that); the built-in
-  ;; ones (null is the boot loader) and arrays go to the class table and see
-  ;; what that loader would load: a classpath class is the application
-  ;; loader's alone, a class another loader defined that loader's, unless it
-  ;; sits in a named module (a proxy's dynamic module)
+  ;; to (a loader that defines classes on demand needs that); for an array
+  ;; it is asked for the element class, a primitive element needing no one.
+  ;; The built-in loaders (null is the boot loader) go to the class table
+  ;; and see what that loader would load (builtin-loader-sees?)
   (let* ([s (jstring->scheme name)]
          [n (slashes s)]
          [c (cond [(or (fxzero? (string-length s)) (memv #\/ (string->list s))) #f]
-                  [(and loader (not (char=? (string-ref s 0) #\[))
-                        (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
-                   (let ([m ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader name)])
-                     (and m (mirror-class m)))]
+                  [(and loader (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
+                   (let ([load (lambda (bn) ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader (jstring bn)))])
+                     (if (char=? (string-ref s 0) #\[)
+                         (let ([e (array-element-binary-name s)])
+                           (and (or (not e) (load e)) (try-class n)))
+                         (let ([m (load s)]) (and m (mirror-class m)))))]
                   [else (let ([c (try-class n)])
                           (and c (builtin-loader-sees? loader c) c))])])
     (unless c (jthrow "java/lang/ClassNotFoundException" s))
@@ -1471,17 +1480,20 @@
 ;; one, for the module's own packages. Class.getResource and the ClassLoader
 ;; resource methods are overridden above, so the module-qualified
 ;; findResource is never reached.
-;; What a built-in loader (this; #f is the boot loader) would load, an array
-;; going by its element: a class another loader defined is that loader's
-;; alone, unless it sits in a named module (a proxy's dynamic module), whose
-;; loader every built-in loader delegates to; a classpath class is the
-;; application loader's; a JDK class is every built-in loader's, except that
-;; the boot loader, which delegates to no one, sees the boot modules only.
+;; What a built-in loader (this; #f is the boot loader proper, the one a null
+;; loader names in Class.forName) would load, an array going by its element:
+;; a class another loader defined is that loader's alone (a proxy's dynamic
+;; module is defined to its loader and no built-in loader delegates to it,
+;; probed: the platform loader doesn't find a proxy the app loader defined);
+;; a classpath class is the application loader's; a JDK class is every
+;; built-in loader object's (BootLoader's own BuiltinClassLoader included:
+;; it delegates by package to the module's loader, as the JDK's does, and its
+;; callers check the module), while the boot loader proper delegates to no
+;; one and sees the boot modules only.
 (define (builtin-loader-sees? this c)
   (let* ([e (element-name c)] [dl (hashtable-ref class-loaders e #f)])
-    (cond [dl (or (eq? dl this)
-                  (let ([m (class-module c)]) (and m (jslot m (jfield-index "java/lang/Module" "name")) #t)))]
-          [(user-class? e) (eq? this (app-loader))]
+    (cond [dl (eq? dl this)]
+          [(user-class? e) (let ([a (app-loader)]) (and a (eq? this a)))]
           [this #t]
           [else (not (module-loader (class-module c)))])))
 ;; whether a class not loaded yet would be a JDK class: its package is one
@@ -1501,8 +1513,7 @@
          (let ([n (slashes s)])
            (and (or (hashtable-ref classes n #f)
                     (jdk-package? n)
-                    (let ([a '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
-                      (and (top-level-bound? a) (eq? this (top-level-value a)))))
+                    (let ([a (app-loader)]) (and a (eq? this a))))
                 (let ([c (try-class n)])
                   (and c (builtin-loader-sees? this c) (jmirror c))))))))
 ;; --- classes defined at run time -------------------------------------------------

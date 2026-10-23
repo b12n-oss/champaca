@@ -77,7 +77,23 @@ public class ModuleCheck {
                            + " " + fails(() -> Class.forName("ModuleCheck", false, platform)) + " " + fails(() -> Class.forName("ModuleCheck", false, null))
                            + " " + (Class.forName("java.lang.String", false, null) == String.class) + " " + fails(() -> Class.forName("java.sql.Date", false, null))
                            + " " + fails(() -> Class.forName("sun.tools.jar.JarToolProvider", false, null)) + " " + (Class.forName("[LModuleCheck;", false, scl) == ModuleCheck[].class)
-                           + " " + fails(() -> Class.forName("[LModuleCheck;", false, platform)));
+                           + " " + fails(() -> Class.forName("[LModuleCheck;", false, platform)) + " " + fails(() -> Class.forName("[LModuleCheck;", false, null)));
+        // a loader of the program's own is asked for an array's element class; the boot loader never delegates to anyone
+        ClassLoader own = new ClassLoader(scl) {};
+        ClassLoader refusing = new ClassLoader(scl) {
+            protected Class<?> loadClass(String n, boolean resolve) throws ClassNotFoundException {
+                if (n.startsWith("ModuleCheck")) throw new ClassNotFoundException("refused " + n);
+                return super.loadClass(n, resolve);
+            }
+        };
+        Class<?> proxy = java.lang.reflect.Proxy.newProxyInstance(scl, new Class<?>[]{Runnable.class}, (p, m, a) -> null).getClass();
+        System.out.println("forName by own loader: " + (Class.forName("[LModuleCheck;", false, own) == ModuleCheck[].class)
+                           + " " + (Class.forName("[[I", false, own) == int[][].class) + " " + fails(() -> Class.forName("[Lno.Such;", false, own))
+                           + " " + fails(() -> Class.forName("[LModuleCheck;", false, refusing)) + " " + fails(() -> Class.forName("ModuleCheck", false, refusing))
+                           + " " + (Class.forName("[[I", false, refusing) == int[][].class)
+                           + " " + (Class.forName("ModuleCheck", false, own) == ModuleCheck.class) + " " + (Class.forName("[Ljava.sql.Date;", false, own) == java.sql.Date[].class)
+                           + " " + proxy.getModule().isNamed() + " " + (Class.forName(proxy.getName(), false, scl) == proxy)
+                           + " " + fails(() -> Class.forName(proxy.getName(), false, null)) + " " + fails(() -> Class.forName(proxy.getName(), false, platform)));
         System.out.println("load through loaders: " + (scl.loadClass("ModuleCheck") == ModuleCheck.class)
                            + " " + (scl.loadClass("java.util.ArrayList") == ArrayList.class)
                            + " " + (Class.forName("java.sql.Date", false, platform) == java.sql.Date.class)

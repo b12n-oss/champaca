@@ -1146,10 +1146,7 @@
                      ;; failing phase 2 has printed its cause to stderr already
                      (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 1 1))
                        (error 'champaca \"the boot layer failed to initialize\"))
-                     ((method-proc \"java/lang/System\" \"initPhase3()V\"))
-                     ;; classpath classes mirrored during the boot get the
-                     ;; application loader and its unnamed module
-                     (adopt-app-loader!)))")]
+                     ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
         (when (and (not hit?) (zero? status))
           (timed :cache-write #(write-cache! dir @rec)))
