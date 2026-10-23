@@ -312,14 +312,19 @@
   (if (jinstance? x (jclass-cname (mirror-class this))) 1 0))
 (defnative "java/lang/Class.isAssignableFrom(Ljava/lang/Class;)Z" (this other)
   (if (class-assignable? (jclass-cname (mirror-class other)) (jclass-cname (mirror-class this))) 1 0))
-;; the binary name of an array descriptor's element class ("[[Lp.Foo;" ->
-;; "p.Foo"), or #f for a primitive element
+;; the element of an array descriptor given as a binary name: "[[Lp.Foo;" ->
+;; "p.Foo", a primitive element -> 'prim, a malformed name ("[", "[[", "[X",
+;; "[LFoo") -> #f, not found as on the JVM
 (define (array-element-binary-name s)
-  (let skip ([i 0])
-    (cond [(char=? (string-ref s i) #\[) (skip (fx+ i 1))]
-          [(and (char=? (string-ref s i) #\L) (char=? (string-ref s (fx- (string-length s) 1)) #\;))
-           (substring s (fx+ i 1) (fx- (string-length s) 1))]
-          [else #f])))
+  (let ([len (string-length s)])
+    (let skip ([i 0])
+      (cond [(fx= i len) #f]
+            [(char=? (string-ref s i) #\[) (skip (fx+ i 1))]
+            [(char=? (string-ref s i) #\L)
+             (and (fx> (fx- len 1) (fx+ i 1)) (char=? (string-ref s (fx- len 1)) #\;)
+                  (substring s (fx+ i 1) (fx- len 1)))]
+            [(and (fx= i (fx- len 1)) (memv (string-ref s i) '(#\B #\C #\D #\F #\I #\J #\S #\Z))) 'prim]
+            [else #f]))))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
@@ -330,15 +335,25 @@
   ;; and see what that loader would load (builtin-loader-sees?)
   (let* ([s (jstring->scheme name)]
          [n (slashes s)]
+         [own? (and loader (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))]
+         [array? (and (fxpositive? (string-length s)) (char=? (string-ref s 0) #\[))]
+         [element (and array? (array-element-binary-name s))]
+         ;; a class by binary name, through the loader given
+         [resolve (lambda (bn)
+                    (if own?
+                        (let ([m ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader (jstring bn))])
+                          (and m (mirror-class m)))
+                        (let ([c (try-class (slashes bn))])
+                          (and c (builtin-loader-sees? loader c) c))))]
          [c (cond [(or (fxzero? (string-length s)) (memv #\/ (string->list s))) #f]
-                  [(and loader (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
-                   (let ([load (lambda (bn) ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader (jstring bn)))])
-                     (if (char=? (string-ref s 0) #\[)
-                         (let ([e (array-element-binary-name s)])
-                           (and (or (not e) (load e)) (try-class n)))
-                         (let ([m (load s)]) (and m (mirror-class m)))))]
-                  [else (let ([c (try-class n)])
-                          (and c (builtin-loader-sees? loader c) c))])])
+                  ;; an array name that isn't a well-formed descriptor is not
+                  ;; found; one with a class element exists once the element
+                  ;; resolves through the loader (its pseudo-class would be
+                  ;; made for any name, and mirrored, it loads its element)
+                  [(and array? (not element)) #f]
+                  [(and array? (not (eq? element 'prim))) (and (resolve element) (try-class n))]
+                  [array? (try-class n)]
+                  [else (resolve s)])])
     (unless c (jthrow "java/lang/ClassNotFoundException" s))
     (when (eqv? init 1) (jinit (jclass-cname c)))
     (jmirror c)))

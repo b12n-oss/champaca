@@ -91,6 +91,10 @@ public class ModuleCheck {
                            + " " + (Class.forName("[[I", false, own) == int[][].class) + " " + fails(() -> Class.forName("[Lno.Such;", false, own))
                            + " " + fails(() -> Class.forName("[LModuleCheck;", false, refusing)) + " " + fails(() -> Class.forName("ModuleCheck", false, refusing))
                            + " " + (Class.forName("[[I", false, refusing) == int[][].class)
+                           + " " + fails(() -> Class.forName("[", false, own)) + " " + fails(() -> Class.forName("[[", false, own))
+                           + " " + fails(() -> Class.forName("[X", false, own)) + " " + fails(() -> Class.forName("[LModuleCheck", false, own))
+                           + " " + fails(() -> Class.forName("[", false, scl)) + " " + fails(() -> Class.forName("[LModuleCheck", false, scl))
+                           + " " + fails(() -> Class.forName("[Lno.Such;", false, scl)) + " " + fails(() -> Class.forName("[Lno.Such;", false, null))
                            + " " + (Class.forName("ModuleCheck", false, own) == ModuleCheck.class) + " " + (Class.forName("[Ljava.sql.Date;", false, own) == java.sql.Date[].class)
                            + " " + proxy.getModule().isNamed() + " " + (Class.forName(proxy.getName(), false, scl) == proxy)
                            + " " + fails(() -> Class.forName(proxy.getName(), false, null)) + " " + fails(() -> Class.forName(proxy.getName(), false, platform)));
