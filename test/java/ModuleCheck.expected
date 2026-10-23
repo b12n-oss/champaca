@@ -9,7 +9,9 @@ internal access: java.lang.IllegalAccessException java.lang.reflect.Inaccessible
 loaders: jdk.internal.loader.ClassLoaders$AppClassLoader true jdk.internal.loader.ClassLoaders$PlatformClassLoader true true app platform true
 inherited context loader: true
 load through loaders: true true true java.sql.Savepoint java.base true java.lang.ClassNotFoundException java.lang.ClassNotFoundException true true true
-module resources: true true true
+loader visibility: java.lang.ClassNotFoundException java.lang.ClassNotFoundException java.lang.ClassNotFoundException java.lang.ClassNotFoundException java.util.zip.CRC32 no exception java.lang.ClassNotFoundException java.lang.ClassNotFoundException String[]
+bootstrap delegation: java.lang.String java.lang.ClassNotFoundException java.lang.ClassNotFoundException true
+module resources: true true true true true
 locale data: 1.234,50 € | jeudi 22 octobre | 1月 | 1 234,50 | true | Mitteleuropäische Normalzeit
 charsets: 日本 true true Big5 true java.nio.charset.UnsupportedCharsetException [-23]
 installed charset providers: 1 java.nio.charset.spi.CharsetProvider

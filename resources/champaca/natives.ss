@@ -310,9 +310,11 @@
   (if (class-assignable? (jclass-cname (mirror-class other)) (jclass-cname (mirror-class this))) 1 0))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
-  (let* ([n (list->string (map (lambda (c) (if (char=? c #\.) #\/ c)) (string->list (jstring->scheme name))))]
-         [c (guard (e [(and (condition? e) (not (jobj? e))) #f]) (find-class n))])
-    (unless c (jthrow "java/lang/ClassNotFoundException" (jstring->scheme name)))
+  ;; a binary name: one with slashes is not found, as on the JVM
+  (let* ([s (jstring->scheme name)]
+         [n (slashes s)]
+         [c (and (not (memv #\/ (string->list s))) (try-class n))])
+    (unless c (jthrow "java/lang/ClassNotFoundException" s))
     (when (eqv? init 1) (jinit n))
     (jmirror c)))
 
@@ -1371,9 +1373,13 @@
                              "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
                              (jstring pn) (append attrs (list seal #f))))])
           ;; constructing ran Java code, which can let another thread in to
-          ;; define the same package first: keep whichever got there
-          (or (hashtable-ref jpackage-table pn #f)
-              (begin (hashtable-set! jpackage-table pn p) p))))))
+          ;; define the same package first: keep whichever got there. A JDK
+          ;; package asked for before its module is defined isn't kept, so
+          ;; a later call gets the sealed one
+          (if (and (string=? (car info) "jdk") (not module))
+              p
+              (or (hashtable-ref jpackage-table pn #f)
+                  (begin (hashtable-set! jpackage-table pn p) p)))))))
 (define-override! "java/lang/Class.getPackage()Ljava/lang/Package;"
   (lambda (this)
     (let ([cn (jclass-cname (mirror-class this))])
@@ -1392,31 +1398,76 @@
 (defnative "java/lang/Module.addExportsToAll0(Ljava/lang/Module;Ljava/lang/String;)V" (from pn) (void))
 (defnative "java/lang/Module.addExportsToAllUnnamed0(Ljava/lang/Module;Ljava/lang/String;)V" (from pn) (void))
 
+;; A class that can be loaded: registered already, an array, or a class file
+;; the loader can find (the resource hook looks where classes come from). Only
+;; that is "not found"; a class that exists but fails to translate is an
+;; error, as it is when a call reaches it, rather than a
+;; ClassNotFoundException hiding the cause. A primitive's name is not a
+;; class's, as on the JVM.
+(define (class-exists? n)
+  (and (fx> (string-length n) 0)
+       (not (prim-name? n))
+       (or (hashtable-ref classes n #f)
+           (char=? (string-ref n 0) #\[)
+           (and (resource-hook (string-append n ".class")) #t))))
 (define (try-class n)
-  (guard (e [(not (jobj? e)) #f]) (find-class n)))
+  (and (class-exists? n) (find-class n)))
+;; HotSpot's boot loader: the classes of the modules defined to it (a null
+;; loader), never the classpath's, so a loader with no parent that delegates
+;; up finds what it would on the JVM
 (defnative "java/lang/ClassLoader.findBootstrapClass(Ljava/lang/String;)Ljava/lang/Class;" (name)
-  (let ([c (try-class (slashes (jstring->scheme name)))]) (and c (jmirror c))))
+  (let ([c (try-class (slashes (jstring->scheme name)))])
+    (and c
+         (not (user-class? (jclass-cname c)))
+         (let ([m (class-module c)])
+           (or (not m) (not (jslot m (jfield-index "java/lang/Module" "loader")))))
+         (jmirror c))))
+;; the classes a loader has loaded: for a built-in loader, those it can see
+;; (below); any other loader has defined none, and finds what its parents
+;; have by delegating, as ClassLoader.loadClass does next
 (defnative "java/lang/ClassLoader.findLoadedClass0(Ljava/lang/String;)Ljava/lang/Class;" (this name)
-  (let ([c (hashtable-ref classes (slashes (jstring->scheme name)) #f)]) (and c (jmirror c))))
+  (let ([c (hashtable-ref classes (slashes (jstring->scheme name)) #f)])
+    (and c (jinstance? this "jdk/internal/loader/BuiltinClassLoader") (builtin-loader-sees? this c) (jmirror c))))
 
 ;; The built-in loaders (boot, platform, app) are this runtime's one class
-;; table in disguise: each finds any class the runtime can load and never
+;; table in disguise: each finds the classes the runtime can load and never
 ;; defines one from bytes itself, which is how the JDK's path would go (the
 ;; module's reader over jrt, then ClassLoader.defineClass). The
 ;; module-qualified lookups (Class.forName(Module, String), ServiceLoader
-;; providers, resource bundles in jdk.localedata) land here too, and a
-;; resource stream from a named module (Module.getResourceAsStream) comes
-;; from the same lookup as a classpath one. Class.getResource and the
-;; ClassLoader resource methods are overridden above, so the module-qualified
+;; providers, resource bundles in jdk.localedata) land here too. What each
+;; loader sees follows the JVM: the three delegate to whichever of them a
+;; module is defined to, so each finds every JDK class, and only the
+;; application loader has a class path, so a classpath class is found through
+;; it alone. A resource stream from a named module
+;; (Module.getResourceAsStream) comes from the same lookup as a classpath
+;; one, for the module's own packages. Class.getResource and the ClassLoader
+;; resource methods are overridden above, so the module-qualified
 ;; findResource is never reached.
-(define (class-or-null name)
-  (let ([c (try-class (slashes (jstring->scheme (nn name))))]) (and c (jmirror c))))
+(define (builtin-loader-sees? this c)
+  (or (not (user-class? (jclass-cname c)))
+      (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
+        (and (top-level-bound? s) (eq? this (top-level-value s))))))
+(define (class-or-null this name)
+  ;; loadClass takes a binary name: one with slashes or an array descriptor is not found
+  (let ([s (jstring->scheme (nn name))])
+    (and (fx> (string-length s) 0)
+         (not (char=? (string-ref s 0) #\[))
+         (not (memv #\/ (string->list s)))
+         (let ([c (try-class (slashes s))])
+           (and c (builtin-loader-sees? this c) (jmirror c))))))
 (define-override! "jdk/internal/loader/BuiltinClassLoader.loadClassOrNull(Ljava/lang/String;Z)Ljava/lang/Class;"
-  (lambda (this name resolve) (class-or-null name)))
+  (lambda (this name resolve) (class-or-null this name)))
 (define-override! "jdk/internal/loader/BuiltinClassLoader.findClass(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/Class;"
-  (lambda (this mn name) (class-or-null name)))
+  (lambda (this mn name) (class-or-null this name)))
 (define-override! "jdk/internal/loader/BuiltinClassLoader.findResourceAsStream(Ljava/lang/String;Ljava/lang/String;)Ljava/io/InputStream;"
-  (lambda (this mn name) (resource-stream (jstring->scheme (nn name)))))
+  (lambda (this mn name)
+    (let ([path (jstring->scheme (nn name))])
+      (if mn
+          ;; the module named must own the resource's package
+          (let ([m (hashtable-ref package-modules (package-dir path) #f)])
+            (and m (string=? (jstring->scheme (jslot m (jfield-index "java/lang/Module" "name"))) (jstring->scheme mn))
+                 (resource-stream path)))
+          (resource-stream path)))))
 
 ;; --- jdk.internal.util.ByteArray and ByteArrayLittleEndian -------------------------
 ;; The JDK reads multi-byte values out of a byte[] through VarHandles

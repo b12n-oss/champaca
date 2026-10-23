@@ -558,10 +558,14 @@
         (string? v) (cg/str-lit v)
         :else (str "#vu8" (apply cg/sx (map str v)))))
 
-(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags reflection conflicts]}]
+(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags reflection conflicts origin]}]
   (str/join
    "\n"
    (concat
+    ;; a classpath class stays in the unnamed module whatever its package
+    ;; (runtime.ss user-class!); user classes are never cached, so a cached
+    ;; registration never carries this
+    (when (= origin :user) [(cg/sx "user-class!" (cg/str-lit name))])
     [(cg/sx "register-class!" (cg/str-lit name) (if super (cg/str-lit super) "#f")
             (str "'" (apply cg/sx (map cg/str-lit interfaces)))
             (apply cg/sx "vector" template)

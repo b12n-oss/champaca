@@ -734,6 +734,7 @@
         (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "modifiers")
                      (class-modifiers c))
         (set-mirror-module! m c)
+        (index-mirror! m c)
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
                        (jmirror (find-class (desc->class-name (substring (jclass-cname c) 1 (string-length (jclass-cname c))))))))
@@ -759,34 +760,58 @@
 ;; defined. Until then a mirror's module is null, as on the JVM.
 (define unnamed-module #f)
 (define package-modules (make-hashtable string-hash string=?))   ; "java/util" -> Module
+;; classes read from the classpath (main.clj registration-text): they stay in
+;; the unnamed module whatever their package, as a classpath class does on the
+;; JVM, where one in a package a JDK module owns is never even loaded
+(define user-classes (make-hashtable string-hash string=?))
+(define (user-class! name) (hashtable-set! user-classes name #t))
+(define (user-class? name) (hashtable-contains? user-classes name))
 (define (package-dir cname)
   (let loop ([i (fx- (string-length cname) 1)])
     (cond [(fx< i 0) ""]
           [(char=? (string-ref cname i) #\/) (substring cname 0 i)]
           [else (loop (fx- i 1))])))
-;; an array's module is its element type's; a primitive's is java.base
+;; the class an array's module comes from: its element type, down through the
+;; dimensions ("[[Ljava/sql/Date;" -> "java/sql/Date"); a primitive stays a
+;; primitive name ("[I" -> "int")
+(define (element-name c)
+  (let ([n (jclass-cname c)])
+    (if (eq? (jclass-kind c) 'array)
+        (let skip ([i 0])
+          (cond [(char=? (string-ref n i) #\[) (skip (fx+ i 1))]
+                [(char=? (string-ref n i) #\L) (substring n (fx+ i 1) (fx- (string-length n) 1))]
+                [else (cdr (assoc (string (string-ref n i)) prim-names))]))
+        n)))
+;; the package a class's module is looked up by: primitives count as java.lang
+(define (class-package c)
+  (let ([e (element-name c)]) (if (prim-name? e) "java/lang" (package-dir e))))
 (define (class-module c)
-  (let* ([n (jclass-cname c)]
-         [pkg (case (jclass-kind c)
-                [(prim) "java/lang"]
-                [(array) (let skip ([i 0])
-                           (cond [(char=? (string-ref n i) #\[) (skip (fx+ i 1))]
-                                 [(char=? (string-ref n i) #\L)
-                                  (package-dir (substring n (fx+ i 1) (fx- (string-length n) 1)))]
-                                 [else "java/lang"]))]
-                [else (package-dir n)])])
-    (hashtable-ref package-modules pkg unnamed-module)))
+  (if (user-class? (element-name c))
+      unnamed-module
+      (hashtable-ref package-modules (class-package c) unnamed-module)))
 (define (set-mirror-module! m c)
   (let ([mod (class-module c)])
     (when mod (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "module") mod))))
-(define (refresh-mirror-modules!)
-  (vector-for-each (lambda (m) (set-mirror-module! m (mirror-class m))) (hashtable-keys mirror->class)))
+;; the mirrors a module's definition has to patch, by package, so defining
+;; the 70 modules of the boot layer touches each mirror once rather than
+;; walking every mirror 70 times (a class is never unloaded, so this keeps
+;; nothing alive that the class table doesn't)
+(define package-mirrors (make-hashtable string-hash string=?))
+(define (index-mirror! m c)
+  (unless (user-class? (element-name c))
+    (let ([d (class-package c)])
+      (hashtable-set! package-mirrors d (cons m (hashtable-ref package-mirrors d '()))))))
 (define (set-unnamed-module! m)
   (set! unnamed-module m)
-  (refresh-mirror-modules!))
+  (vector-for-each (lambda (mirror) (set-mirror-module! mirror (mirror-class mirror))) (hashtable-keys mirror->class)))
 (define (define-module! m package-names)   ; names with dots, as Module.defineModule0 gets them
-  (for-each (lambda (pn) (hashtable-set! package-modules (slashes pn) m)) package-names)
-  (refresh-mirror-modules!))
+  (let ([slot (jfield-index "java/lang/Class" "module")])
+    (for-each (lambda (pn)
+                (let ([d (slashes pn)])
+                  (hashtable-set! package-modules d m)
+                  (for-each (lambda (mirror) (vector-set! (jobj-slots mirror) slot m))
+                            (hashtable-ref package-mirrors d '()))))
+              package-names)))
 
 (define (jmirror-of name) (jmirror (find-class name)))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'champaca "not a mirror" m)))

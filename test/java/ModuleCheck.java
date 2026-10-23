@@ -66,7 +66,18 @@ public class ModuleCheck {
                            + " " + fails(() -> scl.loadClass("no.such.Klass")) + " " + fails(() -> Class.forName("Nope", true, scl))
                            + " " + (scl.getResource("ModuleCheck.class") != null) + " " + (scl.getResourceAsStream("ModuleCheck.class") != null)
                            + " " + (System.getProperty("java.class.path").length() > 0));
+        // what each built-in loader sees: a binary name only, and only the modules defined to it or its parents
+        System.out.println("loader visibility: " + fails(() -> platform.loadClass("ModuleCheck")) + " " + fails(() -> scl.loadClass("java/lang/String"))
+                           + " " + fails(() -> scl.loadClass("[Ljava.lang.String;")) + " " + fails(() -> scl.loadClass("int"))
+                           + " " + platform.loadClass("java.util.zip.CRC32").getName() + " " + fails(() -> platform.loadClass("sun.tools.jar.JarToolProvider"))
+                           + " " + fails(() -> Class.forName("java/lang/String")) + " " + fails(() -> Class.forName("int"))
+                           + " " + Class.forName("[Ljava.lang.String;").getSimpleName());
+        // a loader with no parent delegates to the bootstrap loader, which has the boot modules only
+        ClassLoader parentless = new ClassLoader(null) {};
+        System.out.println("bootstrap delegation: " + parentless.loadClass("java.lang.String").getName() + " " + fails(() -> parentless.loadClass("java.sql.Date"))
+                           + " " + fails(() -> parentless.loadClass("ModuleCheck")) + " " + (parentless.getParent() == null));
         System.out.println("module resources: " + (base.getResourceAsStream("java/lang/Object.class") != null)
+                           + " " + (base.getResourceAsStream("ModuleCheck.class") == null) + " " + (base.getResourceAsStream("java/sql/Date.class") == null)
                            + " " + (base.getResourceAsStream("java/lang/NoSuch.class") == null)
                            + " " + (java.sql.Date.class.getModule().getResourceAsStream("java/sql/Date.class") != null));
         // providers from the JDK's own modules, through their module descriptors
