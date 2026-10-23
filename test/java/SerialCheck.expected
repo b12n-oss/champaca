@@ -20,12 +20,18 @@ boxed: [1, 2.5, 3, 4, c, true]
 shared: true
 chain: 1/2
 jdk types: 1234 [1.50, 2026-10-23, 123e4567-e89b-12d3-a456-426614174000, {a=1}, PT5S, sb, class java.util.Optional, 9]
-throwable: java.lang.IllegalStateException: boom / java.lang.RuntimeException: why / SerialCheck.main(SerialCheck.java:162)
+throwable: java.lang.IllegalStateException: boom / java.lang.RuntimeException: why / SerialCheck.main(SerialCheck.java:170)
 private super: SerialCheck$PrivSub; no valid constructor
 LazyInit.<clinit>
 lazy init: 7625939067143734986
 objenesis: null 0 0
 wrong super: java.lang.UnsupportedOperationException: public java.lang.String() not a superclass of SerialCheck$Sub
+reused constructor: S1 S2 Base base
+allocate Runnable: java.lang.UnsupportedOperationException: public java.lang.Object() not a superclass of java.lang.Runnable
+allocate int[]: java.lang.InstantiationException: [I
+allocate Abs: java.lang.InstantiationException: SerialCheck$Abs
+allocate Class: java.lang.IllegalAccessException: java.lang.Class
+nestmates: secret SerialCheck true SerialCheck false int[]
 plain: java.io.NotSerializableException: SerialCheck$Plain
 holder: java.io.NotSerializableException: SerialCheck$Plain
 suid mismatch: SerialCheck$Declared; local class incompatible: stream classdesc serialVersionUID = 43, local class serialVersionUID = 42

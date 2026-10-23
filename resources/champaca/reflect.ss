@@ -173,7 +173,17 @@
 (defnative "jdk/internal/reflect/ConstantPool.getClassAt0(Ljava/lang/Object;I)Ljava/lang/Class;" (this oop i)
   (jmirror-of (cp-value oop i)))
 (defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this) (no-classes))
-(defnative "java/lang/Class.getNestHost0()Ljava/lang/Class;" (this) this)
+;; The nest host as javac lays nests out: the outermost class, reached through
+;; the declaring class or the enclosing method's class. The NestHost attribute
+;; itself isn't read, so a nest assembled another way (a hidden class defined
+;; as a nestmate) isn't seen. Reflection.areNestMates (below) and
+;; Class.isNestmateOf compare these.
+(define (nest-host c)
+  (let loop ([c c])
+    (let* ([inner (class-inner c)] [enc (class-enclosing c)]
+           [outer (or (and inner (car inner)) (and enc (car enc)))])
+      (if outer (loop (find-class outer)) c))))
+(defnative "java/lang/Class.getNestHost0()Ljava/lang/Class;" (this) (jmirror (nest-host (mirror-class this))))
 (defnative "java/lang/Class.getPermittedSubclasses0()[Ljava/lang/Class;" (this) #f)
 (defnative "java/lang/Class.isRecord0()Z" (this)
   (if (class-record (mirror-class this)) 1 0))
@@ -451,14 +461,28 @@
     (let* ([cname (jclass-cname c)] [desc (cadr meta)]
            ;; a serialization constructor allocates the serializable class and
            ;; runs its first non-serializable superclass's constructor on it
-           [alloc (or (eq-hashtable-ref serial-allocs ctor #f) cname)])
+           [serial (eq-hashtable-ref serial-allocs ctor #f)]
+           [alloc (or serial cname)])
       (jinit alloc)
       (let ([argv (reflect-arg-list (desc-args desc) args)])
         (invoke-wrapped
          (lambda ()
+           (when serial (check-allocatable alloc))
            (let ([o (jnew alloc)])
              (apply (method-proc cname (string-append "<init>" desc)) o argv)
              o)))))))
+
+;; HotSpot's check_valid_for_instantiation, for the class a serialization
+;; constructor allocates: the JVM's allocator throws these out of newInstance
+;; wrapped in InvocationTargetException. The ordinary path never gets here
+;; with an abstract class (ReflectionFactory.newConstructorAccessor refuses it
+;; first), and interfaces and arrays have no constructors.
+(define (check-allocatable cname)
+  (let ([c (find-class cname)])
+    (cond [(string=? cname "java/lang/Class") (jthrow "java/lang/IllegalAccessException" "java.lang.Class")]
+          [(or (memq (jclass-kind c) '(array interface)) (fxpositive? (fxlogand (jclass-flags c) #x400)))
+           (jthrow "java/lang/InstantiationException" (slashes->dots cname))]
+          [else (void)])))
 
 ;; --- serialization ---------------------------------------------------------------
 ;; ObjectStreamClass asks ReflectionFactory for a constructor that allocates
@@ -470,22 +494,37 @@
 ;; place of the constructor's.
 (define serial-allocs (make-weak-eq-hashtable))   ; Constructor -> class name to allocate
 
+;; as MethodHandleAccessorFactory.constructorInSuperclass: decl itself or a
+;; class up its superclass chain (an interface has none, an array's is Object)
+(define (constructor-in-superclass? dn cn)
+  (and (not (prim-name? dn))
+       (not (eq? (jclass-kind (find-class dn)) 'interface))
+       (let loop ([n dn])
+         (cond [(not n) #f]
+               [(string=? n cn) #t]
+               [else (loop (jclass-super (find-class n)))]))))
+
 (define-override! "jdk/internal/reflect/MethodHandleAccessorFactory.newSerializableConstructorAccessor(Ljava/lang/Class;Ljava/lang/reflect/Constructor;)Ljdk/internal/reflect/ConstructorAccessorImpl;"
   (lambda (decl ctor)
     (let ([dn (jclass-cname (mirror-class decl))]
           [cn (jclass-cname (mirror-class (jslot ctor (jfield-index "java/lang/reflect/Constructor" "clazz"))))])
-      (unless (class-assignable? dn cn)
+      (unless (constructor-in-superclass? dn cn)
         (jthrow "java/lang/UnsupportedOperationException"
                 (string-append (jstring->scheme ((jvirt ctor "toString()Ljava/lang/String;") ctor))
                                " not a superclass of " (slashes->dots dn))))
       ;; as the JDK: initialized here, so an ExceptionInInitializerError
       ;; isn't wrapped in an InvocationTargetException later
       (jinit dn)
-      (eq-hashtable-set! serial-allocs ctor dn)
-      (jinit "jdk/internal/reflect/DirectConstructorHandleAccessor")
-      ((method-proc "jdk/internal/reflect/DirectConstructorHandleAccessor"
-                    "nativeAccessor(Ljava/lang/reflect/Constructor;)Ljdk/internal/reflect/ConstructorAccessorImpl;")
-       ctor))))
+      ;; the accessor gets a copy of the Constructor that nothing else holds,
+      ;; and that copy is the table's key: the caller's object may be reused
+      ;; for another class (Objenesis hands Object's constructor to every
+      ;; class), and newInstance0 sees whatever the accessor holds
+      (let ([key (make-jobj (jobj-cls ctor) (vector-copy (jobj-slots ctor)))])
+        (eq-hashtable-set! serial-allocs key dn)
+        (jinit "jdk/internal/reflect/DirectConstructorHandleAccessor")
+        ((method-proc "jdk/internal/reflect/DirectConstructorHandleAccessor"
+                      "nativeAccessor(Ljava/lang/reflect/Constructor;)Ljdk/internal/reflect/ConstructorAccessorImpl;")
+         key)))))
 
 ;; A class's <clinit> is bound as its method global when it has one (jinit
 ;; calls it the same way). Part of the default serialVersionUID.
@@ -495,8 +534,11 @@
 ;; The first frame up the stack whose class has a loader other than the boot
 ;; and platform ones, as HotSpot answers it: a class defined at run time has
 ;; its defining loader, a classpath class the application loader. Null when
-;; there is none; VM.latestUserDefinedLoader makes that the platform loader.
-;; ObjectInputStream resolves class names through it.
+;; there is none (jolt calling Java through champaca.api has no Java frame of
+;; its own, where the JVM would see jolt's classes' loader);
+;; VM.latestUserDefinedLoader makes that the platform loader.
+;; ObjectInputStream resolves class names through it. APP_LOADER is bound by
+;; the time any program runs: initPhase3 initializes ClassLoaders at boot.
 (defnative "jdk/internal/misc/VM.latestUserDefinedLoader0()Ljava/lang/ClassLoader;" ()
   (let loop ([fs (java-frames)])
     (cond [(null? fs) #f]
@@ -506,10 +548,11 @@
              (and (top-level-bound? s) (top-level-value s)))]
           [else (loop (cdr fs))])))
 
-;; Every class is its own nest host here (getNestHost0 above), so two classes
-;; are nestmates only when they are one class.
+;; Reflection.verifyMemberAccess asks this for a private member, and
+;; ReflectionFactory when a serializable class's superclass has private
+;; constructors only.
 (defnative "jdk/internal/reflect/Reflection.areNestMates(Ljava/lang/Class;Ljava/lang/Class;)Z" (a b)
-  (if (eq? a b) 1 0))
+  (if (eq? (nest-host (mirror-class a)) (nest-host (mirror-class b))) 1 0))
 
 ;; --- field access (overrides of java.lang.reflect.Field) -----------------------------
 

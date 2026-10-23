@@ -90,6 +90,14 @@ public class SerialCheck {
     static class PrivSub extends PrivBase implements Serializable {}
     // looking a class up initializes it, before any instance exists
     static class LazyInit implements Serializable { static { System.out.println("LazyInit.<clinit>"); } }
+    static abstract class Abs {}
+    static class S1 extends Base {}
+    static class S2 extends Base {}
+    // nestmates: a nested class may reach the outer class's private members reflectively
+    private static String secret() { return "secret"; }
+    static class Nest {
+        static String callSecret() throws Exception { return (String) SerialCheck.class.getDeclaredMethod("secret").invoke(null); }
+    }
     interface Greeter { String hi(String n); }
     static class Handler implements InvocationHandler, Serializable {
         public Object invoke(Object p, Method m, Object[] a) { return "hi " + a[0]; }
@@ -171,6 +179,21 @@ public class SerialCheck {
         row("objenesis", ((Constructor<?>) ncfs.invoke(rf, Sub.class, Object.class.getDeclaredConstructor())).newInstance());
         try { ncfs.invoke(rf, Sub.class, String.class.getDeclaredConstructor()); row("wrong super", "made"); }
         catch (InvocationTargetException e) { row("wrong super", e.getCause()); }
+        // one Constructor object handed to two classes: each constructor keeps its own class
+        Constructor<?> bc = Base.class.getDeclaredConstructor();
+        Constructor<?> c1 = (Constructor<?>) ncfs.invoke(rf, S1.class, bc), c2 = (Constructor<?>) ncfs.invoke(rf, S2.class, bc);
+        row("reused constructor", c1.newInstance().getClass().getSimpleName() + " " + c2.newInstance().getClass().getSimpleName()
+            + " " + bc.newInstance().getClass().getSimpleName() + " " + ((Base) c1.newInstance()).tag);
+        // classes the JVM refuses to allocate, at creation or at newInstance
+        for (Class<?> decl : new Class<?>[]{Runnable.class, int[].class, Abs.class, Class.class}) {
+            try {
+                Constructor<?> c = (Constructor<?>) ncfs.invoke(rf, decl, Object.class.getDeclaredConstructor());
+                try { c.newInstance(); row("allocate " + decl.getSimpleName(), "made"); }
+                catch (InvocationTargetException e) { row("allocate " + decl.getSimpleName(), e.getCause()); }
+            } catch (InvocationTargetException e) { row("allocate " + decl.getSimpleName(), e.getCause()); }
+        }
+        row("nestmates", Nest.callSecret() + " " + Pt.class.getNestHost().getSimpleName() + " " + Pt.class.isNestmateOf(Sub.class) + " "
+            + new Object(){}.getClass().getNestHost().getSimpleName() + " " + Pt.class.isNestmateOf(String.class) + " " + int[].class.getNestHost().getSimpleName());
         try { write(new Plain()); row("plain", "written"); } catch (NotSerializableException e) { row("plain", e); }
         try { write(new Holder()); row("holder", "written"); } catch (NotSerializableException e) { row("holder", e); }
         // the stream's descriptor carries another serialVersionUID than the class

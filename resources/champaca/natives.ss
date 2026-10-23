@@ -705,7 +705,6 @@
 ;; --- VM and CDS ---------------------------------------------------------------
 
 (defnative "jdk/internal/misc/VM.initialize()V" () (void))
-(defnative "jdk/internal/misc/VM.latestUserDefinedLoader0()Ljava/lang/ClassLoader;" () #f)
 (defnative "jdk/internal/misc/VM.getNanoTimeAdjustment(J)J" (offset)
   (- (now-nanos) (* offset 1000000000)))
 (defnative "jdk/internal/misc/CDS.isDumpingClassList0()Z" () 0)
