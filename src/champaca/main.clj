@@ -149,7 +149,12 @@
         (swap! state assoc-in [:jars path] zf)
         zf)))
 
-(defn- package-dir [cname] (subs cname 0 (or (str/last-index-of cname "/") 0)))
+(defn- package-dir
+  "cname's package directory (\"java/util\"). A hidden class's /0x<n> suffix
+  (define-class!) is part of its name, as in runtime.ss."
+  [cname]
+  (let [n (str/replace cname #"/0x[0-9a-f]+$" "")]
+    (subs n 0 (or (str/last-index-of n "/") 0))))
 
 (defn- user-class-bytes
   "cname's bytes from the first classpath entry that has it. The first class
@@ -275,10 +280,11 @@
         entry (get-in @state [:package-entries d])]
     (cond
       ;; jdk means a package the runtime image owns, whose module the boot
-      ;; layer defines; anything else without a classpath entry (a class a
-      ;; loader defined, a generated one) has no version information either
-      ;; but gets a plain package, cached, like a classpath class's
-      (and (not entry) (not= :defined (get-in @state [:classes cname :origin])) (package-module d)) "jdk"
+      ;; layer defines (a hidden class the JDK defines in one is in it too);
+      ;; anything else without a classpath entry (a class a loader defined, a
+      ;; generated one) has no version information either but gets a plain
+      ;; package, cached, like a classpath class's
+      (and (not entry) (package-module d)) "jdk"
       (not entry) (str/join "\n" (concat ["user"] (repeat 6 "-") ["-"]))
       :else
       (let [m (jar-manifest entry)
