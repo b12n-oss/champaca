@@ -1,0 +1,9 @@
+defined: DefineCheck$Tiny2 7 tiny2 true false true java.lang.Object true false
+found through its loader: true true java.lang.LinkageError java.lang.NoClassDefFoundError java.lang.ClassFormatError java.lang.ClassFormatError java.lang.SecurityException
+defined on demand: DefineCheck$Tiny6 true true 6 java.lang.ClassNotFoundException true
+from a buffer: DefineCheck$Tiny3 three true
+lookup.defineClass: DefineCheck$Tiny4 4 false true true
+hidden: true true true 5 java.lang.ClassNotFoundException true false true true
+class data: the data true
+proxy: [run, compareTo] 7 proxied 99 true true true 2 true true true true
+proxy classes: true true java.lang.IllegalArgumentException true

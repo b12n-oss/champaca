@@ -469,6 +469,8 @@
 
 ;; --- loading -----------------------------------------------------------------------
 
+(declare class-map)
+
 (defn- normalize
   "Parse cname's classfile into the linker's class map."
   [cname]
@@ -476,21 +478,28 @@
         bytes (or user (timed :class-bytes #(jdk-class-bytes cname))
                   (throw (ex-info (str "class not found: " cname) {:class cname})))
         c (timed :cf-parse #(cf/parse bytes))]
-    {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
-     ;; only JDK classes are cached; user classes change between runs
-     :origin (if user :user :jdk)
-     :reflection (:reflection c)
-     :fields (mapv (fn [f] (merge {:name (:name f) :desc (:desc f) :flags (:flags f)
-                                   :static (cf/static? f) :constant (:constant f)}
-                                  (select-keys f [:signature :annotations :type-annotations])))
-                   (:fields c))
-     :methods (mapv (fn [m] (assoc m
-                                   :native (cf/native? m)
-                                   ;; kept in the startup cache, which drops
-                                   ;; the bytecode: inlining checks it first
-                                   :code-len (some-> (:code m) :code count)
-                                   :virtual (not (or (cf/static? m) (str/starts-with? (:name m) "<")))))
-                    (:methods c))}))
+    ;; only JDK classes are cached; user classes change between runs
+    (class-map cname c (if user :user :jdk))))
+
+(defn- class-map
+  "The linker's class map for cname from its parsed classfile c, of origin
+  :jdk, :user (the classpath) or :defined (bytes a class loader handed over
+  at run time, define-class!)."
+  [cname c origin]
+  {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
+   :origin origin
+   :reflection (:reflection c)
+   :fields (mapv (fn [f] (merge {:name (:name f) :desc (:desc f) :flags (:flags f)
+                                 :static (cf/static? f) :constant (:constant f)}
+                                (select-keys f [:signature :annotations :type-annotations])))
+                 (:fields c))
+   :methods (mapv (fn [m] (assoc m
+                                 :native (cf/native? m)
+                                 ;; kept in the startup cache, which drops
+                                 ;; the bytecode: inlining checks it first
+                                 :code-len (some-> (:code m) :code count)
+                                 :virtual (not (or (cf/static? m) (str/starts-with? (:name m) "<")))))
+                  (:methods c))})
 
 (defn- overridden?
   "Whether the runtime overrides cname's method m. An abstract method with an
@@ -676,7 +685,7 @@
     (if (get-in @state [:classes n])
       (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet
       (do (run! ensure-loaded! ifaces)
-          (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011
+          (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011 :origin :jdk
                       :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
                 linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
             (swap! state assoc-in [:classes n] linked)
@@ -684,6 +693,48 @@
               (record! :jdk [n] {:text text}) ; pure data, safe to cache whoever asked
               (scheme! text :interpret)))))
     n))
+
+(defn- rename-class
+  "The parsed class c under a new name: its own and every constant-pool
+  reference to itself. A hidden class keeps the name its bytes carry inside,
+  and two hidden classes from the same bytes would otherwise share the
+  methods and statics compiled under it."
+  [c new]
+  (let [old (:name c)
+        fix (fn [e] (cond (and (= :class (:tag e)) (= old (:name e))) (assoc e :name new)
+                          (= old (:class e)) (assoc e :class new)
+                          :else e))]
+    (-> c (assoc :name new) (update :cp #(into {} (map (fn [[i e]] [i (fix e)])) %)))))
+
+(def ^:private hidden-counter (atom 0x1000))
+
+(defn- define-class!
+  "ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
+  and Unsafe.defineClass0 (natives.ss define-class!): parse, link and
+  register a class from the bytes a loader handed over, which cross from
+  Scheme as a Latin-1 string since a byte array doesn't. given is the name
+  the caller expects, slashed, or nil. Answers \"ok <name>\", \"bad <message>\"
+  (not a class file), \"wrong <name in the bytes>\" or \"dup <name>\" (one
+  class table here, so a second definition of a name is a duplicate whatever
+  its loader), and the Scheme side throws the JVM's error for each. A hidden
+  class is named <name>/0x<n>, as HotSpot names one, and renamed inside.
+  Defined classes are never cached."
+  [given text hidden?]
+  (let [c (try (cf/parse (.getBytes ^String text "ISO-8859-1"))
+               (catch Exception e {:bad (or (ex-message e) (str (class e)))}))]
+    (cond
+      (:bad c) (str "bad " (:bad c))
+      (and given (not= given (:name c))) (str "wrong " (:name c))
+      (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
+      :else
+      (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
+            n (:name c)
+            info (class-map n c :defined)]
+        (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
+        (let [linked (link info)]
+          (swap! state assoc-in [:classes n] linked)
+          (scheme! (registration-text linked) :interpret))
+        (str "ok " n)))))
 
 ;; --- the JIT -----------------------------------------------------------------------
 
@@ -870,7 +921,7 @@
         (for [[k info] classes
               :let [s (if (string? info)
                         info
-                        (when (not= :user (:origin info))
+                        (when (= :jdk (:origin info))   ; not a classpath class, not one a loader defined
                           (pr-str (-> info
                                       (dissoc :parsed)
                                       (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms)))))))]
@@ -1027,6 +1078,7 @@
         (doseq [f runtime-files] (scheme! (slurp (io/resource f)))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (s/call "set-classpath!" (str/join ":" (:classpath @state)))
+  (s/call "set-define-class-hook!" define-class!)
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
   (s/call "set-annotation-class-hook!" (fn [iface keys]

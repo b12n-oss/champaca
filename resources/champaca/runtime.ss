@@ -735,6 +735,9 @@
                      (class-modifiers c))
         (set-mirror-module! m c)
         (index-mirror! m c)
+        ;; a class a loader defined reports that loader; every other class null
+        (let ([ld (hashtable-ref class-loaders (element-name c) #f)])
+          (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld)))
         (when (eq? (jclass-kind c) 'array)
           (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "componentType")
                        (jmirror (find-class (desc->class-name (substring (jclass-cname c) 1 (string-length (jclass-cname c))))))))
@@ -766,10 +769,23 @@
 (define user-classes (make-hashtable string-hash string=?))
 (define (user-class! name) (hashtable-set! user-classes name #t))
 (define (user-class? name) (hashtable-contains? user-classes name))
+;; classes defined at run time (ClassLoader.defineClass, natives.ss): the
+;; loader that defined each, for Class.getClassLoader and findLoadedClass,
+;; and the hidden ones (Lookup.defineHiddenClass), named <class>/0x<n> as
+;; HotSpot names them, which no lookup by name finds
+(define class-loaders (make-hashtable string-hash string=?))
+(define hidden-classes (make-hashtable string-hash string=?))
+(define (hidden-class? n) (hashtable-contains? hidden-classes n))
 (define (package-dir cname)
   (let loop ([i (fx- (string-length cname) 1)])
     (cond [(fx< i 0) ""]
-          [(char=? (string-ref cname i) #\/) (substring cname 0 i)]
+          [(char=? (string-ref cname i) #\/)
+           ;; a hidden class's /0x<n> isn't a package boundary (no package
+           ;; starts with a digit)
+           (if (and (fx< (fx+ i 2) (string-length cname))
+                    (char=? (string-ref cname (fx+ i 1)) #\0) (char=? (string-ref cname (fx+ i 2)) #\x))
+               (package-dir (substring cname 0 i))
+               (substring cname 0 i))]
           [else (loop (fx- i 1))])))
 ;; the class an array's module comes from: its element type, down through the
 ;; dimensions ("[[Ljava/sql/Date;" -> "java/sql/Date"); a primitive stays a
@@ -785,10 +801,16 @@
 ;; the package a class's module is looked up by: primitives count as java.lang
 (define (class-package c)
   (let ([e (element-name c)]) (if (prim-name? e) "java/lang" (package-dir e))))
+;; a classpath class is in the (boot loader's) unnamed module; a class in a
+;; package a module owns (a JDK class, a proxy in its dynamic module) is in
+;; that module; a class a loader defined is in that loader's unnamed module
 (define (class-module c)
-  (if (user-class? (element-name c))
-      unnamed-module
-      (hashtable-ref package-modules (class-package c) unnamed-module)))
+  (let ([e (element-name c)])
+    (cond [(user-class? e) unnamed-module]
+          [(hashtable-ref package-modules (class-package c) #f)]
+          [(hashtable-ref class-loaders e #f)
+           => (lambda (ld) ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld))]
+          [else unnamed-module])))
 (define (set-mirror-module! m c)
   (let ([mod (class-module c)])
     (when mod (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "module") mod))))
