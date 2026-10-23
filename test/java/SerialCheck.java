@@ -97,6 +97,8 @@ public class SerialCheck {
     private static String secret() { return "secret"; }
     static class Nest {
         static String callSecret() throws Exception { return (String) SerialCheck.class.getDeclaredMethod("secret").invoke(null); }
+        static Class<?> anon() { return new Object() {}.getClass(); }
+        static class Deeper {}
     }
     interface Greeter { String hi(String n); }
     static class Handler implements InvocationHandler, Serializable {
@@ -193,7 +195,8 @@ public class SerialCheck {
             } catch (InvocationTargetException e) { row("allocate " + decl.getSimpleName(), e.getCause()); }
         }
         row("nestmates", Nest.callSecret() + " " + Pt.class.getNestHost().getSimpleName() + " " + Pt.class.isNestmateOf(Sub.class) + " "
-            + new Object(){}.getClass().getNestHost().getSimpleName() + " " + Pt.class.isNestmateOf(String.class) + " " + int[].class.getNestHost().getSimpleName());
+            + new Object(){}.getClass().getNestHost().getSimpleName() + " " + Pt.class.isNestmateOf(String.class) + " " + int[].class.getNestHost().getSimpleName()
+            + " " + Nest.Deeper.class.getNestHost().getSimpleName() + " " + Nest.anon().getNestHost().getSimpleName() + " " + Nest.Deeper.class.isNestmateOf(Pt.class));
         try { write(new Plain()); row("plain", "written"); } catch (NotSerializableException e) { row("plain", e); }
         try { write(new Holder()); row("holder", "written"); } catch (NotSerializableException e) { row("holder", e); }
         // the stream's descriptor carries another serialVersionUID than the class

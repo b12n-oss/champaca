@@ -154,6 +154,10 @@ Strings come back as jolt strings, with any lone surrogate turned into U+FFFD ([
 (ldk/->clj (ldk/invoke "a,b,c" "split" ","))          ;=> ["a" "b" "c"]
 ```
 
+## Serialization
+
+`ObjectOutputStream` and `ObjectInputStream` work from jolt as any other classes do, on your own classes and the JDK's (`examples/serialization.clj`). A stream read from jolt resolves the class names it holds through the application class loader, the one your classpath answers to, as the JVM does when the reader is a class of the application's; a stream read by a class a loader of your own defined resolves through that loader ([how-it-works](how-it-works.md#natives)).
+
 ## Exceptions
 
 A Java exception that escapes a call turns into an `ex-info`. Its message is the exception's `toString`, and the exception object itself sits under `:java/exception` in the ex-data, so you can keep asking it things:

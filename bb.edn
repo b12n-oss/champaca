@@ -138,7 +138,8 @@
                               ["jolt-after-init" "jolt itself still works after init!"]
                               ["threads" "Java threads started from jolt"]
                               ["files" "files and MessageDigest from jolt"]
-                              ["fields" "Java fields read and written from jolt"]]
+                              ["fields" "Java fields read and written from jolt"]
+                              ["serialization" "Java serialization of the program's own classes from jolt"]]
                     ex-fails (doall
                               (for [[n what] examples
                                     :let [{:keys [out exit]} (run-limited 300 {:extra-env {"CHAMPACA_NPE_STRICT" "1"}}

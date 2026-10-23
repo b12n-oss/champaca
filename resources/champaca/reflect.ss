@@ -533,19 +533,23 @@
 
 ;; The first frame up the stack whose class has a loader other than the boot
 ;; and platform ones, as HotSpot answers it: a class defined at run time has
-;; its defining loader, a classpath class the application loader. Null when
-;; there is none (jolt calling Java through champaca.api has no Java frame of
-;; its own, where the JVM would see jolt's classes' loader);
-;; VM.latestUserDefinedLoader makes that the platform loader.
-;; ObjectInputStream resolves class names through it. APP_LOADER is bound by
-;; the time any program runs: initPhase3 initializes ClassLoaders at boot.
+;; its defining loader, a classpath class the application loader. When no
+;; frame qualifies the caller is jolt itself (champaca.api), whose classes
+;; the JVM would hold in the application loader, so that is the answer. The
+;; JVM's null (the platform loader, through VM.latestUserDefinedLoader) is
+;; for a stack of JDK code alone, which here also gets the application
+;; loader: a Timer or common-pool thread deserializing from JDK code alone
+;; sees more than on the JVM, never less. ObjectInputStream resolves class
+;; names through it. APP_LOADER is bound by the time any program runs:
+;; initPhase3 initializes ClassLoaders at boot.
+(define (app-loader)
+  (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
+    (and (top-level-bound? s) (top-level-value s))))
 (defnative "jdk/internal/misc/VM.latestUserDefinedLoader0()Ljava/lang/ClassLoader;" ()
   (let loop ([fs (java-frames)])
-    (cond [(null? fs) #f]
+    (cond [(null? fs) (app-loader)]
           [(hashtable-ref class-loaders (caar fs) #f)]
-          [(user-class? (caar fs))
-           (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
-             (and (top-level-bound? s) (top-level-value s)))]
+          [(user-class? (caar fs)) (app-loader)]
           [else (loop (cdr fs))])))
 
 ;; Reflection.verifyMemberAccess asks this for a private member, and
