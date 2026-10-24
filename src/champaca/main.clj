@@ -812,7 +812,8 @@
 
 (def ^:private runtime-files
   "The Scheme runtime, in load order."
-  ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"])
+  ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"
+   "champaca/net.ss"])
 
 ;; The text of a helpful NPE message, from the failing method's bytecode
 ;; (champaca.npe, loaded on the first message so other runs don't pay for

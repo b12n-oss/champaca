@@ -915,7 +915,6 @@
 (defnative "sun/nio/ch/IOUtil.iovMax()I" () 1024)
 (defnative "sun/nio/ch/IOUtil.writevMax()J" () #x7fffffffffffffff)
 (defnative "sun/nio/ch/IOUtil.fdLimit()I" () 10240)
-(defnative "sun/nio/ch/IOUtil.configureBlocking(Ljava/io/FileDescriptor;Z)V" (fdo blocking) (void))
 
 ;; no signalling of native threads: current() is 0, so nothing is signalled
 (defnative "sun/nio/ch/NativeThread.init()V" () (void))
