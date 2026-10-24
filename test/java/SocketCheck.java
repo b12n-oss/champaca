@@ -222,6 +222,57 @@ public class SocketCheck {
             }
         }
 
+        // closing from another thread wakes a thread blocked in accept or read
+        try (ServerSocket ss = new ServerSocket(0, 50, LOOP)) {
+            CountDownLatch entering = new CountDownLatch(1);
+            Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(ss::accept); });
+            entering.await(); Thread.sleep(100);
+            ss.close();
+            row("close wakes accept", blocked.get(10, TimeUnit.SECONDS) + " " + ss.isClosed());
+        }
+        try (ServerSocket ss = new ServerSocket(0, 50, LOOP)) {
+            Future<?> f = serve(ss, c -> { c.getInputStream().read(); });
+            Socket s = new Socket(LOOP, ss.getLocalPort());
+            CountDownLatch entering = new CountDownLatch(1);
+            Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(() -> s.getInputStream().read()); });
+            entering.await(); Thread.sleep(100);
+            s.close();
+            row("close wakes read", blocked.get(10, TimeUnit.SECONDS) + " " + s.isClosed());
+            f.get();
+        }
+        try (java.nio.channels.ServerSocketChannel ssc = java.nio.channels.ServerSocketChannel.open()) {
+            ssc.bind(new InetSocketAddress(LOOP, 0));
+            CountDownLatch entering = new CountDownLatch(1);
+            Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(ssc::accept); });
+            entering.await(); Thread.sleep(100);
+            ssc.close();
+            row("close wakes channel accept", blocked.get(10, TimeUnit.SECONDS));
+        }
+        try (java.nio.channels.ServerSocketChannel ssc = java.nio.channels.ServerSocketChannel.open()) {
+            ssc.bind(new InetSocketAddress(LOOP, 0));
+            Future<java.nio.channels.SocketChannel> accepted = pool.submit(ssc::accept);
+            java.nio.channels.SocketChannel sc = java.nio.channels.SocketChannel.open(ssc.getLocalAddress());
+            accepted.get();
+            CountDownLatch entering = new CountDownLatch(1);
+            Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(() -> sc.read(java.nio.ByteBuffer.allocate(8))); });
+            entering.await(); Thread.sleep(100);
+            sc.close();
+            row("close wakes channel read", blocked.get(10, TimeUnit.SECONDS) + " " + sc.isOpen());
+            // and an interrupt of the blocked thread closes the channel it is reading
+            java.nio.channels.SocketChannel sc2 = java.nio.channels.SocketChannel.open(ssc.getLocalAddress());
+            accepted = pool.submit(ssc::accept); accepted.get();
+            CountDownLatch entering2 = new CountDownLatch(1);
+            Thread[] reader = new Thread[1];
+            Future<String> interrupted = pool.submit(() -> {
+                reader[0] = Thread.currentThread(); entering2.countDown();
+                String r = fails(() -> sc2.read(java.nio.ByteBuffer.allocate(8)));
+                return r + " " + Thread.currentThread().isInterrupted();
+            });
+            entering2.await(); Thread.sleep(100);
+            reader[0].interrupt();
+            row("interrupt wakes channel read", interrupted.get(10, TimeUnit.SECONDS) + " " + sc2.isOpen());
+        }
+
         // nobody listening: the port the server just released
         int freed;
         try (ServerSocket ss = new ServerSocket(0, 50, LOOP)) { freed = ss.getLocalPort(); }

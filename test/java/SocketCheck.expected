@@ -16,6 +16,11 @@ peer gone: java.net.SocketException true
 http: 200 OK | text/plain; charset=utf-8 | SocketCheck | 58 | you asked GET /path?q=1 HTTP/1.1 with Host: 127.0.0.1:port
 http 404: 404 java.io.FileNotFoundException gone
 channels: true true 12 channel ping | 4 true true false true
+close wakes accept: java.net.SocketException: Socket closed true
+close wakes read: java.net.SocketException: Socket closed true
+close wakes channel accept: java.nio.channels.AsynchronousCloseException
+close wakes channel read: java.nio.channels.AsynchronousCloseException false
+interrupt wakes channel read: java.nio.channels.ClosedByInterruptException true false
 refused: java.net.ConnectException: Connection refused | java.net.ConnectException: Connection refused
 bind twice: java.net.BindException: Address already in use
 unconnected: java.net.SocketException: Socket is not connected | false -1 0

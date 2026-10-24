@@ -354,6 +354,41 @@
       (io-error "Configure blocking failed"))
     (void)))
 
+;; --- waking a blocked thread: sun.nio.ch.NativeThread ----------------------------------
+;; A thread in a blocking socket call (accept, read, poll) is woken when
+;; another thread closes the socket: NioSocketImpl and the channels remember
+;; the reader's and writer's native thread (current0), pre-close the fd, and
+;; signal them (signal0); the interrupted call returns EINTR (-3, or 0 from
+;; poll), the Java code sees the socket closed and throws "Socket closed" or
+;; AsynchronousCloseException. As the JDK's NativeThread.c: the thread id is
+;; pthread_self, the signal SIGIO on macOS and SIGRTMAX-2 (62) on Linux,
+;; delivered with pthread_kill to a handler installed without SA_RESTART so
+;; the call is not restarted. The handler has to be C (a Scheme procedure
+;; can't run on a thread that is inside a __collect_safe call), and does
+;; nothing: libc's getpid, which ignores the signal number it is handed.
+(define wake-signal (if net-macos? 23 62))
+(deflibc libc-pthread-self "pthread_self" #f () uptr)
+(deflibc libc-pthread-kill "pthread_kill" #f (uptr int) int)
+(deflibc libc-sigaction "sigaction" #f (int uptr uptr) int)
+(define (install-wake-handler!)
+  ;; struct sigaction: the handler at 0, sa_mask then sa_flags (macOS: a
+  ;; 4-byte mask at 8, flags at 12, 16 bytes; glibc: a 128-byte mask at 8,
+  ;; flags at 136, sa_restorer at 144, 152 bytes), everything else zero
+  (let* ([size (if net-macos? 16 152)] [sa (foreign-alloc size)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i size)) (foreign-set! 'unsigned-8 sa i 0))
+    (foreign-set! 'uptr sa 0 (foreign-entry "getpid"))
+    (let* ([r (libc-sigaction wake-signal sa 0)] [e (errno)])
+      (foreign-free sa)
+      (when (< r 0) (jthrow "java/lang/InternalError" (string-append "sigaction: " (strerror-text e)))))))
+(defnative "sun/nio/ch/NativeThread.init()V" () (install-wake-handler!))
+(defnative "sun/nio/ch/NativeThread.current0()J" () (libc-pthread-self))
+(defnative "sun/nio/ch/NativeThread.signal0(J)V" (tid)
+  (let ([r (libc-pthread-kill tid wake-signal)])
+    ;; ESRCH: the thread is gone, nothing to wake
+    (unless (or (fx= r 0) (fx= r 3)) (jthrow "java/lang/InternalError" (string-append "pthread_kill: " (strerror-text r))))
+    (void)))
+(defnative "sun/nio/ch/NativeThread.supportPendingSignals0()Z" () 0)
+
 ;; --- java.net.InetAddress ------------------------------------------------------------
 (defnative "java/net/InetAddress.init()V" () (void))
 (defnative "java/net/Inet4Address.init()V" () (void))

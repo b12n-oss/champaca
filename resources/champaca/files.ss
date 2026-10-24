@@ -917,10 +917,6 @@
 (defnative "sun/nio/ch/IOUtil.fdLimit()I" () 10240)
 
 ;; no signalling of native threads: current() is 0, so nothing is signalled
-(defnative "sun/nio/ch/NativeThread.init()V" () (void))
-(defnative "sun/nio/ch/NativeThread.current0()J" () 0)
-(defnative "sun/nio/ch/NativeThread.signal0(J)V" (tid) (void))
-(defnative "sun/nio/ch/NativeThread.supportPendingSignals0()Z" () 0)
 
 (defnative "jdk/internal/misc/Unsafe.reallocateMemory0(JJ)J" (this a n)
   (let ([b (libc-realloc a (max n 1))])
