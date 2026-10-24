@@ -916,8 +916,6 @@
 (defnative "sun/nio/ch/IOUtil.writevMax()J" () #x7fffffffffffffff)
 (defnative "sun/nio/ch/IOUtil.fdLimit()I" () 10240)
 
-;; no signalling of native threads: current() is 0, so nothing is signalled
-
 (defnative "jdk/internal/misc/Unsafe.reallocateMemory0(JJ)J" (this a n)
   (let ([b (libc-realloc a (max n 1))])
     (when (eqv? b 0) (jthrow "java/lang/OutOfMemoryError" "Unable to allocate"))

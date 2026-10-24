@@ -331,8 +331,8 @@
 ;; the JDK points a closing socket's fd at a dead descriptor first, so a
 ;; thread still using it fails instead of touching a reused number: one end
 ;; of a socketpair whose other end is closed, so a read sees the end and a
-;; write EPIPE. Reached only when another thread is in a read or write on
-;; the socket, which NativeThread.current0 answering 0 never reports.
+;; write EPIPE. Reached when another thread is in a read, write or accept
+;; on the socket (NativeThread, below), just before that thread is signalled.
 (define preclose-fd #f)
 (define (preclose-fd!)
   (or preclose-fd
@@ -365,7 +365,11 @@
 ;; delivered with pthread_kill to a handler installed without SA_RESTART so
 ;; the call is not restarted. The handler has to be C (a Scheme procedure
 ;; can't run on a thread that is inside a __collect_safe call), and does
-;; nothing: libc's getpid, which ignores the signal number it is handed.
+;; nothing: libc's getpid, async-signal-safe, which takes no argument, so
+;; the signal number arrives in a register it never reads (the arm64 and
+;; x86_64 conventions let a callee ignore extra arguments). Chez's own
+;; keyboard interrupt is a signal handled while Scheme code runs, so a
+;; signal landing on a thread in Scheme code is nothing new to it.
 (define wake-signal (if net-macos? 23 62))
 (deflibc libc-pthread-self "pthread_self" #f () uptr)
 (deflibc libc-pthread-kill "pthread_kill" #f (uptr int) int)
@@ -384,8 +388,11 @@
 (defnative "sun/nio/ch/NativeThread.current0()J" () (libc-pthread-self))
 (defnative "sun/nio/ch/NativeThread.signal0(J)V" (tid)
   (let ([r (libc-pthread-kill tid wake-signal)])
-    ;; ESRCH: the thread is gone, nothing to wake
-    (unless (or (fx= r 0) (fx= r 3)) (jthrow "java/lang/InternalError" (string-append "pthread_kill: " (strerror-text r))))
+    ;; ESRCH (3) and EINVAL (22): the thread is gone, nothing to wake (glibc
+    ;; before 2.34 may fault instead of answering ESRCH for an exited
+    ;; thread; the JDK has the same exposure, and its locks make the window
+    ;; small)
+    (unless (memv r '(0 3 22)) (jthrow "java/lang/InternalError" (string-append "pthread_kill: " (strerror-text r))))
     (void)))
 (defnative "sun/nio/ch/NativeThread.supportPendingSignals0()Z" () 0)
 

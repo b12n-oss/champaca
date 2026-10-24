@@ -19,6 +19,7 @@ channels: true true 12 channel ping | 4 true true false true
 close wakes accept: java.net.SocketException: Socket closed true
 close wakes read: java.net.SocketException: Socket closed true
 close wakes channel accept: java.nio.channels.AsynchronousCloseException
+close wakes file channel read: java.nio.channels.AsynchronousCloseException false
 close wakes channel read: java.nio.channels.AsynchronousCloseException false
 interrupt wakes channel read: java.nio.channels.ClosedByInterruptException true false
 refused: java.net.ConnectException: Connection refused | java.net.ConnectException: Connection refused

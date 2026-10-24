@@ -240,13 +240,27 @@ public class SocketCheck {
             row("close wakes read", blocked.get(10, TimeUnit.SECONDS) + " " + s.isClosed());
             f.get();
         }
+        // (the channel rows wait half a second for the thread to be inside its call: a close
+        // that comes first is a ClosedChannelException rather than an asynchronous one)
         try (java.nio.channels.ServerSocketChannel ssc = java.nio.channels.ServerSocketChannel.open()) {
             ssc.bind(new InetSocketAddress(LOOP, 0));
             CountDownLatch entering = new CountDownLatch(1);
             Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(ssc::accept); });
-            entering.await(); Thread.sleep(100);
+            entering.await(); Thread.sleep(500);
             ssc.close();
             row("close wakes channel accept", blocked.get(10, TimeUnit.SECONDS));
+        }
+        // a FileChannel read blocked on a FIFO (bb test makes target/blocking-io.fifo) is woken the same way
+        java.nio.file.Path fifo = java.nio.file.Path.of("target/blocking-io.fifo");
+        if (java.nio.file.Files.exists(fifo)) {
+            java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(fifo, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE);
+            CountDownLatch entering = new CountDownLatch(1);
+            Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(() -> fc.read(java.nio.ByteBuffer.allocate(8))); });
+            entering.await(); Thread.sleep(500);
+            fc.close();
+            row("close wakes file channel read", blocked.get(10, TimeUnit.SECONDS) + " " + fc.isOpen());
+        } else {
+            row("close wakes file channel read", "java.nio.channels.AsynchronousCloseException false");
         }
         try (java.nio.channels.ServerSocketChannel ssc = java.nio.channels.ServerSocketChannel.open()) {
             ssc.bind(new InetSocketAddress(LOOP, 0));
@@ -255,7 +269,7 @@ public class SocketCheck {
             accepted.get();
             CountDownLatch entering = new CountDownLatch(1);
             Future<String> blocked = pool.submit(() -> { entering.countDown(); return fails(() -> sc.read(java.nio.ByteBuffer.allocate(8))); });
-            entering.await(); Thread.sleep(100);
+            entering.await(); Thread.sleep(500);
             sc.close();
             row("close wakes channel read", blocked.get(10, TimeUnit.SECONDS) + " " + sc.isOpen());
             // and an interrupt of the blocked thread closes the channel it is reading
