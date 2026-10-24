@@ -3,14 +3,16 @@ unknown host: java.net.UnknownHostException
 server socket: true true localhost/127.0.0.1 true true true
 accept timeout: java.net.SocketTimeoutException: Accept timed out
 echo: echo hi from true /127.0.0.1 true | true true true true localhost/127.0.0.1 true null
-closed: false false
+before close: false false
+reset before accept: true true true true true true
+urgent data: sent false
 options: true false true 7 -1 1234 true true false false
 read timeout: java.net.SocketTimeoutException: Read timed out | late
 half close: true got 3 then eof -1 java.net.SocketException
 available: 5 5 [1, 2, 3, 4, 5]
 large transfer: 1048576 true
 eof seen: 42 -1
-peer gone: true true
+peer gone: java.net.SocketException true
 http: 200 OK | text/plain; charset=utf-8 | SocketCheck | 58 | you asked GET /path?q=1 HTTP/1.1 with Host: 127.0.0.1:port
 http 404: 404 java.io.FileNotFoundException gone
 channels: true true 12 channel ping | 4 true true false true

@@ -57,7 +57,28 @@ public class SocketCheck {
                 row("echo", r.readLine() + " | " + s.isConnected() + " " + s.isBound() + " " + (s.getPort() == ss.getLocalPort()) + " " + (s.getLocalPort() > 0)
                     + " " + s.getInetAddress() + " " + s.getRemoteSocketAddress().equals(new InetSocketAddress(LOOP, ss.getLocalPort())) + " " + r.readLine());
                 f.get();
-                row("closed", s.isClosed() + " " + s.isInputShutdown());
+                row("before close", s.isClosed() + " " + s.isInputShutdown());
+            }
+
+            // a client that reset its connection before the server accepted it: accept still answers
+            for (int i = 0; i < 3; i++) {
+                try (Socket s = new Socket(LOOP, ss.getLocalPort())) { s.setSoLinger(true, 0); }
+            }
+            StringBuilder aborted = new StringBuilder();
+            for (int i = 0; i < 3; i++) {
+                // the peer address of a connection reset before accept is system-dependent (macOS's JVM shows 255.255.255.255)
+                try (Socket a = ss.accept()) { aborted.append(a.isConnected()).append(' ').append(a.getInetAddress() != null).append(' '); }
+                catch (IOException e) { aborted.append(e.getClass().getName()).append(' '); }
+            }
+            row("reset before accept", aborted.toString().trim());
+
+            // urgent data is sent (the receiver drops it unless OOBINLINE is on)
+            f = serve(ss, c -> { c.getInputStream().read(); });
+            try (Socket s = new Socket(LOOP, ss.getLocalPort())) {
+                s.sendUrgentData(7);
+                s.getOutputStream().write(1);
+                row("urgent data", "sent " + s.getOOBInline());
+                f.get();
             }
 
             // options
@@ -151,7 +172,7 @@ public class SocketCheck {
                 Thread.sleep(50);
                 String outcome = "no exception";
                 try { for (int i = 0; i < 200; i++) { s.getOutputStream().write(new byte[8192]); } }
-                catch (IOException e) { outcome = (e instanceof SocketException) + " " + (e.getMessage() != null); }
+                catch (IOException e) { outcome = e.getClass().getName() + " " + Set.of("Broken pipe", "Connection reset").contains(e.getMessage()); }
                 row("peer gone", outcome);
             }
 

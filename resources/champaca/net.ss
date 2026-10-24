@@ -49,6 +49,7 @@
 (deflibc libc-shutdown "shutdown" #f (int int) int)
 (deflibc libc-ioctl "ioctl" (__varargs_after 2) (int unsigned-long uptr) int)
 (deflibc libc-dup2 "dup2" #f (int int) int)
+(deflibc libc-socketpair "socketpair" #f (int int int uptr) int)
 (deflibc libc-gethostname "gethostname" #f (uptr size_t) int)
 (deflibc libc-freeaddrinfo "freeaddrinfo" #f (uptr) void)
 (deflibc libc-gai-strerror "gai_strerror" #f (int) string)
@@ -115,19 +116,22 @@
 (define (peer-sockaddr fd k) (with-sockaddr-out (lambda (sa len) (check-socket (libc-getpeername fd sa len)) (k sa))))
 
 ;; --- options ---------------------------------------------------------------------------
+;; errno is read right after the libc call, before the buffers are freed (free
+;; may change it); (failed e) runs after the frees when r is negative
+(define (after-free r e failed) (when (< r 0) (failed e)) r)
 (define (set-int-option! fd level opt v)
   (let ([buf (foreign-alloc 4)])
     (foreign-set! 'int buf 0 v)
-    (let ([r (libc-setsockopt fd level opt buf 4)])
+    (let* ([r (libc-setsockopt fd level opt buf 4)] [e (errno)])
       (foreign-free buf)
-      (check-socket r))))
+      (after-free r e socket-error))))
 (define (get-int-option fd level opt)
   (let ([buf (foreign-alloc 8)] [len (foreign-alloc 4)])
     (foreign-set! 'int buf 0 0)
     (foreign-set! 'unsigned-32 len 0 4)
-    (let* ([r (libc-getsockopt fd level opt buf len)] [v (foreign-ref 'int buf 0)])
+    (let* ([r (libc-getsockopt fd level opt buf len)] [e (errno)] [v (foreign-ref 'int buf 0)])
       (foreign-free buf) (foreign-free len)
-      (check-socket r)
+      (after-free r e socket-error)
       v)))
 (define (linger? level opt) (and (fx= level (net-const 'SOL_SOCKET)) (fx= opt (net-const 'SO_LINGER))))
 ;; SO_LINGER carries struct linger: -1 when off, else the seconds
@@ -135,22 +139,28 @@
   (let ([buf (foreign-alloc 8)] [len (foreign-alloc 4)])
     (foreign-set! 'int buf 0 0) (foreign-set! 'int buf 4 0)
     (foreign-set! 'unsigned-32 len 0 8)
-    (let* ([r (libc-getsockopt fd (net-const 'SOL_SOCKET) (net-const 'SO_LINGER) buf len)]
+    (let* ([r (libc-getsockopt fd (net-const 'SOL_SOCKET) (net-const 'SO_LINGER) buf len)] [e (errno)]
            [on (foreign-ref 'int buf 0)] [secs (foreign-ref 'int buf 4)])
       (foreign-free buf) (foreign-free len)
-      (check-socket r)
+      (after-free r e socket-error)
       (if (fx= on 0) -1 secs))))
 (define (set-linger! fd arg)
   (let ([buf (foreign-alloc 8)])
     (foreign-set! 'int buf 0 (if (fx>= arg 0) 1 0))
     (foreign-set! 'int buf 4 (if (fx>= arg 0) arg 0))
-    (let ([r (libc-setsockopt fd (net-const 'SOL_SOCKET) (net-const 'SO_LINGER) buf 8)])
+    (let* ([r (libc-setsockopt fd (net-const 'SOL_SOCKET) (net-const 'SO_LINGER) buf 8)] [e (errno)])
       (foreign-free buf)
-      (check-socket r))))
-;; a socket of ours never raises SIGPIPE on macOS; Linux's writes say so per call
+      (after-free r e socket-error))))
+;; a socket of ours never raises SIGPIPE on macOS (Linux's writes say so per
+;; call). Best effort: setsockopt fails with EINVAL on a socket whose peer
+;; has already reset it, which accept hands out too, and a peer that is gone
+;; can't be written to anyway
 (define (quiet-pipe! fd)
   (when (net-const 'SO_NOSIGPIPE)
-    (set-int-option! fd (net-const 'SOL_SOCKET) (net-const 'SO_NOSIGPIPE) 1)))
+    (let ([buf (foreign-alloc 4)])
+      (foreign-set! 'int buf 0 1)
+      (libc-setsockopt fd (net-const 'SOL_SOCKET) (net-const 'SO_NOSIGPIPE) buf 4)
+      (foreign-free buf))))
 
 ;; --- sun.nio.ch.Net ------------------------------------------------------------------
 (define (defnet sig proc) (define-native! (string-append "sun/nio/ch/Net." sig) proc))
@@ -174,7 +184,10 @@
 (defnet "socket0(ZZZZ)I"
   (lambda (ipv6 stream reuse fast)
     (let ([fd (check-socket (libc-socket 2 (if (eqv? stream 1) 1 2) 0))])
-      (when (eqv? reuse 1) (set-int-option! fd (net-const 'SOL_SOCKET) (net-const 'SO_REUSEADDR) 1))
+      ;; the new fd doesn't leak when its option can't be set
+      (when (eqv? reuse 1)
+        (guard (e [#t (libc-close fd) (raise e)])
+          (set-int-option! fd (net-const 'SOL_SOCKET) (net-const 'SO_REUSEADDR) 1)))
       (quiet-pipe! fd)
       fd)))
 (defnet "bind0(Ljava/io/FileDescriptor;ZZLjava/net/InetAddress;I)V"
@@ -201,8 +214,8 @@
      (lambda (sa len)
        (let ([r (released-call* (lambda () (libc-accept-blocking (net-fd fdo) sa len)))])
          (if (fx>= r 0)
-             (begin (quiet-pipe! r)
-                    (fdo-fd-set! newfdo r)
+             (begin (fdo-fd-set! newfdo r)   ; the caller owns the fd from here, whatever follows
+                    (quiet-pipe! r)
                     (vector-set! (jarr-vec isaa) 0 (inet-socket-address (sockaddr-ip sa) (sockaddr-port sa)))
                     1)
              (let ([e (errno)])
@@ -234,11 +247,12 @@
     (foreign-set! 'short pfd 4 events)
     (foreign-set! 'short pfd 6 0)
     (let* ([r (released-call* (lambda () (libc-poll-blocking pfd 1 (if (< timeout 0) -1 (min timeout #x7fffffff)))))]
+           [e (errno)]
            [revents (foreign-ref 'short pfd 6)])
       (foreign-free pfd)
       (cond [(fx>= r 0) (if (fx= r 0) 0 revents)]
-            [(fx= (errno) 4) 0]
-            [else (socket-error (errno))]))))
+            [(fx= e 4) 0]
+            [else (socket-error e)]))))
 (defnet "poll(Ljava/io/FileDescriptor;IJ)I" (lambda (fdo events timeout) (poll-fd (net-fd fdo) events timeout)))
 ;; whether a non-blocking connect finished; its failure is thrown here
 (defnet "pollConnect(Ljava/io/FileDescriptor;J)Z"
@@ -253,17 +267,20 @@
   (lambda (fdo)
     (let ([buf (foreign-alloc 4)])
       (foreign-set! 'int buf 0 0)
-      (let* ([r (libc-ioctl (net-fd fdo) (net-const 'FIONREAD) buf)] [n (foreign-ref 'int buf 0)])
+      (let* ([r (libc-ioctl (net-fd fdo) (net-const 'FIONREAD) buf)] [e (errno)] [n (foreign-ref 'int buf 0)])
         (foreign-free buf)
-        (check-socket r)
+        (after-free r e socket-error)
         n))))
 (defnet "sendOOB(Ljava/io/FileDescriptor;B)I"
   (lambda (fdo b)
     (let ([buf (foreign-alloc 1)])
       (foreign-set! 'unsigned-8 buf 0 (fxlogand b 255))
-      (let ([r (released-call* (lambda () (libc-send-blocking (net-fd fdo) buf 1 (fxlogor 1 (net-const 'MSG_NOSIGNAL)))))])
+      (let* ([r (released-call* (lambda () (libc-send-blocking (net-fd fdo) buf 1 (fxlogor 1 (net-const 'MSG_NOSIGNAL)))))]
+             [e (errno)])
         (foreign-free buf)
-        (socket-status r #f)))))
+        (socket-status* r e #f #f)))))
+;; pending urgent data isn't drained (the JDK reads it with MSG_OOB); nothing
+;; on the blocking paths asks
 (defnet "discardOOB(Ljava/io/FileDescriptor;)Z" (lambda (fdo) 0))
 
 ;; jdk.net's platform options (keep-alive tuning, quick ack, don't fragment,
@@ -275,16 +292,20 @@
     "jdk/net/LinuxSocketOptions.incomingNapiIdSupported0()Z" "jdk/net/LinuxSocketOptions.ipDontFragmentSupported0()Z"))
 
 ;; --- the dispatchers ----------------------------------------------------------------
-;; IOStatus as files.ss: -1 end of stream, -2 unavailable, -3 interrupted; a
-;; peer that reset the connection is the JDK's ConnectionResetException
-(define (socket-status r reading)
+;; IOStatus as files.ss: -1 end of stream, -2 unavailable, -3 interrupted. A
+;; peer that reset the connection is the JDK's ConnectionResetException on
+;; the dispatcher's reads and writes (reset?), which NioSocketImpl turns into
+;; SocketException "Connection reset"; any other failure, a broken pipe
+;; included, is an IOException with strerror's bare text, as the JDK's
+;; convertReturnVal throws it (so "Broken pipe" reads as on the JVM)
+(define (socket-status* r e reading reset?)
   (cond [(fx> r 0) r]
         [(fx= r 0) (if reading -1 0)]
-        [else (let ([e (errno)])
-                (cond [(fx= e (net-const 'EAGAIN)) -2]
-                      [(fx= e 4) -3]
-                      [(memv e (list (net-const 'ECONNRESET) 32)) (jthrow "sun/net/ConnectionResetException" "Connection reset")]
-                      [else (jthrow "java/io/IOException" (string-append (if reading "Read failed" "Write failed") " (" (strerror-text e) ")"))]))]))
+        [(fx= e (net-const 'EAGAIN)) -2]
+        [(fx= e 4) -3]
+        [(and reset? (fx= e (net-const 'ECONNRESET))) (jthrow "sun/net/ConnectionResetException" "Connection reset")]
+        [else (jthrow "java/io/IOException" (strerror-text e))]))
+(define (socket-status r reading) (socket-status* r (if (< r 0) (errno) 0) reading #t))
 (define (socket-write fd addr n)
   (if (fx= (net-const 'MSG_NOSIGNAL) 0)
       (fd-write fd addr n)
@@ -305,11 +326,23 @@
     (when (fx>= fd 0) (when (< (libc-close fd) 0) (io-error "Close failed")))
     (void)))
 ;; the JDK points a closing socket's fd at a dead descriptor first, so a
-;; thread still using it fails instead of touching a reused number
+;; thread still using it fails instead of touching a reused number: one end
+;; of a socketpair whose other end is closed, so a read sees the end and a
+;; write EPIPE. Reached only when another thread is in a read or write on
+;; the socket, which NativeThread.current0 answering 0 never reports.
 (define preclose-fd #f)
+(define (preclose-fd!)
+  (or preclose-fd
+      (let ([sv (foreign-alloc 8)])
+        (let* ([r (libc-socketpair 1 1 0 sv)] [e (errno)] [a (foreign-ref 'int sv 0)] [b (foreign-ref 'int sv 4)])
+          (foreign-free sv)
+          (after-free r e socket-error)
+          (libc-close b)
+          (quiet-pipe! a)
+          (set! preclose-fd a)
+          a))))
 (defnative "sun/nio/ch/UnixDispatcher.preClose0(Ljava/io/FileDescriptor;)V" (fdo)
-  (unless preclose-fd (set! preclose-fd (libc-open-string "/dev/null" 2 0)))
-  (when (< (libc-dup2 preclose-fd (net-fd fdo)) 0) (io-error "Pre-close failed"))
+  (when (< (libc-dup2 (preclose-fd!) (net-fd fdo)) 0) (io-error "Pre-close failed"))
   (void))
 (defnative "sun/nio/ch/IOUtil.configureBlocking(Ljava/io/FileDescriptor;Z)V" (fdo blocking)
   (let* ([fd (fdo-fd fdo)] [flags (libc-fcntl-int fd 3 0)] [nb (net-const 'O_NONBLOCK)])
