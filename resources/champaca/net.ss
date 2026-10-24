@@ -9,9 +9,12 @@
 ;; no, so every address is a sockaddr_in and an Inet6Address is refused with
 ;; the JDK's "Protocol family unavailable". Blocking calls (connect, accept,
 ;; poll, read, write, getaddrinfo) give the GIL up through __collect_safe
-;; entries. A write to a socket whose peer is gone would raise SIGPIPE and end
-;; the process: every socket gets SO_NOSIGPIPE on macOS, and a write goes
-;; through send with MSG_NOSIGNAL on Linux.
+;; entries. A write to a socket whose peer is gone raises SIGPIPE, which
+;; would end a process that hasn't ignored it. Chez's runtime ignores it
+;; (jolt's process.ss notes the same, and a probe found SIG_IGN before
+;; champaca boots), so the write fails with EPIPE; for a host that doesn't,
+;; every socket also gets SO_NOSIGPIPE on macOS and a write goes through
+;; send with MSG_NOSIGNAL on Linux.
 
 (define net-macos? fs-macos?)
 
