@@ -57,6 +57,27 @@ Add champaca as a dependency. A local checkout is the simplest:
 
 Call `init!` once per process, before any other champaca function. A second call returns `:ok` and does nothing else, and that includes ignoring a different `:classpath`, so pass the full classpath the first time. To load classes from your own jars: `(ldk/init! {:classpath ["lib/gson-2.13.2.jar"]})`. [jars-and-modules](jars-and-modules.md) has the details.
 
+## From an editor
+
+`bb examples` lists the programs in `examples/`, and `bb example interop` runs one. `jars`, `fields` and `serialization` need `target/lib.jar`, which `bb test` builds from `test/jar`. `bb example` builds that jar too, when it's missing or older than its sources.
+
+To work live from an editor, start jolt's nREPL server from the repo root:
+
+```sh
+bb nrepl
+```
+
+It binds a free port on 127.0.0.1 and writes it to `.nrepl-port`, which CIDER and Calva read. In Emacs, `M-x cider-connect-clj` with host `localhost` offers that port. `bb nrepl 7890`, or `CHAMPACA_NREPL_PORT=7890`, asks for a port of your own, and a busy one is refused rather than swapped for another. When `.nrepl-port` already names a server that answers, `bb nrepl` says so and stops, so connect to that one instead. Stop the server with `^C`, which also removes the file.
+
+Since `init!` runs once per process, as above, the first form to evaluate in a fresh session is
+
+```clojure
+(require '[champaca.api :as ldk])
+(ldk/init! {:classpath ["target/lib.jar"]})
+```
+
+After that every example loads in the same session (`C-c C-k` in CIDER), because their own `init!` calls do nothing. Skip it and load `interop.clj` first, though, and that example's plain `init!` wins: `jars.clj` then can't find its classes until you restart the server. Expect one difference from `bb example`: nREPL evaluates on a connection thread, so `threads.clj` prints a `jolt-<n>` name where a plain run prints `main`. jolt's server has eval, load-file and completion but no lookup op, so CIDER's jump to definition and documentation popups don't work.
+
 ## Running the tests
 
 ```sh

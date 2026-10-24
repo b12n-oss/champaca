@@ -63,6 +63,42 @@
                   (System/exit 1)))
               (shell "docker build --platform" (str "linux/" arch) "--build-arg" (str "JDK_FILE=" file)
                      "--build-arg" (str "JDK_SHA256=" sha) "-t" (str "champaca-linux:" arch) "ci/linux")))
+          ;; the jolt programs in examples/, each with what it shows; bb test
+          ;; checks each against its .expected
+          (def examples [["interop" "jolt calling Java"] ["dynamic" "descriptor-free calls"]
+                         ["varargs" "varargs and vectors as arrays"]
+                         ["jars" "a jar and other JDK modules"]
+                         ["collections" "jolt collections as java.util and back"]
+                         ["callsite" "the call-site cache"]
+                         ["jolt-after-init" "jolt itself still works after init!"]
+                         ["threads" "Java threads started from jolt"]
+                         ["files" "files and MessageDigest from jolt"]
+                         ["fields" "Java fields read and written from jolt"]
+                         ["serialization" "Java serialization of the program's own classes from jolt"]])
+          ;; test/jar packed into target/lib.jar, which jars, fields and
+          ;; serialization put on their classpath
+          (defn lib-jar! []
+            (shell "mkdir -p target/lib-classes")
+            (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
+            ;; and its other files: a service registration, a properties file
+            (doseq [f (fs/glob "test/jar" "**")
+                    :when (and (fs/regular-file? f) (not (str/ends-with? (str f) ".java")))
+                    :let [to (fs/path "target/lib-classes" (str (fs/relativize "test/jar" f)))]]
+              (fs/create-dirs (fs/parent to))
+              (fs/copy f to {:replace-existing true}))
+            ;; with a manifest of its own: a package section, a wrapped value
+            (shell "jar cfm target/lib.jar test/jar.mf -C target/lib-classes ."))
+          (defn lib-jar-stale? []
+            (or (not (fs/exists? "target/lib.jar"))
+                (seq (fs/modified-since "target/lib.jar" ["test/jar" "test/jar.mf"]))))
+          ;; something accepts connections on this loopback port
+          (defn port-answers? [port]
+            (try (with-open [s (java.net.Socket.)]
+                   (.connect s (java.net.InetSocketAddress. "127.0.0.1" (int port)) 500)
+                   true)
+                 (catch Exception _ false)))
+          (defn port-file-port [f]
+            (when (fs/exists? f) (parse-long (str/trim (slurp f)))))
           (defn sha1-hex [f]
             (let [md (java.security.MessageDigest/getInstance "SHA-1")]
               (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))
@@ -91,18 +127,10 @@
                     (shell jolt-pinned "--version"))))}
   test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected"
         :task (let [_ (println "jolt:" (jolt-bin) (str/trim (:out (shell {:out :string} (jolt-bin) "--version"))))
-                    _ (shell "mkdir -p target/classes target/lib-classes")
+                    _ (shell "mkdir -p target/classes")
                     ;; test/jar is packed into target/lib.jar, so its classes reach
                     ;; the runtime only from a jar on the classpath
-                    _ (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
-                    ;; and its other files: a service registration, a properties file
-                    _ (doseq [f (fs/glob "test/jar" "**")
-                              :when (and (fs/regular-file? f) (not (str/ends-with? (str f) ".java")))
-                              :let [to (fs/path "target/lib-classes" (str (fs/relativize "test/jar" f)))]]
-                        (fs/create-dirs (fs/parent to))
-                        (fs/copy f to {:replace-existing true}))
-                    ;; with a manifest of its own: a package section, a wrapped value
-                    _ (shell "jar cfm target/lib.jar test/jar.mf -C target/lib-classes .")
+                    _ (lib-jar!)
                     ;; a second jar sharing one package with the first (PackageCheck)
                     _ (shell "mkdir -p target/lib2-classes")
                     _ (apply shell "javac -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
@@ -130,16 +158,6 @@
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
                     ;; jolt programs calling Java, checked against expected output
-                    examples [["interop" "jolt calling Java"] ["dynamic" "descriptor-free calls"]
-                              ["varargs" "varargs and vectors as arrays"]
-                              ["jars" "a jar and other JDK modules"]
-                              ["collections" "jolt collections as java.util and back"]
-                              ["callsite" "the call-site cache"]
-                              ["jolt-after-init" "jolt itself still works after init!"]
-                              ["threads" "Java threads started from jolt"]
-                              ["files" "files and MessageDigest from jolt"]
-                              ["fields" "Java fields read and written from jolt"]
-                              ["serialization" "Java serialization of the program's own classes from jolt"]]
                     ex-fails (doall
                               (for [[n what] examples
                                     :let [{:keys [out exit]} (run-limited 300 {:extra-env {"CHAMPACA_NPE_STRICT" "1"}}
@@ -247,4 +265,37 @@
                                   ;; exit skips finally
                                   (fs/delete-if-exists part)
                                   (System/exit 1))))
-                          (finally (fs/delete-if-exists part)))))}}}
+                          (finally (fs/delete-if-exists part)))))}
+  examples {:doc "List the examples/*.clj programs that bb example runs"
+            :task (doseq [[n what] examples]
+                    (println (format "  %-16s %s" n what)))}
+  example {:doc "Run one examples/*.clj program on the jolt bb test picks (bb example interop), building target/lib.jar first when it's missing or stale"
+           :task (let [arg (first *command-line-args*)
+                       n (when arg (fs/strip-ext (fs/file-name arg)))]
+                   (when-not (some (fn [[e _]] (= e n)) examples)
+                     (println (if arg (str "no such example: " arg) "usage: bb example <name>, one of:"))
+                     (run 'examples)
+                     (System/exit 1))
+                   (when (lib-jar-stale?) (lib-jar!))
+                   (System/exit (:exit (shell {:continue true} (jolt-bin) "-M" (str "examples/" n ".clj")))))}
+  nrepl {:doc "Start jolt's nREPL server here for an editor (CIDER, Calva); a free port by default, written to .nrepl-port (bb nrepl 7890 or CHAMPACA_NREPL_PORT=7890 asks for one, refused when busy)"
+         :task (let [given (or (first *command-line-args*) (System/getenv "CHAMPACA_NREPL_PORT"))
+                     port (if given (parse-long given) 0)
+                     pf ".nrepl-port"
+                     running (port-file-port pf)]
+                 (when-not (and port (<= 0 port 65535))
+                   (println (str "bb nrepl: the port is a number from 0 (any free one) to 65535, not " given))
+                   (System/exit 1))
+                 (when (and running (port-answers? running))
+                   (println (str "bb nrepl: a server already answers on port " running " (.nrepl-port); connect to it, or stop it first"))
+                   (System/exit 1))
+                 ;; left by a server that was killed
+                 (fs/delete-if-exists pf)
+                 (when (lib-jar-stale?) (lib-jar!))
+                 (println ";; Emacs: M-x cider-connect-clj, host localhost, and CIDER offers the port in .nrepl-port")
+                 (println ";; then: (require '[champaca.api :as ldk]) (ldk/init! {:classpath [\"target/lib.jar\"]})")
+                 (let [exit (:exit (shell {:continue true} (jolt-bin) "nrepl-server" (str port)))]
+                   ;; jolt removes its port file on ^C; a server killed outright leaves it
+                   (when-let [p (port-file-port pf)]
+                     (when-not (port-answers? p) (fs/delete-if-exists pf)))
+                   (System/exit exit)))}}}

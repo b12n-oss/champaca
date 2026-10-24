@@ -4,3 +4,4 @@ AGENTS.md
 *.class
 .cpcache/
 ci/linux/cache/
+/.nrepl-port

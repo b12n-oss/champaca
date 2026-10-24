@@ -101,6 +101,9 @@ bb test                                               # every test/java program 
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
+bb examples                                           # list the examples/*.clj programs
+bb example interop                                    # run one of them (builds target/lib.jar first if it needs to)
+bb nrepl                                              # an nREPL server for your editor, on a free port written to .nrepl-port
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit
                         # (and say why an NPE got no message)
