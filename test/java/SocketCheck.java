@@ -172,7 +172,8 @@ public class SocketCheck {
                 Thread.sleep(50);
                 String outcome = "no exception";
                 try { for (int i = 0; i < 200; i++) { s.getOutputStream().write(new byte[8192]); } }
-                catch (IOException e) { outcome = e.getClass().getName() + " " + Set.of("Broken pipe", "Connection reset").contains(e.getMessage()); }
+                // which of the two the system gives depends on timing: the JVM has shown both
+                catch (IOException e) { outcome = e.getClass().getName() + " " + Set.of("Broken pipe", "Connection reset by peer").contains(e.getMessage()); }
                 row("peer gone", outcome);
             }
 
@@ -250,7 +251,9 @@ public class SocketCheck {
             ssc.close();
             row("close wakes channel accept", blocked.get(10, TimeUnit.SECONDS));
         }
-        // a FileChannel read blocked on a FIFO (bb test makes target/blocking-io.fifo) is woken the same way
+        // a FileChannel read blocked on a FIFO is woken the same way. The FIFO is the one bb test
+        // makes (target/blocking-io.fifo), assumed empty, as the programs before this one leave it;
+        // a run without it says so instead of pretending
         java.nio.file.Path fifo = java.nio.file.Path.of("target/blocking-io.fifo");
         if (java.nio.file.Files.exists(fifo)) {
             java.nio.channels.FileChannel fc = java.nio.channels.FileChannel.open(fifo, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE);
@@ -260,7 +263,7 @@ public class SocketCheck {
             fc.close();
             row("close wakes file channel read", blocked.get(10, TimeUnit.SECONDS) + " " + fc.isOpen());
         } else {
-            row("close wakes file channel read", "java.nio.channels.AsynchronousCloseException false");
+            row("close wakes file channel read", "skipped: no target/blocking-io.fifo (run under bb test)");
         }
         try (java.nio.channels.ServerSocketChannel ssc = java.nio.channels.ServerSocketChannel.open()) {
             ssc.bind(new InetSocketAddress(LOOP, 0));

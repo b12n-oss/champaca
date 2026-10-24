@@ -281,7 +281,7 @@
       (let* ([r (released-call* (lambda () (libc-send-blocking (net-fd fdo) buf 1 (fxlogor 1 (net-const 'MSG_NOSIGNAL)))))]
              [e (errno)])
         (foreign-free buf)
-        (socket-status* r e #f #f)))))
+        (socket-status* r e #f)))))
 ;; pending urgent data isn't drained (the JDK reads it with MSG_OOB); nothing
 ;; on the blocking paths asks
 (defnet "discardOOB(Ljava/io/FileDescriptor;)Z" (lambda (fdo) 0))
@@ -295,20 +295,22 @@
     "jdk/net/LinuxSocketOptions.incomingNapiIdSupported0()Z" "jdk/net/LinuxSocketOptions.ipDontFragmentSupported0()Z"))
 
 ;; --- the dispatchers ----------------------------------------------------------------
-;; IOStatus as files.ss: -1 end of stream, -2 unavailable, -3 interrupted. A
-;; peer that reset the connection is the JDK's ConnectionResetException on
-;; the dispatcher's reads and writes (reset?), which NioSocketImpl turns into
-;; SocketException "Connection reset"; any other failure, a broken pipe
-;; included, is an IOException with strerror's bare text, as the JDK's
-;; convertReturnVal throws it (so "Broken pipe" reads as on the JVM)
-(define (socket-status* r e reading reset?)
+;; IOStatus as files.ss: -1 end of stream, -2 unavailable, -3 interrupted. On
+;; a read, a peer that reset the connection (ECONNRESET, or EPIPE) is the
+;; JDK's ConnectionResetException, which NioSocketImpl turns into
+;; SocketException "Connection reset". A write's failure, a reset or a broken
+;; pipe included, is an IOException with strerror's bare text ("Connection
+;; reset by peer", "Broken pipe"), as the JDK's write0 only converts the
+;; return value; so does any other failure of a read. Seen on the JVM: a
+;; write after the peer reset says either text, depending on timing.
+(define (socket-status* r e reading)
   (cond [(fx> r 0) r]
         [(fx= r 0) (if reading -1 0)]
         [(fx= e (net-const 'EAGAIN)) -2]
         [(fx= e 4) -3]
-        [(and reset? (fx= e (net-const 'ECONNRESET))) (jthrow "sun/net/ConnectionResetException" "Connection reset")]
+        [(and reading (memv e (list (net-const 'ECONNRESET) 32))) (jthrow "sun/net/ConnectionResetException" "Connection reset")]
         [else (jthrow "java/io/IOException" (strerror-text e))]))
-(define (socket-status r reading) (socket-status* r (if (< r 0) (errno) 0) reading #t))
+(define (socket-status r reading) (socket-status* r (if (< r 0) (errno) 0) reading))
 (define (socket-write fd addr n)
   (if (fx= (net-const 'MSG_NOSIGNAL) 0)
       (fd-write fd addr n)
