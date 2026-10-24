@@ -45,9 +45,12 @@
 (deftest jolt-threads-get-java-threads
   ;; a thread jolt started (a future) calling Java gets a java.lang.Thread of
   ;; its own, as a native thread attached to a JVM does. The process's first
-  ;; thread is main; an nREPL evaluation runs on a jolt-<n> thread instead.
+  ;; thread is main, where test/run_example.clj runs the tests; an nREPL
+  ;; evaluation runs on a jolt-<n> thread instead.
   (let [here (current-name)
         there @(future (current-name))]
-    (is (or (= "main" here) (re-matches #"jolt-\d+" here)))
+    (if (System/getProperty "champaca.example.runner")
+      (is (= "main" here))
+      (is (re-matches #"jolt-\d+" here)))
     (is (re-matches #"jolt-\d+" there))
     (is (not= here there))))
