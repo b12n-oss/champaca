@@ -1,4 +1,0 @@
-thread ran: 1000 false
-squares: [1 4 9 16 25]
-filled while jolt waited: true [0 1 2 3 4]
-main is main / future is jolt-N: true

@@ -1,8 +1,0 @@
-note Note(chez, 5, null)
-same class, new object [true false]
-fields [chez 5]
-list [1 two 3.5]
-map {a [1 2], b nil}
-nested [Note(chez, 5, null), Note(chez, 5, null)]
-serialVersionUID -1021398932933719370
-bytes 86

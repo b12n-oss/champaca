@@ -1,26 +1,38 @@
 ;; Varargs and vector-to-array calls from jolt. Trailing arguments are packed
 ;; into the varargs array; a jolt vector passed for an array parameter
-;; becomes a Java array of the parameter's element type.
-;;   jolt -M examples/varargs.clj
-(require '[champaca.api :as ldk])
+;; becomes a Java array of the parameter's element type. The expected values
+;; are what test/java/VarargsCheck.java prints on the JVM.
+;;   bb example varargs
+(ns examples.varargs
+  (:require [clojure.test :refer [deftest is]]
+            [champaca.api :as ldk]))
 
 (ldk/init!)
 
-(defn p [label v] (println label (if (string? v) v (ldk/to-string v))))
+(defn- s [v] (ldk/to-string v))
 
-(p "list-of-3" (ldk/invoke-static "java.util.List" "of" "a" "b" "c"))
-(p "list-of-1" (ldk/invoke-static "java.util.List" "of" "x"))
-(p "list-of-0" (ldk/invoke-static "java.util.List" "of"))
-(p "list-of-12" (apply ldk/invoke-static "java.util.List" "of" (range 1 13)))
-(p "asList" (ldk/invoke-static "java.util.Arrays" "asList" 1 2 3))
-(p "join" (ldk/invoke-static "java.lang.String" "join" "-" "x" "y" "z"))
-(p "hash" (str (ldk/invoke-static "java.util.Objects" "hash" 1 2 3)))
-(p "toString-int[]" (ldk/invoke-static "java.util.Arrays" "toString" [3 1 2]))
-(p "toString-String[]" (ldk/invoke-static "java.util.Arrays" "toString" ["p" "q"]))
-(p "deepToString" (ldk/invoke-static "java.util.Arrays" "deepToString" [[1 2] [3]]))
-(p "format" (ldk/invoke-static "java.lang.String" "format" "%s has %d items at %.2f each, %b" "cart" 3 2.5 true))
-(p "format-pad" (ldk/invoke-static "java.lang.String" "format" "[%5d|%-4s|%x]" 42 "ab" 255))
-(p "max-of" (str (ldk/invoke-static "java.util.Collections" "max" (ldk/invoke-static "java.util.Arrays" "asList" 4 9 2))))
-(p "enumset" (ldk/invoke-static "java.util.EnumSet" "of"
-                                (ldk/get-static "java.lang.Thread$State" "NEW")
-                                (ldk/get-static "java.lang.Thread$State" "BLOCKED")))
+(deftest packed-tails
+  (is (= "[a, b, c]" (s (ldk/invoke-static "java.util.List" "of" "a" "b" "c"))))
+  (is (= "[x]" (s (ldk/invoke-static "java.util.List" "of" "x"))))
+  (is (= "[]" (s (ldk/invoke-static "java.util.List" "of"))))
+  (is (= "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]" (s (apply ldk/invoke-static "java.util.List" "of" (range 1 13)))))
+  (is (= "[1, 2, 3]" (s (ldk/invoke-static "java.util.Arrays" "asList" 1 2 3))))
+  (is (= "x-y-z" (ldk/invoke-static "java.lang.String" "join" "-" "x" "y" "z")))
+  (is (= 30817 (ldk/invoke-static "java.util.Objects" "hash" 1 2 3))))
+
+(deftest vectors-as-arrays
+  (is (= "[3, 1, 2]" (ldk/invoke-static "java.util.Arrays" "toString" [3 1 2])))
+  (is (= "[p, q]" (ldk/invoke-static "java.util.Arrays" "toString" ["p" "q"])))
+  (is (= "[[1, 2], [3]]" (ldk/invoke-static "java.util.Arrays" "deepToString" [[1 2] [3]]))))
+
+(deftest string-format
+  (is (= "cart has 3 items at 2.50 each, true"
+         (ldk/invoke-static "java.lang.String" "format" "%s has %d items at %.2f each, %b" "cart" 3 2.5 true)))
+  (is (= "[   42|ab  |ff]" (ldk/invoke-static "java.lang.String" "format" "[%5d|%-4s|%x]" 42 "ab" 255))))
+
+(deftest generic-results
+  (is (= 9 (ldk/invoke-static "java.util.Collections" "max" (ldk/invoke-static "java.util.Arrays" "asList" 4 9 2))))
+  (is (= "[NEW, BLOCKED]"
+         (s (ldk/invoke-static "java.util.EnumSet" "of"
+                               (ldk/get-static "java.lang.Thread$State" "NEW")
+                               (ldk/get-static "java.lang.Thread$State" "BLOCKED"))))))

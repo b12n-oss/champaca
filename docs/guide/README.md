@@ -20,4 +20,4 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 - [how-it-works](how-it-works.md): from a `.class` file to native code, and how the JDK boots.
 - [limitations](limitations.md): the shortcuts a real program will run into.
 
-The top-level [README](../../README.md) has the short version of most of this. The runnable programs in `examples/` are checked by `bb test`, so they make a good second reference.
+The top-level [README](../../README.md) has the short version of most of this. The files in `examples/` are tests that `bb test` runs, each asserting what its calls return, so they make a good second reference.

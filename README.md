@@ -50,7 +50,7 @@ So a jolt map can go straight into a JSON library and come back:
 ;=> {"name" "champaca", "tags" ["a" "b"]}
 ```
 
-`examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. `bb test` checks the outputs match, and also runs both Java programs on champaca.
+`examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. The examples are tests, and the values they assert are the ones the twins print on the JVM. `bb test` runs them and also runs both Java programs on champaca.
 
 Choosing an overload means walking the class's methods and scoring each one, so a call remembers what it chose. The cache key is the class, the method name and the kind of each argument: a Java value's class, an integer's range (int, long or bigger), or the jolt type for the rest. A vector counts by its element kind, whatever its length. A vector mixing kinds isn't cached, and neither is a failed lookup. Once a call has been seen, `invoke` on `StringBuilder.length` takes 1.0 µs instead of 6.3 µs, which is close to the 0.85 µs of a `call` with its descriptor. `ArrayList.add` drops from 9.8 to 1.6 µs and `Math.max` from 4.4 to 1.3 µs. `examples/callsite.clj` runs one call site with arguments that need different overloads, and `CHAMPACA_CALL_CACHE=off` turns the cache off to compare.
 
@@ -85,6 +85,8 @@ The first run builds a cache under `~/.cache/champaca/<key>/` and later runs loa
 | Streams | 1.72 s | 0.43 s | 0.44 s |
 | `examples/interop.clj` | 1.50 s | 0.37 s | 0.39 s |
 
+The `examples/interop.clj` row timed `jolt -M examples/interop.clj` when that file was a program printing its results. The examples are `clojure.test` namespaces now, and `bb example interop` runs one.
+
 The key covers the JDK (`release`, the runtime image's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
 The compiled code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 4.9 MB now, and was 1.7 MB before the module system booted, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. The class table in `state.img` works the same way: each class rides as edn text and parses the first time a run touches it, so a cache grown by many programs costs a warm run little. Before those changes a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. A cold start compiles each JDK method once and caches that same object code, rather than compiling it again to write the cache. Writing a new cache removes key directories no run has used for a week, and keeps at most the 16 most recently used.
@@ -97,12 +99,12 @@ You need jolt 0.8.23 or later (`deps.edn` sets that as `:jolt/min-version`) and 
 
 ```sh
 bb jolt                                               # build the pinned jolt (about 45 s, once per pin)
-bb test                                               # every test/java program vs the JVM, plus the examples/*.clj programs
+bb test                                               # every test/java program vs the JVM, plus the examples/*.clj tests
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
-bb examples                                           # list the examples/*.clj programs
-bb example interop                                    # run one of them (builds target/lib.jar first if it needs to)
+bb examples                                           # list the examples/*.clj test files
+bb example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
 bb nrepl                                              # an nREPL server for your editor, on a free port written to .nrepl-port
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit

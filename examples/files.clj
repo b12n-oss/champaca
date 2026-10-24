@@ -1,27 +1,31 @@
 ;; jolt reading and writing files through java.nio.file, and hashing with
 ;; MessageDigest, whose providers load through the same file system code.
-;;   jolt -M examples/files.clj
-(require '[champaca.api :as ldk])
+;;   bb example files
+(ns examples.files
+  (:require [clojure.test :refer [deftest is]]
+            [champaca.api :as ldk]))
 
 (ldk/init!)
 
-(defn p [label v] (println label v))
+(defn- files [method & args] (apply ldk/invoke-static "java.nio.file.Files" method args))
 
-(def dir (ldk/invoke-static "java.nio.file.Files" "createTempDirectory" "champaca-example"))
-(def notes (ldk/invoke dir "resolve" "notes.txt"))
+(deftest write-read-list-delete
+  (let [dir (files "createTempDirectory" "champaca-example")
+        notes (ldk/invoke dir "resolve" "notes.txt")]
+    (files "writeString" notes "first\nsecond\n")
+    (is (= "first\nsecond\n" (files "readString" notes)))
+    (is (= ["first" "second"] (ldk/->clj (files "readAllLines" notes))))
+    (is (= 13 (files "size" notes)))
+    (files "createDirectories" (ldk/invoke dir "resolve" "a/b"))
+    (is (= ["a" "notes.txt"]
+           (sort (map #(ldk/to-string (ldk/invoke % "getFileName"))
+                      (ldk/->clj (ldk/invoke (files "list" dir) "toList"))))))
+    (doseq [f ["a/b" "a" "notes.txt"]] (files "delete" (ldk/invoke dir "resolve" f)))
+    (files "delete" dir)
+    (is (false? (files "exists" dir)))))
 
-(ldk/invoke-static "java.nio.file.Files" "writeString" notes "first\nsecond\n")
-(p "read" (ldk/invoke-static "java.nio.file.Files" "readString" notes))
-(p "lines" (ldk/->clj (ldk/invoke-static "java.nio.file.Files" "readAllLines" notes)))
-(p "size" (ldk/invoke-static "java.nio.file.Files" "size" notes))
-(ldk/invoke-static "java.nio.file.Files" "createDirectories" (ldk/invoke dir "resolve" "a/b"))
-(p "listed" (sort (map #(ldk/to-string (ldk/invoke % "getFileName"))
-                       (ldk/->clj (ldk/invoke (ldk/invoke-static "java.nio.file.Files" "list" dir) "toList")))))
-
-(def md (ldk/invoke-static "java.security.MessageDigest" "getInstance" "SHA-256"))
-(p "sha-256" (apply str (map #(format "%02x" (bit-and % 0xff))
-                             (ldk/->clj (ldk/invoke md "digest" (ldk/invoke "abc" "getBytes"))))))
-
-(doseq [f ["a/b" "a" "notes.txt"]] (ldk/invoke-static "java.nio.file.Files" "delete" (ldk/invoke dir "resolve" f)))
-(ldk/invoke-static "java.nio.file.Files" "delete" dir)
-(p "cleaned" (not (ldk/invoke-static "java.nio.file.Files" "exists" dir)))
+(deftest message-digest
+  (let [md (ldk/invoke-static "java.security.MessageDigest" "getInstance" "SHA-256")]
+    (is (= "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+           (apply str (map #(format "%02x" (bit-and % 0xff))
+                           (ldk/->clj (ldk/invoke md "digest" (ldk/invoke "abc" "getBytes")))))))))

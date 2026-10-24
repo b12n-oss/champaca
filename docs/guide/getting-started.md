@@ -59,7 +59,7 @@ Call `init!` once per process, before any other champaca function. A second call
 
 ## From an editor
 
-`bb examples` lists the programs in `examples/`, and `bb example interop` runs one. `jars`, `fields` and `serialization` need `target/lib.jar`, which `bb test` builds from `test/jar`. `bb example` builds that jar too, when it's missing or older than its sources.
+Each file in `examples/` is a namespace of `clojure.test` tests, so it shows a call next to the value it returns. `bb examples` lists them, and `bb example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields` and `serialization` need `target/lib.jar`, which `bb test` builds from `test/jar`. `bb example` builds that jar too, when it's missing or older than its sources.
 
 To work live from an editor, start jolt's nREPL server from the repo root:
 
@@ -76,7 +76,9 @@ Since `init!` runs once per process, as above, the first form to evaluate in a f
 (ldk/init! {:classpath ["target/lib.jar"]})
 ```
 
-After that every example loads in the same session (`C-c C-k` in CIDER), because their own `init!` calls do nothing. Skip it and load `interop.clj` first, though, and that example's plain `init!` wins: `jars.clj` then can't find its classes until you restart the server. Expect one difference from `bb example`: nREPL evaluates on a connection thread, so `threads.clj` prints a `jolt-<n>` name where a plain run prints `main`. jolt's server has eval, load-file and completion but no lookup op, so CIDER's jump to definition and documentation popups don't work.
+After that every example loads in the same session (`C-c C-k` in CIDER), because their own `init!` calls do nothing. Skip that form and load `interop.clj` first, though, and its plain `init!` wins: `jars.clj` then can't find its classes until you restart the server.
+
+Loading a file only defines its tests. Evaluate any form inside a `deftest` to see its value, or `(clojure.test/run-tests)` in the file's namespace to run them all. jolt's server has eval, load-file and completion but no test or lookup op, so CIDER's own test commands, its jump to definition and its documentation popups don't work. Two tests pass only the first time they run in a session, because a class initializes once per process: `class-initialization` in `fields.clj`, and `exceptions` in `dynamic.clj`, whose missing native is reached from `NetworkInterface`'s static initializer on macOS, so a second call gets `NoClassDefFoundError` as it would on a JVM.
 
 ## Running the tests
 
@@ -84,7 +86,7 @@ After that every example loads in the same session (`C-c C-k` in CIDER), because
 bb test
 ```
 
-It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, and one that runs past five minutes fails. Then it runs the `examples/*.clj` programs and checks them the same way. The first line says which jolt it used.
+It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, and one that runs past five minutes fails. Then it runs the tests in each `examples/*.clj` file, each file in a process of its own. The first line says which jolt it used.
 
 ## Where next
 

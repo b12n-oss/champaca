@@ -3,36 +3,42 @@
 ;; back through ObjectOutputStream and ObjectInputStream. ObjectInputStream
 ;; resolves class names through the application class loader when jolt is
 ;; the caller, as the JVM would for a Clojure caller.
-;; bb test builds target/lib.jar from test/jar first.
-;;   jolt -M examples/serialization.clj
-(require '[champaca.api :as ldk])
+;; target/lib.jar is built from test/jar by bb test and bb example.
+;;   bb example serialization
+(ns examples.serialization
+  (:require [clojure.test :refer [deftest is]]
+            [champaca.api :as ldk]))
 
 (ldk/init! {:classpath ["target/lib.jar"]})
 
-(defn p [label v] (println label v))
-
-(defn freeze [o]
+(defn- freeze [o]
   (let [bytes (ldk/construct "java.io.ByteArrayOutputStream")
         out (ldk/construct "java.io.ObjectOutputStream" bytes)]
     (ldk/invoke out "writeObject" o)
     (ldk/invoke out "close")
     (ldk/invoke bytes "toByteArray")))
 
-(defn thaw [bytes]
+(defn- thaw [bytes]
   (ldk/invoke (ldk/construct "java.io.ObjectInputStream" (ldk/construct "java.io.ByteArrayInputStream" bytes)) "readObject"))
 
-;; a class of the program's own: found through the application loader
-(def note (ldk/construct "champaca.lib.Note" "chez" 5))
-(def back (thaw (freeze note)))
-(p "note" (ldk/to-string back))
-(p "same class, new object" [(= (ldk/invoke back "getClass") (ldk/invoke note "getClass")) (identical? back note)])
-(p "fields" [(ldk/get-field back "title") (ldk/get-field back "stars")])
+(deftest a-class-of-the-programs-own
+  ;; found through the application loader
+  (let [note (ldk/construct "champaca.lib.Note" "chez" 5)
+        back (thaw (freeze note))]
+    (is (= "Note(chez, 5, null)" (ldk/to-string back)))
+    (is (= (ldk/invoke back "getClass") (ldk/invoke note "getClass")))
+    (is (not (identical? back note)))
+    (is (= ["chez" 5] [(ldk/get-field back "title") (ldk/get-field back "stars")]))
+    (is (= "[Note(chez, 5, null), Note(chez, 5, null)]" (ldk/to-string (thaw (freeze (ldk/->java [note note]))))))))
 
-;; JDK classes, and a jolt collection converted on the way in
-(p "list" (ldk/->clj (thaw (freeze (ldk/->java [1 "two" 3.5])))))
-(p "map" (ldk/->clj (thaw (freeze (ldk/->java {"a" [1 2] "b" nil})))))
-(p "nested" (ldk/to-string (thaw (freeze (ldk/->java [note note])))))
+(deftest jdk-classes
+  ;; a jolt collection converted on the way in
+  (is (= [1 "two" 3.5] (ldk/->clj (thaw (freeze (ldk/->java [1 "two" 3.5]))))))
+  (is (= {"a" [1 2] "b" nil} (ldk/->clj (thaw (freeze (ldk/->java {"a" [1 2] "b" nil})))))))
 
-;; the stream's own view of the class
-(p "serialVersionUID" (ldk/invoke (ldk/invoke-static "java.io.ObjectStreamClass" "lookup" (ldk/invoke note "getClass")) "getSerialVersionUID"))
-(p "bytes" (count (ldk/->clj (freeze note))))
+(deftest the-streams-view-of-the-class
+  ;; the JVM's computed serialVersionUID and stream length for the same class
+  (let [note (ldk/construct "champaca.lib.Note" "chez" 5)]
+    (is (= -1021398932933719370
+           (ldk/invoke (ldk/invoke-static "java.io.ObjectStreamClass" "lookup" (ldk/invoke note "getClass")) "getSerialVersionUID")))
+    (is (= 86 (count (ldk/->clj (freeze note)))))))
