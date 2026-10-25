@@ -76,7 +76,7 @@ public class ProcessCheck {
             Process dz = new ProcessBuilder("/bin/sh", "-c", "echo gone; echo kept 1>&2").redirectOutput(Redirect.DISCARD).start();
             row("discard", dz.getInputStream().read() + " " + err(dz) + " " + dz.waitFor());
 
-            System.out.flush();
+            System.out.print("inherit: before the child, unflushed | ");
             Process inh = new ProcessBuilder("/bin/sh", "-c", "echo 'inherit: from the child'").redirectOutput(Redirect.INHERIT).start();
             inh.waitFor();
             row("inherit done", inh.exitValue());
@@ -92,7 +92,7 @@ public class ProcessCheck {
                 + " " + fails(slow::exitValue));
             slow.destroy();
             row("destroy", slow.waitFor() + " " + slow.isAlive() + " " + slow.waitFor(1, TimeUnit.MILLISECONDS));
-            Process stubborn = sh("trap '' TERM; echo ready; sleep 30");
+            Process stubborn = sh("trap '' TERM; echo ready; exec sleep 30");
             BufferedReader sr = new BufferedReader(new InputStreamReader(stubborn.getInputStream()));
             String ready = sr.readLine();
             stubborn.destroy();
@@ -118,6 +118,10 @@ public class ProcessCheck {
             int sum = 0;
             for (Process m : many) sum += m.waitFor();
             row("six at once", sum);
+
+            // argv[0] is the name as given, not the path PATH found
+            Process a0 = new ProcessBuilder("sh", "-c", "echo $0").start();
+            row("argv[0]", out(a0) + " " + a0.waitFor());
 
             Process rt = Runtime.getRuntime().exec(new String[]{"/bin/sh", "-c", "echo $0 $1", "zero", "one"});
             row("Runtime.exec", out(rt) + " " + rt.waitFor());

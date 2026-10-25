@@ -14,7 +14,7 @@ descriptors: true 120
 file redirects: 0 from a file -1
 append: from a file|appended|
 discard: -1 kept 0
-inherit: from the child
+inherit: before the child, unflushed | inherit: from the child
 inherit done: 0
 large output: 202000 0
 waitFor timeout: false true true java.lang.IllegalThreadStateException: process hasn't exited
@@ -23,6 +23,7 @@ destroyForcibly: ready true 137 false
 onExit: 7 true false
 pipeline: APPLE|BANANA|CHERRY 3
 six at once: 15
+argv[0]: sh 0
 Runtime.exec: zero one 0
 no such program: java.io.IOException: Cannot run program "no-such-program-for-the-check": Exec failed, error: 2 (No such file or directory) 
 not executable: java.io.IOException: Cannot run program "<script>": Exec failed, error: 13 (Permission denied) 

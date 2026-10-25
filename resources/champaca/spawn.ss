@@ -8,7 +8,8 @@
 ;; dup2 onto 0, 1 and 2, chdir (posix_spawn_file_actions_addchdir_np, macOS
 ;; 10.15 and glibc 2.29), and every other descriptor closed
 ;; (POSIX_SPAWN_CLOEXEC_DEFAULT on macOS, addclosefrom_np from glibc 2.34;
-;; without it the pipes made here are close-on-exec anyway). PATH is the
+;; on glibc 2.33 only the pipes made here are close-on-exec, so a file the
+;; parent holds open reaches the child there). PATH is the
 ;; parent's and is searched here as the JDK's JDK_execvpe does: a directory
 ;; where the program is missing is skipped, EACCES is kept for the end, and
 ;; a file the kernel can't run (ENOEXEC) runs through /bin/sh. SIGPIPE is
@@ -71,24 +72,45 @@
           (begin (foreign-set! 'uptr v (fx* i w) 0) v)
           (begin (foreign-set! 'uptr v (fx* i w) (car ps)) (loop (fx+ i 1) (cdr ps)))))))
 
-;; a pipe whose ends are close-on-exec, as (read . write); errno is left set
-;; on failure for the caller's message
+;; a pipe whose ends are close-on-exec and above 2, as (read . write), or
+;; the errno. With 0, 1 or 2 closed in this process, pipe() hands those
+;; out, and an end sitting on a standard descriptor would be overwritten by
+;; another stream's dup2, or kept close-on-exec where it should be inherited;
+;; F_DUPFD_CLOEXEC (67 on macOS, 1030 on Linux) moves it to 3 or above.
+(define f-dupfd-cloexec (if fs-macos? 67 1030))
+(define (high-cloexec fd)
+  (if (fx< fd 3)
+      (let ([moved (libc-fcntl-int fd f-dupfd-cloexec 3)])
+        (libc-close fd)
+        moved)
+      (begin (libc-fcntl-int fd 2 1) fd)))   ; F_SETFD, FD_CLOEXEC
 (define (cloexec-pipe)
   (let ([fds (foreign-alloc 8)])
     (let* ([r (libc-pipe fds)] [e (errno)] [rd (foreign-ref 'int fds 0)] [wr (foreign-ref 'int fds 4)])
       (foreign-free fds)
-      (if (< r 0)
-          (begin (foreign-set! 'int (libc-errno-location) 0 e) #f)
-          (begin (libc-fcntl-int rd 2 1) (libc-fcntl-int wr 2 1)   ; F_SETFD, FD_CLOEXEC
-                 (cons rd wr))))))
+      (if (< r 0) e (cons (high-cloexec rd) (high-cloexec wr))))))
+
+;; the raw bytes of a variable in this process's environment, as a Latin-1
+;; string (one char per byte, so a path round-trips to the same bytes), or #f
+(define (environ-bytes name)
+  (let ([envp (environ-pointer)] [n (string-length name)] [w (foreign-sizeof 'uptr)])
+    (let loop ([i 0])
+      (let ([p (if (eqv? envp 0) 0 (foreign-ref 'uptr envp (fx* i w)))])
+        (cond [(eqv? p 0) #f]
+              [(and (let match ([j 0]) (or (fx= j n) (and (fx= (foreign-ref 'unsigned-8 p j) (char->integer (string-ref name j))) (match (fx+ j 1)))))
+                    (fx= (foreign-ref 'unsigned-8 p n) 61))
+               (let ([len (cstring-length (+ p n 1))])
+                 (list->string (let collect ([k 0]) (if (fx= k len) '() (cons (integer->char (foreign-ref 'unsigned-8 p (+ n 1 k))) (collect (fx+ k 1)))))))]
+              [else (loop (fx+ i 1))])))))
 
 ;; the candidates JDK_execvpe tries for prog: prog itself when it has a
-;; slash, else each PATH directory (an empty entry is the working directory)
+;; slash, else each directory of this process's PATH (an empty entry is the
+;; working directory)
 (define (spawn-candidates prog)
   (if (or (fx= (string-length prog) 0)
           (let loop ([i 0]) (and (fx< i (string-length prog)) (or (char=? (string-ref prog i) #\/) (loop (fx+ i 1))))))
       (list prog)
-      (let split ([path (or (getenv "PATH") ":/bin:/usr/bin")] [acc '()])
+      (let split ([path (or (environ-bytes "PATH") ":/bin:/usr/bin")] [acc '()])
         (let ([colon (let loop ([i 0]) (cond [(fx= i (string-length path)) #f] [(char=? (string-ref path i) #\:) i] [else (loop (fx+ i 1))]))])
           (let* ([dir (if colon (substring path 0 colon) path)]
                  [full (if (fx= (string-length dir) 0) prog (string-append dir (if (char=? (string-ref dir (fx- (string-length dir) 1)) #\/) "" "/") prog))])
@@ -96,12 +118,13 @@
                 (split (substring path (fx+ colon 1) (string-length path)) (cons full acc))
                 (reverse (cons full acc))))))))
 
-;; spawn path with argv (a char** whose first entry is replaced by the path
-;; tried) and envp; the pid, or (error . errno). ENOEXEC runs it through
-;; /bin/sh, as the JDK's execve_with_shell_fallback.
-(define (spawn-one fa attr path arg-ptrs envp)
+;; spawn path with argv0 and the other arguments (argv0 is the program as
+;; the caller named it, never the path found, as JDK_execvpe keeps it) and
+;; envp; the pid, or (error . errno). ENOEXEC runs it as /bin/sh path args,
+;; as the JDK's execve_with_shell_fallback.
+(define (spawn-one fa attr path argv0 arg-ptrs envp)
   (let* ([cpath (latin1->foreign path)]
-         [argv (pointer-vector (cons cpath arg-ptrs))]
+         [argv (pointer-vector (cons argv0 arg-ptrs))]
          [pidp (foreign-alloc 4)]
          [r (libc-posix-spawn pidp cpath fa attr argv envp)]
          [r (if (fx= r 8)   ; ENOEXEC, 8 on macOS and Linux
@@ -120,6 +143,8 @@
 ;; 127, so the search can't rely on it. The ENOEXEC fallback still does: under
 ;; that emulator a script without #! exits 127 where it should run through
 ;; /bin/sh (ProcessCheck's "no shebang" row; native arm64 and macOS pass).
+;; access checks the real uid where exec checks the effective one, which
+;; only differs in a setuid process.
 (define (access-errno path)
   (let* ([c (latin1->foreign path)] [r (libc-access c 1)] [e (errno)])
     (foreign-free c)
@@ -127,69 +152,88 @@
 ;; a relative candidate is checked where the child will look for it
 (define (in-dir dir path)
   (if (or (not dir) (and (fx> (string-length path) 0) (char=? (string-ref path 0) #\/))) path (string-append dir "/" path)))
-(define (spawn-search fa attr prog dir arg-ptrs envp)
+(define (spawn-search fa attr prog dir argv0 arg-ptrs envp)
   (let loop ([cs (spawn-candidates prog)] [sticky #f])
     (if (null? cs)
         (cons 'error (or sticky 2))
         (let* ([e (access-errno (in-dir dir (car cs)))]
-               [r (if (fx= e 0) (spawn-one fa attr (car cs) arg-ptrs envp) (cons 'error e))])
+               [r (if (fx= e 0) (spawn-one fa attr (car cs) argv0 arg-ptrs envp) (cons 'error e))])
           (cond [(fixnum? r) r]
                 [(null? (cdr cs)) (if (and sticky (memv (cdr r) '(2 20))) (cons 'error sticky) r)]
                 [(memv (cdr r) '(2 20)) (loop (cdr cs) sticky)]   ; ENOENT, ENOTDIR: next directory
                 [(fx= (cdr r) 13) (loop (cdr cs) 13)]             ; EACCES: kept, the search goes on
                 [else r])))))
 
+;; the pipes asked for (fd -1), made in order, as (child . parent) per
+;; stream, #f for a stream given an fd; a failure closes the ones made and
+;; throws as ProcessImpl_md.c does
+(define (spawn-pipes given)
+  (let loop ([i 0] [gs given] [acc '()])
+    (if (null? gs)
+        (reverse acc)
+        (let ([p (and (fx= (car gs) -1) (cloexec-pipe))])
+          (if (fixnum? p)
+              (begin (for-each (lambda (q) (when q (libc-close (car q)) (libc-close (cdr q)))) acc)
+                     (jthrow "java/io/IOException" (string-append "error=" (number->string p) ", " (strerror-text p))))
+              (loop (fx+ i 1) (cdr gs)
+                    (cons (and p (if (fx= i 0) p (cons (cdr p) (car p)))) acc)))))))
+
 (defnative "java/lang/ProcessImpl.forkAndExec(I[B[B[BI[BI[B[IZ)I"
   (this mode helper prog arg-block argc env-block envc dir fds redirect-err)
   (let* ([fdv (jarr-vec (nn fds))]
          [given (vector->list fdv)]
-         ;; (child . parent) per stream: a fresh pipe's ends, or the fd given
-         [pipes (map (lambda (i fd) (if (fx= fd -1) (or (cloexec-pipe) 'failed) #f)) '(0 1 2) given)]
-         [close-pipes! (lambda () (for-each (lambda (p) (when (pair? p) (libc-close (car p)) (libc-close (cdr p)))) pipes))])
-    (when (memq 'failed pipes)
-      (let ([e (errno)]) (close-pipes!) (jthrow "java/io/IOException" (strerror-text e))))
-    (let* ([child-fd (lambda (i) (let ([p (list-ref pipes i)] [fd (list-ref given i)])
-                                   (cond [(not p) fd] [(fx= i 0) (car p)] [else (cdr p)])))]
-           [fa (foreign-alloc spawn-opaque-size)] [attr (foreign-alloc spawn-opaque-size)]
-           [sigs (foreign-alloc spawn-opaque-size)]
-           [cprog (jbytes->latin1 (nn prog))]
-           [args (and arg-block (jbytes->foreign arg-block))]
-           [arg-ptrs (if args (block-strings args argc) '())]
-           [env (and env-block (jbytes->foreign env-block))]
-           [envp (if env (pointer-vector (block-strings env envc)) (environ-pointer))]
-           [cdir (and dir (jbytes->foreign dir))])
-      (libc-spawn-fa-init fa)
-      (libc-spawnattr-init attr)
-      (libc-spawnattr-setflags attr spawn-flags)
-      (libc-sigemptyset sigs) (libc-spawnattr-setsigmask attr sigs)
-      (libc-sigaddset sigs 13) (libc-spawnattr-setsigdefault attr sigs)   ; SIGPIPE
-      ;; stdin and stdout first, then stderr: from stdout when merged
-      (for-each (lambda (i)
-                  (let ([c (if (and (fx= i 2) (eqv? redirect-err 1)) 1 (child-fd i))])
-                    (if (fx= c i)
-                        (when fs-macos? (libc-spawn-fa-inherit fa i))
-                        (libc-spawn-fa-dup2 fa c i))))
-                '(0 1 2))
-      (when cdir (libc-spawn-fa-chdir fa cdir))
-      (when spawn-closefrom? (libc-spawn-fa-closefrom fa 3))
-      (let ([r (let ([e (if dir (access-errno (jbytes->latin1 dir)) 0)])
-                 (if (fx= e 0) (spawn-search fa attr cprog (and dir (jbytes->latin1 dir)) arg-ptrs envp) (cons 'error e)))])
-        (libc-spawn-fa-destroy fa) (libc-spawnattr-destroy attr)
-        (foreign-free fa) (foreign-free attr) (foreign-free sigs)
-        (when args (foreign-free args))
-        (when env (foreign-free env) (foreign-free envp))
-        (when cdir (foreign-free cdir))
-        (if (pair? r)
-            (begin (close-pipes!)
-                   (jthrow "java/io/IOException"
-                           (string-append "Exec failed, error: " (number->string (cdr r)) " (" (strerror-text (cdr r)) ") ")))
-            (begin
-              ;; the parent keeps its ends and closes the child's
-              (for-each (lambda (i p)
-                          (vector-set! fdv i (if p (if (fx= i 0) (cdr p) (car p)) -1))
-                          (when p (libc-close (if (fx= i 0) (car p) (cdr p)))))
-                        '(0 1 2) pipes)
-              r))))))
+         [pipes (spawn-pipes given)]
+         [close-pipes! (lambda () (for-each (lambda (p) (when p (libc-close (car p)) (libc-close (cdr p)))) pipes))]
+         ;; the fd the child gets as each of 0, 1 and 2; stderr from stdout when merged
+         [child (map (lambda (i p fd) (cond [(and (fx= i 2) (eqv? redirect-err 1)) 1] [p (car p)] [else fd])) '(0 1 2) pipes given)]
+         [fa (foreign-alloc spawn-opaque-size)] [attr (foreign-alloc spawn-opaque-size)]
+         [sigs (foreign-alloc spawn-opaque-size)]
+         [held '()]
+         [hold! (lambda (p) (set! held (cons p held)) p)]
+         [release! (lambda ()
+                     (libc-spawn-fa-destroy fa) (libc-spawnattr-destroy attr)
+                     (for-each foreign-free (list* fa attr sigs held))
+                     (set! held '()))])
+    (libc-spawn-fa-init fa)
+    (libc-spawnattr-init attr)
+    (let ([r (guard (e [#t (release!) (close-pipes!) (raise e)])
+               (let* ([cprog (jbytes->latin1 (nn prog))]
+                      [argv0 (hold! (jbytes->foreign prog))]
+                      [args (and arg-block (hold! (jbytes->foreign arg-block)))]
+                      [arg-ptrs (if args (block-strings args argc) '())]
+                      [env (and env-block (hold! (jbytes->foreign env-block)))]
+                      [envp (if env (hold! (pointer-vector (block-strings env envc))) (environ-pointer))]
+                      [ldir (and dir (jbytes->latin1 dir))]
+                      [cdir (and dir (hold! (jbytes->foreign dir)))])
+                 (libc-spawnattr-setflags attr spawn-flags)
+                 (libc-sigemptyset sigs) (libc-spawnattr-setsigmask attr sigs)
+                 (libc-sigaddset sigs 13) (libc-spawnattr-setsigdefault attr sigs)   ; SIGPIPE
+                 (for-each (lambda (i c)
+                             (if (fx= c i)
+                                 (when fs-macos? (libc-spawn-fa-inherit fa i))
+                                 (libc-spawn-fa-dup2 fa c i)))
+                           '(0 1 2) child)
+                 (when cdir (libc-spawn-fa-chdir fa cdir))
+                 (when spawn-closefrom? (libc-spawn-fa-closefrom fa 3))
+                 ;; a child writing straight to our stdout or stderr comes after
+                 ;; what was printed before it, as with the JVM's flushed
+                 ;; System.out; Java's writes are flushed already, so this
+                 ;; is for jolt's own buffered output
+                 (when (or (memv 1 child) (memv 2 child)) (console-flush 1))
+                 (let ([e (if ldir (access-errno ldir) 0)])
+                   (if (fx= e 0) (spawn-search fa attr cprog ldir argv0 arg-ptrs envp) (cons 'error e)))))])
+      (release!)
+      (if (pair? r)
+          (begin (close-pipes!)
+                 (jthrow "java/io/IOException"
+                         (string-append "Exec failed, error: " (number->string (cdr r)) " (" (strerror-text (cdr r)) ") ")))
+          (begin
+            ;; the parent keeps its ends and closes the child's
+            (for-each (lambda (i p)
+                        (vector-set! fdv i (if p (cdr p) -1))
+                        (when p (libc-close (car p))))
+                      '(0 1 2) pipes)
+            r)))))
 
 ;; The exit code as ProcessHandleImpl wants it: the status of a normal exit,
 ;; 0x80 plus the signal for one killed by a signal. Reaping waits in waitpid
