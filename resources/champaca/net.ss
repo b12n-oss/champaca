@@ -26,13 +26,13 @@
     (SO_NOSIGPIPE . #x1022) (MSG_NOSIGNAL . 0) (FIONREAD . #x4004667f) (O_NONBLOCK . 4) (NI_NAMEREQD . 4)
     (EAGAIN . 35) (EINPROGRESS . 36) (EALREADY . 37) (EISCONN . 56) (ECONNREFUSED . 61) (ECONNRESET . 54)
     (ETIMEDOUT . 60) (ENOTCONN . 57) (EHOSTUNREACH . 65) (EADDRINUSE . 48) (EADDRNOTAVAIL . 49) (EPROTO . 100)
-    (ai-addr . 32)))
+    (ENETUNREACH . 51) (EAFNOSUPPORT . 47) (ai-addr . 32)))
 (define net-consts-linux
   '((SOL_SOCKET . 1) (SO_REUSEADDR . 2) (SO_REUSEPORT . 15) (SO_ERROR . 4) (SO_LINGER . 13)
     (SO_NOSIGPIPE . #f) (MSG_NOSIGNAL . #x4000) (FIONREAD . #x541b) (O_NONBLOCK . 2048) (NI_NAMEREQD . 8)
     (EAGAIN . 11) (EINPROGRESS . 115) (EALREADY . 114) (EISCONN . 106) (ECONNREFUSED . 111) (ECONNRESET . 104)
     (ETIMEDOUT . 110) (ENOTCONN . 107) (EHOSTUNREACH . 113) (EADDRINUSE . 98) (EADDRNOTAVAIL . 99) (EPROTO . 71)
-    (ai-addr . 24)))
+    (ENETUNREACH . 101) (EAFNOSUPPORT . 97) (ai-addr . 24)))
 (define (net-const name)
   (cdr (or (assq name (if net-macos? net-consts-macos net-consts-linux)) (error 'champaca "no net constant" name))))
 ;; the same on both: AF_INET 2, SOCK_STREAM 1, SOCK_DGRAM 2, EINTR 4, EPIPE 32,
@@ -184,6 +184,16 @@
 (defnet "pollnvalValue()S" (lambda () 32))
 (defnet "pollconnValue()S" (lambda () 4))
 
+;; as the JDK's socket0 sets a datagram socket up: on macOS a send buffer of
+;; at least 65507 bytes, since net.inet.udp.maxdgram (9216) caps a datagram
+;; at the buffer's size; on Linux IP_MULTICAST_ALL off (49), so a socket only
+;; hears the groups it joined
+(define (datagram-socket! fd)
+  (if net-macos?
+      (guard (e [#t (void)])
+        (when (< (get-int-option fd (net-const 'SOL_SOCKET) #x1001) 65507)
+          (set-int-option! fd (net-const 'SOL_SOCKET) #x1001 65507)))
+      (guard (e [#t (void)]) (set-int-option! fd 0 49 0))))
 (defnet "socket0(ZZZZ)I"
   (lambda (ipv6 stream reuse fast)
     (let ([fd (check-socket (libc-socket 2 (if (eqv? stream 1) 1 2) 0))])
@@ -192,6 +202,7 @@
         (guard (e [#t (libc-close fd) (raise e)])
           (set-int-option! fd (net-const 'SOL_SOCKET) (net-const 'SO_REUSEADDR) 1)))
       (quiet-pipe! fd)
+      (unless (eqv? stream 1) (datagram-socket! fd))
       fd)))
 (defnet "bind0(Ljava/io/FileDescriptor;ZZLjava/net/InetAddress;I)V"
   (lambda (fdo ipv6 excl ia port)
@@ -236,13 +247,56 @@
 (defnet "remotePort(Ljava/io/FileDescriptor;)I" (lambda (fdo) (peer-sockaddr (net-fd fdo) sockaddr-port)))
 (defnet "remoteInetAddress(Ljava/io/FileDescriptor;)Ljava/net/InetAddress;"
   (lambda (fdo) (peer-sockaddr (net-fd fdo) (lambda (sa) (inet4 #f (sockaddr-ip sa))))))
+;; IP_MULTICAST_TTL and IP_MULTICAST_LOOP are one byte, as the JDK passes them
+;; when it says they may need converting (macOS 10 and 11, Linux 33 and 34)
+(define (byte-option? conv level opt)
+  (and (eqv? conv 1) (fx= level 0) (memv opt (if net-macos? '(10 11) '(33 34)))))
+(define (get-byte-option fd level opt)
+  (let ([buf (foreign-alloc 4)] [len (foreign-alloc 4)])
+    (foreign-set! 'unsigned-8 buf 0 0)
+    (foreign-set! 'unsigned-32 len 0 1)
+    (let* ([r (libc-getsockopt fd level opt buf len)] [e (errno)] [v (foreign-ref 'unsigned-8 buf 0)])
+      (foreign-free buf) (foreign-free len)
+      (after-free r e socket-error)
+      v)))
+(define (set-byte-option! fd level opt v)
+  (let ([buf (foreign-alloc 1)])
+    (foreign-set! 'unsigned-8 buf 0 (fxlogand v 255))
+    (let* ([r (libc-setsockopt fd level opt buf 1)] [e (errno)])
+      (foreign-free buf)
+      (after-free r e socket-error))))
 (defnet "getIntOption0(Ljava/io/FileDescriptor;ZII)I"
   (lambda (fdo conv level opt)
-    (if (linger? level opt) (get-linger (net-fd fdo)) (get-int-option (net-fd fdo) level opt))))
+    (cond [(linger? level opt) (get-linger (net-fd fdo))]
+          [(byte-option? conv level opt) (get-byte-option (net-fd fdo) level opt)]
+          [else (get-int-option (net-fd fdo) level opt)])))
 (defnet "setIntOption0(Ljava/io/FileDescriptor;ZIIIZ)V"
   (lambda (fdo conv level opt arg ipv6)
-    (if (linger? level opt) (set-linger! (net-fd fdo) arg) (set-int-option! (net-fd fdo) level opt arg))
+    (cond [(linger? level opt) (set-linger! (net-fd fdo) arg)]
+          [(byte-option? conv level opt) (set-byte-option! (net-fd fdo) level opt arg)]
+          [else (set-int-option! (net-fd fdo) level opt arg)])
     (void)))
+;; IP_MULTICAST_IF (macOS 9, Linux 32) as a struct in_addr, the JDK's int in
+;; host order; 0 is any interface. Joining groups isn't done (joinOrDrop4)
+(define ip-multicast-if (if net-macos? 9 32))
+(defnet "getInterface4(Ljava/io/FileDescriptor;)I"
+  (lambda (fdo)
+    (let ([buf (foreign-alloc 4)] [len (foreign-alloc 4)])
+      (foreign-set! 'unsigned-32 buf 0 0)
+      (foreign-set! 'unsigned-32 len 0 4)
+      (let* ([r (libc-getsockopt (net-fd fdo) 0 ip-multicast-if buf len)] [e (errno)]
+             [ip (let loop ([i 0] [acc 0]) (if (fx= i 4) acc (loop (fx+ i 1) (fxlogor (fxsll acc 8) (foreign-ref 'unsigned-8 buf i)))))])
+        (foreign-free buf) (foreign-free len)
+        (after-free r e socket-error)
+        (i32 ip)))))
+(defnet "setInterface4(Ljava/io/FileDescriptor;I)V"
+  (lambda (fdo interf)
+    (let ([buf (foreign-alloc 4)])
+      (do ([i 0 (fx+ i 1)]) ((fx= i 4)) (foreign-set! 'unsigned-8 buf i (fxlogand (ash interf (fx* -8 (fx- 3 i))) 255)))
+      (let* ([r (libc-setsockopt (net-fd fdo) 0 ip-multicast-if buf 4)] [e (errno)])
+        (foreign-free buf)
+        (after-free r e socket-error)
+        (void)))))
 ;; the events that happened (0 on a timeout or an interrupt), as the JDK's poll answers
 (define (poll-fd fd events timeout)
   (let ([pfd (foreign-alloc 8)])
@@ -605,3 +659,284 @@
             [(fx= e (net-const 'EAGAIN)) 0]
             [(fx= e 4) -3]
             [else (last-error-io e)]))))
+
+;; --- datagrams: DatagramChannelImpl, DatagramDispatcher, NativeSocketAddress -----------
+;; DatagramSocket runs on DatagramChannelImpl, as the selectors' channels do.
+;; NativeSocketAddress is the JDK's SOCKETADDRESS union in Unsafe memory, which
+;; the JDK encodes and decodes itself, so its natives give the layout only:
+;; sockaddr_in6's offsets, the family a byte at 1 after macOS's sin_len and a
+;; short at 0 on Linux. A connected socket hears a refusal from the peer's
+;; host as ECONNREFUSED, which is PortUnreachableException with no message;
+;; an unconnected one never should, and receive0 ignores it as the JDK does.
+(deflibc-blocking libc-recvfrom-blocking "recvfrom" (int uptr size_t int uptr uptr) ssize_t)
+(deflibc-blocking libc-sendto-blocking "sendto" (int uptr size_t int uptr unsigned-32) ssize_t)
+(deflibc-blocking libc-recv-blocking "recv" (int uptr size_t int) ssize_t)
+(deflibc-blocking libc-send0-blocking "send" (int uptr size_t int) ssize_t)
+(deflibc-blocking libc-readv-blocking "readv" (int uptr int) ssize_t)
+(deflibc-blocking libc-writev-blocking "writev" (int uptr int) ssize_t)
+(deflibc libc-connect "connect" #f (int uptr unsigned-32) int)
+(deflibc libc-disconnectx (if net-macos? "disconnectx" "no-disconnectx-here") #f (int unsigned-32 unsigned-32) int)
+
+(define (defnsa sig v) (define-native! (string-append "sun/nio/ch/NativeSocketAddress." sig) (lambda () v)))
+(defnsa "AFINET()I" 2)
+(defnsa "AFINET6()I" (if net-macos? 30 10))
+(defnsa "sizeofSockAddr4()I" 16)
+(defnsa "sizeofSockAddr6()I" 28)
+(defnsa "sizeofFamily()I" (if net-macos? 1 2))
+(defnsa "offsetFamily()I" (if net-macos? 1 0))
+(defnsa "offsetSin4Port()I" 2)
+(defnsa "offsetSin4Addr()I" 4)
+(defnsa "offsetSin6Port()I" 2)
+(defnsa "offsetSin6Addr()I" 8)
+(defnsa "offsetSin6ScopeId()I" 24)
+(defnsa "offsetSin6FlowInfo()I" 4)
+
+(define (port-unreachable) (jthrow "java/net/PortUnreachableException" #f))
+;; IOStatus as the JDK's convertReturnVal answers it, so an empty datagram read
+;; through a connected channel is -1, as on the JVM
+(define (datagram-status r e reading)
+  (cond [(fx> r 0) r]
+        [(fx= r 0) (if reading -1 0)]
+        [(fx= e (net-const 'EAGAIN)) -2]
+        [(fx= e 4) -3]
+        [(fx= e (net-const 'ECONNREFUSED)) (port-unreachable)]
+        [else (jthrow "java/io/IOException" (strerror-text e))]))
+(define (datagram-call call reading)
+  (let* ([r (released-call* call)] [e (if (< r 0) (errno) 0)])
+    (datagram-status r e reading)))
+
+(define (defdcm sig proc) (define-native! (string-append "sun/nio/ch/DatagramChannelImpl." sig) proc))
+;; the sender's address goes to the NativeSocketAddress at sender; a zero-length
+;; datagram is 0
+(defdcm "receive0(Ljava/io/FileDescriptor;JIJZ)I"
+  (lambda (fdo addr len sender connected)
+    (let ([salen (foreign-alloc 4)] [fd (net-fd fdo)])
+      (let retry ()
+        (foreign-set! 'unsigned-32 salen 0 28)
+        (let* ([r (released-call* (lambda () (libc-recvfrom-blocking fd addr len 0 sender salen)))]
+               [e (if (< r 0) (errno) 0)])
+          (cond [(fx>= r 0) (foreign-free salen) r]
+                [(and (fx= e (net-const 'ECONNREFUSED)) (not (eqv? connected 1))) (retry)]
+                [else (foreign-free salen)
+                      (cond [(fx= e (net-const 'EAGAIN)) -2]
+                            [(fx= e 4) -3]
+                            [(fx= e (net-const 'ECONNREFUSED)) (port-unreachable)]
+                            [else (socket-error e)])]))))))
+(defdcm "send0(Ljava/io/FileDescriptor;JIJI)I"
+  (lambda (fdo addr len target tlen)
+    (let* ([r (released-call* (lambda () (libc-sendto-blocking (net-fd fdo) addr len 0 target tlen)))]
+           [e (if (< r 0) (errno) 0)])
+      (cond [(fx>= r 0) r]
+            [(fx= e (net-const 'EAGAIN)) -2]
+            [(fx= e 4) -3]
+            [(fx= e (net-const 'ECONNREFUSED)) (port-unreachable)]
+            [else (socket-error e)]))))
+;; macOS dissolves the association with disconnectx, Linux with a connect to
+;; AF_UNSPEC; a BSD kernel may answer EADDRNOTAVAIL, which means done
+(defdcm "disconnect0(Ljava/io/FileDescriptor;Z)V"
+  (lambda (fdo ipv6)
+    (let ([fd (net-fd fdo)])
+      (if net-macos?
+          (when (and (< (libc-disconnectx fd 0 0) 0) (not (fx= (errno) (net-const 'EADDRNOTAVAIL))))
+            (socket-error (errno)))
+          (let ([sa (foreign-alloc sockaddr-size)])
+            (do ([i 0 (fx+ i 1)]) ((fx= i sockaddr-size)) (foreign-set! 'unsigned-8 sa i 0))
+            (let* ([r (libc-connect fd sa sockaddr-size)] [e (errno)])
+              (foreign-free sa)
+              (after-free r e socket-error))))
+      (void))))
+
+;; a connected channel's read and write: one datagram each, so the vector
+;; forms are readv and writev themselves, never one call per buffer
+(define (defdd sig proc) (define-native! (string-append "sun/nio/ch/DatagramDispatcher." sig) proc))
+(defdd "read0(Ljava/io/FileDescriptor;JI)I"
+  (lambda (fdo addr n) (datagram-call (lambda () (libc-recv-blocking (net-fd fdo) addr n 0)) #t)))
+(defdd "readv0(Ljava/io/FileDescriptor;JI)J"
+  (lambda (fdo addr n) (datagram-call (lambda () (libc-readv-blocking (net-fd fdo) addr n)) #t)))
+(defdd "write0(Ljava/io/FileDescriptor;JI)I"
+  (lambda (fdo addr n) (datagram-call (lambda () (libc-send0-blocking (net-fd fdo) addr n 0)) #f)))
+(defdd "writev0(Ljava/io/FileDescriptor;JI)J"
+  (lambda (fdo addr n) (datagram-call (lambda () (libc-writev-blocking (net-fd fdo) addr n)) #f)))
+;; the JDK's repairSocket puts a fresh socket in place of the old fd's
+(defdd "dup0(Ljava/io/FileDescriptor;Ljava/io/FileDescriptor;)V"
+  (lambda (fdo1 fdo2)
+    (when (< (libc-dup2 (net-fd fdo1) (net-fd fdo2)) 0) (last-error-io (errno)))
+    (void)))
+
+;; --- java.net.NetworkInterface ----------------------------------------------------------
+;; The interfaces with an IPv4 address, from getifaddrs, as the JDK's
+;; enumIPv4Interfaces finds them: each new interface and each address goes in
+;; front, so the order is the JVM's for the IPv4 part. IPv6 is off, so an
+;; interface with IPv6 addresses only isn't listed. Flags and the MTU come
+;; from ioctl on a datagram socket, as in the JDK, with its messages; the
+;; hardware address from the AF_LINK entry on macOS (6 bytes or none) and
+;; SIOCGIFHWADDR on Linux (none when all zeros). struct ifaddrs is the same
+;; on both: next 0, name 8, flags 16, addr 24, netmask 32, broadaddr 40.
+(deflibc libc-getifaddrs "getifaddrs" #f (uptr) int)
+(deflibc libc-freeifaddrs "freeifaddrs" #f (uptr) void)
+(deflibc libc-if-nametoindex "if_nametoindex" #f (uptr) unsigned-32)
+(define ifr-size 40)
+(define (ifconst name)
+  (cdr (assq name (if net-macos?
+                      '((SIOCGIFFLAGS . #xc0206911) (SIOCGIFMTU . #xc0206933) (IFF_MULTICAST . #x8000))
+                      '((SIOCGIFFLAGS . #x8913) (SIOCGIFMTU . #x8921) (SIOCGIFHWADDR . #x8927) (IFF_MULTICAST . #x1000))))))
+(define (sockaddr-family sa) (if net-macos? (foreign-ref 'unsigned-8 sa 1) (foreign-ref 'unsigned-16 sa 0)))
+(define (prefix-length sa)
+  (let loop ([i 0] [n 0])
+    (if (fx= i 4) n (loop (fx+ i 1) (fx+ n (fxbit-count (foreign-ref 'unsigned-8 sa (fx+ 4 i))))))))
+(define (interface-index name)
+  (let* ([p (c-string name)] [i (libc-if-nametoindex p)])
+    (foreign-free p) i))
+
+;; ((name . addresses) ...), newest first; an address is (ip prefix broadcast-ip-or-#f)
+(define (ipv4-interfaces)
+  (let ([head (foreign-alloc 8)])
+    (foreign-set! 'uptr head 0 0)
+    (let* ([r (libc-getifaddrs head)] [e (errno)] [first (foreign-ref 'uptr head 0)])
+      (foreign-free head)
+      (when (< r 0) (socket-error e))
+      (let loop ([p first] [ifs '()])
+        (if (= p 0)
+            (begin (unless (= first 0) (libc-freeifaddrs first)) ifs)
+            (let ([sa (foreign-ref 'uptr p 24)] [next (foreign-ref 'uptr p 0)])
+              (if (or (= sa 0) (not (fx= (sockaddr-family sa) 2)))
+                  (loop next ifs)
+                  (let* ([name (c-string-text (foreign-ref 'uptr p 8))]
+                         [flags (foreign-ref 'unsigned-32 p 16)]
+                         [mask (foreign-ref 'uptr p 32)]
+                         [broad (foreign-ref 'uptr p 40)]
+                         [addr (list (sockaddr-ip sa)
+                                     (if (= mask 0) 0 (prefix-length mask))
+                                     (and (fxlogtest flags 2) (not (= broad 0)) (sockaddr-ip broad)))]
+                         [old (assoc name ifs)])
+                    (loop next (if old
+                                   (begin (set-cdr! old (cons addr (cdr old))) ifs)
+                                   (cons (list name addr) ifs)))))))))))
+
+(define (interface-address a)
+  (let ([ia (construct "java/net/InterfaceAddress" "()V")])
+    (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "address") (inet4 #f (car a)))
+    (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "broadcast") (and (caddr a) (inet4 #f (caddr a))))
+    (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "maskLength") (cadr a))
+    ia))
+(define (network-interface entry)
+  (let* ([name (jstring (car entry))] [addrs (cdr entry)]
+         [ni (construct "java/net/NetworkInterface" "(Ljava/lang/String;I[Ljava/net/InetAddress;)V"
+                        name (interface-index (car entry))
+                        (make-jarr "Ljava/net/InetAddress;" (list->vector (map (lambda (a) (inet4 #f (car a))) addrs))))])
+    (jslot-set! ni (jfield-index "java/net/NetworkInterface" "displayName") name)
+    (jslot-set! ni (jfield-index "java/net/NetworkInterface" "bindings")
+                (make-jarr "Ljava/net/InterfaceAddress;" (list->vector (map interface-address addrs))))
+    (jslot-set! ni (jfield-index "java/net/NetworkInterface" "childs") (make-jarr "Ljava/net/NetworkInterface;" (vector)))
+    ni))
+(define (find-interface pred)
+  (let loop ([ifs (ipv4-interfaces)])
+    (cond [(null? ifs) #f]
+          [(pred (car ifs)) (network-interface (car ifs))]
+          [else (loop (cdr ifs))])))
+;; the interface holding an InetAddress; an IPv6 one has none here
+(define (holds-address? ia)
+  (if (fx= (ia-family ia) 1)
+      (let ([ip (fxlogand (jslot (ia-holder ia) (jfield-index "java/net/InetAddress$InetAddressHolder" "address")) #xffffffff)])
+        (lambda (entry) (exists (lambda (a) (= (car a) ip)) (cdr entry))))
+      (lambda (entry) #f)))
+
+(define (defni sig proc) (define-native! (string-append "java/net/NetworkInterface." sig) proc))
+(defni "getAll()[Ljava/net/NetworkInterface;"
+  (lambda () (make-jarr "Ljava/net/NetworkInterface;" (list->vector (map network-interface (ipv4-interfaces))))))
+(defni "getByName0(Ljava/lang/String;)Ljava/net/NetworkInterface;"
+  (lambda (name) (let ([n (jstring->scheme (nn name))]) (find-interface (lambda (e) (string=? (car e) n))))))
+(defni "getByIndex0(I)Ljava/net/NetworkInterface;"
+  (lambda (index) (find-interface (lambda (e) (= (interface-index (car e)) index)))))
+(defni "getByInetAddress0(Ljava/net/InetAddress;)Ljava/net/NetworkInterface;"
+  (lambda (ia) (find-interface (holds-address? (nn ia)))))
+(defni "boundInetAddress0(Ljava/net/InetAddress;)Z"
+  (lambda (ia) (if (exists (holds-address? (nn ia)) (ipv4-interfaces)) 1 0)))
+
+;; (k ifr) with a struct ifreq naming the interface, on a datagram socket; the
+;; request's failure is "<strerror> (<what> failed)" as the JDK says it
+(define (with-ifreq name what request k)
+  (let ([fd (libc-socket 2 2 0)])
+    (when (< fd 0) (socket-error (errno)))
+    (let ([ifr (foreign-alloc ifr-size)] [bv (string->utf8 (jstring->scheme (nn name)))])
+      (do ([i 0 (fx+ i 1)]) ((fx= i ifr-size)) (foreign-set! 'unsigned-8 ifr i 0))
+      (do ([i 0 (fx+ i 1)]) ((fx= i (fxmin 15 (bytevector-length bv)))) (foreign-set! 'unsigned-8 ifr i (bytevector-u8-ref bv i)))
+      (let* ([r (libc-ioctl fd request ifr)] [e (errno)])
+        (libc-close fd)
+        (if (< r 0)
+            (begin (foreign-free ifr)
+                   (jthrow "java/net/SocketException" (string-append (strerror-text e) " (" what " failed)")))
+            (let ([v (k ifr)]) (foreign-free ifr) v))))))
+(define (interface-flags name)
+  (with-ifreq name "getFlags()" (ifconst 'SIOCGIFFLAGS) (lambda (ifr) (foreign-ref 'unsigned-16 ifr 16))))
+(define (flag-native sig test)
+  (defni sig (lambda (name index) (if (test (interface-flags name)) 1 0))))
+;; up is IFF_UP and IFF_RUNNING, as the JDK asks
+(flag-native "isUp0(Ljava/lang/String;I)Z" (lambda (f) (and (fxlogtest f 1) (fxlogtest f #x40))))
+(flag-native "isLoopback0(Ljava/lang/String;I)Z" (lambda (f) (fxlogtest f 8)))
+(flag-native "isP2P0(Ljava/lang/String;I)Z" (lambda (f) (fxlogtest f #x10)))
+(flag-native "supportsMulticast0(Ljava/lang/String;I)Z" (lambda (f) (fxlogtest f (ifconst 'IFF_MULTICAST))))
+(defni "getMTU0(Ljava/lang/String;I)I"
+  (lambda (name index) (with-ifreq name "ioctl(SIOCGIFMTU)" (ifconst 'SIOCGIFMTU) (lambda (ifr) (foreign-ref 'int ifr 16)))))
+(define (byte-list->jbytes l) (make-jarr "B" (list->vector (map i2b l))))
+(defni "getMacAddr0([BLjava/lang/String;I)[B"
+  (lambda (inaddr name index)
+    (if net-macos?
+        ;; the AF_LINK entry's sockaddr_dl: name length at 5, address length
+        ;; at 6, the name and then the address from 8
+        (let ([n (jstring->scheme (nn name))] [head (foreign-alloc 8)])
+          (foreign-set! 'uptr head 0 0)
+          (let* ([r (libc-getifaddrs head)] [first (foreign-ref 'uptr head 0)])
+            (foreign-free head)
+            (let loop ([p (if (< r 0) 0 first)])
+              (if (= p 0)
+                  (begin (unless (or (< r 0) (= first 0)) (libc-freeifaddrs first)) #f)
+                  (let ([sa (foreign-ref 'uptr p 24)])
+                    (if (and (not (= sa 0)) (fx= (sockaddr-family sa) 18) (fx= (foreign-ref 'unsigned-8 sa 6) 6)
+                             (string=? (c-string-text (foreign-ref 'uptr p 8)) n))
+                        (let* ([at (fx+ 8 (foreign-ref 'unsigned-8 sa 5))]
+                               [mac (let collect ([i 5] [acc '()])
+                                      (if (fx< i 0) acc (collect (fx- i 1) (cons (foreign-ref 'unsigned-8 sa (fx+ at i)) acc))))])
+                          (libc-freeifaddrs first)
+                          (byte-list->jbytes mac))
+                        (loop (foreign-ref 'uptr p 0))))))))
+        ;; ifr_hwaddr is a struct sockaddr at 16, its data from 18
+        (let ([mac (with-ifreq name "ioctl(SIOCGIFHWADDR)" (ifconst 'SIOCGIFHWADDR)
+                               (lambda (ifr) (let collect ([i 5] [acc '()])
+                                               (if (fx< i 0) acc (collect (fx- i 1) (cons (foreign-ref 'unsigned-8 ifr (fx+ 18 i)) acc))))))])
+          (and (exists (lambda (b) (not (fx= b 0))) mac) (byte-list->jbytes mac))))))
+
+;; --- InetAddress.isReachable --------------------------------------------------------
+;; The JDK sends ICMP echo when it may open a raw socket (as root) and else
+;; tries TCP port 7: a connection or a refusal both mean the host answered.
+;; champaca always takes the TCP way.
+(defnative "java/net/Inet4AddressImpl.isReachable0([BI[BI)Z" (this addr timeout ifaddr ttl)
+  (define (bytes->ip arr)
+    (let ([v (jarr-vec arr)])
+      (let loop ([i 0] [acc 0]) (if (fx= i 4) acc (loop (fx+ i 1) (fxlogor (fxsll acc 8) (fxlogand (vector-ref v i) 255)))))))
+  (let ([fd (libc-socket 2 1 0)])
+    (when (< fd 0) (socket-error (errno)))
+    (let ([sa (foreign-alloc sockaddr-size)])
+      (define (done v) (foreign-free sa) (libc-close fd) v)
+      (guard (e [#t (foreign-free sa) (libc-close fd) (raise e)])
+        (when (> ttl 0)
+          (let ([buf (foreign-alloc 4)])
+            (foreign-set! 'int buf 0 ttl)
+            (libc-setsockopt fd 0 (if net-macos? 4 2) buf 4)
+            (foreign-free buf)))
+        (if (and ifaddr (begin (sockaddr-in! sa (bytes->ip ifaddr) 0) (< (libc-bind fd sa sockaddr-size) 0)))
+            (done 0)
+            (let ([flags (libc-fcntl-int fd 3 0)])
+              (libc-fcntl-int fd 4 (fxlogor flags (net-const 'O_NONBLOCK)))
+              (sockaddr-in! sa (bytes->ip addr) 7)
+              (let* ([r (libc-connect fd sa sockaddr-size)] [e (if (< r 0) (errno) 0)])
+                (cond [(or (fx= r 0) (fx= e (net-const 'ECONNREFUSED))) (done 1)]
+                      [(memv e (append (list (net-const 'ENETUNREACH) (net-const 'EAFNOSUPPORT) (net-const 'EADDRNOTAVAIL))
+                                       (if net-macos? '() (list 22 (net-const 'EHOSTUNREACH)))))
+                       (done 0)]
+                      [(fx= e (net-const 'EINPROGRESS))
+                       (if (fx= (poll-fd fd 4 timeout) 0)
+                           (done 0)
+                           (let ([err (guard (x [#t -1]) (get-int-option fd (net-const 'SOL_SOCKET) (net-const 'SO_ERROR)))])
+                             (done (if (or (fx= err 0) (fx= err (net-const 'ECONNREFUSED))) 1 0))))]
+                      [else (jthrow "java/net/ConnectException" (string-append (strerror-text e) " (connect failed)"))]))))))))

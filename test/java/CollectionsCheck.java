@@ -22,5 +22,17 @@ public class CollectionsCheck {
     h.putAll(xy);
     System.out.println("putAll [" + h.get("x") + " " + h.containsKey("y") + " " + h.size() + "]");
     p("array-still", Arrays.toString(new int[] {1, 2, 3}));
+    // collectors: a list that grows past its first array, parallel, grouped,
+    // into a chosen collection, and finished (once reported as an NPE on
+    // ArrayList's elementData, not seen since)
+    p("toList grows", java.util.stream.IntStream.range(0, 50).boxed().collect(java.util.stream.Collectors.toList()).size());
+    p("toList parallel", java.util.stream.IntStream.range(0, 1000).parallel().boxed()
+        .collect(java.util.stream.Collectors.toList()).stream().mapToInt(Integer::intValue).sum());
+    p("groupingBy", new TreeMap<>(java.util.stream.Stream.of("a", "bb", "cc", "ddd")
+        .collect(java.util.stream.Collectors.groupingBy(String::length))));
+    p("toCollection", java.util.stream.Stream.of(3, 1, 2).collect(java.util.stream.Collectors.toCollection(TreeSet::new)));
+    p("collectingAndThen", java.util.stream.Stream.of(1, 2).collect(
+        java.util.stream.Collectors.collectingAndThen(java.util.stream.Collectors.toList(), Collections::unmodifiableList)));
+    p("Stream.toList", java.util.stream.Stream.of("x", "y").filter(z -> !z.isEmpty()).toList());
   }
 }

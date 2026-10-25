@@ -6,3 +6,9 @@ contains true
 copyOf "[1, [2, 3], {k=v}]"
 putAll [1 true 2]
 array-still "[1, 2, 3]"
+toList grows 50
+toList parallel 499500
+groupingBy {1=[a], 2=[bb, cc], 3=[ddd]}
+toCollection [1, 2, 3]
+collectingAndThen [1, 2]
+Stream.toList [x, y]
