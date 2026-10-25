@@ -71,10 +71,9 @@
          (try (ldk/invoke-static "java.lang.Integer" "parseInt" "x")
               (catch Exception e (ex-message e)))))
   ;; a native champaca lacks is an UnsatisfiedLinkError, caught like any Java
-  ;; exception. On macOS NetworkInterface's static initializer is what reaches
-  ;; the missing getAll, so the class stays uninitialized and a second call in
-  ;; the same process is a NoClassDefFoundError, as on a JVM: this assertion
-  ;; holds the first time the test runs in a session.
-  (is (= ["java.lang.UnsatisfiedLinkError" true]
-         (try (ldk/invoke-static "java.net.NetworkInterface" "getNetworkInterfaces")
-              (catch Exception e [(subs (ex-message e) 0 30) (contains? (ex-data e) :java/exception)])))))
+  ;; exception, and again on a second call: listing every process stops at
+  ;; ProcessHandleImpl.getProcessPids0
+  (dotimes [_ 2]
+    (is (= ["java.lang.UnsatisfiedLinkError" true]
+           (try (ldk/invoke-static "java.lang.ProcessHandle" "allProcesses")
+                (catch Exception e [(subs (ex-message e) 0 30) (contains? (ex-data e) :java/exception)]))))))

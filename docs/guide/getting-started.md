@@ -78,7 +78,7 @@ Since `init!` runs once per process, as above, the first form to evaluate in a f
 
 After that every example loads in the same session (`C-c C-k` in CIDER), because their own `init!` calls do nothing. Skip that form and load `interop.clj` first, though, and its plain `init!` wins: `jars.clj` then can't find its classes until you restart the server.
 
-Loading a file only defines its tests. Evaluate any form inside a `deftest` to see its value, or `(clojure.test/run-tests)` in the file's namespace to run them all. jolt's server has eval, load-file and completion but no test or lookup op, so CIDER's own test commands, its jump to definition and its documentation popups don't work. Two tests pass only the first time they run in a session, because a class initializes once per process: `class-initialization` in `fields.clj`, and `exceptions` in `dynamic.clj`, whose missing native is reached from `NetworkInterface`'s static initializer on macOS, so a second call gets `NoClassDefFoundError` as it would on a JVM.
+Loading a file only defines its tests. Evaluate any form inside a `deftest` to see its value, or `(clojure.test/run-tests)` in the file's namespace to run them all. jolt's server has eval, load-file and completion but no test or lookup op, so CIDER's own test commands, its jump to definition and its documentation popups don't work. One test passes only the first time it runs in a session, because a class initializes once per process: `class-initialization` in `fields.clj`.
 
 ## Running the tests
 
