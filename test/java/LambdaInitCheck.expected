@@ -1,3 +1,4 @@
+HttpClient: false
 static reference made
 Lazy initialized
 call: 7
@@ -7,5 +8,6 @@ Made initialized
 new: made given
 fails: java.lang.ExceptionInInitializerError caused by java.lang.IllegalStateException: no
 fails: java.lang.NoClassDefFoundError caused by java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no [in thread "main"]
+own reference from another thread: saw 42
 Twice initialized
 twice: 1 1 1

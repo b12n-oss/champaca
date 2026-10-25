@@ -300,12 +300,15 @@
         ;; first, as the JVM's method handle does (JVMS 5.5), through a site
         ;; cell like invokestatic's and new's. That also loads the class, which
         ;; translating this method did in this process but may not have in the
-        ;; one running it from the startup cache.
+        ;; one running it from the startup cache. Unlike invokestatic, a
+        ;; reference to this class's own method checks too: the lambda can run
+        ;; on another thread while this class's <clinit> is still going, and
+        ;; that thread has to wait for it.
         call (case (int kind)
                6 (do ((:ensure-loaded resolve) class)
-                     (let [decl ((:resolve-method resolve) class name desc)
-                           c (apply sx (method-global decl name desc) actuals)]
-                       (if (= decl (:name cls)) c (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl))) c))))
+                     (let [decl ((:resolve-method resolve) class name desc)]
+                       (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl)))
+                           (apply sx (method-global decl name desc) actuals))))
                7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
                (5 9) (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals)
                8 (do ((:ensure-loaded resolve) class)
