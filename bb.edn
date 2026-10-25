@@ -12,14 +12,16 @@
             (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt"))
           ;; a command with a time limit, so a test that hangs fails instead.
           ;; A hang leaves its output so far, and on macOS a native stack
-          ;; sample, in target/hangs/<program>-<ms>/.
+          ;; sample, in target/hangs/<program>-<ms>/, the program being opts'
+          ;; :label or else the command's last word.
           (defn run-limited [secs opts & cmd]
             (let [outf (str (fs/create-temp-file {:prefix "champaca-out-"}))
-                  proc (apply process/process (merge {:out (fs/file outf) :err :inherit :in :inherit} opts) cmd)
+                  label (or (:label opts) (fs/file-name (last cmd)))
+                  proc (apply process/process (merge {:out (fs/file outf) :err :inherit :in :inherit} (dissoc opts :label)) cmd)
                   r (deref proc (* 1000 secs) :timed-out)]
               (try
                 (if (= r :timed-out)
-                  (let [d (str "target/hangs/" (fs/file-name (last cmd)) "-" (System/currentTimeMillis))]
+                  (let [d (str "target/hangs/" label "-" (System/currentTimeMillis))]
                     (fs/create-dirs d)
                     (when (fs/which "sample")
                       (shell {:continue true :out (str d "/sample.txt") :err :string} "sample" (str (.pid (:proc proc))) "5"))
@@ -201,7 +203,7 @@
                                                                        (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
-                    jar-fails (let [{:keys [out exit]} (run-limited 300 {} (jolt-bin) "-M" "-m" "champaca.main" "-jar" "target/app.jar" "a" "b")
+                    jar-fails (let [{:keys [out exit]} (run-limited 300 {:label "jarmain"} (jolt-bin) "-M" "-m" "champaca.main" "-jar" "target/app.jar" "a" "b")
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
                                 (if ok [] ["-jar"]))
@@ -219,6 +221,8 @@
                     aaa-mains (->> (fs/glob "test/aaa" "*.expected")
                                    (map (fn [p] (str/replace (fs/file-name p) ".expected" "")))
                                    sort)
+                    ;; none found is a broken checkout or path, not a pass
+                    _ (when (empty? aaa-mains) (println "bb test: no test/aaa/*.expected found") (System/exit 1))
                     deps (str "{:deps {champaca/champaca {:local/root " (pr-str (str (fs/absolutize "."))) "}}}")
                     ;; a path to jolt is made absolute for the work dirs; a bare name is found on PATH
                     jolt (let [j (jolt-bin)] (if (str/includes? j "/") (str (fs/absolutize j)) j))
@@ -229,7 +233,7 @@
                                            _ (fs/copy-tree "target/aaa-classes/aaa" (str w "/aaa"))
                                            _ (fs/copy (str "test/aaa/" m ".java") (str w "/aaa"))
                                            _ (fs/copy "target/aaa-test.jar" (str w "/test.jar"))
-                                           {:keys [out exit]} (run-limited 300 {:dir w :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                           {:keys [out exit]} (run-limited 300 {:dir w :label (str "aaa." m) :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
                                                                            jolt "-Sdeps" deps "-M" "-m" "champaca.main"
                                                                            "." (str "aaa." m) "1" "2" "3" "4" "5")
                                            ok (and (zero? exit) (= out (slurp (str "test/aaa/" m ".expected"))))]]
