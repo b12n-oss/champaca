@@ -737,7 +737,6 @@
           :newarray (let [e (newarray-elem a0) el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
                       (un #(sx (at pc "jnewarray-interned") el % (if (#{"F" "D"} e) "0.0" "0")) "A"))
           :anewarray (let [c (:name (cp a0))
-                           _ (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                            e (if (str/starts-with? c "[") c (str "L" c ";"))
                            el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
                        (un #(sx (at pc "jnewarray-interned") el % "#f") "A"))
@@ -759,7 +758,7 @@
         false
         (catch Exception e
           (let [c (missing-class e)
-                ncdfe (sx "jthrow" (str-lit "java/lang/NoClassDefFoundError") (str-lit c))]
+                ncdfe (sx "jthrow-missing" (str-lit c))]
             (when-not c (throw e))
             (case op
               ;; on null, neither resolves its class, as HotSpot doesn't: a

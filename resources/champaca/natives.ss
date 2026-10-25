@@ -1553,8 +1553,14 @@
   (let ([l (resolving-loader)])
     (and l (not (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))
          (not (member name (asking-loader)))
-         (parameterize ([asking-loader (cons name (asking-loader))])
-           (guard (e [(jobj? e) #f])
+         ;; the loader's own code resolves nothing through it
+         (parameterize ([asking-loader (cons name (asking-loader))] [resolving-loader #f])
+           ;; only ClassNotFoundException means not there. Any other error
+           ;; the loader throws (ClassFormatError, LinkageError) is the
+           ;; resolution's, as on the JVM: it is kept for the name, and the
+           ;; instruction that names the class throws it (jthrow-missing)
+           (guard (e [(and (jobj? e) (jinstance? e "java/lang/ClassNotFoundException")) #f]
+                     [(jobj? e) (hashtable-set! resolution-errors name e) #f])
              ((jvirt l "loadClass(Ljava/lang/String;)Ljava/lang/Class;") l (jstring (slashes->dots name)))
              (and (hashtable-ref classes name #f) #t))))))
 (define (define-class! loader given v off len hidden? classdata)

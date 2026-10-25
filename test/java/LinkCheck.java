@@ -31,6 +31,12 @@ public class LinkCheck {
     static Object invokeVirtual(Object o) { return present ? ((LinkGone) o).name() : "absent"; }
     static Object ldc() { return present ? LinkGone.class : "absent"; }
     static Object subclass() { return present ? new LinkOrphan() : "absent"; }
+    // the error caught by a handler of the same method
+    static Object caughtHere() {
+        try { return present ? new LinkGone() : "absent"; }
+        catch (NoClassDefFoundError e) { return "caught here: " + e.getMessage(); }
+    }
+    static Object orphanArray() { return present ? new LinkOrphan[0][0] : "absent"; }
     static Object catchType() {
         try {
             if (present) throw new IllegalStateException("thrown");
@@ -67,6 +73,7 @@ public class LinkCheck {
         PROBES.put("invokevirtual", () -> invokeVirtual(null));
         PROBES.put("ldc", LinkCheck::ldc);
         PROBES.put("superclass", LinkCheck::subclass);
+        PROBES.put("handler", LinkCheck::caughtHere);
         PROBES.put("catch", LinkCheck::catchType);
         PROBES.put("lambda", LinkCheck::lambda);
         PROBES.put("lambda interface", LinkCheck::lambdaInterface);
@@ -85,12 +92,17 @@ public class LinkCheck {
         public static class GenC extends GenBase implements Supplier<String> {
             public String get() { return "C extends " + base(); }
         }
+        public static class GenBad { }
+        public static class GenD implements Supplier<String> {
+            public String get() { return "D made " + new GenBad(); }
+        }
     }
     static class Lazy extends ClassLoader {
         final List<String> asked = new ArrayList<>();
         Lazy() { super(LinkCheck.class.getClassLoader()); }
         protected Class<?> findClass(String name) throws ClassNotFoundException {
             asked.add(name.substring(name.lastIndexOf('$') + 1));
+            if (name.endsWith("$HidBad")) throw new ClassFormatError("bad bytes for " + name);
             String prefix = "LinkCheck$LinkLazy$Hid";
             if (!name.startsWith(prefix)) throw new ClassNotFoundException(name);
             try (InputStream in = LinkCheck.class.getResourceAsStream("LinkCheck$LinkLazy$Gen" + name.substring(prefix.length()) + ".class")) {
@@ -122,6 +134,8 @@ public class LinkCheck {
         for (Map.Entry<String, Callable0> p : PROBES.entrySet()) row(p.getKey() + " run", fails(p.getValue()));
         // the failed resolution is the same error a second time
         row("new again", fails(LinkCheck::newInstance));
+        try { newInstance(); } catch (NoClassDefFoundError e) { row("cause", e.getCause()); }
+        row("array of orphans", fails(LinkCheck::orphanArray));
         row("forName", fails(() -> Class.forName("LinkGone")));
 
         Lazy l = new Lazy();
@@ -129,6 +143,7 @@ public class LinkCheck {
         row("lazy superclass", lazy(l, "HidC"));
         row("lazy forName", Class.forName("LinkCheck$LinkLazy$HidB", true, l).getClassLoader() == l);
         row("lazy missing", fails(() -> Class.forName("LinkCheck$LinkLazy$HidZ", true, l)));
+        row("lazy loader error", fails(() -> lazy(l, "HidD")));
         row("lazy asked", l.asked);
         row("lazy not ours", fails(() -> lazy(new Lazy(), "GenA")));
     }

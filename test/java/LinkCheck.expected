@@ -8,6 +8,7 @@ invokestatic not run: ran (absent)
 invokevirtual not run: ran (absent)
 ldc not run: ran (absent)
 superclass not run: ran (absent)
+handler not run: ran (absent)
 catch not run: ran (absent)
 lambda not run: ran (absent)
 lambda interface not run: ran (absent)
@@ -23,16 +24,20 @@ invokestatic run: java.lang.NoClassDefFoundError: LinkGone
 invokevirtual run: java.lang.NoClassDefFoundError: LinkGone
 ldc run: java.lang.NoClassDefFoundError: LinkGone
 superclass run: java.lang.NoClassDefFoundError: LinkGone
+handler run: ran (caught here: LinkGone)
 catch run: java.lang.IllegalStateException: thrown
 lambda run: java.lang.NoClassDefFoundError: LinkGone
 lambda interface run: java.lang.NoClassDefFoundError: LinkGoneListener
 field type run: ran (null)
 parameter type run: ran (null)
 new again: java.lang.NoClassDefFoundError: LinkGone
+cause: java.lang.ClassNotFoundException: LinkGone
+array of orphans: java.lang.NoClassDefFoundError: LinkGone
 forName: java.lang.ClassNotFoundException: LinkGone
 lazy reference: true A sees 42
 lazy superclass: true C extends base
 lazy forName: true
 lazy missing: java.lang.ClassNotFoundException: LinkCheck$LinkLazy$HidZ
-lazy asked: [HidA, HidB, HidC, HidBase, HidZ]
+lazy loader error: java.lang.ClassFormatError: bad bytes for LinkCheck$LinkLazy$HidBad
+lazy asked: [HidA, HidB, HidC, HidBase, HidZ, HidD, HidBad]
 lazy not ours: ran (false A sees 42)

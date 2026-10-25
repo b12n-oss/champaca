@@ -214,15 +214,37 @@
         [(fx= 0 (string-length name)) (error 'champaca "empty class name")]
         [(char=? (string-ref name 0) #\[) (pseudo-class! name 'array)]
         [(prim-name? name) (pseudo-class! name 'prim)]
-        ;; a class whose bytes are nowhere is the JVM's NoClassDefFoundError
-        ;; for the code that named it (an ldc, a catch clause's type, a
-        ;; descriptor); one that is there but fails to load stays the error
-        ;; it is, which names the cause (class-exists? is natives.ss's)
-        [else (guard (e [(and (not (jobj? e)) (not (class-exists? name)))
-                         (jthrow "java/lang/NoClassDefFoundError" name)])
+        ;; a class whose bytes are nowhere, or whose superclass or an
+        ;; interface's are, is the JVM's NoClassDefFoundError for the code
+        ;; that named it (an ldc, a catch clause's type, a descriptor); one
+        ;; that is there but fails otherwise stays the error it is, which
+        ;; names the cause (class-exists?, condition-text: natives.ss)
+        [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing])
                 (load-hook name))
               (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
+;; the class a failed load says isn't there: name itself when its bytes are
+;; nowhere, else the one a "class not found: X" from the linker names
+(define (missing-class-of e name)
+  (if (not (class-exists? name))
+      name
+      (let* ([t (condition-text e)] [k "class not found: "] [n (string-length t)] [m (string-length k)])
+        (let loop ([i 0])
+          (cond [(fx> (fx+ i m) n) #f]
+                [(string=? (substring t i (fx+ i m)) k) (substring t (fx+ i m) n)]
+                [else (loop (fx+ i 1))])))))
+;; the JVM's error for a class nothing has: the slashed name, caused by a
+;; ClassNotFoundException with the dotted one; or the error the class's
+;; loader threw resolving it, every time, as JVMS 5.4.3 has a failed
+;; resolution fail the same way again (natives.ss ask-resolving-loader)
+(define resolution-errors (make-hashtable string-hash string=?))
+(define (jthrow-missing name)
+  (let ([le (hashtable-ref resolution-errors name #f)])
+    (when le (raise le)))
+  (let ([e (construct "java/lang/NoClassDefFoundError" "(Ljava/lang/String;)V" (jstring name))]
+        [cnfe (construct "java/lang/ClassNotFoundException" "(Ljava/lang/String;)V" (jstring (slashes->dots name)))])
+    ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;") e cnfe)
+    (raise e)))
 (define (method-proc cname key)
   (top-level-value (string->symbol (string-append cname "." key))))
 

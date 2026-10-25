@@ -671,8 +671,13 @@
     (contains? (:lazy @state) cname)
     (let [info (thaw! cname)]
       (swap! state update :lazy disj cname)
-      (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
-        (ensure-loaded! dep))
+      ;; a dependency that isn't there leaves cname lazy, not half-registered
+      (try
+        (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+          (ensure-loaded! dep))
+        (catch Exception e
+          (swap! state update :lazy conj cname)
+          (throw e)))
       (or (load-unit! (:cached-class info))
           (let [text (registration-text info)]
             (record! (:origin info) [cname] {:text text})
@@ -777,14 +782,25 @@
     (swap! state update :jitted inc)
     (when (trace?) (binding [*out* *err*] (println "jit" (str cname "." mname desc))))
     (let [text (timed :codegen #(cg/compile-method (:parsed info) m resolver))
-          unit [cname (str mname desc)]]
-      (if (compile-to-cache? (:origin info))
+          unit [cname (str mname desc)]
+          ;; an instruction naming a class that isn't there throws when it
+          ;; runs (codegen): such a method is never cached, so a cache can't
+          ;; carry a throw for a class a later run has, and CHAMPACA_BT says so
+          missing (seq (map second (re-seq (re-pattern "\\(jthrow-missing \"([^\"]+)\"") text)))]
+      (when (and missing (System/getenv "CHAMPACA_BT"))
+        (binding [*out* *err*]
+          (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct missing))
+                        ", not found; that code throws NoClassDefFoundError"))))
+      (cond
+        missing (timed :chez-compile #(scheme! text))
         ;; compiled once: the same object code runs now and goes in the cache
+        (compile-to-cache? (:origin info))
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
                                            (s/call "compile-unit" text)))]
           (record! :jdk unit {:fasl bv}))
         ;; the text is kept (cheaply) so save-cache! can compile it into a
         ;; generation; without that a jolt program re-jits these every run
+        :else
         (do (timed :chez-compile #(scheme! text))
             (record! (:origin info) unit {:text text}))))))
 
