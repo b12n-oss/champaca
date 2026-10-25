@@ -226,8 +226,8 @@
 (define libc-getpid (foreign-procedure "getpid" () int))
 (define libc-getppid (foreign-procedure "getppid" () int))
 (define libc-kill (foreign-procedure "kill" (int int) int))
-;; ProcessImpl's class setup; its launch natives stay missing, so starting a
-;; process throws UnsatisfiedLinkError. ProcessEnvironment needs its charset.
+;; ProcessImpl's class setup; launching, waiting and destroying are in
+;; spawn.ss. ProcessEnvironment needs its charset.
 (defnative "java/lang/ProcessImpl.init()V" () (void))
 (defnative "java/lang/ProcessHandleImpl.initNative()V" () (void))
 (defnative "java/lang/ProcessHandleImpl.getCurrentPid0()J" () (libc-getpid))
@@ -262,8 +262,6 @@
   (cond [(not (pid-ok? pid)) -1]
         [(eqv? pid (libc-getpid)) (libc-getppid)]
         [else (parent-pid pid)]))
-;; -2 is NOT_A_CHILD: ProcessHandleImpl then polls isAlive0 for onExit
-(defnative "java/lang/ProcessHandleImpl.waitForProcessExit0(JZ)I" (pid reap) -2)
 
 (defnative "java/lang/System.mapLibraryName(Ljava/lang/String;)Ljava/lang/String;" (name)
   (jstring (string-append "lib" (jstring->scheme (nn name)) (if natives-macos? ".dylib" ".so"))))

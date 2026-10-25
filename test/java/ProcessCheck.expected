@@ -1,0 +1,32 @@
+echo: hello world | 0 false 0 true true false
+exit 0: 0
+exit 3: 3
+exit 255: 255
+killed by a signal: 137
+SIGPIPE default:  141
+stdin to cat: line one|line two 0
+separate streams: to-out / to-err 2
+merged streams: first|second [] 0
+environment: set here|unset
+environment cleared: ONLY=this
+directory: true
+descriptors: true 120
+file redirects: 0 from a file -1
+append: from a file|appended|
+discard: -1 kept 0
+inherit: from the child
+inherit done: 0
+large output: 202000 0
+waitFor timeout: false true true java.lang.IllegalThreadStateException: process hasn't exited
+destroy: 143 false true
+destroyForcibly: ready true 137 false
+onExit: 7 true false
+pipeline: APPLE|BANANA|CHERRY 3
+six at once: 15
+Runtime.exec: zero one 0
+no such program: java.io.IOException: Cannot run program "no-such-program-for-the-check": Exec failed, error: 2 (No such file or directory) 
+not executable: java.io.IOException: Cannot run program "<script>": Exec failed, error: 13 (Permission denied) 
+no such directory: java.io.IOException: Cannot run program "echo" (in directory "/no/such/dir/for/check"): Exec failed, error: 2 (No such file or directory) 
+made executable: no 0
+no shebang: without a shebang 0
+empty command: java.lang.ArrayIndexOutOfBoundsException: Index 0 out of bounds for length 0
