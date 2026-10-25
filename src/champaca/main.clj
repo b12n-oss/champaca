@@ -156,6 +156,18 @@
   (let [n (str/replace cname #"/0x[0-9a-f]+$" "")]
     (subs n 0 (or (str/last-index-of n "/") 0))))
 
+(defn- jar-entry?
+  "Whether a classpath entry is a jar: as the JDK's class path has it, any
+  entry that isn't a directory, whatever its name (a .jar that isn't there
+  counts too, as before). Asked once per entry."
+  [entry]
+  (let [k (str entry)]
+    (if-some [v (get-in @state [:jar-entries k])]
+      v
+      (let [v (boolean (or (str/ends-with? k ".jar") (.isFile (io/file k))))]
+        (swap! state assoc-in [:jar-entries k] v)
+        v))))
+
 (defn- user-class-bytes
   "cname's bytes from the first classpath entry that has it. The first class
   read from a package also decides which entry defines that package, as the
@@ -164,7 +176,7 @@
   [cname]
   (let [rel (str cname ".class")]
     (some (fn [entry]
-            (when-let [bs (if (str/ends-with? (str entry) ".jar")
+            (when-let [bs (if (jar-entry? entry)
                             (read-entry (jar entry) rel)
                             (let [f (io/file entry rel)]
                               (when (.exists f)
@@ -188,7 +200,7 @@
 
 (defn- user-resource-bytes [path]
   (some (fn [entry]
-          (if (str/ends-with? (str entry) ".jar")
+          (if (jar-entry? entry)
             (read-entry (jar entry) path)
             (let [f (io/file entry path)]
               (when (.isFile f)
@@ -260,7 +272,7 @@
   (let [cached (get-in @state [:manifests entry] ::unread)]
     (if (not= cached ::unread)
       cached
-      (let [m (when (str/ends-with? (str entry) ".jar")
+      (let [m (when (jar-entry? entry)
                 (when-let [bs (read-entry (jar entry) "META-INF/MANIFEST.MF")]
                   (try (manifest-sections bs)
                        (catch Exception e
@@ -310,15 +322,26 @@
   (str (.toURI (.getCanonicalFile (io/file entry)))))
 
 (defn- encode-path
-  "A resource name in a URL, as the JDK's ParseUtil.encodePath writes it: the
-  characters a path may hold as they are, every other byte of its UTF-8 as %XX."
+  "A resource name in a URL as the JDK's ParseUtil.encodePath writes it for
+  its class path's loaders: ASCII kept except controls, space and
+  \" # % ; < = > ? [ \\ ] ^ ` { | } DEL, which are %xx in lower-case hex,
+  and every UTF-16 unit above 0x7F as its two or three UTF-8-style bytes
+  (a character beyond the BMP as its two surrogates, three bytes each)."
   [path]
-  (let [keep? (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()/:@&=+$,;")]
-    (apply str (map (fn [b] (let [c (char (bit-and b 0xff))]
-                              (if (and (< (bit-and b 0xff) 128) (keep? c))
-                                (str c)
-                                (str "%" (str/upper-case (format "%02x" (bit-and b 0xff)))))))
-                    (.getBytes ^String path "UTF-8")))))
+  (let [enc (set (concat (map char (range 0 32)) " \"#%;<=>?[\\]^`{|}" [(char 127)]))
+        esc (fn [b] (str "%" (format "%02x" b)))
+        units (fn [cp] (if (> cp 0xFFFF)
+                         (let [v (- cp 0x10000)] [(+ 0xD800 (bit-shift-right v 10)) (+ 0xDC00 (bit-and v 0x3FF))])
+                         [cp]))]
+    (apply str (for [ch path
+                     u (units (int ch))]
+                 (cond (and (< u 128) (enc (char u))) (esc u)
+                       (< u 128) (str (char u))
+                       (> u 0x7FF) (str (esc (bit-or 0xE0 (bit-and (bit-shift-right u 12) 0x0F)))
+                                        (esc (bit-or 0x80 (bit-and (bit-shift-right u 6) 0x3F)))
+                                        (esc (bit-or 0x80 (bit-and u 0x3F))))
+                       :else (str (esc (bit-or 0xC0 (bit-and (bit-shift-right u 6) 0x1F)))
+                                  (esc (bit-or 0x80 (bit-and u 0x3F)))))))))
 
 (defn- resource-urls
   "Every classpath entry's URL for path, file: for a directory and jar: for a
@@ -328,14 +351,14 @@
   image."
   [path]
   (for [entry (when (or (= path "") (plain-resource-path? path)) (:classpath @state))
-        :let [jar? (str/ends-with? (str entry) ".jar")]
+        :let [jar? (jar-entry? entry)]
         :when (if jar?
                 (and (not= path "") (some? (.getEntry (jar entry) path)))
                 (.exists (io/file entry path)))]
-    ;; an entry name is percent-encoded as File.toURI does, through a File
-    ;; standing for "/<path>"
+    ;; the name as given, a directory's trailing / kept, as the JDK's
+    ;; loaders join it to the entry's URL
     (if jar?
-      (str "jar:" (entry-url entry) "!" (subs (str (.toURI (io/file (str "/" path)))) 5))
+      (str "jar:" (entry-url entry) "!/" (encode-path path))
       (str (entry-url entry) (encode-path path)))))
 
 (defn- record!
@@ -1150,6 +1173,8 @@
           ;; URLs as one string, one per line
           (fn [path] (str/join "\n" (resource-urls path))))
   (s/call "set-jpackage-hook!" package-info)
+  ;; the JDK's resources alone, for the platform loader
+  (s/call "set-jdk-resource-hook!" (fn [path] (or (when (plain-resource-path? path) (jdk-resource-bytes path)) false)))
   ;; a classpath class's code source: its entry's URL, or false
   (s/call "set-code-source-hook!" (fn [cname] (if-let [e (get-in @state [:class-entries cname])] (entry-url e) false)))
   (s/call "set-cp-hook!" (fn [cname i]
@@ -1199,18 +1224,39 @@
       (swap! state assoc :cache (cond hit? :hit dir :miss :else :off))
       status)))
 
+(defn- percent-decode
+  "%xx escapes decoded as the bytes of UTF-8 text, as a URL's path is."
+  [u]
+  (let [bs (.getBytes ^String u "UTF-8")
+        n (count bs)
+        out (java.io.ByteArrayOutputStream.)]
+    (loop [i 0]
+      (if (>= i n)
+        (String. (.toByteArray out) "UTF-8")
+        (let [b (bit-and (nth bs i) 0xff)
+              h (when (and (= b 37) (< (+ i 2) n)) (subs u (+ i 1) (+ i 3)))
+              v (when (and h (re-matches (re-pattern "[0-9A-Fa-f]{2}") h)) (Integer/parseInt h 16))]
+          (if v
+            (do (.write out (int v)) (recur (+ i 3)))
+            (do (.write out (int b)) (recur (inc i)))))))))
+
 (defn- manifest-class-path
-  "The entries a jar's manifest Class-Path names, as files: space-separated
-  URLs relative to the jar's directory (or file: ones), %-escapes decoded."
+  "The entries a jar's manifest Class-Path names, as files, the way the
+  JDK's URLClassPath resolves them: each a URL relative to the jar's real
+  location (a symlink followed), so a leading / is absolute and file: one
+  is the same with the scheme; a name ending in / is a directory and any
+  other a jar, so a directory named without / and a scheme other than file:
+  are left out."
   [entry]
   (when-let [v (get-in (jar-manifest entry) [nil "class-path"])]
-    (let [dir (.getParentFile (.getAbsoluteFile (io/file entry)))
-          decode (fn [u] (str/replace u (re-pattern "%([0-9A-Fa-f]{2})")
-                                      (fn [[_ h]] (str (char (Integer/parseInt h 16))))))]
+    (let [dir (.getParentFile (.getCanonicalFile (io/file entry)))]
       (for [u (str/split (str/trim v) (re-pattern "\\s+"))
             :when (not (str/blank? u))
-            :let [u (decode u)
-                  f (if (str/starts-with? u "file:") (io/file (subs u 5)) (io/file dir u))]]
+            :let [scheme (second (re-find (re-pattern "^([A-Za-z][A-Za-z0-9+.-]*):") u))
+                  p (percent-decode (if (= "file" (some-> scheme str/lower-case)) (subs u 5) u))
+                  f (if (str/starts-with? p "/") (io/file p) (io/file dir p))]
+            :when (and (or (nil? scheme) (= "file" (str/lower-case scheme)))
+                       (if (str/ends-with? p "/") (.isDirectory f) (.isFile f)))]
         (str f)))))
 
 (defn- with-manifest-class-paths
@@ -1218,14 +1264,18 @@
   where the JDK's URLClassPath searches them, theirs after them in turn; an
   entry is searched once, and one that isn't there is left out."
   [classpath]
-  ;; todo holds [entry named-by-a-manifest?]; the entries given stay as given
-  (loop [todo (map (fn [e] [e false]) classpath) seen #{} out []]
+  ;; todo is a list of [entry named-by-a-manifest?], a jar's entries pushed
+  ;; on its front; an entry seen before is skipped, the given ones included.
+  ;; A jar a manifest names that can't be read is left out, as the JDK
+  ;; skips one it can't open; a manifest that can't be read names nothing.
+  (loop [todo (apply list (map (fn [e] [e false]) classpath)) seen #{} out []]
     (if-let [[e manifest?] (first todo)]
-      (let [k (str (.getCanonicalFile (io/file e)))]
-        (if (or (seen k) (and manifest? (not (.exists (io/file e)))))
+      (let [k (str (.getCanonicalFile (io/file e)))
+            more (when (jar-entry? e)
+                   (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable []))))]
+        (if (or (seen k) (= more ::unreadable))
           (recur (rest todo) seen out)
-          (recur (concat (when (str/ends-with? (str e) ".jar") (map (fn [m] [m true]) (manifest-class-path e)))
-                         (rest todo))
+          (recur (into (rest todo) (reverse (map (fn [m] [m true]) more)))
                  (conj seen k) (conj out e))))
       out)))
 
@@ -1257,6 +1307,9 @@
 
 (defn -main [& argv]
   (let [[cp cname & args] argv]
+    (when (and (= cp "-jar") (not cname))
+      (binding [*out* *err*] (println "Error: -jar requires jar file specification"))
+      (System/exit 1))
     (when-not cname
       (binding [*out* *err*]
         (println "usage: jolt -M -m champaca.main <classpath[:entry...] (dirs and jars)> <MainClass> [args...]")
@@ -1265,12 +1318,16 @@
     (if (= cp "-jar")
       ;; as java -jar: the manifest's Main-Class, the jar alone as the class
       ;; path given (its Class-Path entries follow it, as for any jar)
-      (let [main (and (.isFile (io/file cname)) (get-in (jar-manifest cname) [nil "main-class"]))]
+      (let [file? (.isFile (io/file cname))
+            ;; any file, whatever its name, as java -jar takes it; one that
+            ;; isn't a zip is the launcher's "invalid or corrupt"
+            m (when file? (try (or (jar-manifest cname) {}) (catch Exception _ ::corrupt)))
+            main (when (map? m) (get-in m [nil "main-class"]))]
         (when-not main
           (binding [*out* *err*]
-            (println (if (.isFile (io/file cname))
-                       (str "no main manifest attribute, in " cname)
-                       (str "Error: Unable to access jarfile " cname))))
+            (println (cond (not file?) (str "Error: Unable to access jarfile " cname)
+                           (= m ::corrupt) (str "Error: Invalid or corrupt jarfile " cname)
+                           :else (str "no main manifest attribute, in " cname))))
           (System/exit 1))
         (System/exit (run [cname] (str/replace (str/trim main) "." "/") (vec args))))
       (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args))))))

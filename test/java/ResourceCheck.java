@@ -53,7 +53,8 @@ public class ResourceCheck {
         try (InputStream in = ResourceCheck.class.getResourceAsStream("ResourceProbe.class")) { probe = in.readAllBytes(); }
         new File(ResourceCheck.class.getResource("ResourceProbe.class").toURI()).delete();
         try (JarOutputStream out = new JarOutputStream(Files.newOutputStream(jar))) {
-            for (String[] e : new String[][] {{"d/", null}, {"d/a.txt", "in the jar"}, {"shared.txt", "jar copy"}, {"probe.txt", "probe's own"}}) {
+            for (String[] e : new String[][] {{"d/", null}, {"d/a.txt", "in the jar"}, {"shared.txt", "jar copy"}, {"probe.txt", "probe's own"},
+                                              {"META-INF/", null}, {"META-INF/x.txt", "x"}, {"odd/a=b;c d\u00e9#.txt", "odd"}}) {
                 out.putNextEntry(new JarEntry(e[0]));
                 if (e[1] != null) out.write(e[1].getBytes(StandardCharsets.UTF_8));
                 out.closeEntry();
@@ -69,11 +70,19 @@ public class ResourceCheck {
         Path dir = Files.createDirectories(tmp.resolve("dir"));
         Files.createDirectories(dir.resolve("d"));
         Files.writeString(dir.resolve("d/a.txt"), "in the directory");
+        Files.writeString(dir.resolve("a=b;c d\u00e9#.txt"), "odd");
         URL jarUrl = jar.toUri().toURL();
 
         // a loader with no parent, over a jar, then a directory
         try (URLClassLoader own = new URLClassLoader(new URL[] {jarUrl}, null)) {
             probeLoader("jar, no parent", own);
+            // a directory entry keeps its /, whatever the host's disk has; names
+            // are escaped as the JDK's class path escapes them
+            URL meta = own.getResource("META-INF/");
+            String odd = own.getResource("odd/a=b;c d\u00e9#.txt").toString();
+            row("jar URL names", own.getResource("d/").toString().endsWith("!/d/") + " " + own.getResource("d").toString().endsWith("!/d")
+                + " " + meta.toString().endsWith("!/META-INF/") + " " + odd.substring(odd.indexOf("!/"))
+                + " " + text(own.getResource("odd/a=b;c d\u00e9#.txt").openStream()));
             Class<?> p = own.loadClass("ResourceProbe");
             Object o = p.getDeclaredConstructor().newInstance();
             row("defined class", p.getClassLoader() == own);
@@ -86,6 +95,16 @@ public class ResourceCheck {
         try (URLClassLoader own = new URLClassLoader(new URL[] {dir.toUri().toURL()}, null)) {
             row("directory, no parent", text(own.getResourceAsStream("d/a.txt")) + " " + found(own.getResource("d"))
                 + " " + found(own.getResource("d/")) + " " + count(own.getResources("d/a.txt")));
+            String odd = own.getResource("a=b;c d\u00e9#.txt").toString();
+            row("directory URL names", odd.substring(odd.lastIndexOf('/')) + " " + own.getResource("d").toString().endsWith("/d"));
+        }
+        // the platform loader as parent: nothing of the application's
+        try (URLClassLoader iso = new URLClassLoader(new URL[] {jarUrl}, ClassLoader.getPlatformClassLoader())) {
+            row("platform parent", found(iso.getResource("ResourceCheck.class")) + " " + count(iso.getResources("ResourceCheck.class"))
+                + " " + (iso.getResourceAsStream("ResourceCheck.class") != null) + " " + text(iso.getResourceAsStream("d/a.txt")));
+            ClassLoader pl = ClassLoader.getPlatformClassLoader();
+            row("platform loader", found(pl.getResource("ResourceCheck.class")) + " " + pl.getResourceAsStream("ResourceCheck.class")
+                + " " + count(pl.getResources("ResourceCheck.class")));
         }
         // the application loader as parent: its resources first
         try (URLClassLoader child = new URLClassLoader(new URL[] {jarUrl}, ResourceCheck.class.getClassLoader())) {
@@ -109,7 +128,14 @@ public class ResourceCheck {
         // the application loader: a directory entry's root and its directories
         ClassLoader app = ResourceCheck.class.getClassLoader();
         URL root = app.getResource("");
-        row("app root", found(root) + " " + (root != null && root.getPath().endsWith("/")));
+        row("app root", found(root) + " " + (root != null && root.getPath().endsWith("/"))
+            + " " + (app.getResourceAsStream("") != null));
+        // names the class path itself escapes: target/lib.jar has these (test/jar)
+        URL oddApp = app.getResource("odd/a=b;c d\u00e9#.txt");
+        row("app jar URL names", (oddApp == null ? "null" : oddApp.toString().substring(oddApp.toString().indexOf("!/")))
+            + " " + (oddApp == null ? "" : text(oddApp.openStream()))
+            + " " + String.valueOf(app.getResource("champaca/lib/")).endsWith("!/champaca/lib/")
+            + " " + String.valueOf(app.getResource("champaca/lib")).endsWith("!/champaca/lib"));
         row("app class resource", found(app.getResource("ResourceCheck.class")) + " " + found(ClassLoader.getSystemResource("ResourceCheck.class")));
 
         // code sources

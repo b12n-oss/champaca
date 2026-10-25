@@ -2,17 +2,22 @@ jar, no parent getResource: jar jar jar null null
 jar, no parent getResourceAsStream: in the jar null
 jar, no parent getResources: 1 0 1
 jar, no parent findResource: jar jar
+jar URL names: true true true !/odd/a%3db%3bc%20d%c3%a9%23.txt odd
 defined class: true
 defined class resources: probe's own | jar jar
 defined class code source: true true true
 directory, no parent: in the directory file file 1
+directory URL names: /a%3db%3bc%20d%c3%a9%23.txt true
+platform parent: jar 1 true in the jar
+platform loader: null null 0
 jar, app parent getResource: jar jar jar null null
 jar, app parent getResourceAsStream: in the jar null
 jar, app parent getResources: 1 0 1
 jar, app parent findResource: jar jar
 parent first: file [file, jar] jar
 custom findResource: file null null
-app root: file true
+app root: file true true
+app jar URL names: !/odd/a%3db%3bc%20d%c3%a9%23.txt odd one true true
 app class resource: file file
 code source: true true true
 protection domain: true true null

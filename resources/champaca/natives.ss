@@ -1321,12 +1321,7 @@
   (let ([bv (if (record? x) ((record-accessor (record-rtd x) 0) x) x)])
     (unless (bytevector? bv) (error 'champaca "resource hook gave no bytes" x))
     bv))
-(define (resource-stream path)
-  (let ([found (resource-hook path)])
-    (and found
-         (let* ([bv (host-bytevector found)] [n (bytevector-length bv)] [v (make-vector n)])
-           (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v i (bytevector-s8-ref bv i)))
-           (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v))))))
+(define (resource-stream path) (bytes-stream (resource-hook path)))
 ;; Class.getResource*: a name without a leading / is relative to the class's
 ;; package. A ClassLoader takes names without one, and finds nothing for a
 ;; name with one (the loader's hook refuses it).
@@ -1347,6 +1342,28 @@
 ;; URLs here (JDK resources are streams only), so through a loader with no
 ;; parent a JDK resource is found by that loader alone.
 (define (own-loader? l) (and l (not (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))))
+;; the platform loader has no class path: it sees the JDK's resources alone,
+;; as streams, so a loader isolated under it doesn't see the application's
+(define (platform-loader? l)
+  (let ([s '|jdk/internal/loader/ClassLoaders:PLATFORM_LOADER|])
+    (and l (top-level-bound? s) (eq? l (top-level-value s)))))
+(define jdk-resource-hook (lambda (path) #f))
+(define (set-jdk-resource-hook! f) (set! jdk-resource-hook f))
+(define (bytes-stream found)
+  (and found
+       (let* ([bv (host-bytevector found)] [n (bytevector-length bv)] [v (make-vector n)])
+         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v i (bytevector-s8-ref bv i)))
+         (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v)))))
+;; a built-in loader's stream: the bytes, or for a classpath directory (which
+;; has a URL but no bytes) the URL opened, which lists it, as the JDK's
+;; getResourceAsStream opens getResource's URL
+(define (builtin-resource-stream l path)
+  (if (platform-loader? l)
+      (bytes-stream (jdk-resource-hook path))
+      (or (resource-stream path)
+          (let ([u (first-resource-url path)])
+            (and u (guard (e [(and (jobj? e) (jinstance? e "java/io/IOException")) #f])
+                     ((jvirt u "openStream()Ljava/io/InputStream;") u)))))))
 (define (class-own-loader this)
   (let ([l (jslot this (jfield-index "java/lang/Class" "classLoader"))]) (and (own-loader? l) l)))
 (define (own-get-resource l name)
@@ -1371,14 +1388,14 @@
     (let ([l (class-own-loader this)] [p (class-resource-path this name)])
       (if l
           ((jvirt l "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;") l (jstring p))
-          (resource-stream p)))))
+          (builtin-resource-stream #f p)))))
 (define-override! "java/lang/ClassLoader.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resource-stream this (nn name))
-        (resource-stream (jstring->scheme (nn name))))))
+        (builtin-resource-stream this (jstring->scheme (nn name))))))
 (define-override! "java/lang/ClassLoader.getSystemResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
-  (lambda (name) (resource-stream (jstring->scheme (nn name)))))
+  (lambda (name) (builtin-resource-stream #f (jstring->scheme (nn name)))))
 
 ;; URLs, for classpath resources only (file: and jar:, which the JDK opens
 ;; with its own handlers)
@@ -1408,14 +1425,16 @@
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resource this (nn name))
-        (first-resource-url (jstring->scheme (nn name))))))
+        (and (not (platform-loader? this)) (first-resource-url (jstring->scheme (nn name)))))))
 (define-override! "java/lang/ClassLoader.getSystemResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (name) (first-resource-url (jstring->scheme (nn name)))))
 (define-override! "java/lang/ClassLoader.getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resources this (nn name))
-        (resource-enumeration (jstring->scheme (nn name))))))
+        (if (platform-loader? this)
+            (resource-enumeration-of '())
+            (resource-enumeration (jstring->scheme (nn name)))))))
 
 ;; Class.getProtectionDomain: a field the VM sets when it defines a class. A
 ;; class defined with a domain keeps that one (define-class!); a classpath
