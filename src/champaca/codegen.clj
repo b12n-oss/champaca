@@ -736,7 +736,10 @@
           ;; the element descriptor is interned once per method (runtime.ss)
           :newarray (let [e (newarray-elem a0) el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
                       (un #(sx (at pc "jnewarray-interned") el % (if (#{"F" "D"} e) "0.0" "0")) "A"))
+          ;; the element class resolves here, as the JVM's anewarray does: making
+          ;; the array alone wouldn't load it
           :anewarray (let [c (:name (cp a0))
+                           _ (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                            e (if (str/starts-with? c "[") c (str "L" c ";"))
                            el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
                        (un #(sx (at pc "jnewarray-interned") el % "#f") "A"))

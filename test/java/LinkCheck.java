@@ -24,7 +24,8 @@ public class LinkCheck {
     static Object newInstance() { return present ? new LinkGone() : "absent"; }
     static Object checkcast(Object o) { return present ? (LinkGone) o : "absent"; }
     static Object instanceOf(Object o) { return present ? (Object) (o instanceof LinkGone) : "absent"; }
-    static Object newArray() { return present ? new LinkGone[1] : "absent"; }
+    // the array isn't printed: toString would load the element class anyway
+    static Object newArray() { return present ? (new LinkGone[1] != null ? "made" : "null") : "absent"; }
     static Object getStatic() { return present ? LinkGone.FIELD : "absent"; }
     static Object putStatic() { if (present) LinkGone.FIELD = "x"; return "absent"; }
     static Object invokeStatic() { return present ? LinkGone.make() : "absent"; }
