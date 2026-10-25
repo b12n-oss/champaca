@@ -169,8 +169,12 @@
                             (let [f (io/file entry rel)]
                               (when (.exists f)
                                 (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))]
-              (swap! state update :package-entries
-                     (fn [m] (let [d (package-dir cname)] (if (contains? m d) m (assoc m d entry)))))
+              (swap! state (fn [st]
+                             (-> st
+                                 (update :package-entries
+                                         (fn [m] (let [d (package-dir cname)] (if (contains? m d) m (assoc m d entry)))))
+                                 ;; the entry a class came from is its code source
+                                 (assoc-in [:class-entries cname] entry))))
               bs))
           (:classpath @state))))
 
@@ -299,22 +303,40 @@
                              (str "+" (.toURI (io/file (.getAbsolutePath (io/file entry)))))
                              "-")]))))))
 
+(defn- entry-url
+  "A classpath entry's URL as the JDK's class loaders make it: from the
+  canonical file (a symlink resolved), a directory's ending in /."
+  [entry]
+  (str (.toURI (.getCanonicalFile (io/file entry)))))
+
+(defn- encode-path
+  "A resource name in a URL, as the JDK's ParseUtil.encodePath writes it: the
+  characters a path may hold as they are, every other byte of its UTF-8 as %XX."
+  [path]
+  (let [keep? (set "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()/:@&=+$,;")]
+    (apply str (map (fn [b] (let [c (char (bit-and b 0xff))]
+                              (if (and (< (bit-and b 0xff) 128) (keep? c))
+                                (str c)
+                                (str "%" (str/upper-case (format "%02x" (bit-and b 0xff)))))))
+                    (.getBytes ^String path "UTF-8")))))
+
 (defn- resource-urls
   "Every classpath entry's URL for path, file: for a directory and jar: for a
-  jar, in classpath order. JDK resources have none: their jrt: URLs need the
-  runtime image."
+  jar, in classpath order. In a directory anything that exists counts, a
+  directory too, and \"\" names the directory itself, as the JDK's file
+  loader answers. JDK resources have none: their jrt: URLs need the runtime
+  image."
   [path]
-  (for [entry (when (plain-resource-path? path) (:classpath @state))
-        :let [f (io/file entry)
-              abs (.getAbsolutePath f)]
-        :when (if (str/ends-with? (str entry) ".jar")
-                (some? (.getEntry (jar entry) path))
-                (.isFile (io/file entry path)))]
-    ;; File.toURI percent-encodes as the JDK's class loaders do; an entry name
-    ;; is encoded the same way, through a File standing for "/<path>"
-    (if (str/ends-with? (str entry) ".jar")
-      (str "jar:" (.toURI f) "!" (subs (str (.toURI (io/file (str "/" path)))) 5))
-      (str (.toURI (io/file abs path))))))
+  (for [entry (when (or (= path "") (plain-resource-path? path)) (:classpath @state))
+        :let [jar? (str/ends-with? (str entry) ".jar")]
+        :when (if jar?
+                (and (not= path "") (some? (.getEntry (jar entry) path)))
+                (.exists (io/file entry path)))]
+    ;; an entry name is percent-encoded as File.toURI does, through a File
+    ;; standing for "/<path>"
+    (if jar?
+      (str "jar:" (entry-url entry) "!" (subs (str (.toURI (io/file (str "/" path)))) 5))
+      (str (entry-url entry) (encode-path path)))))
 
 (defn- record!
   "Keep code for the startup cache when it belongs to a JDK class: {:text t}
@@ -1117,7 +1139,7 @@
           (swap! state assoc :cache-tmp tmp))
         (doseq [f runtime-files] (scheme! (slurp (io/resource f)))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
-  (s/call "set-classpath!" (str/join ":" (:classpath @state)))
+  (s/call "set-classpath!" (str/join ":" (:classpath-given @state)))
   (s/call "set-define-class-hook!" define-class!)
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
@@ -1128,6 +1150,8 @@
           ;; URLs as one string, one per line
           (fn [path] (str/join "\n" (resource-urls path))))
   (s/call "set-jpackage-hook!" package-info)
+  ;; a classpath class's code source: its entry's URL, or false
+  (s/call "set-code-source-hook!" (fn [cname] (if-let [e (get-in @state [:class-entries cname])] (entry-url e) false)))
   (s/call "set-cp-hook!" (fn [cname i]
                            (let [e (get (:cp (parsed cname)) i)]
                              (let [v (or (:value e) (:name e)
@@ -1175,12 +1199,44 @@
       (swap! state assoc :cache (cond hit? :hit dir :miss :else :off))
       status)))
 
+(defn- manifest-class-path
+  "The entries a jar's manifest Class-Path names, as files: space-separated
+  URLs relative to the jar's directory (or file: ones), %-escapes decoded."
+  [entry]
+  (when-let [v (get-in (jar-manifest entry) [nil "class-path"])]
+    (let [dir (.getParentFile (.getAbsoluteFile (io/file entry)))
+          decode (fn [u] (str/replace u (re-pattern "%([0-9A-Fa-f]{2})")
+                                      (fn [[_ h]] (str (char (Integer/parseInt h 16))))))]
+      (for [u (str/split (str/trim v) (re-pattern "\\s+"))
+            :when (not (str/blank? u))
+            :let [u (decode u)
+                  f (if (str/starts-with? u "file:") (io/file (subs u 5)) (io/file dir u))]]
+        (str f)))))
+
+(defn- with-manifest-class-paths
+  "classpath with each jar's manifest Class-Path entries right after it,
+  where the JDK's URLClassPath searches them, theirs after them in turn; an
+  entry is searched once, and one that isn't there is left out."
+  [classpath]
+  ;; todo holds [entry named-by-a-manifest?]; the entries given stay as given
+  (loop [todo (map (fn [e] [e false]) classpath) seen #{} out []]
+    (if-let [[e manifest?] (first todo)]
+      (let [k (str (.getCanonicalFile (io/file e)))]
+        (if (or (seen k) (and manifest? (not (.exists (io/file e)))))
+          (recur (rest todo) seen out)
+          (recur (concat (when (str/ends-with? (str e) ".jar") (map (fn [m] [m true]) (manifest-class-path e)))
+                         (rest todo))
+                 (conj seen k) (conj out e))))
+      out)))
+
 (defn init!
   "Boot the JDK once (System.initPhase1 and what precedes it) with the given
   user classpath dirs. Returns 0 on success; a second call is a no-op."
   [classpath]
   (or (:boot-status @state)
-      (do (swap! state assoc :classpath (vec classpath))
+      (do (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
+                 ;; java.class.path is what was given, as the JVM's launcher has it
+                 :classpath-given (vec classpath))
           (let [status (boot!)] (swap! state assoc :boot-status status) status))))
 
 (defn run
@@ -1202,6 +1258,19 @@
 (defn -main [& argv]
   (let [[cp cname & args] argv]
     (when-not cname
-      (binding [*out* *err*] (println "usage: jolt -M -m champaca.main <classpath[:entry...] (dirs and jars)> <MainClass> [args...]"))
+      (binding [*out* *err*]
+        (println "usage: jolt -M -m champaca.main <classpath[:entry...] (dirs and jars)> <MainClass> [args...]")
+        (println "   or: jolt -M -m champaca.main -jar <jarfile> [args...]"))
       (System/exit 2))
-    (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args)))))
+    (if (= cp "-jar")
+      ;; as java -jar: the manifest's Main-Class, the jar alone as the class
+      ;; path given (its Class-Path entries follow it, as for any jar)
+      (let [main (and (.isFile (io/file cname)) (get-in (jar-manifest cname) [nil "main-class"]))]
+        (when-not main
+          (binding [*out* *err*]
+            (println (if (.isFile (io/file cname))
+                       (str "no main manifest attribute, in " cname)
+                       (str "Error: Unable to access jarfile " cname))))
+          (System/exit 1))
+        (System/exit (run [cname] (str/replace (str/trim main) "." "/") (vec args))))
+      (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args))))))

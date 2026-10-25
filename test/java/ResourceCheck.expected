@@ -1,0 +1,20 @@
+jar, no parent getResource: jar jar jar null null
+jar, no parent getResourceAsStream: in the jar null
+jar, no parent getResources: 1 0 1
+jar, no parent findResource: jar jar
+defined class: true
+defined class resources: probe's own | jar jar
+defined class code source: true true true
+directory, no parent: in the directory file file 1
+jar, app parent getResource: jar jar jar null null
+jar, app parent getResourceAsStream: in the jar null
+jar, app parent getResources: 1 0 1
+jar, app parent findResource: jar jar
+parent first: true
+custom findResource: file null
+app root: file true
+app class resource: file file
+code source: true true true
+protection domain: true true null
+given protection domain: true
+definer: null

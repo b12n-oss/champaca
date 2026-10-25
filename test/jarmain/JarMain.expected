@@ -1,0 +1,5 @@
+args: [a, b]
+class path: true
+own code source: true
+from Class-Path: champaca.lib.Note true
+service: champaca.lib.EnglishGreeter Hello, jar

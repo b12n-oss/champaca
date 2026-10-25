@@ -46,11 +46,13 @@ To call one of them from jolt, with the jars in `~/.m2`:
 ;=> {"name" "champaca", "tags" ["a" "b"]}
 ```
 
-Champaca doesn't resolve Maven coordinates, so a library's dependencies have to be listed too, as Jackson's three jars are here.
+Champaca doesn't resolve Maven coordinates, so a library's dependencies have to be listed too, as Jackson's three jars are here, unless a jar names them in its manifest's `Class-Path`, which is followed as on the JVM.
 
 ### Resources
 
-A jar's other files are reachable the way Java code expects. `getResourceAsStream` reads them, `getResource` gives a `jar:` URL (a `file:` URL for a directory on the classpath) that opens like any other, and `ServiceLoader` finds the providers listed under `META-INF/services`. That last one is how SLF4J 2 finds its logging backend: without it, SLF4J prints "No SLF4J providers were found" and logs nothing. `test/java/JarCheck.java` loads a service, a properties file and a URL from `test/jar`.
+A jar's other files are reachable the way Java code expects. `getResourceAsStream` reads them, `getResource` gives a `jar:` URL (a `file:` URL for a directory on the classpath, where a directory itself is a resource too, and `""` the entry's root, as on the JVM) that opens like any other, and `ServiceLoader` finds the providers listed under `META-INF/services`. That last one is how SLF4J 2 finds its logging backend: without it, SLF4J prints "No SLF4J providers were found" and logs nothing. `test/java/JarCheck.java` loads a service, a properties file and a URL from `test/jar`.
+
+A class loader of your program's own, such as a `URLClassLoader` over a jar a plugin system found, answers `getResource`, `getResourceAsStream` and `getResources` the way the JDK has it: its parent first, then its own `findResource`. A class it defines finds its resources through it, and its `getProtectionDomain()` is the one the loader gave `defineClass`. A classpath class's code source is its entry's URL, a jar's or a directory's, which is how Quarkus's launcher and Spring Boot find their own jar (`test/java/ResourceCheck.java`).
 
 Resources inside the JDK's own modules, such as the ICU data the JDK uses for Unicode normalization, can be read as streams but have no URL.
 

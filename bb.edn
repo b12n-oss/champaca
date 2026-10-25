@@ -182,6 +182,11 @@
                     _ (shell "java test/gen/DefaultConflictGen.java target/classes")
                     ;; ModuleCheck's Truncated.class: present but unloadable
                     _ (shell "java test/gen/TruncatedGen.java target/classes")
+                    ;; run as -jar: target/app.jar's manifest names JarMain and a
+                    ;; Class-Path of lib.jar beside it
+                    _ (shell "mkdir -p target/jarmain-classes")
+                    _ (shell "javac -d target/jarmain-classes test/jarmain/JarMain.java")
+                    _ (shell "jar cfm target/app.jar test/jarmain.mf -C target/jarmain-classes .")
                     ;; BlockingIoCheck's FIFO
                     _ (fs/delete-if-exists "target/blocking-io.fifo")
                     _ (shell "mkfifo target/blocking-io.fifo")
@@ -196,6 +201,10 @@
                                                                        (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
+                    jar-fails (let [{:keys [out exit]} (run-limited 300 {} (jolt-bin) "-M" "-m" "champaca.main" "-jar" "target/app.jar" "a" "b")
+                                    ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
+                                (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
+                                (if ok [] ["-jar"]))
                     ;; jolt programs calling Java, each a namespace of clojure.test
                     ;; tests that test/run_example.clj runs in a process of its own
                     ex-fails (doall
@@ -205,8 +214,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails ex-fails))
-                    mains (concat mains (map first examples))]
+                    fails (remove nil? (concat fails jar-fails ex-fails))
+                    mains (concat mains ["-jar"] (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"

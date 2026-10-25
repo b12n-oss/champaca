@@ -1,0 +1,2 @@
+Main-Class: JarMain
+Class-Path: lib.jar

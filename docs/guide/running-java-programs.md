@@ -9,6 +9,8 @@ jolt -M -m champaca.main classes Boom
 
 The first argument is the classpath, colon-separated as with `java -cp` (`classes:lib/gson-2.13.2.jar`). The second is the main class, with dots or slashes. Anything after that goes to `main` as its `String[]`.
 
+As with `java -jar`, `jolt -M -m champaca.main -jar app.jar args...` runs the class the jar's manifest names in `Main-Class`, with the jar as the class path. A jar's `Class-Path` entries, relative to the jar's directory, are searched right after it, as the JVM's application loader does, whether the jar came through `-jar` or the class path; `java.class.path` stays what was given. A jar without `Main-Class` or a missing one fails with the JVM's message and status 1 (`test/jarmain`, run by `bb test`).
+
 `System.out` and `System.err` go through the JDK's own `PrintStream` and encoder down to a native write, and the process exits with the status a JVM would give: 0, the argument to `System.exit`, or 1 after an uncaught exception. As with `java`, the process waits for any non-daemon threads still running when `main` returns, then runs the shutdown hooks.
 
 Here's a small program that throws on its second line of output:

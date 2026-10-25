@@ -1338,10 +1338,45 @@
                [slash (let loop ([i (fx- (string-length c) 1)])
                         (cond [(fx< i 0) #f] [(char=? (string-ref c i) #\/) i] [else (loop (fx- i 1))]))])
           (if slash (string-append (substring c 0 (fx+ slash 1)) n) n)))))
+;; A loader of the program's own (a URLClassLoader, a plugin or fat-jar
+;; loader) runs the JDK's own logic: its parent first, or the boot loader,
+;; then its findResource, which a URLClassLoader answers from its URLs
+;; through the JDK's code; the built-in loaders answer from the classpath and
+;; the image. A class such a loader defined asks it for its resources, as
+;; Class.getResource does through its class's loader. The boot loader has no
+;; URLs here (JDK resources are streams only), so through a loader with no
+;; parent a JDK resource is found by that loader alone.
+(define (own-loader? l) (and l (not (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))))
+(define (class-own-loader this)
+  (let ([l (jslot this (jfield-index "java/lang/Class" "classLoader"))]) (and (own-loader? l) l)))
+(define (own-get-resource l name)
+  (let* ([parent (jslot l (jfield-index "java/lang/ClassLoader" "parent"))]
+         [up (and parent ((jvirt parent "getResource(Ljava/lang/String;)Ljava/net/URL;") parent name))])
+    (or up ((jvirt l "findResource(Ljava/lang/String;)Ljava/net/URL;") l name))))
+(define (own-get-resource-stream l name)
+  (let ([u ((jvirt l "getResource(Ljava/lang/String;)Ljava/net/URL;") l name)])
+    ;; as the JDK's: an IOException opening it is no resource
+    (and u (guard (e [(and (jobj? e) (jinstance? e "java/io/IOException")) #f])
+             ((jvirt u "openStream()Ljava/io/InputStream;") u)))))
+(define (own-get-resources l name)
+  (let* ([parent (jslot l (jfield-index "java/lang/ClassLoader" "parent"))]
+         [up (if parent
+                 ((jvirt parent "getResources(Ljava/lang/String;)Ljava/util/Enumeration;") parent name)
+                 (resource-enumeration-of '()))]
+         [mine ((jvirt l "findResources(Ljava/lang/String;)Ljava/util/Enumeration;") l name)])
+    (construct "java/lang/CompoundEnumeration" "([Ljava/util/Enumeration;)V"
+               (make-jarr "Ljava/util/Enumeration;" (vector up mine)))))
 (define-override! "java/lang/Class.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
-  (lambda (this name) (resource-stream (class-resource-path this name))))
+  (lambda (this name)
+    (let ([l (class-own-loader this)] [p (class-resource-path this name)])
+      (if l
+          ((jvirt l "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;") l (jstring p))
+          (resource-stream p)))))
 (define-override! "java/lang/ClassLoader.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
-  (lambda (this name) (resource-stream (jstring->scheme (nn name)))))
+  (lambda (this name)
+    (if (own-loader? this)
+        (own-get-resource-stream this (nn name))
+        (resource-stream (jstring->scheme (nn name))))))
 (define-override! "java/lang/ClassLoader.getSystemResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (name) (resource-stream (jstring->scheme (nn name)))))
 
@@ -1357,19 +1392,55 @@
                      [(char=? (string-ref text i) #\newline) (loop (fx+ i 1) (fx+ i 1) (cons (substring text start i) acc))]
                      [else (loop (fx+ i 1) start acc)]))))))
 (define (first-resource-url path) (let ([us (resource-url-list path)]) (and (pair? us) (car us))))
-(define (resource-enumeration path)
+(define (resource-enumeration-of urls)
   (let ([lst (construct "java/util/ArrayList" "()V")])
-    (for-each (lambda (u) ((jvirt lst "add(Ljava/lang/Object;)Z") lst u)) (resource-url-list path))
+    (for-each (lambda (u) ((jvirt lst "add(Ljava/lang/Object;)Z") lst u)) urls)
     (jinit "java/util/Collections")
     ((method-proc "java/util/Collections" "enumeration(Ljava/util/Collection;)Ljava/util/Enumeration;") lst)))
+(define (resource-enumeration path) (resource-enumeration-of (resource-url-list path)))
 (define-override! "java/lang/Class.getResource(Ljava/lang/String;)Ljava/net/URL;"
-  (lambda (this name) (first-resource-url (class-resource-path this name))))
+  (lambda (this name)
+    (let ([l (class-own-loader this)] [p (class-resource-path this name)])
+      (if l
+          ((jvirt l "getResource(Ljava/lang/String;)Ljava/net/URL;") l (jstring p))
+          (first-resource-url p)))))
 (define-override! "java/lang/ClassLoader.getResource(Ljava/lang/String;)Ljava/net/URL;"
-  (lambda (this name) (first-resource-url (jstring->scheme (nn name)))))
+  (lambda (this name)
+    (if (own-loader? this)
+        (own-get-resource this (nn name))
+        (first-resource-url (jstring->scheme (nn name))))))
 (define-override! "java/lang/ClassLoader.getSystemResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (name) (first-resource-url (jstring->scheme (nn name)))))
 (define-override! "java/lang/ClassLoader.getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
-  (lambda (this name) (resource-enumeration (jstring->scheme (nn name)))))
+  (lambda (this name)
+    (if (own-loader? this)
+        (own-get-resources this (nn name))
+        (resource-enumeration (jstring->scheme (nn name))))))
+
+;; Class.getProtectionDomain: a field the VM sets when it defines a class. A
+;; class defined with a domain keeps that one (define-class!); a classpath
+;; class gets the application loader's for its entry's code source, made the
+;; first time it is asked for, as BuiltinClassLoader defines it with
+;; (SecureClassLoader.getProtectionDomain, which caches one per code source);
+;; any other class the JDK's all-permission domain with no code source
+(define code-source-hook (lambda (cname) #f))
+(define (set-code-source-hook! f) (set! code-source-hook f))
+(define-override! "java/lang/Class.getProtectionDomain()Ljava/security/ProtectionDomain;"
+  (lambda (this)
+    (let* ([slot (jfield-index "java/lang/Class" "protectionDomain")] [pd (jslot this slot)])
+      (or pd
+          (let* ([c (mirror-class this)]
+                 [url (and (not (eq? (jclass-kind c) 'array)) (user-class? (jclass-cname c))
+                           (code-source-hook (jclass-cname c)))])
+            (and url
+                 (let* ([cs (construct "java/security/CodeSource" "(Ljava/net/URL;[Ljava/security/CodeSigner;)V"
+                                       (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring url)) #f)]
+                        [pd ((method-proc "java/security/SecureClassLoader"
+                                          "getProtectionDomain(Ljava/security/CodeSource;)Ljava/security/ProtectionDomain;")
+                             (app-loader) cs)])
+                   (jslot-set! this slot pd)
+                   pd)))
+          (begin (jinit "java/lang/Class$Holder") (top-level-value '|java/lang/Class$Holder:allPermDomain|))))))
 (define-override! "java/lang/ClassLoader.getSystemResources(Ljava/lang/String;)Ljava/util/Enumeration;"
   (lambda (name) (resource-enumeration (jstring->scheme (nn name)))))
 
@@ -1563,7 +1634,7 @@
                      [(jobj? e) (hashtable-set! resolution-errors name e) #f])
              ((jvirt l "loadClass(Ljava/lang/String;)Ljava/lang/Class;") l (jstring (slashes->dots name)))
              (and (hashtable-ref classes name #f) #t))))))
-(define (define-class! loader given v off len hidden? classdata)
+(define (define-class! loader given v off len hidden? classdata pd)
   (unless (and (fx>= off 0) (fx>= len 0) (fx<= (fx+ off len) (vector-length v)))
     (jthrow "java/lang/ArrayIndexOutOfBoundsException"
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
@@ -1589,10 +1660,12 @@
            (when loader (hashtable-set! class-loaders arg loader))
            (let ([m (jmirror (find-class arg))])
              (when classdata (jslot-set! m (jfield-index "java/lang/Class" "classData") classdata))
+             ;; the domain it was defined with is its getProtectionDomain
+             (when pd (jslot-set! m (jfield-index "java/lang/Class" "protectionDomain") pd))
              m)])))
 (defnative "java/lang/ClassLoader.defineClass1(Ljava/lang/ClassLoader;Ljava/lang/String;[BIILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
-  (define-class! loader name (jarr-vec (nn b)) off len #f #f))
+  (define-class! loader name (jarr-vec (nn b)) off len #f #f pd))
 (defnative "java/lang/ClassLoader.defineClass2(Ljava/lang/ClassLoader;Ljava/lang/String;Ljava/nio/ByteBuffer;IILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
   ;; only a direct buffer gets here (ClassLoader.defineClass copies a heap
@@ -1600,21 +1673,21 @@
   ;; from the position given, which is what Unsafe gave it
   (let ([hb (jslot (nn b) (jfield-index "java/nio/ByteBuffer" "hb"))])
     (if hb
-        (define-class! loader name (jarr-vec hb) (fx+ off (jslot b (jfield-index "java/nio/ByteBuffer" "offset"))) len #f #f)
+        (define-class! loader name (jarr-vec hb) (fx+ off (jslot b (jfield-index "java/nio/ByteBuffer" "offset"))) len #f #f pd)
         (let* ([addr (jslot b (jfield-index "java/nio/Buffer" "address"))]
                [v (make-vector len)])
           (do ([i 0 (fx+ i 1)]) ((fx= i len))
             (vector-set! v i (foreign-ref 'unsigned-8 addr (fx+ off i))))
-          (define-class! loader name v 0 len #f #f)))))
+          (define-class! loader name v 0 len #f #f pd)))))
 (defnative "java/lang/ClassLoader.defineClass0(Ljava/lang/ClassLoader;Ljava/lang/Class;Ljava/lang/String;[BIILjava/security/ProtectionDomain;ZILjava/lang/Object;)Ljava/lang/Class;"
   (loader lookup name b off len pd initialize flags classdata)
   ;; flags: 1 nestmate (the lookup class's nest, not kept here), 2 hidden, 4 strong, 8 vm annotations
-  (let ([m (define-class! loader name (jarr-vec (nn b)) off len (fxpositive? (fxlogand flags 2)) classdata)])
+  (let ([m (define-class! loader name (jarr-vec (nn b)) off len (fxpositive? (fxlogand flags 2)) classdata pd)])
     (when (eqv? initialize 1) (jinit (jclass-cname (mirror-class m))))
     m))
 (defnative "jdk/internal/misc/Unsafe.defineClass0(Ljava/lang/String;[BIILjava/lang/ClassLoader;Ljava/security/ProtectionDomain;)Ljava/lang/Class;"
   (this name b off len loader pd)
-  (define-class! loader name (jarr-vec (nn b)) off len #f #f))
+  (define-class! loader name (jarr-vec (nn b)) off len #f #f pd))
 
 (define-override! "jdk/internal/loader/BuiltinClassLoader.loadClassOrNull(Ljava/lang/String;Z)Ljava/lang/Class;"
   (lambda (this name resolve) (class-or-null this name)))
