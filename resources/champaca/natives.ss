@@ -842,6 +842,22 @@
          [ctype (and set? (setlocale 0 #f))])     ; LC_CTYPE
     (when set? (setlocale 6 saved))
     (cons (posix-locale-parts messages) (posix-locale-parts ctype))))
+;; user.name and user.home as the JDK finds them: the password database's
+;; entry for getuid() (name "?" without one), its home directory unless that
+;; is missing or under two characters, then $HOME. USER and HOME don't
+;; decide either (a container's root has no USER).
+(define (password-entry)
+  (let* ([getpwuid (foreign-procedure "getpwuid" (unsigned-32) uptr)]
+         [getuid (foreign-procedure "getuid" () unsigned-32)]
+         [pw (getpwuid (getuid))]
+         ;; struct passwd: pw_name first; pw_dir after pw_change, pw_class and
+         ;; pw_gecos on macOS (48), after pw_gecos on glibc (32)
+         [field (lambda (off) (and (not (eqv? pw 0))
+                                   (let ([p (foreign-ref 'uptr pw off)]) (and (not (eqv? p 0)) (c-string-text p)))))]
+         [name (or (field 0) "?")]
+         [dir (field (if natives-macos? 48 32))])
+    (values name
+            (if (and dir (fx>= (string-length dir) 2)) dir (or (getenv "HOME") dir "?")))))
 (define (host-locales)
   (if natives-macos?
       (let ([l (or (macos-locale) (posix-locale-parts #f))]) (cons l l))
@@ -917,8 +933,9 @@
                             '("language" "script" "country") parts))
                 '("display" "format") (list (car ls) (cdr ls))))
     (set "_user_dir_NDX" (current-directory))
-    (set "_user_home_NDX" (or (getenv "HOME") "/"))
-    (set "_user_name_NDX" (or (getenv "USER") "champaca"))
+    (let-values ([(name home) (password-entry)])
+      (set "_user_home_NDX" home)
+      (set "_user_name_NDX" name))
     (set "_sun_cpu_endian_NDX" "little")
     (set "_sun_arch_data_model_NDX" "64")
     ;; as the JDK's own: UnicodeBig on macOS whatever the byte order
