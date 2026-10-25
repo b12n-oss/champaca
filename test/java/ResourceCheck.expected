@@ -17,7 +17,7 @@ jar, app parent findResource: jar jar
 parent first: file [file, jar] jar
 custom findResource: file null null
 app root: file true true
-app jar URL names: !/odd/a%3db%3bc%20d%c3%a9%23.txt odd one true true
+app jar URL names: !/odd/a%3db%3bc%20d%23.txt odd one true true
 app class resource: file file
 code source: true true true
 protection domain: true true null

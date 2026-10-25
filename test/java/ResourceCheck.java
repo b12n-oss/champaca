@@ -130,8 +130,10 @@ public class ResourceCheck {
         URL root = app.getResource("");
         row("app root", found(root) + " " + (root != null && root.getPath().endsWith("/"))
             + " " + (app.getResourceAsStream("") != null));
-        // names the class path itself escapes: target/lib.jar has these (test/jar)
-        URL oddApp = app.getResource("odd/a=b;c d\u00e9#.txt");
+        // names the class path itself escapes: target/lib.jar has these (test/jar;
+        // ASCII only, since a Linux container's JVM without a UTF-8 locale can't
+        // read a file name holding anything else)
+        URL oddApp = app.getResource("odd/a=b;c d#.txt");
         row("app jar URL names", (oddApp == null ? "null" : oddApp.toString().substring(oddApp.toString().indexOf("!/")))
             + " " + (oddApp == null ? "" : text(oddApp.openStream()))
             + " " + String.valueOf(app.getResource("champaca/lib/")).endsWith("!/champaca/lib/")
