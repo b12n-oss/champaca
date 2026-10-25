@@ -92,8 +92,24 @@
 
 (define (jfcmp a b nan-result)
   (cond [(or (nan? a) (nan? b)) nan-result] [(fl< a b) -1] [(fl> a b) 1] [else 0]))
-(define (jfrem a b) (if (or (nan? a) (nan? b) (fl= b 0.0) (infinite? a)) +nan.0
-                        (fl- a (fl* b (fltruncate (fl/ a b))))))
+;; Java's % on doubles and floats is C's fmod (JLS 15.17.3; HotSpot calls it):
+;; a - b*q with q the quotient truncated, always exact, with a's sign even
+;; when zero (-4.0 % 2.0 is -0.0), an infinite divisor giving a back. libm's
+;; fmod does it (libSystem on macOS, libm.so.6 on glibc, where it isn't in
+;; libc), about 10 ns a call; where it can't be loaded, exact arithmetic
+;; gives the same answers at about 300 ns. The flonum a - b*trunc(a/b) it
+;; replaces lost a zero's sign and went wrong once a/b passed 2^53.
+(define (exact-frem a b)
+  (cond [(or (nan? a) (nan? b) (infinite? a) (fl= b 0.0)) +nan.0]
+        [(or (infinite? b) (fl= a 0.0)) a]
+        [else (let* ([ea (exact a)] [eb (exact b)]
+                     [r (inexact (- ea (* eb (truncate (/ ea eb)))))])
+                (if (fl= r 0.0) (if (fl< a 0.0) -0.0 0.0) r))]))
+(define libm-fmod
+  (guard (e [#t #f])
+    (load-shared-object (if (memq (machine-type) '(tarm64osx arm64osx ta6osx a6osx)) "libSystem.dylib" "libm.so.6"))
+    (foreign-procedure "fmod" (double double) double)))
+(define jfrem (or libm-fmod exact-frem))
 (define (d2i x) (cond [(nan? x) 0] [(fl>= x 2147483647.0) 2147483647] [(fl<= x -2147483648.0) -2147483648]
                       [else (exact (fltruncate x))]))
 (define (d2l x) (cond [(nan? x) 0] [(fl>= x 9223372036854775807.0) 9223372036854775807]
