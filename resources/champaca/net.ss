@@ -489,11 +489,14 @@
 (deflibc-blocking libc-epoll-wait-blocking (if net-macos? "no-epoll-here" "epoll_wait") (int uptr int int) int)
 (deflibc libc-eventfd (if net-macos? "no-eventfd-here" "eventfd") #f (unsigned-32 int) int)
 
+;; the IOException of JNU_ThrowIOExceptionWithLastError, whose message is
+;; strerror's text alone (the C code's "what" is only its fallback)
+(define (last-error-io e) (jthrow "java/io/IOException" (strerror-text e)))
 ;; a wait's result: the events, or -3 (IOStatus.INTERRUPTED) on EINTR
-(define (wait-status r e what)
+(define (wait-status r e)
   (cond [(fx>= r 0) r]
         [(fx= e 4) -3]
-        [else (jthrow "java/io/IOException" (string-append what " (" (strerror-text e) ")"))]))
+        [else (last-error-io e)]))
 
 (defnative "sun/nio/ch/KQueue.keventSize()I" () 32)
 (defnative "sun/nio/ch/KQueue.identOffset()I" () 0)
@@ -501,7 +504,7 @@
 (defnative "sun/nio/ch/KQueue.flagsOffset()I" () 10)
 (defnative "sun/nio/ch/KQueue.create()I" ()
   (let ([kq (libc-kqueue)])
-    (when (< kq 0) (io-error "kqueue failed"))
+    (when (< kq 0) (last-error-io (errno)))
     kq))
 ;; one change, applied at once; errno on failure (the JDK's caller decides)
 (defnative "sun/nio/ch/KQueue.register(IIII)I" (kq fd filter flags)
@@ -524,14 +527,14 @@
                   (released-call* (lambda () (libc-kevent-blocking kq 0 0 addr n (or ts 0)))))]
            [e (errno)])
       (when ts (foreign-free ts))
-      (wait-status r e "kqueue failed"))))
+      (wait-status r e))))
 
 (defnative "sun/nio/ch/EPoll.eventSize()I" () (if epoll-packed? 12 16))
 (defnative "sun/nio/ch/EPoll.eventsOffset()I" () 0)
 (defnative "sun/nio/ch/EPoll.dataOffset()I" () (if epoll-packed? 4 8))
 (defnative "sun/nio/ch/EPoll.create()I" ()
   (let ([epfd (libc-epoll-create1 #x80000)])   ; EPOLL_CLOEXEC
-    (when (< epfd 0) (io-error "epoll_create1 failed"))
+    (when (< epfd 0) (last-error-io (errno)))
     epfd))
 ;; the data word carries the fd, as EPoll.c sets event.data.fd
 (defnative "sun/nio/ch/EPoll.ctl(IIII)I" (epfd op fd events)
@@ -539,7 +542,7 @@
     (foreign-set! 'unsigned-64 ev 0 0) (foreign-set! 'unsigned-64 ev 8 0)
     (foreign-set! 'unsigned-32 ev 0 (logand events #xffffffff))
     (foreign-set! 'int ev (if epoll-packed? 4 8) fd)
-    (let* ([r (libc-epoll-ctl epfd op fd ev)] [e (errno)])
+    (let* ([r (restartable (lambda () (libc-epoll-ctl epfd op fd ev)))] [e (errno)])
       (foreign-free ev)
       (if (< r 0) e 0))))
 (defnative "sun/nio/ch/EPoll.wait(IJII)I" (epfd addr n timeout)
@@ -547,17 +550,17 @@
                 (libc-epoll-wait epfd addr n 0)
                 (released-call* (lambda () (libc-epoll-wait-blocking epfd addr n timeout))))]
          [e (errno)])
-    (wait-status r e "epoll_wait failed")))
+    (wait-status r e)))
 (defnative "sun/nio/ch/EventFD.eventfd0()I" ()
   (let ([efd (libc-eventfd 0 0)])
-    (when (< efd 0) (io-error "eventfd failed"))
+    (when (< efd 0) (last-error-io (errno)))
     efd))
 (defnative "sun/nio/ch/EventFD.set0(I)I" (efd)
   (let ([buf (foreign-alloc 8)])
     (foreign-set! 'unsigned-64 buf 0 1)
     (let* ([r (libc-write efd buf 8)] [e (errno)])
       (foreign-free buf)
-      (when (< r 0) (foreign-set! 'int (libc-errno-location) 0 e) (io-error "eventfd write failed"))
+      (when (< r 0) (last-error-io e))
       r)))
 
 ;; the read end in the high 32 bits, the write end in the low, as IOUtil.c
@@ -565,7 +568,7 @@
   (let ([fds (foreign-alloc 8)])
     (let* ([r (libc-pipe fds)] [e (errno)] [rd (foreign-ref 'int fds 0)] [wr (foreign-ref 'int fds 4)])
       (foreign-free fds)
-      (when (< r 0) (foreign-set! 'int (libc-errno-location) 0 e) (io-error "Pipe failed"))
+      (when (< r 0) (last-error-io e))
       (unless (eqv? blocking 1)
         (let ([nb (net-const 'O_NONBLOCK)])
           (for-each (lambda (fd)
@@ -573,26 +576,26 @@
                         (when (or (< flags 0) (< (libc-fcntl-int fd 4 (fxlogor flags nb)) 0))
                           (let ([e (errno)])
                             (libc-close rd) (libc-close wr)
-                            (foreign-set! 'int (libc-errno-location) 0 e)
-                            (io-error "Configure blocking failed")))))
+                            (last-error-io e)))))
                     (list rd wr))))
       (logor (ash rd 32) wr))))
 (defnative "sun/nio/ch/IOUtil.write1(IB)I" (fd b)
   (let ([buf (foreign-alloc 1)])
     (foreign-set! 'integer-8 buf 0 b)
-    (let* ([r (restartable (lambda () (libc-write fd buf 1)))] [e (errno)])
+    (let* ([r (libc-write fd buf 1)] [e (errno)])
       (foreign-free buf)
       (cond [(fx>= r 0) r]
             [(fx= e (net-const 'EAGAIN)) -2]
-            [else (foreign-set! 'int (libc-errno-location) 0 e) (io-error "Write failed")]))))
-;; read 16 bytes at a time until less comes back; whether anything was read
+            [(fx= e 4) -3]
+            [else (last-error-io e)]))))
+;; read 128 bytes at a time until less comes back; whether anything was read
 (defnative "sun/nio/ch/IOUtil.drain(I)Z" (fd)
-  (let ([buf (foreign-alloc 16)])
+  (let ([buf (foreign-alloc 128)])
     (let loop ([total 0])
-      (let* ([r (libc-read fd buf 16)] [e (errno)])
-        (cond [(fx= r 16) (loop (fx+ total 16))]
+      (let* ([r (libc-read fd buf 128)] [e (errno)])
+        (cond [(fx= r 128) (loop (fx+ total 128))]
               [(and (< r 0) (not (fx= e (net-const 'EAGAIN))))
-               (foreign-free buf) (foreign-set! 'int (libc-errno-location) 0 e) (io-error "Drain")]
+               (foreign-free buf) (last-error-io e)]
               [else (foreign-free buf) (if (fx> (fx+ total (fxmax r 0)) 0) 1 0)])))))
 (defnative "sun/nio/ch/IOUtil.drain1(I)I" (fd)
   (let ([buf (foreign-alloc 1)])
@@ -601,4 +604,4 @@
       (cond [(fx>= r 0) r]
             [(fx= e (net-const 'EAGAIN)) 0]
             [(fx= e 4) -3]
-            [else (foreign-set! 'int (libc-errno-location) 0 e) (io-error "read")]))))
+            [else (last-error-io e)]))))

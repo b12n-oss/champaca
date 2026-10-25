@@ -127,30 +127,41 @@ public class SelectorCheck {
         try (Selector sel = Selector.open()) {
             sel.wakeup();
             row("wakeup before", sel.select() + " " + sel.selectNow());
+            // each task says it is about to select; main then waits 200 ms more,
+            // so the select has started before main acts on it
+            CountDownLatch r1 = new CountDownLatch(1);
             Future<String> f = pool.submit(() -> {
+                r1.countDown();
                 long t0 = System.nanoTime();
                 int n = sel.select();
                 return n + " " + ((System.nanoTime() - t0) / 1_000_000 >= 100);
             });
+            r1.await(30, TimeUnit.SECONDS);
             Thread.sleep(200);
             sel.wakeup();
-            row("wakeup", f.get(10, TimeUnit.SECONDS));
+            row("wakeup", f.get(30, TimeUnit.SECONDS));
+            CountDownLatch r2 = new CountDownLatch(1);
             Thread[] th = new Thread[1];
             Future<String> g = pool.submit(() -> {
                 th[0] = Thread.currentThread();
+                r2.countDown();
                 int n = sel.select();
                 return n + " " + Thread.interrupted();
             });
+            r2.await(30, TimeUnit.SECONDS);
             Thread.sleep(200);
             th[0].interrupt();
-            row("interrupt", g.get(10, TimeUnit.SECONDS));
+            row("interrupt", g.get(30, TimeUnit.SECONDS));
+            CountDownLatch r3 = new CountDownLatch(1);
             Future<String> h = pool.submit(() -> {
+                r3.countDown();
                 int n = sel.select();
                 return n + " " + sel.isOpen();
             });
+            r3.await(30, TimeUnit.SECONDS);
             Thread.sleep(200);
             sel.close();
-            row("close", h.get(10, TimeUnit.SECONDS));
+            row("close", h.get(30, TimeUnit.SECONDS));
             row("closed select", fails(() -> sel.select(1)) + " " + fails(sel::keys));
         }
 
