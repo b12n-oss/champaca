@@ -186,14 +186,27 @@
 
 ;; as the JDK's socket0 sets a datagram socket up: on macOS a send buffer of
 ;; at least 65507 bytes, since net.inet.udp.maxdgram (9216) caps a datagram
-;; at the buffer's size; on Linux IP_MULTICAST_ALL off (49), so a socket only
-;; hears the groups it joined
+;; at the buffer's size, best effort as there (the JDK checks neither call);
+;; on Linux IP_MULTICAST_ALL off (49), so a socket only hears the groups it
+;; joined, where only a kernel without the option (ENOPROTOOPT, 92) is let
+;; pass and any other failure is the JDK's IOException
 (define (datagram-socket! fd)
   (if net-macos?
-      (guard (e [#t (void)])
-        (when (< (get-int-option fd (net-const 'SOL_SOCKET) #x1001) 65507)
-          (set-int-option! fd (net-const 'SOL_SOCKET) #x1001 65507)))
-      (guard (e [#t (void)]) (set-int-option! fd 0 49 0))))
+      (let ([buf (foreign-alloc 4)] [len (foreign-alloc 4)])
+        (foreign-set! 'int buf 0 0)
+        (foreign-set! 'unsigned-32 len 0 4)
+        (when (and (fx= 0 (libc-getsockopt fd (net-const 'SOL_SOCKET) #x1001 buf len))
+                   (< (foreign-ref 'int buf 0) 65507))
+          (foreign-set! 'int buf 0 65507)
+          (libc-setsockopt fd (net-const 'SOL_SOCKET) #x1001 buf 4))
+        (foreign-free buf) (foreign-free len))
+      (let ([buf (foreign-alloc 4)])
+        (foreign-set! 'int buf 0 0)
+        (let* ([r (libc-setsockopt fd 0 49 buf 4)] [e (errno)])
+          (foreign-free buf)
+          (when (and (< r 0) (not (fx= e 92)))
+            (libc-close fd)
+            (jthrow "java/io/IOException" (strerror-text e)))))))
 (defnet "socket0(ZZZZ)I"
   (lambda (ipv6 stream reuse fast)
     (let ([fd (check-socket (libc-socket 2 (if (eqv? stream 1) 1 2) 0))])
@@ -813,20 +826,21 @@
                                    (begin (set-cdr! old (cons addr (cdr old))) ifs)
                                    (cons (list name addr) ifs)))))))))))
 
-(define (interface-address a)
+(define (interface-address a inet)
   (let ([ia (construct "java/net/InterfaceAddress" "()V")])
-    (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "address") (inet4 #f (car a)))
+    (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "address") inet)
     (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "broadcast") (and (caddr a) (inet4 #f (caddr a))))
     (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "maskLength") (cadr a))
     ia))
 (define (network-interface entry)
   (let* ([name (jstring (car entry))] [addrs (cdr entry)]
+         [inets (map (lambda (a) (inet4 #f (car a))) addrs)]
          [ni (construct "java/net/NetworkInterface" "(Ljava/lang/String;I[Ljava/net/InetAddress;)V"
                         name (interface-index (car entry))
-                        (make-jarr "Ljava/net/InetAddress;" (list->vector (map (lambda (a) (inet4 #f (car a))) addrs))))])
+                        (make-jarr "Ljava/net/InetAddress;" (list->vector inets)))])
     (jslot-set! ni (jfield-index "java/net/NetworkInterface" "displayName") name)
     (jslot-set! ni (jfield-index "java/net/NetworkInterface" "bindings")
-                (make-jarr "Ljava/net/InterfaceAddress;" (list->vector (map interface-address addrs))))
+                (make-jarr "Ljava/net/InterfaceAddress;" (list->vector (map interface-address addrs inets))))
     (jslot-set! ni (jfield-index "java/net/NetworkInterface" "childs") (make-jarr "Ljava/net/NetworkInterface;" (vector)))
     ni))
 (define (find-interface pred)
@@ -856,9 +870,9 @@
 ;; (k ifr) with a struct ifreq naming the interface, on a datagram socket; the
 ;; request's failure is "<strerror> (<what> failed)" as the JDK says it
 (define (with-ifreq name what request k)
-  (let ([fd (libc-socket 2 2 0)])
+  (let ([bv (string->utf8 (jstring->scheme (nn name)))] [fd (libc-socket 2 2 0)])
     (when (< fd 0) (socket-error (errno)))
-    (let ([ifr (foreign-alloc ifr-size)] [bv (string->utf8 (jstring->scheme (nn name)))])
+    (let ([ifr (foreign-alloc ifr-size)])
       (do ([i 0 (fx+ i 1)]) ((fx= i ifr-size)) (foreign-set! 'unsigned-8 ifr i 0))
       (do ([i 0 (fx+ i 1)]) ((fx= i (fxmin 15 (bytevector-length bv)))) (foreign-set! 'unsigned-8 ifr i (bytevector-u8-ref bv i)))
       (let* ([r (libc-ioctl fd request ifr)] [e (errno)])
@@ -909,7 +923,21 @@
 ;; --- InetAddress.isReachable --------------------------------------------------------
 ;; The JDK sends ICMP echo when it may open a raw socket (as root) and else
 ;; tries TCP port 7: a connection or a refusal both mean the host answered.
-;; champaca always takes the TCP way.
+;; champaca always takes the TCP way. The wait for the connection goes on
+;; with the time left when a signal interrupts it, as the JDK's NET_Wait does:
+;; a socket closed on another thread signals blocked threads (NativeThread)
+(define (wait-writable fd timeout)   ; #t when fd turned writable within timeout ms
+  (let ([pfd (foreign-alloc 8)]
+        [deadline (+ (real-time) timeout)])
+    (let loop ([left timeout])
+      (foreign-set! 'int pfd 0 fd)
+      (foreign-set! 'short pfd 4 4)
+      (foreign-set! 'short pfd 6 0)
+      (let* ([r (released-call* (lambda () (libc-poll-blocking pfd 1 (max 0 (min left #x7fffffff)))))]
+             [e (if (< r 0) (errno) 0)])
+        (cond [(> r 0) (foreign-free pfd) #t]
+              [(and (< r 0) (fx= e 4)) (loop (- deadline (real-time)))]
+              [else (foreign-free pfd) #f])))))
 (defnative "java/net/Inet4AddressImpl.isReachable0([BI[BI)Z" (this addr timeout ifaddr ttl)
   (define (bytes->ip arr)
     (let ([v (jarr-vec arr)])
@@ -935,7 +963,7 @@
                                        (if net-macos? '() (list 22 (net-const 'EHOSTUNREACH)))))
                        (done 0)]
                       [(fx= e (net-const 'EINPROGRESS))
-                       (if (fx= (poll-fd fd 4 timeout) 0)
+                       (if (not (wait-writable fd timeout))
                            (done 0)
                            (let ([err (guard (x [#t -1]) (get-int-option fd (net-const 'SOL_SOCKET) (net-const 'SO_ERROR)))])
                              (done (if (or (fx= err 0) (fx= err (net-const 'ECONNREFUSED))) 1 0))))]

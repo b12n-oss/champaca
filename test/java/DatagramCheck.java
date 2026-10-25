@@ -111,6 +111,9 @@ public class DatagramCheck {
             ch.socket().setSoTimeout(2000);
             Thread.sleep(100);
             row("unreachable", fails(() -> ch.read(ByteBuffer.allocate(10))));
+            ch.write(bytes("again?"));
+            Thread.sleep(100);
+            row("unreachable receive", fails(() -> ch.receive(ByteBuffer.allocate(10))));
         }
 
         // DatagramChannel: send and receive, read and write once connected
@@ -257,6 +260,21 @@ public class DatagramCheck {
             .filter(a -> a instanceof Inet4Address).allMatch(a -> {
                 try { return NetworkInterface.getByInetAddress(a) != null; } catch (SocketException e) { return false; }
             }));
+
+        // the multicast options: one-byte TTL and loop, the interface as an address
+        try (DatagramChannel m = DatagramChannel.open()) {
+            m.bind(new InetSocketAddress(LOOP, 0));
+            row("multicast defaults", m.getOption(StandardSocketOptions.IP_MULTICAST_IF)
+                + " " + m.getOption(StandardSocketOptions.IP_MULTICAST_TTL)
+                + " " + m.getOption(StandardSocketOptions.IP_MULTICAST_LOOP));
+            m.setOption(StandardSocketOptions.IP_MULTICAST_TTL, 200);
+            m.setOption(StandardSocketOptions.IP_MULTICAST_LOOP, false);
+            m.setOption(StandardSocketOptions.IP_MULTICAST_IF, lo);
+            row("multicast set", m.getOption(StandardSocketOptions.IP_MULTICAST_TTL)
+                + " " + m.getOption(StandardSocketOptions.IP_MULTICAST_LOOP)
+                + " " + lo.equals(m.getOption(StandardSocketOptions.IP_MULTICAST_IF))
+                + " " + fails(() -> m.setOption(StandardSocketOptions.IP_MULTICAST_TTL, 256)));
+        }
 
         // reachability
         row("reachable", LOOP.isReachable(2000) + " " + InetAddress.getByName("127.0.0.1").isReachable(lo, 0, 2000));

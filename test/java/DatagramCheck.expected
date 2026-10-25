@@ -13,6 +13,7 @@ connected receive: from a
 disconnected: false null -1
 after disconnect: from c again true
 unreachable: java.net.PortUnreachableException
+unreachable receive: java.net.PortUnreachableException
 channel: 7 channel true
 direct buffers: direct 0
 channel connected: true true
@@ -39,6 +40,8 @@ loopback: true true false false null true null true 0
 not found: null null null java.lang.IllegalArgumentException: Interface index can't be negative
 hardware addresses: true
 every address bound: true
+multicast defaults: null 1 true
+multicast set: 200 false true java.lang.IllegalArgumentException: Invalid TTL/hop value
 reachable: true true
 not reachable: false
 bad timeout: java.lang.IllegalArgumentException: timeout can't be negative
