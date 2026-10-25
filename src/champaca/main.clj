@@ -488,10 +488,13 @@
   [cname]
   (let [user (timed :class-bytes #(user-class-bytes cname))
         bytes (or user (timed :class-bytes #(jdk-class-bytes cname))
-                  (throw (ex-info (str "class not found: " cname) {:class cname})))
-        c (timed :cf-parse #(cf/parse bytes))]
-    ;; only JDK classes are cached; user classes change between runs
-    (class-map cname c (if user :user :jdk))))
+                  ;; a loader of the program's own may define it, when the
+                  ;; class naming it is that loader's (natives.ss); nil then
+                  (when (boolean (s/call "ask-resolving-loader" cname)) ::defined)
+                  (throw (ex-info (str "class not found: " cname) {:class cname})))]
+    (when-not (= bytes ::defined)
+      ;; only JDK classes are cached; user classes change between runs
+      (class-map cname (timed :cf-parse #(cf/parse bytes)) (if user :user :jdk)))))
 
 (defn- class-map
   "The linker's class map for cname from its parsed classfile c, of origin
@@ -676,7 +679,7 @@
             (scheme! text :interpret))))
 
     (not (get-in @state [:classes cname]))
-    (let [info (timed :parse #(normalize cname))]
+    (when-let [info (timed :parse #(normalize cname))]
       (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
         (ensure-loaded! dep))
       (when-not (get-in @state [:classes cname])

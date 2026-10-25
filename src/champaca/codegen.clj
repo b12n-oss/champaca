@@ -430,6 +430,14 @@
             (seq-form (nth (first scopes) 2))
             (recur (add-child (pop scopes) (close (peek scopes))))))))))
 
+(defn- missing-class
+  "The class a resolution failure says isn't there, or nil for any other
+  failure (main.clj's normalize: \"class not found\" with the name)."
+  [e]
+  (let [d (ex-data e)]
+    (when (and (= (set (keys d)) #{:class}) (str/starts-with? (str (ex-message e)) "class not found"))
+      (:class d))))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
   linker callbacks), :next-pc, :live (the locals a jump passes), :boxed (the
@@ -489,7 +497,14 @@
               :if_icmpgt "fx>" :if_icmple "fx<="}
         terminal (volatile! nil)
         branch (fn [test target fall] (vreset! terminal (sx "if" test (goto target) (goto fall))))]
-    (doseq [{:keys [op args pc len]} blk]
+    ;; a class an instruction names is resolved when it is translated, but on
+    ;; the JVM only when it runs: one that isn't there makes the instruction a
+    ;; throw of NoClassDefFoundError (JVMS 5.4.3), and the rest of the block,
+    ;; which can't be reached, isn't translated
+    (loop [insns blk]
+     (when-let [{:keys [op args pc len]} (first insns)]
+      (when-not
+       (try
       (let [a0 (first args)]
         (case op
           :nop nil
@@ -722,6 +737,7 @@
           :newarray (let [e (newarray-elem a0) el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
                       (un #(sx (at pc "jnewarray-interned") el % (if (#{"F" "D"} e) "0.0" "0")) "A"))
           :anewarray (let [c (:name (cp a0))
+                           _ (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                            e (if (str/starts-with? c "[") c (str "L" c ";"))
                            el ((:ic! ctx) (sx "intern-elem" (str-lit e)))]
                        (un #(sx (at pc "jnewarray-interned") el % "#f") "A"))
@@ -739,7 +755,24 @@
         ;; close the lets of the slots it popped. Not after the block's last
         ;; instruction, whose terminal expression (a branch test, a return
         ;; value) reads what it popped.
-        (when (nil? @terminal) (conj! stmts [:depth (count @st)]))))
+        (when (nil? @terminal) (conj! stmts [:depth (count @st)])))
+        false
+        (catch Exception e
+          (let [c (missing-class e)
+                ncdfe (sx "jthrow" (str-lit "java/lang/NoClassDefFoundError") (str-lit c))]
+            (when-not c (throw e))
+            (case op
+              ;; on null, neither resolves its class, as HotSpot doesn't: a
+              ;; cast passes and instanceof is false; only an object throws
+              :checkcast (let [v (s (dec (count @st)))]
+                           (bind! v (sx "if" v ncdfe v))
+                           (conj! stmts [:depth (count @st)])
+                           false)
+              :instanceof (do (un #(sx "if" % ncdfe "0") "I")
+                              (conj! stmts [:depth (count @st)])
+                              false)
+              (do (vreset! terminal ncdfe) true)))))
+       (recur (rest insns)))))
     (let [term (or @terminal (goto next-pc))]
       {:code (render-steps (persistent! stmts) term)
        :succ @succ})))

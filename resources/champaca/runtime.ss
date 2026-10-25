@@ -13,7 +13,16 @@
 (define jit-hook #f)
 (define load-hook #f)
 (define (set-hooks! jit load) (set! jit-hook jit) (set! load-hook load))
-(define (jit! c m d) (jit-hook c m d))
+;; the loader a class is being defined or compiled for, per thread: a class
+;; that code names and the classpath and JDK lack is asked of it (natives.ss
+;; ask-resolving-loader), as the JVM resolves a reference through the
+;; referring class's loader (JVMS 5.3)
+(define resolving-loader (make-thread-parameter #f))
+;; set for every compile, #f for a class no loader of the program's own
+;; defined, since compiling one method can compile another (a loader's
+;; findClass runs Java code)
+(define (jit! c m d)
+  (parameterize ([resolving-loader (hashtable-ref class-loaders c #f)]) (jit-hook c m d)))
 
 ;; --- numbers ---------------------------------------------------------------
 
@@ -205,7 +214,13 @@
         [(fx= 0 (string-length name)) (error 'champaca "empty class name")]
         [(char=? (string-ref name 0) #\[) (pseudo-class! name 'array)]
         [(prim-name? name) (pseudo-class! name 'prim)]
-        [else (load-hook name)
+        ;; a class whose bytes are nowhere is the JVM's NoClassDefFoundError
+        ;; for the code that named it (an ldc, a catch clause's type, a
+        ;; descriptor); one that is there but fails to load stays the error
+        ;; it is, which names the cause (class-exists? is natives.ss's)
+        [else (guard (e [(and (not (jobj? e)) (not (class-exists? name)))
+                         (jthrow "java/lang/NoClassDefFoundError" name)])
+                (load-hook name))
               (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
 (define (method-proc cname key)

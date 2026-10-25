@@ -1,0 +1,38 @@
+new not run: ran (absent)
+checkcast not run: ran (absent)
+instanceof not run: ran (absent)
+anewarray not run: ran (absent)
+getstatic not run: ran (absent)
+putstatic not run: ran (absent)
+invokestatic not run: ran (absent)
+invokevirtual not run: ran (absent)
+ldc not run: ran (absent)
+superclass not run: ran (absent)
+catch not run: ran (absent)
+lambda not run: ran (absent)
+lambda interface not run: ran (absent)
+field type not run: ran (absent)
+parameter type not run: ran (absent)
+new run: java.lang.NoClassDefFoundError: LinkGone
+checkcast run: ran (null)
+instanceof run: ran (false)
+anewarray run: java.lang.NoClassDefFoundError: LinkGone
+getstatic run: java.lang.NoClassDefFoundError: LinkGone
+putstatic run: java.lang.NoClassDefFoundError: LinkGone
+invokestatic run: java.lang.NoClassDefFoundError: LinkGone
+invokevirtual run: java.lang.NoClassDefFoundError: LinkGone
+ldc run: java.lang.NoClassDefFoundError: LinkGone
+superclass run: java.lang.NoClassDefFoundError: LinkGone
+catch run: java.lang.IllegalStateException: thrown
+lambda run: java.lang.NoClassDefFoundError: LinkGone
+lambda interface run: java.lang.NoClassDefFoundError: LinkGoneListener
+field type run: ran (null)
+parameter type run: ran (null)
+new again: java.lang.NoClassDefFoundError: LinkGone
+forName: java.lang.ClassNotFoundException: LinkGone
+lazy reference: true A sees 42
+lazy superclass: true C extends base
+lazy forName: true
+lazy missing: java.lang.ClassNotFoundException: LinkCheck$LinkLazy$HidZ
+lazy asked: [HidA, HidB, HidC, HidBase, HidZ]
+lazy not ours: ran (false A sees 42)

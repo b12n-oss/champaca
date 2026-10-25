@@ -1543,6 +1543,20 @@
   (let ([s (make-string len)])
     (do ([i 0 (fx+ i 1)]) ((fx= i len) s)
       (string-set! s i (integer->char (fxlogand (vector-ref v (fx+ off i)) #xff))))))
+;; a class nothing else has, asked of the loader whose class names it (a
+;; loader of the program's own: the built-in ones answer from the class table
+;; already); #t when that defined it. A name already being asked on this
+;; thread isn't asked again, so a loader whose loadClass names the class it
+;; is defining can't loop. The loader's ClassNotFoundException means no.
+(define asking-loader (make-thread-parameter '()))
+(define (ask-resolving-loader name)
+  (let ([l (resolving-loader)])
+    (and l (not (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))
+         (not (member name (asking-loader)))
+         (parameterize ([asking-loader (cons name (asking-loader))])
+           (guard (e [(jobj? e) #f])
+             ((jvirt l "loadClass(Ljava/lang/String;)Ljava/lang/Class;") l (jstring (slashes->dots name)))
+             (and (hashtable-ref classes name #f) #t))))))
 (define (define-class! loader given v off len hidden? classdata)
   (unless (and (fx>= off 0) (fx>= len 0) (fx<= (fx+ off len) (vector-length v)))
     (jthrow "java/lang/ArrayIndexOutOfBoundsException"
@@ -1552,7 +1566,8 @@
          ;; error) is a NoClassDefFoundError naming the cause, as a class
          ;; the JVM can't define is a LinkageError
          [r (guard (e [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
-              (define-class-hook name (bytes->latin1 v off len) hidden?))]
+              (parameterize ([resolving-loader loader])
+                (define-class-hook name (bytes->latin1 v off len) hidden?)))]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])
