@@ -31,8 +31,9 @@ getPackage java/util: java/util true
 getPackage java.sql: null
 same Package: true true
 getPackages: true false
+getPackage once loaded: package javax.print true
 user.language: true true true
-java.io.tmpdir: true true
+java.io.tmpdir: true true true
 sun.java.command: VmCheck | SUN_STANDARD
 sun.boot.library.path: true
 sun.io.unicode.encoding: true

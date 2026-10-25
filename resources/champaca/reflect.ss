@@ -185,13 +185,16 @@
 (define (same-runtime-package? a b)
   (and (string=? (package-dir (jclass-cname a)) (package-dir (jclass-cname b)))
        (eq? (class-loader-of a) (class-loader-of b))))
+;; a class's host is worked out once, as HotSpot keeps it once resolved
+(define nest-hosts (make-weak-eq-hashtable))
 (define (nest-host c)
   (or (hashtable-ref dynamic-nest-hosts (jclass-cname c) #f)
+      (eq-hashtable-ref nest-hosts c #f)
       (let* ([hn (class-nest-host-name c)]
-             [h (and hn (guard (e [#t #f]) (find-class hn)))])
-        (if (and h (same-runtime-package? c h) (member (jclass-cname c) (class-nest-members h)))
-            h
-            c))))
+             [h (and hn (guard (e [#t #f]) (find-class hn)))]
+             [host (if (and h (same-runtime-package? c h) (member (jclass-cname c) (class-nest-members h))) h c)])
+        (eq-hashtable-set! nest-hosts c host)
+        host)))
 (defnative "java/lang/Class.getNestHost0()Ljava/lang/Class;" (this) (jmirror (nest-host (mirror-class this))))
 ;; the host, then each of its NestMembers that loads and has it as host, as
 ;; HotSpot leaves out a member that fails either way

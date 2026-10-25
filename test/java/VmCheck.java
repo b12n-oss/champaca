@@ -90,13 +90,19 @@ public class VmCheck {
             + " " + (java.sql.Date.class.getPackage() == ClassLoader.getPlatformClassLoader().getDefinedPackage("java.sql")));
         row("getPackages", Arrays.stream(Package.getPackages()).anyMatch(p -> p.getName().equals("java.util"))
             + " " + Arrays.stream(Package.getPackages()).anyMatch(p -> p.getName().equals("javax.print")));
+        Class.forName("javax.print.DocFlavor");
+        row("getPackage once loaded", Package.getPackage("javax.print") + " "
+            + Arrays.stream(Package.getPackages()).anyMatch(p -> p.getName().equals("javax.print")));
 
         // properties the host and the launcher give
         Locale d = Locale.getDefault();
         String lang = System.getProperty("user.language"), country = System.getProperty("user.country");
         row("user.language", (lang != null) + " " + d.getLanguage().equals(lang) + " " + d.getCountry().equals(country == null ? "" : country));
         File tmp = new File(System.getProperty("java.io.tmpdir"));
-        row("java.io.tmpdir", tmp.isDirectory() + " " + tmp.canWrite());
+        // macOS's per-user directory (confstr), else /tmp
+        row("java.io.tmpdir", tmp.isDirectory() + " " + tmp.canWrite() + " "
+            + (System.getProperty("os.name").startsWith("Mac") ? tmp.getPath().endsWith("/T") && System.getProperty("java.io.tmpdir").endsWith("/T/")
+               : System.getProperty("java.io.tmpdir").equals("/tmp")));
         row("sun.java.command", System.getProperty("sun.java.command") + " | " + System.getProperty("sun.java.launcher"));
         row("sun.boot.library.path", System.getProperty("sun.boot.library.path").equals(System.getProperty("java.home") + "/lib"));
         row("sun.io.unicode.encoding", System.getProperty("sun.io.unicode.encoding")

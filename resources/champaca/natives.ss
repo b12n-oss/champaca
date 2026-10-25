@@ -807,6 +807,9 @@
                                  (and hit (cdr hit))))])
     (list (if (member lang '("C" "POSIX")) "en" lang) script (and country (positive? (string-length country)) country))))
 (define (macos-locale)
+  (let ([buf (foreign-alloc 128)])
+    (let ([r (macos-locale* buf)]) (foreign-free buf) r)))
+(define (macos-locale* buf)
   (guard (e [#t #f])
     (load-shared-object "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
     (let* ([copy-languages (foreign-procedure "CFLocaleCopyPreferredLanguages" () uptr)]
@@ -816,7 +819,6 @@
            [copy-current (foreign-procedure "CFLocaleCopyCurrent" () uptr)]
            [identifier (foreign-procedure "CFLocaleGetIdentifier" (uptr) uptr)]
            [release (foreign-procedure "CFRelease" (uptr) void)]
-           [buf (foreign-alloc 128)]
            [text (lambda (cf) (and (not (eqv? cf 0)) (fx> (string-text cf buf 128 #x08000100) 0) (c-string-text buf)))]
            [languages (copy-languages)]
            [first (and (not (eqv? languages 0)) (fx> (array-count languages) 0) (text (array-at languages 0)))]
@@ -829,7 +831,6 @@
                                           (cond [(fx< i 0) #f] [(char=? (string-ref id i) #\_) i] [else (loop (fx- i 1))]))])
                                (and us (substring id (fx+ us 1) (string-length id))))))])
       (unless (eqv? languages 0) (release languages))
-      (foreign-free buf)
       (and first
            (let ([p (locale-parts first)])
              (if (and (not (caddr p)) region) (list (car p) (cadr p) region) p))))))
@@ -1308,8 +1309,8 @@
      (lambda ()
        (jthread-state-tid-set! s (get-thread-id))
        (self s)
-       (note-native-thread! this)
        (gil-enter!)
+       (note-native-thread! this)   ; the table is shared: under the GIL
        (thread-body this)
        (gil-leave!)))
     (void)))
@@ -1356,12 +1357,14 @@
 ;; thread's mach port; on Linux the total is the thread's CPU clock
 ;; (pthread_getcpuclockid) and the user time utime in
 ;; /proc/self/task/<tid>/stat. Each Java thread's pthread_t, and on Linux
-;; its kernel tid, is noted on the thread itself when it starts. A thread is
+;; its kernel tid, is noted on the thread itself once it holds the GIL, so a
+;; thread asked about before that (just started) answers -1. A thread is
 ;; looked up among the live ones under the GIL, and a thread leaves that
 ;; list before its OS thread can end, so its pthread_t is still good.
 (define thread-natives (make-weak-eq-hashtable))   ; java.lang.Thread -> (pthread . tid)
 (define thread-pthread-self (foreign-procedure "pthread_self" () uptr))
-(define thread-gettid (if natives-macos? (lambda () 0) (foreign-procedure "gettid" () int)))
+(define thread-gettid   ; glibc 2.30+; without it, user times are -1
+  (or (and (not natives-macos?) (guard (e [#t #f]) (foreign-procedure "gettid" () int))) (lambda () 0)))
 (define (note-native-thread! t) (eq-hashtable-set! thread-natives t (cons (thread-pthread-self) (thread-gettid))))
 (define thread-cpu-enabled 1)   ; HotSpot measures by default
 (defnative "sun/management/ThreadImpl.setThreadCpuTimeEnabled0(Z)V" (on) (set! thread-cpu-enabled on))
@@ -1394,10 +1397,11 @@
       r)))
 (define clock-ticks (and (not natives-macos?) ((foreign-procedure "sysconf" (int) long) 2)))   ; _SC_CLK_TCK
 (define (linux-thread-user-ns tid)
-  ;; the fields after the command's closing paren: state is the first,
+  ;; tid 0: no gettid. The fields after the command's closing paren: state is the first,
   ;; utime (field 14) the twelfth
   (guard (e [#t #f])
-    (let* ([line (call-with-input-file (string-append "/proc/self/task/" (number->string tid) "/stat") get-line)]
+    (let* ([_ (when (eqv? tid 0) (raise 'no-tid))]
+           [line (call-with-input-file (string-append "/proc/self/task/" (number->string tid) "/stat") get-line)]
            [rest (let loop ([i (fx- (string-length line) 1)])
                    (if (char=? (string-ref line i) #\)) (substring line (fx+ i 2) (string-length line)) (loop (fx- i 1))))]
            [fields (let split ([i 0] [start 0] [acc '()])
@@ -1689,7 +1693,7 @@
   (let* ([dir (package-dir cn)]   ; hidden-class aware: Name/0x1 is in Name's package
          [pn (slashes->dots dir)])
     (or (hashtable-ref jpackage-table pn #f)
-        (jdk-module-package pn)
+        (let ([p (jdk-module-package pn)]) (when p (hashtable-set! jpackage-table pn p)) p)
         (let* ([info (text-lines (jpackage-hook cn))]
                [given (lambda (s) (and (char=? (string-ref s 0) #\+) (substring s 1 (string-length s))))]
                [module (and (not (string=? dir "")) (string=? (car info) "jdk") (hashtable-ref package-modules dir #f))]
@@ -1734,7 +1738,15 @@
 ;; null until a class of it loads); a name with slashes or dots, as
 ;; BootLoader passes either. The location is the module's jrt: URL, which
 ;; BootLoader turns back into the module.
+;; kept while neither the class table nor the module packages grow, which
+;; is all either does
+(define boot-packages-cache (list -1 -1 #f))   ; (classes packages table)
 (define (boot-packages-loaded)
+  (let ([nc (hashtable-size classes)] [np (hashtable-size package-modules)])
+    (if (and (fx= (car boot-packages-cache) nc) (fx= (cadr boot-packages-cache) np))
+        (caddr boot-packages-cache)
+        (let ([t (boot-packages-scan)]) (set! boot-packages-cache (list nc np t)) t))))
+(define (boot-packages-scan)
   (let ([t (make-hashtable string-hash string=?)])
     (vector-for-each
      (lambda (cn)
