@@ -10,8 +10,8 @@ jar, app parent getResource: jar jar jar null null
 jar, app parent getResourceAsStream: in the jar null
 jar, app parent getResources: 1 0 1
 jar, app parent findResource: jar jar
-parent first: true
-custom findResource: file null
+parent first: file [file, jar] jar
+custom findResource: file null null
 app root: file true
 app class resource: file file
 code source: true true true

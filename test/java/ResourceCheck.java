@@ -58,6 +58,10 @@ public class ResourceCheck {
                 if (e[1] != null) out.write(e[1].getBytes(StandardCharsets.UTF_8));
                 out.closeEntry();
             }
+            // a name the application loader has too
+            out.putNextEntry(new JarEntry("ResourceCheck.class"));
+            out.write(1);
+            out.closeEntry();
             out.putNextEntry(new JarEntry("ResourceProbe.class"));
             out.write(probe);
             out.closeEntry();
@@ -86,7 +90,10 @@ public class ResourceCheck {
         // the application loader as parent: its resources first
         try (URLClassLoader child = new URLClassLoader(new URL[] {jarUrl}, ResourceCheck.class.getClassLoader())) {
             probeLoader("jar, app parent", child);
-            row("parent first", text(child.getResourceAsStream("ResourceCheck.class")).length() > 0);
+            List<String> both = new ArrayList<>();
+            for (URL u : Collections.list(child.getResources("ResourceCheck.class"))) both.add(u.getProtocol());
+            row("parent first", found(child.getResource("ResourceCheck.class")) + " " + both
+                + " " + found(child.findResource("ResourceCheck.class")));
         }
         // a loader of the program's own that overrides findResource only
         ClassLoader custom = new ClassLoader(null) {
@@ -95,7 +102,9 @@ public class ResourceCheck {
                 catch (MalformedURLException e) { throw new UncheckedIOException(e); }
             }
         };
-        row("custom findResource", found(custom.getResource("magic.txt")) + " " + found(custom.getResource("other.txt")));
+        // its URL names a file that isn't there: no stream, as the JDK's IOException
+        row("custom findResource", found(custom.getResource("magic.txt")) + " " + found(custom.getResource("other.txt"))
+            + " " + custom.getResourceAsStream("magic.txt"));
 
         // the application loader: a directory entry's root and its directories
         ClassLoader app = ResourceCheck.class.getClassLoader();
