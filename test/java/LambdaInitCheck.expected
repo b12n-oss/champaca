@@ -1,0 +1,11 @@
+static reference made
+Lazy initialized
+call: 7
+again: 7
+constructor references made
+Made initialized
+new: made given
+fails: java.lang.ExceptionInInitializerError caused by java.lang.IllegalStateException: no
+fails: java.lang.NoClassDefFoundError caused by java.lang.ExceptionInInitializerError: Exception java.lang.IllegalStateException: no [in thread "main"]
+Twice initialized
+twice: 1 1 1

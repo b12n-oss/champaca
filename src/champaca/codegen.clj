@@ -280,7 +280,7 @@
       :else v)))
 
 (defn- lambda-expr
-  [{:keys [cls resolve]} sam-name iface-desc captured-types captured bsm]
+  [{:keys [cls resolve ic!]} sam-name iface-desc captured-types captured bsm]
   (let [cp (:cp cls)
         [sam-mt impl-mh _inst-mt] (map cp (:args bsm))
         iface (subs iface-desc 1 (dec (count iface-desc)))
@@ -296,13 +296,20 @@
         actuals (concat cvars
                         (map (fn [t p want] (convert t want p))
                              sam-args params (drop (count captured) impl-params)))
+        ;; invoking a static or constructor reference initializes its class
+        ;; first, as the JVM's method handle does (JVMS 5.5), through a site
+        ;; cell like invokestatic's and new's. That also loads the class, which
+        ;; translating this method did in this process but may not have in the
+        ;; one running it from the startup cache.
         call (case (int kind)
                6 (do ((:ensure-loaded resolve) class)
-                     (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals))
+                     (let [decl ((:resolve-method resolve) class name desc)
+                           c (apply sx (method-global decl name desc) actuals)]
+                       (if (= decl (:name cls)) c (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl))) c))))
                7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
                (5 9) (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals)
                8 (do ((:ensure-loaded resolve) class)
-                     (sx "let" (sx (sx "o" (sx "jnew-sym" (str "'" (sym class)))))
+                     (sx "let" (sx (sx "o" (sx "jnew-ic" (ic!) (str "'" (sym class)))))
                          (apply sx (method-global class name desc) "o" actuals) "o")))
         ret-type (if (= kind 8) (str "L" class ";") impl-ret)
         body (cond (= sam-ret "V") (sx "begin" call "(void)")
