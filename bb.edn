@@ -91,6 +91,45 @@
           (defn lib-jar-stale? []
             (or (not (fs/exists? "target/lib.jar"))
                 (seq (fs/modified-since "target/lib.jar" ["test/jar" "test/jar.mf"]))))
+          ;; The docs site is rendered by the b12n-oss docs-engine, which lives in
+          ;; its own repo. site:* tasks delegate to it. Found via $DOCS_ENGINE,
+          ;; then a sibling checkout, then ~/dev/b12n-oss/docs-engine.
+          (def docs-engine-repo "git@github.com:b12n-oss/docs-engine.git")
+          (defn docs-engine-dir []
+            (let [home (System/getProperty "user.home")]
+              (->> [(System/getenv "DOCS_ENGINE")
+                    "../docs-engine"
+                    (str home "/dev/b12n-oss/docs-engine")]
+                   (remove nil?)
+                   (filter (fn [d] (fs/exists? (fs/file d "bb.edn"))))
+                   first)))
+          (defn site-task [task & args]
+            (if-let [engine (docs-engine-dir)]
+              (let [argv (into ["bb" task (str (fs/canonicalize "."))] (remove nil? args))
+                    ;; HTTPS_PROXY cleared: the engine fetches markdown-clj on first run.
+                    res (apply process/shell {:dir (str engine) :continue true
+                                              :extra-env {"HTTPS_PROXY" "" "https_proxy" ""}} argv)]
+                (when-not (zero? (:exit res)) (System/exit (:exit res))))
+              (do
+                (println "docs-engine not found. Looked in $DOCS_ENGINE, ../docs-engine and ~/dev/b12n-oss/docs-engine.")
+                (println "Clone it, or point DOCS_ENGINE at a checkout:")
+                (println (str "  git clone " docs-engine-repo " ~/dev/b12n-oss/docs-engine"))
+                (System/exit 1))))
+          ;; The attempt IS the test: bind the wildcard address without
+          ;; SO_REUSEADDR, so a port held on any interface counts as busy (a
+          ;; loopback-only bind would coexist with another process's wildcard
+          ;; bind and the server would land beside it, silently).
+          (defn can-bind? [p]
+            (let [s (java.net.ServerSocket.)]
+              (.setReuseAddress s false)
+              (try (.bind s (java.net.InetSocketAddress. (int p)))
+                   true
+                   (catch Exception _ false)
+                   (finally (.close s)))))
+          (defn free-port [base span]
+            (loop [p base]
+              (when (<= p (+ base span))
+                (if (can-bind? p) p (recur (inc p))))))
           ;; something accepts connections on this loopback port
           (defn port-answers? [port]
             (try (with-open [s (java.net.Socket.)]
@@ -299,4 +338,26 @@
                    ;; jolt removes its port file on ^C; a server killed outright leaves it
                    (when-let [p (port-file-port pf)]
                      (when-not (port-answers? p) (fs/delete-if-exists pf)))
-                   (System/exit exit)))}}}
+                   (System/exit exit)))}
+  site:build {:doc "Build the documentation site into _site/ (needs a docs-engine checkout)"
+              :task (site-task "build")}
+  ;; No port given: scan from 3000 for a free one. A port you name is honoured
+  ;; strictly and refused when busy, never swapped for another.
+  site:serve {:doc "Build the docs site and serve it locally; first free port from 3000, or site:serve PORT (refused if busy)"
+              :task (let [requested (first *command-line-args*)
+                          port (when requested (parse-long requested))]
+                      (when (and requested (not (and port (<= 1 port 65535))))
+                        (println (str "bb site:serve: the port is a number from 1 to 65535, not " requested))
+                        (System/exit 1))
+                      (if port
+                        (if (can-bind? port)
+                          (site-task "serve" (str port))
+                          (do (println (str "bb site:serve: port " port " is busy; pick another, or drop the argument to scan from 3000"))
+                              (System/exit 1)))
+                        (if-let [p (free-port 3000 100)]
+                          (do (println (str "bb site:serve: using free port " p))
+                              (site-task "serve" (str p)))
+                          (do (println "bb site:serve: no free port in 3000..3100")
+                              (System/exit 1)))))}
+  site:clean {:doc "Delete the _site/ build output"
+              :task (site-task "clean")}}}

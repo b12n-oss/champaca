@@ -106,6 +106,8 @@ bb linux                                              # bb test and bb libs on L
 bb examples                                           # list the examples/*.clj test files
 bb example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
 bb nrepl                                              # an nREPL server for your editor, on a free port written to .nrepl-port
+bb site:serve                                         # build the docs site and serve it on the first free port from 3000 (bb site:serve 4000 refuses a busy port); needs a docs-engine checkout
+bb site:build                                         # build the docs site into _site/ (bb site:clean deletes it)
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit
                         # (and say why an NPE got no message)

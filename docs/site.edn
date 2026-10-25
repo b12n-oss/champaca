@@ -1,0 +1,10 @@
+;; Configuration for the documentation site, read by the b12n-oss docs-engine
+;; (git@github.com:b12n-oss/docs-engine.git). See its README for every key.
+;;
+;; Build and preview it locally with `bb site:serve`.
+{;; Every URL the engine emits carries this prefix, and `bb site:serve` mounts
+ ;; the build under it, so the local URL matches.
+ :base-path   "/champaca"
+
+ :title       "champaca"
+ :description "Java bytecode run natively inside a jolt process, so jolt code can call Java libraries in-process."}

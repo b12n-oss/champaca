@@ -80,6 +80,10 @@ After that every example loads in the same session (`C-c C-k` in CIDER), because
 
 Loading a file only defines its tests. Evaluate any form inside a `deftest` to see its value, or `(clojure.test/run-tests)` in the file's namespace to run them all. jolt's server has eval, load-file and completion but no test or lookup op, so CIDER's own test commands, its jump to definition and its documentation popups don't work. One test passes only the first time it runs in a session, because a class initializes once per process: `class-initialization` in `fields.clj`.
 
+## The docs site
+
+These guides can be read as a local site. `bb site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `bb site:serve 4000` asks for a port of your own, and a busy one is refused rather than swapped for another. `bb site:build` only builds, and `bb site:clean` deletes `_site/`. The rendering is done by the b12n-oss docs-engine, which must be checked out at `$DOCS_ENGINE`, `../docs-engine` or `~/dev/b12n-oss/docs-engine` (`git clone git@github.com:b12n-oss/docs-engine.git ~/dev/b12n-oss/docs-engine`). The engine's config for this project is `docs/site.edn`.
+
 ## Running the tests
 
 ```sh
