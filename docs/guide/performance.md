@@ -208,4 +208,4 @@ Evaluating `handles.ss` from source added about 20 ms to every start when method
 
 File natives call libc through Chez's foreign interface, so a read or write is one libc call plus copying between a Java `byte[]` (a Scheme vector of fixnums) and native memory, in 4 KB pieces for `java.io`. Writing a 4 MB file with `Files.write` took about 180 ms and reading it back with `Files.readAllBytes` about 145 ms, against 7 ms and 1 ms on the JVM. Reading the same file a byte at a time through a `BufferedInputStream` took 2.1 s against 37 ms: that loop is all generated code, which is the slow part ([The generated code](#the-generated-code)).
 
-`files.ss` is the largest runtime file, and evaluating it took about 40 ms per start before the compiled runtime made that a one-time cost.
+`files.ss` is one of the larger runtime files, and evaluating it took about 40 ms per start before the compiled runtime made that a one-time cost.

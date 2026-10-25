@@ -50,7 +50,7 @@ So a jolt map can go straight into a JSON library and come back:
 ;=> {"name" "champaca", "tags" ["a" "b"]}
 ```
 
-`examples/dynamic.clj` (20 calls) and `examples/varargs.clj` (14 calls) each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM. The examples are tests, and the values they assert are the ones the twins print on the JVM. `bb test` runs them and also runs both Java programs on champaca.
+`examples/dynamic.clj` and `examples/varargs.clj` each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM: 20 and 14 of them. `dynamic.clj` also checks surrogate pairs and a missing native, which its twin doesn't. The examples are tests, and the values they assert are the ones the twins print on the JVM. `bb test` runs them and also runs both Java programs on champaca.
 
 Choosing an overload means walking the class's methods and scoring each one, so a call remembers what it chose. The cache key is the class, the method name and the kind of each argument: a Java value's class, an integer's range (int, long or bigger), or the jolt type for the rest. A vector counts by its element kind, whatever its length. A vector mixing kinds isn't cached, and neither is a failed lookup. Once a call has been seen, `invoke` on `StringBuilder.length` takes 1.0 µs instead of 6.3 µs, which is close to the 0.85 µs of a `call` with its descriptor. `ArrayList.add` drops from 9.8 to 1.6 µs and `Math.max` from 4.4 to 1.3 µs. `examples/callsite.clj` runs one call site with arguments that need different overloads, and `CHAMPACA_CALL_CACHE=off` turns the cache off to compare.
 
@@ -128,10 +128,11 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (a port of HotSpot's) |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
-| `resources/champaca/natives.ss` | JDK native methods (121 named, plus pattern rules for `Unsafe`), resources, a few overrides |
+| `resources/champaca/natives.ss` | JDK native methods (149 named, plus pattern rules for `Unsafe`), resources, a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` and the frame walk behind stack traces |
 | `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
-| `resources/champaca/files.ss` | file, channel and zlib natives (127) through libc, `UnsafeConstants` |
+| `resources/champaca/files.ss` | file, channel and zlib natives (128) through libc, `UnsafeConstants` |
+| `resources/champaca/net.ss` | socket natives (52) through libc: `sun.nio.ch.Net`, the socket dispatcher, `Inet4AddressImpl` |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
 | `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, the call-site cache, auto-wrapping jolt fns |
 
