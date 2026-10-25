@@ -99,7 +99,7 @@ You need jolt 0.8.23 or later (`deps.edn` sets that as `:jolt/min-version`) and 
 
 ```sh
 bb jolt                                               # build the pinned jolt (about 45 s, once per pin)
-bb test                                               # every test/java program vs the JVM, plus the examples/*.clj tests
+bb test                                               # every test/java and test/aaa program vs the JVM, plus the examples/*.clj tests
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
@@ -172,4 +172,4 @@ The logo in `docs/images/logo.svg` was drawn for this project.
 
 ## License
 
-GPLv3 with the Classpath Exception, inherited from OpenLDK. See `COPYING` and `COPYING.CLASSPATH-EXCEPTION`.
+GPLv3 with the Classpath Exception, inherited from OpenLDK. See `COPYING` and `COPYING.CLASSPATH-EXCEPTION`. The test programs in `test/aaa` are OpenLDK's own, under the same license (`test/aaa/README.md`).

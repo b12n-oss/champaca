@@ -164,7 +164,7 @@
                     (shell {:dir wt} "make build")
                     (fs/copy (str wt "/target/release/jolt") jolt-pinned {:replace-existing true})
                     (shell jolt-pinned "--version"))))}
-  test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected; then the examples/*.clj tests"
+  test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected; the same for upstream OpenLDK's test/aaa programs; then the examples/*.clj tests"
         :task (let [_ (println "jolt:" (jolt-bin) (str/trim (:out (shell {:out :string} (jolt-bin) "--version"))))
                     _ (shell "mkdir -p target/classes")
                     ;; test/jar is packed into target/lib.jar, so its classes reach
@@ -205,6 +205,36 @@
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
                                 (if ok [] ["-jar"]))
+                    ;; upstream OpenLDK's testsuite/aaa programs (test/aaa, see its
+                    ;; README): compiled together into one aaa package, each run from a
+                    ;; work dir of its own holding a fresh copy of it (some delete their
+                    ;; own class files), its source and a small test.jar, with the
+                    ;; arguments upstream's run.exp gives; .expected is the JVM's output
+                    _ (fs/delete-tree "target/aaa-classes")
+                    _ (fs/delete-tree "target/aaa-work")
+                    _ (apply shell "javac -nowarn -d target/aaa-classes" (map str (fs/glob "test/aaa" "*.java")))
+                    _ (fs/create-dirs "target/aaa-jar/a")
+                    _ (spit "target/aaa-jar/a/x.txt" "x\n")
+                    _ (shell "jar cf target/aaa-test.jar -C target/aaa-jar .")
+                    aaa-mains (->> (fs/glob "test/aaa" "*.expected")
+                                   (map (fn [p] (str/replace (fs/file-name p) ".expected" "")))
+                                   sort)
+                    deps (str "{:deps {champaca/champaca {:local/root " (pr-str (str (fs/absolutize "."))) "}}}")
+                    ;; a path to jolt is made absolute for the work dirs; a bare name is found on PATH
+                    jolt (let [j (jolt-bin)] (if (str/includes? j "/") (str (fs/absolutize j)) j))
+                    aaa-fails (doall
+                               (for [m aaa-mains
+                                     :let [w (str "target/aaa-work/" m)
+                                           _ (fs/create-dirs w)
+                                           _ (fs/copy-tree "target/aaa-classes/aaa" (str w "/aaa"))
+                                           _ (fs/copy (str "test/aaa/" m ".java") (str w "/aaa"))
+                                           _ (fs/copy "target/aaa-test.jar" (str w "/test.jar"))
+                                           {:keys [out exit]} (run-limited 300 {:dir w :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                                                           jolt "-Sdeps" deps "-M" "-m" "champaca.main"
+                                                                           "." (str "aaa." m) "1" "2" "3" "4" "5")
+                                           ok (and (zero? exit) (= out (slurp (str "test/aaa/" m ".expected"))))]]
+                                 (do (println (if ok "PASS" "FAIL") (str "aaa." m))
+                                     (when-not ok (str "aaa." m)))))
                     ;; jolt programs calling Java, each a namespace of clojure.test
                     ;; tests that test/run_example.clj runs in a process of its own
                     ex-fails (doall
@@ -214,8 +244,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails ex-fails))
-                    mains (concat mains ["-jar"] (map first examples))]
+                    fails (remove nil? (concat fails jar-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar"] aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"
