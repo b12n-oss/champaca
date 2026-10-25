@@ -275,7 +275,8 @@
 (defn- nesting
   "This class's own InnerClasses entry, {:outer :simple-name :flags} (outer and
   simple name nil for local and anonymous classes), and its EnclosingMethod,
-  {:class :name :desc} (name and desc nil outside a method)."
+  {:class :name :desc} (name and desc nil outside a method), and its nest:
+  the NestHost attribute's class, or the NestMembers attribute's classes."
   [attrs cp this]
   (let [inner (some #(when (= "InnerClasses" (:name %))
                        (some (fn [[ci oi ni fl]]
@@ -288,8 +289,11 @@
         encl (some #(when (= "EnclosingMethod" (:name %))
                       (let [[ci mi] (u2s (:info %)) nat (when (pos? mi) (cp mi))]
                         {:class (:name (cp ci)) :name (:name nat) :desc (:desc nat)}))
-                   attrs)]
-    (cond-> {} inner (assoc :inner inner) encl (assoc :enclosing-method encl))))
+                   attrs)
+        host (some #(when (= "NestHost" (:name %)) (:name (cp (first (u2s (:info %)))))) attrs)
+        members (some #(when (= "NestMembers" (:name %)) (mapv (fn [i] (:name (cp i))) (rest (u2s (:info %))))) attrs)]
+    (cond-> {} inner (assoc :inner inner) encl (assoc :enclosing-method encl)
+            host (assoc :nest-host host) members (assoc :nest-members members))))
 
 (defn- read-member [r cp]
   (let [flags (u2 r)

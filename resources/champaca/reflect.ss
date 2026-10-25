@@ -173,17 +173,37 @@
 (defnative "jdk/internal/reflect/ConstantPool.getClassAt0(Ljava/lang/Object;I)Ljava/lang/Class;" (this oop i)
   (jmirror-of (cp-value oop i)))
 (defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this) (no-classes))
-;; The nest host as javac lays nests out: the outermost class, reached through
-;; the declaring class or the enclosing method's class. The NestHost attribute
-;; itself isn't read, so a nest assembled another way (a hidden class defined
-;; as a nestmate) isn't seen. Reflection.areNestMates (below) and
-;; Class.isNestmateOf compare these.
+;; Nests (JVMS 5.4.4): a class's host is the class its NestHost attribute
+;; names, once that class loads, is in the same runtime package and lists
+;; this one in its NestMembers; any other class is its own host. A hidden
+;; class defined as a nestmate (Lookup.defineHiddenClass with NESTMATE) has
+;; its lookup class's host (dynamic-nest-hosts, from defineClass0).
+;; Reflection.areNestMates (below) and Class.isNestmateOf compare hosts.
+(define (class-nest-host-name c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 6) (list-ref r 6))))
+(define (class-nest-members c) (let ([r (meta-class-refl c)]) (or (and (fx> (length r) 7) (list-ref r 7)) '())))
+(define dynamic-nest-hosts (make-hashtable string-hash string=?))   ; hidden class name -> host jclass
+(define (same-runtime-package? a b)
+  (and (string=? (package-dir (jclass-cname a)) (package-dir (jclass-cname b)))
+       (eq? (class-loader-of a) (class-loader-of b))))
 (define (nest-host c)
-  (let loop ([c c])
-    (let* ([inner (class-inner c)] [enc (class-enclosing c)]
-           [outer (or (and inner (car inner)) (and enc (car enc)))])
-      (if outer (loop (find-class outer)) c))))
+  (or (hashtable-ref dynamic-nest-hosts (jclass-cname c) #f)
+      (let* ([hn (class-nest-host-name c)]
+             [h (and hn (guard (e [#t #f]) (find-class hn)))])
+        (if (and h (same-runtime-package? c h) (member (jclass-cname c) (class-nest-members h)))
+            h
+            c))))
 (defnative "java/lang/Class.getNestHost0()Ljava/lang/Class;" (this) (jmirror (nest-host (mirror-class this))))
+;; the host, then each of its NestMembers that loads and has it as host, as
+;; HotSpot leaves out a member that fails either way
+(defnative "java/lang/Class.getNestMembers0()[Ljava/lang/Class;" (this)
+  (let ([h (nest-host (mirror-class this))])
+    (make-jarr "Ljava/lang/Class;"
+               (list->vector
+                (cons (jmirror h)
+                      (fold-right (lambda (n acc)
+                                    (let ([m (guard (e [#t #f]) (find-class n))])
+                                      (if (and m (eq? (nest-host m) h)) (cons (jmirror m) acc) acc)))
+                                  '() (class-nest-members h)))))))
 (defnative "java/lang/Class.getPermittedSubclasses0()[Ljava/lang/Class;" (this) #f)
 (defnative "java/lang/Class.isRecord0()Z" (this)
   (if (class-record (mirror-class this)) 1 0))

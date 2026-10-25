@@ -1,0 +1,38 @@
+enumerate: true true
+getAllStackTraces: true dumpThreads true getAllStackTraces main VmCheck
+cpu time support: true true true
+current thread cpu: true true true true true true
+other thread cpu: true true true -1
+thread cpu arrays: true -1 true -1
+cpu time disabled: false -1 -1
+cpu time enabled again: true
+nest VmCheck: VmCheck [A, B, C, Hid, I, Pkg, Priv, Prot, VmCheck] true
+nest A: VmCheck [A, B, C, Hid, I, Pkg, Priv, Prot, VmCheck] true
+nest C: VmCheck [A, B, C, Hid, I, Pkg, Priv, Prot, VmCheck] true
+nest I: VmCheck [A, B, C, Hid, I, Pkg, Priv, Prot, VmCheck] true
+nest int: int [int] false
+nest int[]: int[] [int[]] false
+nest Entry: Map [Entry, Map] false
+nest host first: true
+hidden nestmate: true true true false false
+modifiers Priv[]: private abstract final
+modifiers Pkg[][]: abstract final
+modifiers Prot[]: protected abstract final
+modifiers VmCheck[]: public abstract final
+modifiers int[][]: public abstract final
+modifiers Entry[]: public abstract final
+getPackage java.util: java.util true
+getPackage java.lang: java.lang true
+getPackage jdk.internal.misc: jdk.internal.misc true
+getPackage javax.print: null
+getPackage no.such.pkg: null
+getPackage no-such-proc: null
+getPackage java/util: java/util true
+getPackage java.sql: null
+same Package: true true
+getPackages: true false
+user.language: true true true
+java.io.tmpdir: true true
+sun.java.command: VmCheck | SUN_STANDARD
+sun.boot.library.path: true
+sun.io.unicode.encoding: true

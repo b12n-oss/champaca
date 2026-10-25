@@ -113,8 +113,8 @@
 ;; Enough of sun.management for the Runtime, Memory, OperatingSystem and
 ;; ClassLoading beans and ThreadMXBean's counts: the VM's counters, from what
 ;; the runtime keeps, and zeros for the HotSpot-only ones (safepoints, JIT
-;; and class-verification times). ThreadInfo, CPU times and deadlock
-;; detection stay missing.
+;; and class-verification times), and the threads' CPU times (Thread
+;; section). ThreadInfo and deadlock detection stay missing.
 (define vm-start-ms (quotient (now-nanos) 1000000))
 (define vm-start-mono (current-time 'time-monotonic))   ; uptime survives a clock step
 (define (uptime-ms)
@@ -124,9 +124,15 @@
   (define cls "sun/management/VMManagementImpl")
   (define (def name proc) (define-native! (string-append cls "." name) proc))
   (def "getVersion0()Ljava/lang/String;" (lambda () (jstring "4.0")))
-  (def "initOptionalSupportFields()V" (lambda () (void)))
+  ;; the CPU times of the current thread and of others are measured (below);
+  ;; the other optional supports stay off
+  (def "initOptionalSupportFields()V"
+       (lambda ()
+         (set-top-level-value! '|sun/management/VMManagementImpl:currentThreadCpuTimeSupport| 1)
+         (set-top-level-value! '|sun/management/VMManagementImpl:otherThreadCpuTimeSupport| 1)))
+  (def "isThreadCpuTimeEnabled()Z" (lambda (this) thread-cpu-enabled))
   (for-each (lambda (n) (def n (lambda (this) 0)))
-            '("isThreadContentionMonitoringEnabled()Z" "isThreadCpuTimeEnabled()Z"
+            '("isThreadContentionMonitoringEnabled()Z"
               "isThreadAllocatedMemoryEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
               "getUnloadedClassCount()J" "getTotalCompileTime()J" "getSafepointCount()J"
               "getTotalSafepointTime()J" "getSafepointSyncTime()J" "getTotalApplicationNonStoppedTime()J"
@@ -170,7 +176,7 @@
       (foreign-free buf)
       got)))
 (defnative "sun/management/ThreadImpl.getThreads()[Ljava/lang/Thread;" ()
-  (make-jarr "Ljava/lang/Thread;" (list->vector (cons main-thread (reverse java-live-threads)))))
+  (make-jarr "Ljava/lang/Thread;" (list->vector (live-jthreads))))
 ;; jdk.management's OperatingSystemImpl is the OS bean once the module system
 ;; has booted (ManagementFactory finds its provider in the boot layer, as the
 ;; JVM does): process CPU time from the runtime, the host's CPU counts from
@@ -749,14 +755,107 @@
      ("java.vm.specification.vendor" . "Oracle Corporation")
      ("java.vm.specification.version" . "25")
      ("java.class.path" . ,classpath-string)
-     ("sun.boot.library.path" . "")
+     ("sun.boot.library.path" . ,(string-append java-home-dir "/lib"))
      ("java.library.path" . "")
      ("jdk.debug" . "release")
      ;; reflection through invoke0/newInstance0 (reflect.ss), never method handles
      ("jdk.reflect.useNativeAccessorOnly" . "true")
      ;; sun.misc.Unsafe's default "warn" finds its caller with StackWalker,
      ;; which has no natives here; "allow" skips the stderr warning and the walk
-     ("sun.misc.unsafe.memory.access" . "allow"))))
+     ("sun.misc.unsafe.memory.access" . "allow")
+     ;; what the launcher sets: the main class or jar and its arguments,
+     ;; when champaca.main started the program
+     ,@(if java-command
+           `(("sun.java.command" . ,java-command) ("sun.java.launcher" . "SUN_STANDARD"))
+           '()))))
+(define java-command #f)
+(define (set-java-command! s) (set! java-command s))
+
+;; The locale properties (user.language, user.script, user.country, and
+;; their .format forms when the format locale differs) as the JDK finds
+;; them: (language script country), any of them #f. macOS reads the user's
+;; first preferred language from CoreFoundation for both, with the current
+;; locale's region when that language names none; the environment is never
+;; read there. Linux asks setlocale(LC_ALL, "") for LC_MESSAGES (display)
+;; and LC_CTYPE (format), the process's own locale put back afterwards; a
+;; locale that isn't installed leaves it C, which the JDK takes as en_US.
+;; Of a POSIX name's @modifier only the script names are read; the JDK's
+;; variant and alias tables (nynorsk, iw) aren't here.
+(define (locale-parts lang-script-country)   ; "en-AU", "zh-Hans-CN", "en" -> (en #f AU) ...
+  (let* ([parts (let split ([i 0] [start 0] [acc '()])
+                  (let ([n (string-length lang-script-country)])
+                    (cond [(fx= i n) (reverse (cons (substring lang-script-country start i) acc))]
+                          [(char=? (string-ref lang-script-country i) #\-)
+                           (split (fx+ i 1) (fx+ i 1) (cons (substring lang-script-country start i) acc))]
+                          [else (split (fx+ i 1) start acc)])))]
+         [script (and (pair? (cdr parts)) (fx= 4 (string-length (cadr parts))) (cadr parts))]
+         [rest (if script (cddr parts) (cdr parts))])
+    (list (car parts) script (and (pair? rest) (positive? (string-length (car rest))) (car rest)))))
+(define (posix-locale-parts lc)   ; "sr_RS.UTF-8@latin" -> (sr Latn RS)
+  (let* ([lc (if (or (not lc) (member lc '("C" "POSIX"))) "en_US" lc)]
+         [n (string-length lc)]
+         [upto (lambda (from stops)
+                 (let loop ([i from]) (if (or (fx= i n) (memv (string-ref lc i) stops)) i (loop (fx+ i 1)))))]
+         [le (upto 0 '(#\_ #\. #\@))]
+         [lang (substring lc 0 le)]
+         [country (and (fx< le n) (char=? (string-ref lc le) #\_)
+                       (substring lc (fx+ le 1) (upto (fx+ le 1) '(#\. #\@))))]
+         [at (upto 0 '(#\@))]
+         [modifier (and (fx< at n) (substring lc (fx+ at 1) n))]
+         [script (and modifier (let ([hit (assoc modifier '(("latin" . "Latn") ("cyrillic" . "Cyrl")
+                                                              ("devanagari" . "Deva") ("iqtelif" . "Latn")))])
+                                 (and hit (cdr hit))))])
+    (list (if (member lang '("C" "POSIX")) "en" lang) script (and country (positive? (string-length country)) country))))
+(define (macos-locale)
+  (guard (e [#t #f])
+    (load-shared-object "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    (let* ([copy-languages (foreign-procedure "CFLocaleCopyPreferredLanguages" () uptr)]
+           [array-count (foreign-procedure "CFArrayGetCount" (uptr) long)]
+           [array-at (foreign-procedure "CFArrayGetValueAtIndex" (uptr long) uptr)]
+           [string-text (foreign-procedure "CFStringGetCString" (uptr uptr long unsigned-32) unsigned-8)]
+           [copy-current (foreign-procedure "CFLocaleCopyCurrent" () uptr)]
+           [identifier (foreign-procedure "CFLocaleGetIdentifier" (uptr) uptr)]
+           [release (foreign-procedure "CFRelease" (uptr) void)]
+           [buf (foreign-alloc 128)]
+           [text (lambda (cf) (and (not (eqv? cf 0)) (fx> (string-text cf buf 128 #x08000100) 0) (c-string-text buf)))]
+           [languages (copy-languages)]
+           [first (and (not (eqv? languages 0)) (fx> (array-count languages) 0) (text (array-at languages 0)))]
+           [region (let* ([cur (copy-current)] [id (text (identifier cur))])
+                     (release cur)
+                     ;; "en_AU" or "en_TH@rg=thzzzz": what follows the last _
+                     (and id (let* ([at (let loop ([i 0]) (if (or (fx= i (string-length id)) (char=? (string-ref id i) #\@)) i (loop (fx+ i 1))))]
+                                    [id (substring id 0 at)]
+                                    [us (let loop ([i (fx- (string-length id) 1)])
+                                          (cond [(fx< i 0) #f] [(char=? (string-ref id i) #\_) i] [else (loop (fx- i 1))]))])
+                               (and us (substring id (fx+ us 1) (string-length id))))))])
+      (unless (eqv? languages 0) (release languages))
+      (foreign-free buf)
+      (and first
+           (let ([p (locale-parts first)])
+             (if (and (not (caddr p)) region) (list (car p) (cadr p) region) p))))))
+(define (linux-locales)   ; (display . format)
+  (let* ([setlocale (foreign-procedure "setlocale" (int string) string)]
+         [saved (setlocale 6 #f)]   ; LC_ALL
+         [set? (setlocale 6 "")]
+         [messages (and set? (setlocale 5 #f))]   ; LC_MESSAGES
+         [ctype (and set? (setlocale 0 #f))])     ; LC_CTYPE
+    (when set? (setlocale 6 saved))
+    (cons (posix-locale-parts messages) (posix-locale-parts ctype))))
+(define (host-locales)
+  (if natives-macos?
+      (let ([l (or (macos-locale) (posix-locale-parts #f))]) (cons l l))
+      (linux-locales)))
+;; java.io.tmpdir: macOS's per-user directory (confstr's
+;; _CS_DARWIN_USER_TEMP_DIR), else P_tmpdir, as the JDK
+(define (host-tmpdir)
+  (if natives-macos?
+      (let* ([confstr (foreign-procedure "confstr" (int uptr size_t) size_t)]
+             [buf (foreign-alloc 1024)]
+             [n (confstr 65537 buf 1024)]
+             [d (and (fx> n 0) (fx<= n 1024) (c-string-text buf))])
+        (foreign-free buf)
+        (or d "/var/tmp/"))
+      "/tmp"))
 
 ;; os.version must parse as a version: CLDR's locale provider rejects "".
 ;; macOS reports the product version (as the JDK does), others the kernel's.
@@ -810,13 +909,19 @@
                           [(ta6le a6le) "amd64"]
                           [else (symbol->string (machine-type))]))
     (set "_os_version_NDX" (os-version))
-    (set "_java_io_tmpdir_NDX" "/tmp")
+    (set "_java_io_tmpdir_NDX" (host-tmpdir))
+    (let ([ls (host-locales)])
+      (for-each (lambda (which parts)
+                  (for-each (lambda (field v) (when v (set (string-append "_" which "_" field "_NDX") v)))
+                            '("language" "script" "country") parts))
+                '("display" "format") (list (car ls) (cdr ls))))
     (set "_user_dir_NDX" (current-directory))
     (set "_user_home_NDX" (or (getenv "HOME") "/"))
     (set "_user_name_NDX" (or (getenv "USER") "champaca"))
     (set "_sun_cpu_endian_NDX" "little")
     (set "_sun_arch_data_model_NDX" "64")
-    (set "_sun_io_unicode_encoding_NDX" "UnicodeLittle")
+    ;; as the JDK's own: UnicodeBig on macOS whatever the byte order
+    (set "_sun_io_unicode_encoding_NDX" (if natives-macos? "UnicodeBig" "UnicodeLittle"))
     (make-jarr "Ljava/lang/String;" v)))
 
 ;; --- file descriptors and output ---------------------------------------------------
@@ -1203,6 +1308,7 @@
      (lambda ()
        (jthread-state-tid-set! s (get-thread-id))
        (self s)
+       (note-native-thread! this)
        (gil-enter!)
        (thread-body this)
        (gil-leave!)))
@@ -1219,7 +1325,102 @@
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
      t ((jvirt main-thread "getThreadGroup()Ljava/lang/ThreadGroup;") main-thread)
      (jstring (string-append "jolt-" (number->string (get-thread-id)))))
+    (note-native-thread! t)
     (thread-alive! t #t)))
+
+;; The live Java threads, main first, as Thread.getThreads and the
+;; management beans list them (a jolt thread calling in isn't one, as a
+;; native thread attached to a JVM is)
+(define (live-jthreads) (cons main-thread (reverse java-live-threads)))
+(defnative "java/lang/Thread.getThreads()[Ljava/lang/Thread;" ()
+  (make-jarr "Ljava/lang/Thread;" (list->vector (live-jthreads))))
+;; Thread.getAllStackTraces: the current thread's stack, from the native's
+;; caller down, with the native's own frame on top as the JVM shows it; no
+;; other thread's stack can be read here, which the method's contract allows
+;; as a zero-length array
+(defnative "java/lang/Thread.dumpThreads([Ljava/lang/Thread;)[[Ljava/lang/StackTraceElement;" (threads)
+  (make-jarr "[Ljava/lang/StackTraceElement;"
+             (vector-map (lambda (t)
+                           (if (eq? t current-jthread)
+                               (let ([arr (stack-trace-array
+                                           (cons (list "java/lang/Thread" "dumpThreads" "([Ljava/lang/Thread;)[[Ljava/lang/StackTraceElement;" -1)
+                                                 (visible-frames (java-frames-of (call/1cc (lambda (k) (raw-frames k)))))))])
+                                 ;; line -2 is how a StackTraceElement says Native Method
+                                 (jslot-set! (vector-ref (jarr-vec arr) 0) (slot-of "java/lang/StackTraceElement" "lineNumber") -2)
+                                 arr)
+                               (make-jarr "Ljava/lang/StackTraceElement;" (vector))))
+                         (jarr-vec (nn threads)))))
+
+;; ThreadMXBean's CPU times, measured as HotSpot measures them. On macOS that
+;; is thread_info's user and system times (microseconds) through the
+;; thread's mach port; on Linux the total is the thread's CPU clock
+;; (pthread_getcpuclockid) and the user time utime in
+;; /proc/self/task/<tid>/stat. Each Java thread's pthread_t, and on Linux
+;; its kernel tid, is noted on the thread itself when it starts. A thread is
+;; looked up among the live ones under the GIL, and a thread leaves that
+;; list before its OS thread can end, so its pthread_t is still good.
+(define thread-natives (make-weak-eq-hashtable))   ; java.lang.Thread -> (pthread . tid)
+(define thread-pthread-self (foreign-procedure "pthread_self" () uptr))
+(define thread-gettid (if natives-macos? (lambda () 0) (foreign-procedure "gettid" () int)))
+(define (note-native-thread! t) (eq-hashtable-set! thread-natives t (cons (thread-pthread-self) (thread-gettid))))
+(define thread-cpu-enabled 1)   ; HotSpot measures by default
+(defnative "sun/management/ThreadImpl.setThreadCpuTimeEnabled0(Z)V" (on) (set! thread-cpu-enabled on))
+
+;; macOS: (user-ns . system-ns), or #f
+(define mach-thread-of (and natives-macos? (foreign-procedure "pthread_mach_thread_np" (uptr) unsigned-32)))
+(define mach-thread-info (and natives-macos? (foreign-procedure "thread_info" (unsigned-32 int uptr uptr) int)))
+(define (mach-thread-times pthread)
+  ;; struct thread_basic_info: user_time and system_time, each two int32s
+  ;; (seconds, microseconds), then six more; THREAD_BASIC_INFO is 3, its
+  ;; count 10 natural_t
+  (let ([info (foreign-alloc 40)] [count (foreign-alloc 4)])
+    (foreign-set! 'unsigned-32 count 0 10)
+    (let* ([ok (eqv? 0 (mach-thread-info (mach-thread-of pthread) 3 info count))]
+           [us (lambda (off) (+ (* 1000000 (foreign-ref 'integer-32 info off)) (foreign-ref 'integer-32 info (fx+ off 4))))]
+           [r (and ok (cons (* 1000 (us 0)) (* 1000 (us 8))))])
+      (foreign-free info)
+      (foreign-free count)
+      r)))
+;; Linux
+(define cpu-clock-of (and (not natives-macos?) (foreign-procedure "pthread_getcpuclockid" (uptr uptr) int)))
+(define cpu-clock-gettime (foreign-procedure "clock_gettime" (int uptr) int))
+(define (linux-thread-cpu-ns pthread)
+  (let ([id (foreign-alloc 4)] [ts (foreign-alloc 16)])
+    (let ([r (and (eqv? 0 (cpu-clock-of pthread id))
+                  (eqv? 0 (cpu-clock-gettime (foreign-ref 'integer-32 id 0) ts))
+                  (+ (* 1000000000 (foreign-ref 'integer-64 ts 0)) (foreign-ref 'integer-64 ts 8)))])
+      (foreign-free id)
+      (foreign-free ts)
+      r)))
+(define clock-ticks (and (not natives-macos?) ((foreign-procedure "sysconf" (int) long) 2)))   ; _SC_CLK_TCK
+(define (linux-thread-user-ns tid)
+  ;; the fields after the command's closing paren: state is the first,
+  ;; utime (field 14) the twelfth
+  (guard (e [#t #f])
+    (let* ([line (call-with-input-file (string-append "/proc/self/task/" (number->string tid) "/stat") get-line)]
+           [rest (let loop ([i (fx- (string-length line) 1)])
+                   (if (char=? (string-ref line i) #\)) (substring line (fx+ i 2) (string-length line)) (loop (fx- i 1))))]
+           [fields (let split ([i 0] [start 0] [acc '()])
+                     (cond [(fx= i (string-length rest)) (reverse (cons (substring rest start i) acc))]
+                           [(char=? (string-ref rest i) #\space) (split (fx+ i 1) (fx+ i 1) (cons (substring rest start i) acc))]
+                           [else (split (fx+ i 1) start acc)]))])
+      (* (string->number (list-ref fields 11)) (quotient 1000000000 clock-ticks)))))
+;; id 0 is the current thread; -1 for a thread that isn't alive
+(define (thread-cpu-ns id user?)
+  (let* ([tid-slot (jfield-index "java/lang/Thread" "tid")]
+         [t (if (eqv? id 0) current-jthread (find (lambda (t) (eqv? id (jslot t tid-slot))) (live-jthreads)))]
+         [n (and t (eq-hashtable-ref thread-natives t #f))])
+    (or (and n (if natives-macos?
+                   (let ([ts (mach-thread-times (car n))]) (and ts (if user? (car ts) (+ (car ts) (cdr ts)))))
+                   (if user? (linux-thread-user-ns (cdr n)) (linux-thread-cpu-ns (car n)))))
+        -1)))
+(defnative "sun/management/ThreadImpl.getThreadTotalCpuTime0(J)J" (id) (thread-cpu-ns id #f))
+(defnative "sun/management/ThreadImpl.getThreadUserCpuTime0(J)J" (id) (thread-cpu-ns id #t))
+(define (thread-cpu-times! ids result user?)
+  (let ([iv (jarr-vec (nn ids))] [rv (jarr-vec (nn result))])
+    (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length iv))) (vector-set! rv i (thread-cpu-ns (vector-ref iv i) user?)))))
+(defnative "sun/management/ThreadImpl.getThreadTotalCpuTime1([J[J)V" (ids result) (thread-cpu-times! ids result #f))
+(defnative "sun/management/ThreadImpl.getThreadUserCpuTime1([J[J)V" (ids result) (thread-cpu-times! ids result #t))
 
 ;; The launcher's DestroyJavaVM: wait for every non-daemon thread, then run
 ;; the shutdown hooks.
@@ -1248,6 +1449,7 @@
     (set! interrupted-slot (jfield-index "java/lang/Thread" "interrupted"))
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
      main-thread main (jstring "main"))
+    (note-native-thread! main-thread)
     (thread-alive! main-thread #t)))
 
 ;; --- references: no finalization, no reference-processing thread ----------------
@@ -1468,7 +1670,10 @@
 ;; so it answered null for every class. One Package per name instead, built
 ;; the way the JDK's class loaders define one: a classpath class's from its
 ;; jar's manifest (the hook), a JDK class's as a package of its named module
-;; (no version information, sealed), as BootLoader.definePackage builds it. A
+;; (no version information, sealed), defined to its module's loader the way
+;; ClassLoader.definePackage(Class) does (the boot loader's BootClassLoader
+;; for a boot module), so Package.getPackage and getDefinedPackage answer the
+;; same object. A
 ;; lambda class is champaca/Lambda$..., shared by every call site with the
 ;; same interface, so its package is champaca, in step with its getName (the
 ;; JVM's lambda lives in its caller's package).
@@ -1484,6 +1689,7 @@
   (let* ([dir (package-dir cn)]   ; hidden-class aware: Name/0x1 is in Name's package
          [pn (slashes->dots dir)])
     (or (hashtable-ref jpackage-table pn #f)
+        (jdk-module-package pn)
         (let* ([info (text-lines (jpackage-hook cn))]
                [given (lambda (s) (and (char=? (string-ref s 0) #\+) (substring s 1 (string-length s))))]
                [module (and (not (string=? dir "")) (string=? (car info) "jdk") (hashtable-ref package-modules dir #f))]
@@ -1500,10 +1706,10 @@
                              (jstring pn) (append attrs (list seal #f))))])
           ;; constructing ran Java code, which can let another thread in to
           ;; define the same package first: keep whichever got there. A JDK
-          ;; package asked for before its module is defined (the hook says
-          ;; jdk only for a package the runtime image owns) isn't kept, so a
-          ;; later call gets the sealed one
-          (if (and (string=? (car info) "jdk") (not module))
+          ;; package asked for before its module and the boot loader object
+          ;; exist (the hook says jdk only for a package the runtime image
+          ;; owns) isn't kept, so a later call gets its loader's
+          (if (string=? (car info) "jdk")
               p
               (or (hashtable-ref jpackage-table pn #f)
                   (begin (hashtable-set! jpackage-table pn p) p)))))))
@@ -1514,9 +1720,34 @@
            (jpackage-of cn)))))
 
 (defnative "jdk/internal/loader/BootLoader.setBootLoaderUnnamedModule0(Ljava/lang/Module;)V" (m) (set-unnamed-module! m))
+;; a JDK package's Package, from its module's loader, once the module and
+;; the boot loader object exist (#f before, and for any other package)
+(define (jdk-module-package pn)
+  (let* ([m (hashtable-ref package-modules (slashes pn) #f)]
+         [boot '|jdk/internal/loader/ClassLoaders:BOOT_LOADER|]
+         [ld (and m (or (module-loader m) (and (top-level-bound? boot) (top-level-value boot))))])
+    (and ld ((method-proc "java/lang/ClassLoader" "definePackage(Ljava/lang/String;Ljava/lang/Module;)Ljava/lang/Package;")
+             ld (jstring pn) m))))
+
+;; System packages are the boot modules' packages the boot loader has loaded
+;; a class from, as HotSpot answers (Package.getPackage("javax.crypto") is
+;; null until a class of it loads); a name with slashes or dots, as
+;; BootLoader passes either. The location is the module's jrt: URL, which
+;; BootLoader turns back into the module.
+(define (boot-packages-loaded)
+  (let ([t (make-hashtable string-hash string=?)])
+    (vector-for-each
+     (lambda (cn)
+       (unless (or (char=? (string-ref cn 0) #\[) (prim-name? cn))
+         (let* ([d (package-dir cn)] [m (hashtable-ref package-modules d #f)])
+           (when (and m (not (module-loader m)) (not (user-class? cn))) (hashtable-set! t d m)))))
+     (hashtable-keys classes))
+    t))
 (defnative "jdk/internal/loader/BootLoader.getSystemPackageNames()[Ljava/lang/String;" ()
-  (make-jarr "Ljava/lang/String;" (vector)))
-(defnative "jdk/internal/loader/BootLoader.getSystemPackageLocation(Ljava/lang/String;)Ljava/lang/String;" (n) #f)
+  (scheme-list->jarray "Ljava/lang/String;" (map jstring (vector->list (hashtable-keys (boot-packages-loaded))))))
+(defnative "jdk/internal/loader/BootLoader.getSystemPackageLocation(Ljava/lang/String;)Ljava/lang/String;" (n)
+  (let ([m (hashtable-ref (boot-packages-loaded) (slashes (jstring->scheme (nn n))) #f)])
+    (and m (jstring (string-append "jrt:/" (jstring->scheme (jslot m (jfield-index "java/lang/Module" "name"))))))))
 (defnative "java/lang/Module.defineModule0(Ljava/lang/Module;ZLjava/lang/String;Ljava/lang/String;[Ljava/lang/Object;)V"
   (m open? version location pns)
   (define-module! m (map jstring->scheme (vector->list (jarr-vec pns)))))
@@ -1700,8 +1931,10 @@
           (define-class! loader name v 0 len #f #f pd)))))
 (defnative "java/lang/ClassLoader.defineClass0(Ljava/lang/ClassLoader;Ljava/lang/Class;Ljava/lang/String;[BIILjava/security/ProtectionDomain;ZILjava/lang/Object;)Ljava/lang/Class;"
   (loader lookup name b off len pd initialize flags classdata)
-  ;; flags: 1 nestmate (the lookup class's nest, not kept here), 2 hidden, 4 strong, 8 vm annotations
+  ;; flags: 1 nestmate (the lookup class's nest host becomes its own), 2 hidden, 4 strong, 8 vm annotations
   (let ([m (define-class! loader name (jarr-vec (nn b)) off len (fxpositive? (fxlogand flags 2)) classdata pd)])
+    (when (and lookup (fxpositive? (fxlogand flags 1)))
+      (hashtable-set! dynamic-nest-hosts (jclass-cname (mirror-class m)) (nest-host (mirror-class lookup))))
     (when (eqv? initialize 1) (jinit (jclass-cname (mirror-class m))))
     m))
 (defnative "jdk/internal/misc/Unsafe.defineClass0(Ljava/lang/String;[BIILjava/lang/ClassLoader;Ljava/security/ProtectionDomain;)Ljava/lang/Class;"

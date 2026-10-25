@@ -653,7 +653,8 @@
             ;; annotation-default type-annotations exceptions parameters),
             ;; fields (name desc flags signature annotations type-annotations),
             ;; then the class's own (signature annotations inner
-            ;; enclosing-method record-components type-annotations)
+            ;; enclosing-method record-components type-annotations nest-host
+            ;; nest-members)
             (str "'" (cg/sx (apply cg/sx (for [m methods]
                                            (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m))
                                                   (refl-lit (:signature m)) (refl-lit (:annotations m))
@@ -669,7 +670,7 @@
                                            (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))
                                                   (refl-lit (:signature f)) (refl-lit (:annotations f))
                                                   (refl-lit (:type-annotations f)))))
-                            (let [{:keys [inner enclosing-method record]} reflection]
+                            (let [{:keys [inner enclosing-method record nest-members]} reflection]
                               (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
                                      ;; (outer simple-name flags): InnerClasses' entry for this class
                                      (if inner
@@ -687,7 +688,10 @@
                                                              (refl-lit (:signature rc)) (refl-lit (:annotations rc))
                                                              (refl-lit (:type-annotations rc)))))
                                        "#f")
-                                     (refl-lit (:type-annotations reflection)))))))]
+                                     (refl-lit (:type-annotations reflection))
+                                     ;; NestHost: the host's name; NestMembers: their names
+                                     (refl-lit (:nest-host reflection))
+                                     (if nest-members (apply cg/sx (map cg/str-lit nest-members)) "#f"))))))]
     ;; a conflicting default's stub, with the JVM's message: the interfaces
     ;; in declaration order, dotted, without descriptors
     (for [[k is] (sort conflicts)
@@ -1163,6 +1167,7 @@
         (doseq [f runtime-files] (scheme! (slurp (io/resource f)))))))
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (s/call "set-classpath!" (str/join ":" (:classpath-given @state)))
+  (when-let [c (:java-command @state)] (s/call "set-java-command!" c))
   (s/call "set-define-class-hook!" define-class!)
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
@@ -1329,5 +1334,9 @@
                            (= m ::corrupt) (str "Error: Invalid or corrupt jarfile " cname)
                            :else (str "no main manifest attribute, in " cname))))
           (System/exit 1))
+        (swap! state assoc :java-command (str/join " " (cons cname args)))
         (System/exit (run [cname] (str/replace (str/trim main) "." "/") (vec args))))
-      (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args))))))
+      (do
+        ;; sun.java.command, as the launcher has it: the main class as given, then the arguments
+        (swap! state assoc :java-command (str/join " " (cons cname args)))
+        (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args)))))))

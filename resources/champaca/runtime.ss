@@ -800,10 +800,16 @@
 ;; bit with Modifier.SYNCHRONIZED; the JVM masks it off the same way. A member
 ;; class answers the flags from its own InnerClasses entry instead, which is
 ;; where static, private and protected live (the class's meta, reflect.ss).
+;; An array is abstract and final with its innermost element's public,
+;; private or protected, as HotSpot's ObjArrayKlass computes it; a primitive
+;; array is public.
 (define (class-modifiers c)
-  (let* ([m (jclass-meta c)]
-         [inner (and (pair? (cddr m)) (fx> (length (caddr m)) 2) (caddr (caddr m)))])
-    (fxlogand (if inner (caddr inner) (jclass-flags c)) #x761f)))
+  (if (eq? (jclass-kind c) 'array)
+      (let ([e (element-name c)])
+        (fxior #x410 (if (prim-name? e) 1 (fxlogand (class-modifiers (find-class e)) 7))))
+      (let* ([m (jclass-meta c)]
+             [inner (and (pair? (cddr m)) (fx> (length (caddr m)) 2) (caddr (caddr m)))])
+        (fxlogand (if inner (caddr inner) (jclass-flags c)) #x761f))))
 
 ;; --- modules ---------------------------------------------------------------------
 ;; Class.getModule() is the boot layer's named module for a JDK class, found
