@@ -1,0 +1,28 @@
+open: true 0 0 true
+select timeout: 0 true
+register: accept true true 1 java.nio.channels.IllegalBlockingModeException
+accept and connect: true true true true true
+writable: 1 {client=write}
+readable: {accepted=read} 4 ping true
+nothing to read: 0 0
+peer closed: {accepted=read} -1 false
+closed channel: false 0 false
+cancelled key: java.nio.channels.CancelledKeyException
+closed register: java.nio.channels.ClosedChannelException
+blocking register: java.nio.channels.IllegalBlockingModeException
+bad ops: java.lang.IllegalArgumentException
+pipe idle: 0
+pipe: 1 through the pipe true
+pipe closed: -1
+wakeup before: 0 0
+wakeup: 0 true
+interrupt: 0 true
+close: 0 false
+closed select: java.nio.channels.ClosedSelectorException java.nio.channels.ClosedSelectorException
+select action: 1 [accept]
+echo server: 5 [echo client 0, echo client 1, echo client 2, echo client 3, echo client 4]
+http get: 200 hello from the server yes HTTP_1_1
+http post: 200 got a body
+http server saw: GET /hello HTTP/1.1;POST /echo HTTP/1.1 [a body];
+http closed: true true
+http refused: java.net.ConnectException
