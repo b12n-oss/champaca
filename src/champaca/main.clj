@@ -882,19 +882,29 @@
   "The synthetic class implementing ifaces for lambdas whose abstract
   method keys (\"name(desc)\", the SAM plus any bridges) are sam-keys.
   Slot 0 holds the closure; every SAM key maps to champaca/Lambda.invoke,
-  which calls it."
+  which calls it. Its vtable takes the interfaces' default methods, so its
+  name carries the fingerprints of every classpath interface among them
+  and their superinterfaces (user-deps): a jar's interface that changes
+  between runs gets a class of its own instead of an earlier run's cached
+  one. One whose interfaces can't be checked (a directory's, a defined
+  one) isn't cached."
   [ifaces sam-keys]
-  (let [n (str "champaca/Lambda$" (str/replace (first ifaces) "/" "$") "$" (Math/abs (hash [ifaces sam-keys])))]
+  (run! ensure-loaded! ifaces)
+  (let [deps (user-deps ifaces)
+        n (str "champaca/Lambda$" (str/replace (first ifaces) "/" "$") "$"
+               (Math/abs (hash (if (empty? deps) [ifaces sam-keys] [ifaces sam-keys deps]))))]
     (if (get-in @state [:classes n])
       (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet
-      (do (run! ensure-loaded! ifaces)
-          (let [info {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011 :origin :jdk
-                      :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
-                linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
-            (swap! state assoc-in [:classes n] linked)
-            (let [text (registration-text linked)]
-              (record! :jdk [n] {:text text}) ; pure data, safe to cache whoever asked
-              (scheme! text :interpret)))))
+      (let [info (cond-> {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011 :origin :jdk
+                          :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
+                   (nil? deps) (assoc :no-cache true))
+            linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
+        (swap! state assoc-in [:classes n] linked)
+        (let [text (registration-text linked)]
+          ;; a later run trusts what state.img holds, so only a name that
+          ;; pins the interfaces goes there (strip-for-cache skips :no-cache)
+          (record! (when deps :jdk) [n] {:text text})
+          (scheme! text :interpret))))
     ;; the code being compiled names n (user-deps)
     (when-let [r *reads*] (vswap! r conj n))
     n))
@@ -1163,7 +1173,9 @@
         (for [[k info] classes
               :let [s (if (string? info)
                         info
-                        (when (= :jdk (:origin info))   ; not a classpath class, not one a loader defined
+                        ;; not a classpath class, not one a loader defined, not a
+                        ;; lambda class over interfaces no later run can check
+                        (when (and (= :jdk (:origin info)) (not (:no-cache info)))
                           (packed-entry info)))]
               :when s]
           [k s])))

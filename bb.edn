@@ -252,6 +252,27 @@
                                         doall
                                         (remove nil?)
                                         vec)
+                    ;; a lambda over a jar's interface that gains a default method
+                    ;; (test/libcache/lam): the main for v2 calls it, the second v2
+                    ;; run with the lambda's class from the cache
+                    _ (doseq [v ["v1" "v2"]]
+                        (shell (str "javac -d " lc "/lam-" v "-classes test/libcache/lam/" v "/li/Greeter.java"))
+                        (shell (str "jar cf " lc "/greeter-" v ".jar -C " lc "/lam-" v "-classes ."))
+                        (shell (str "javac -cp " lc "/greeter-" v ".jar -d " lc "/lam-main-" v " test/libcache/lam/m" (subs v 1) "/LamMain.java")))
+                    ;; then the interface from a directory, whose lambda class
+                    ;; is never cached
+                    lam-fails (->> [["v1" ".jar"] ["v2" ".jar"] ["v2" ".jar"] ["v1" "-dir"] ["v2" "-dir"]]
+                                   (map-indexed
+                                    (fn [i [v kind]]
+                                      (let [cp (str lc "/lam-main-" v ":" lc (if (= kind ".jar") (str "/greeter-" v ".jar") (str "/lam-" v "-classes")))
+                                            {:keys [out exit]} (run-limited 300 {:label (str "libcache-lam-" (inc i)) :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                                                            (jolt-bin) "-M" "-m" "champaca.main" cp "LamMain")
+                                            ok (and (zero? exit) (= out (slurp (str "test/libcache/lam/" v ".expected"))))]
+                                        (println (if ok "PASS" "FAIL") (str "test/libcache/lam run " (inc i) " (" cp ")"))
+                                        (when-not ok (str "libcache-lam-" (inc i))))))
+                                   doall
+                                   (remove nil?)
+                                   vec)
                     ;; upstream OpenLDK's testsuite/aaa programs (test/aaa, see its
                     ;; README): compiled together into one aaa package, each run from a
                     ;; work dir of its own holding a fresh copy of it (some delete their
@@ -293,8 +314,9 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails libcache-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 6)) aaa-mains (map first examples))]
+                    fails (remove nil? (concat fails jar-fails libcache-fails lam-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 6))
+                                  (map (fn [i] (str "libcache-lam-" i)) (range 1 6)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"
