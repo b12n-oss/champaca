@@ -235,10 +235,17 @@
                     ;; ran, plus User's registration
                     libcache-fails (->> [["base-v1.jar" "v1" 0] ["base-v1.jar" "v1" 1] ["base-v2.jar" "v2" 0] ["base-v2.jar" "v2" 1]
                                          ;; Base from a directory ahead of the jar, which the cache never keeps
-                                         ["v2-classes:" "v2dir" 0 "base-v1.jar"] ["base-v1.jar" "v1" 2]]
+                                         ["v2-classes:" "v2dir" 0 "base-v1.jar"] ["base-v1.jar" "v1" 2]
+                                         ;; one path rebuilt, as a snapshot or an uberjar is: base.jar is
+                                         ;; v1, then v2 copied over it, which its own library file must
+                                         ;; not answer with v1's classes
+                                         ["base.jar" "v1base" 0 nil "base-v1.jar"] ["base.jar" "v1base" 1]
+                                         ["base.jar" "v2base" 0 nil "base-v2.jar"]]
                                         (map-indexed
-                                         (fn [i [first-entry v restores second-entry]]
-                                           (let [cp (str lc "/main-classes:" lc "/" first-entry
+                                         (fn [i [first-entry v restores second-entry copy-from]]
+                                           (let [_ (when copy-from
+                                                     (fs/copy (str lc "/" copy-from) (str lc "/base.jar") {:replace-existing true}))
+                                                 cp (str lc "/main-classes:" lc "/" first-entry
                                                          (when second-entry (str lc "/" second-entry)) ":" lc "/user.jar")
                                                  ;; CHAMPACA_STATS prints after boot, then at exit: the last counts
                                                  {:keys [out err exit]} (run-limited 300 {:label (str "libcache-" (inc i)) :err :string
@@ -319,7 +326,7 @@
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
                     fails (remove nil? (concat fails jar-fails libcache-fails lam-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 7))
+                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 10))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 6)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}

@@ -410,7 +410,11 @@
   cached, and two programs on different versions of a library (different
   paths) keep their own entries."
   [jar]
-  (io/file (:cache-dir @state) "lib" (str (Long/toHexString (bit-and (hash jar) 0xffffffff)) ".img")))
+  ;; 64 bits from two string hashes, so two jars sharing a name (each would
+  ;; overwrite the other's file every run) take thousands of times more jars
+  ;; than 32 would; a clash still reads as {} (read-library-image)
+  (let [h #(format "%08x" (bit-and (hash %) 0xffffffff))]
+    (io/file (:cache-dir @state) "lib" (str (h jar) (h (str/reverse jar)) ".img"))))
 
 (defn- read-library-image
   "The entries in jar's library file, {} when there is none, or when it
@@ -423,8 +427,9 @@
           (try (let [m (timed :cache-read-library #(img/read-image (str f)))]
                  (when-not (and (map? m) (map? (:entries m)))
                    (throw (ex-info "not a champaca library image" {})))
-                 (.setLastModified f (System/currentTimeMillis))
-                 (when (= jar (:jar m)) (:entries m)))
+                 (when (= jar (:jar m))
+                   (.setLastModified f (System/currentTimeMillis))
+                   (:entries m)))
                (catch Exception e
                  (binding [*out* *err*]
                    (println "champaca: discarding a damaged library cache file:" (str f) (ex-message e)))
@@ -1330,6 +1335,9 @@
   "Drop library files no run has read for a week (a jar gone, a version no
   longer used), and temp files a crash left."
   [dir]
+  ;; Racy by design: another process may rename a fresh file over one
+  ;; between the age check and the delete, and that costs its jar one
+  ;; recompile, never a stale entry.
   (let [cutoff (- (System/currentTimeMillis) stale-ms)]
     (doseq [f (.listFiles (io/file dir "lib"))
             :when (< (.lastModified f) cutoff)]
@@ -1364,11 +1372,17 @@
       (doseq [jar (remove nil? (:library-dirty @state))
               :let [f (library-file jar)
                     tmp (io/file (.getParentFile f) (str (.getName f) ".tmp-" (System/nanoTime)))]]
-        (.mkdirs (.getParentFile f))
-        (img/dump! (str tmp) {:jar jar :entries (library-entries jar (:classes @state))})
-        (if (.renameTo tmp f)
-          (swap! state #(-> % (update :library-dirty disj jar) (update :library-dropped dissoc jar)))
-          (.delete tmp)))
+        ;; one jar's failure leaves it dirty and the others still go
+        (try
+          (.mkdirs (.getParentFile f))
+          (img/dump! (str tmp) {:jar jar :entries (library-entries jar (:classes @state))})
+          (if (.renameTo tmp f)
+            (swap! state #(-> % (update :library-dirty disj jar) (update :library-dropped dissoc jar)))
+            (.delete tmp))
+          (catch Exception e
+            (.delete tmp)
+            (binding [*out* *err*]
+              (println "champaca: couldn't save the library cache for" jar (str "(" (ex-message e) ")"))))))
       (swap! state update :library-dirty (fn [s] (set (remove nil? s))))
       (prune-library! dir))))
 
