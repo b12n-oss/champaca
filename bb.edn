@@ -214,8 +214,11 @@
                     ;; place Base decides
                     lc "target/libcache"
                     _ (fs/delete-tree lc)
-                    _ (doseq [v ["v1" "v2"]]
+                    _ (doseq [v ["v1" "v2" "v3"]]
                         (shell (str "javac -d " lc "/" v "-classes test/libcache/" v "/lc/Base.java")))
+                    _ (when-not (apply = (map (fn [v] (fs/size (str lc "/" v "-classes/lc/Base.class"))) ["v1" "v3"]))
+                        (println "bb test: lc/Base.class sizes differ between v1 and v3, so test/libcache doesn't check the CRC")
+                        (System/exit 1))
                     _ (shell (str "javac -cp " lc "/v1-classes -d " lc "/sub-classes test/libcache/lc/Sub.java"))
                     _ (doseq [v ["v1" "v2"]]
                         (shell (str "jar cf " lc "/base-" v ".jar -C " lc "/" v "-classes . -C " lc "/sub-classes .")))
@@ -234,17 +237,29 @@
                     ;; from base-v1.jar's own library file, kept while base-v2.jar
                     ;; ran, plus User's registration
                     libcache-fails (->> [["base-v1.jar" "v1" 0] ["base-v1.jar" "v1" 1] ["base-v2.jar" "v2" 0] ["base-v2.jar" "v2" 1]
-                                         ;; Base from a directory ahead of the jar, which the cache never keeps
-                                         ["v2-classes:" "v2dir" 0 "base-v1.jar"] ["base-v1.jar" "v1" 2]
+                                         ;; Base from a directory ahead of the jar, cached by its bytes
+                                         ;; as a jar's class is by its CRC: LibCacheMain, Base, Sub and
+                                         ;; User all come back on the second run
+                                         ["v2-classes:" "v2dir" 0 "base-v1.jar"] ["v2-classes:" "v2dir" 4 "base-v1.jar"]
+                                         ["base-v1.jar" "v1" 2]
                                          ;; one path rebuilt, as a snapshot or an uberjar is: base.jar is
                                          ;; v1, then v2 copied over it, which its own library file must
                                          ;; not answer with v1's classes
                                          ["base.jar" "v1base" 0 nil "base-v1.jar"] ["base.jar" "v1base" 1]
-                                         ["base.jar" "v2base" 0 nil "base-v2.jar"]]
+                                         ["base.jar" "v2base" 0 nil "base-v2.jar"]
+                                         ;; and one directory rebuilt, as javac -d does: v1's classes,
+                                         ;; then v2's over them
+                                         ["base-dir" "v1basedir" 0 nil ["v1-classes" "sub-classes"]] ["base-dir" "v1basedir" 4]
+                                         ;; v3 is v1 at the same size with another CRC
+                                         ["base-dir" "v3basedir" 0 nil ["v3-classes"]]
+                                         ["base-dir" "v2basedir" 0 nil ["v2-classes" "sub-classes"]]]
                                         (map-indexed
                                          (fn [i [first-entry v restores second-entry copy-from]]
-                                           (let [_ (when copy-from
-                                                     (fs/copy (str lc "/" copy-from) (str lc "/base.jar") {:replace-existing true}))
+                                           (let [_ (cond (vector? copy-from)
+                                                         (doseq [d copy-from]
+                                                           (fs/copy-tree (str lc "/" d) (str lc "/base-dir") {:replace-existing true}))
+                                                         copy-from
+                                                         (fs/copy (str lc "/" copy-from) (str lc "/base.jar") {:replace-existing true}))
                                                  cp (str lc "/main-classes:" lc "/" first-entry
                                                          (when second-entry (str lc "/" second-entry)) ":" lc "/user.jar")
                                                  ;; CHAMPACA_STATS prints after boot, then at exit: the last counts
@@ -270,12 +285,15 @@
                         (shell (str "javac -d " lc "/lam-" v "-classes test/libcache/lam/" v "/li/Greeter.java"))
                         (shell (str "jar cf " lc "/greeter-" v ".jar -C " lc "/lam-" v "-classes ."))
                         (shell (str "javac -cp " lc "/greeter-" v ".jar -d " lc "/lam-main-" v " test/libcache/lam/m" (subs v 1) "/LamMain.java")))
-                    ;; then the interface from a directory, whose lambda class
-                    ;; is never cached
-                    lam-fails (->> [["v1" ".jar"] ["v2" ".jar"] ["v2" ".jar"] ["v1" "-dir"] ["v2" "-dir"]]
+                    ;; then the interface from a directory, and from one
+                    ;; directory holding v1's interface, then v2's over it
+                    lam-fails (->> [["v1" ".jar"] ["v2" ".jar"] ["v2" ".jar"] ["v1" "-dir"] ["v2" "-dir"] ["v2" "-dir"]
+                                    ["v1" "-same"] ["v2" "-same"]]
                                    (map-indexed
                                     (fn [i [v kind]]
-                                      (let [cp (str lc "/lam-main-" v ":" lc (if (= kind ".jar") (str "/greeter-" v ".jar") (str "/lam-" v "-classes")))
+                                      (let [_ (when (= kind "-same")
+                                                (fs/copy-tree (str lc "/lam-" v "-classes") (str lc "/lam-same") {:replace-existing true}))
+                                            cp (str lc "/lam-main-" v ":" lc (case kind ".jar" (str "/greeter-" v ".jar") "-dir" (str "/lam-" v "-classes") "/lam-same"))
                                             {:keys [out exit]} (run-limited 300 {:label (str "libcache-lam-" (inc i)) :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
                                                                             (jolt-bin) "-M" "-m" "champaca.main" cp "LamMain")
                                             ok (and (zero? exit) (= out (slurp (str "test/libcache/lam/" v ".expected"))))]
@@ -326,8 +344,8 @@
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
                     fails (remove nil? (concat fails jar-fails libcache-fails lam-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 10))
-                                  (map (fn [i] (str "libcache-lam-" i)) (range 1 6)) aaa-mains (map first examples))]
+                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 15))
+                                  (map (fn [i] (str "libcache-lam-" i)) (range 1 9)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"

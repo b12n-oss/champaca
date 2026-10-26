@@ -115,6 +115,6 @@ champaca prof (run, cache hit): wall 228.66 ms
   java+runtime (rest) 86.12 ms
 ```
 
-The second report covers the whole run up to `main`'s return, boot included. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars)).
+The second report covers the whole run up to `main`'s return, boot included. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars-and-directories)).
 
 On a cache miss the phases are parsing, registering classes, code generation, Chez compilation and writing the cache.

@@ -187,23 +187,41 @@
                      ;; the entry a class came from is its code source
                      (assoc-in [:class-entries cname] entry)))))
 
+(defn- read-class-file [entry rel]
+  (let [f (io/file entry rel)]
+    (when (.exists f)
+      (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))
+
 (defn- user-class-bytes
-  "cname's bytes from the first classpath entry that has it."
+  "cname's bytes from the first classpath entry that has it. A directory's
+  class whose fingerprint class-source took is parsed from the very bytes
+  it took it from, so the cache can't pair one version's fingerprint with
+  another's code."
   [cname]
   (let [rel (str cname ".class")]
     (some (fn [entry]
             (when-let [bs (if (jar-entry? entry)
                             (read-entry (jar entry) rel)
-                            (let [f (io/file entry rel)]
-                              (when (.exists f)
-                                (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))]
+                            (let [[from held] (get-in @state [:dir-bytes cname])]
+                              (if (= from entry)
+                                (do (swap! state update :dir-bytes dissoc cname) held)
+                                (read-class-file entry rel))))]
               (note-class-entry! cname entry)
               bs))
           (:classpath @state))))
 
+(defn- bytes-fp
+  "A class's fingerprint from its bytes: [CRC-32 size], what a jar's
+  directory records for an entry, so a jar's class and a directory's compare
+  the same way."
+  [^bytes bs]
+  (let [c (java.util.zip.CRC32.)]
+    (.update c bs 0 (count bs))
+    [(.getValue c) (count bs)]))
+
 (defn- jar-path
-  "A classpath jar's canonical path, which names its file in the library
-  cache. Asked once per entry."
+  "A classpath entry's canonical path, a jar's or a directory's, which names
+  its file in the library cache. Asked once per entry."
   [entry]
   (or (get-in @state [:jar-paths entry])
       (let [p (.getCanonicalPath (io/file (str entry)))]
@@ -212,11 +230,12 @@
 
 (defn- class-source
   "Where cname is on the classpath, found as user-class-bytes finds it:
-  {:entry e :fp fp :jar j}, fp being a jar entry's [CRC size] from the
-  zip's directory (nothing inflated), which stands for the class's bytes,
-  and j the jar's canonical path; fp is nil for a directory's class, which
-  the library cache leaves alone. nil when no entry has it. Looked up once
-  per class per run."
+  {:entry e :fp fp :jar j}, fp being [CRC size] of the class's bytes and j
+  the entry's canonical path (a directory's too, though the key says jar).
+  A jar's fp comes from the zip's directory, nothing inflated; a
+  directory's class is read for it, and the bytes are held for
+  user-class-bytes, so the file is read once. nil when no entry has it.
+  Looked up once per class per run."
   [cname]
   (let [m (:class-sources @state)]
     (if (contains? m cname)
@@ -226,8 +245,9 @@
                         (if (jar-entry? entry)
                           (when-let [e (.getEntry (jar entry) rel)]
                             {:entry entry :fp [(.getCrc e) (.getSize e)] :jar (jar-path entry)})
-                          (when (.exists (io/file entry rel))
-                            {:entry entry :fp nil})))
+                          (when-let [bs (read-class-file entry rel)]
+                            (swap! state assoc-in [:dir-bytes cname] [entry bs])
+                            {:entry entry :fp (bytes-fp bs) :jar (jar-path entry)})))
                       (:classpath @state))]
         (swap! state assoc-in [:class-sources cname] src)
         src))))
@@ -404,11 +424,12 @@
       (str (entry-url entry) (encode-path path)))))
 
 (defn- library-file
-  "The library cache's file for the jar at canonical path jar: lib/<hash>.img
-  in the cache directory, holding the entries of the classes that jar
-  supplied. A jar per file means a program reads only what its own jars
-  cached, and two programs on different versions of a library (different
-  paths) keep their own entries."
+  "The library cache's file for the classpath entry (a jar or a directory)
+  at canonical path jar: lib/<hash>.img in the cache directory, holding the
+  entries of the classes that entry supplied. An entry per file means a
+  program reads only what its own entries cached, and two programs on
+  different versions of a library (different paths) keep their own
+  entries."
   [jar]
   ;; 64 bits from two string hashes, so two jars sharing a name (each would
   ;; overwrite the other's file every run) take thousands of times more jars
@@ -820,9 +841,9 @@
   with its fingerprint (class-source). JDK classes need none, since the
   cache key covers the JDK, but a synthetic one (champaca/, a lambda's)
   has no bytes to make it again from, so it is :present, there when the
-  entry is used. nil when one can't be checked later (a directory's class,
-  one a loader defined, one not in the class table), which keeps the entry
-  out of the cache."
+  entry is used. nil when one can't be checked later (one a loader
+  defined, one not in the class table), which keeps the entry out of the
+  cache."
   [names]
   (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (string? e) :jdk (:origin e))))]
     (when (every? origin names)
@@ -871,6 +892,7 @@
                                     (or (nil? e) (= :user (:origin e)))))))
                          (:deps info)))
           (do (note-class-entry! cname (:entry src))
+              (swap! state update :dir-bytes dissoc cname)
               (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
                 (ensure-loaded! dep))
               (swap! state update :restored (fnil inc 0))
@@ -931,10 +953,10 @@
   Slot 0 holds the closure; every SAM key maps to champaca/Lambda.invoke,
   which calls it. Its vtable takes the interfaces' default methods, so its
   name carries the fingerprints of every classpath interface among them
-  and their superinterfaces (user-deps): a jar's interface that changes
-  between runs gets a class of its own instead of an earlier run's cached
-  one. One whose interfaces can't be checked (a directory's, a defined
-  one) isn't cached."
+  and their superinterfaces (user-deps): a classpath interface that
+  changes between runs gets a class of its own instead of an earlier run's
+  cached one. One whose interfaces can't be checked (a defined one) isn't
+  cached."
   [ifaces sam-keys]
   (run! ensure-loaded! ifaces)
   (let [deps (user-deps ifaces)
@@ -1010,10 +1032,17 @@
 
 (defn- parsed
   "The parsed classfile for cname. A class restored from the boot cache
-  carries no bytecode, so it is re-read on the first method compile."
+  carries no bytecode, so it is re-read on the first method compile; a
+  classpath class restored from the library cache must read back as the
+  bytes its entry was made from, or its new methods wouldn't match the
+  ones it has."
   [cname]
   (or (:parsed (thaw! cname))
-      (let [p (timed :parse #(cf/parse (class-bytes cname)))]
+      (let [bs (class-bytes cname)
+            fp (get-in @state [:classes cname :src-fp])
+            _ (when (and fp bs (not= fp (bytes-fp bs)))
+                (throw (ex-info (str cname " changed on the classpath while this program ran") {:class cname})))
+            p (timed :parse #(cf/parse bs))]
         (swap! state assoc-in [:classes cname :parsed] p)
         p)))
 
