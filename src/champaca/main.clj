@@ -1053,12 +1053,12 @@
       (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
             n (:name c)
             info (class-map n c :defined)]
-        ;; bytes class-source held for a classpath class of this name won't
-        ;; be parsed; the defined bytes are kept for NPE messages and frames
-        (swap! state #(-> % (update :dir-bytes dissoc n) (assoc-in [:defined-bytes n] bs)))
+        ;; bytes class-source held for a classpath class of this name won't be parsed
+        (swap! state update :dir-bytes dissoc n)
         (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
         (let [linked (link info)]
-          (swap! state assoc-in [:classes n] linked)
+          ;; the defined bytes are kept for NPE messages and frames, once the class is in
+          (swap! state #(-> % (assoc-in [:classes n] linked) (assoc-in [:defined-bytes n] bs)))
           (scheme! (registration-text linked) :interpret))
         (str "ok " n)))))
 

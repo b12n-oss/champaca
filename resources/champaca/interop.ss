@@ -5,12 +5,15 @@
 ;;   jolt boolean <-> Java boolean (0/1)  numbers pass through
 ;; A float/double parameter accepts a jolt integer and converts it.
 
+;; jolt's truth: nil and false are false, anything else true
+(define (jolt-true? v) (not (or (eq? v jolt-nil) (eq? v #f))))
+
 (define (ldk-in d v)
   (cond
+    [(char=? (string-ref d 0) #\Z) (if (jolt-true? v) 1 0)]
     [(eq? v jolt-nil) #f]
     [else
      (case (string-ref d 0)
-       [(#\Z) (if v 1 0)]
        [(#\F) (f32 (inexact v))]
        [(#\D) (inexact v)]
        [(#\L #\[) (if (string? v) (jstring v) v)]
@@ -98,7 +101,7 @@
 ;; the jolt error behind x or behind one of its causes (a Java wrapper such
 ;; as ExecutionException), else #f
 (define (ldk-jolt-cause x)
-  (guard (e [#t #f])
+  (guard (e [(jobj? e) #f])
     (let loop ([x x] [n 0])
       (and x (fx< n 64)
            (or (eq-hashtable-ref jolt-errors x #f)

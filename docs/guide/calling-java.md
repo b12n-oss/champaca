@@ -121,7 +121,7 @@ Where a parameter's type is an interface with one abstract method (`Comparator`,
 ;=> [1 3 5]
 ```
 
-The fn's return value goes back through the same conversion as an argument, so return a boolean for a `Predicate` and an integer for a `Comparator`.
+The fn's return value goes back through the same conversion as an argument, so return an integer for a `Comparator`. A method returning `boolean`, such as a `Predicate`'s, takes jolt's truth, so `nil` is false.
 
 A fn fits any single-method interface, so a method overloaded on two of them is ambiguous. `ExecutorService.submit` takes a `Runnable` or a `Callable`, and `(ldk/invoke pool "submit" (fn [] 42))` fails with both as candidates. `implement` says which one you mean:
 
@@ -141,7 +141,7 @@ A fn fits any single-method interface, so a method overloaded on two of them is 
 (ldk/invoke (ldk/construct "java.lang.Thread" p) "start")  ; prints "ran"
 ```
 
-Names can be strings or keywords, and overloads of one name share its fn, so give it one arity per overload. Arguments arrive converted as `invoke` results are. The fn's result goes back boxed for the method's return type, so a `long` method can return `5` and a `double` method `2`. A result that doesn't fit goes back as it is, and the proxy's own cast fails as it would on the JVM: `5000000000` from an `int` method is a `ClassCastException`, and `nil` a `NullPointerException`.
+Names can be strings or keywords, and overloads of one name share its fn, so give it one arity per overload. A map value can be anything callable, a var for instance, and anything else is refused when the proxy is made. Arguments arrive converted for their parameter types as `invoke` results are. The fn's result goes back boxed for the method's return type, so a `long` method can return `5` and a `double` method `2`, and a `boolean` method takes jolt's truth, `nil` being false. A result that doesn't fit goes back as it is, and the proxy's own cast fails as it would on the JVM: `5000000000` from an `int` method is a `ClassCastException`, and `nil` from an `int` method a `NullPointerException`.
 
 A method without a fn runs its own body when it has one. That covers default methods, so `(ldk/invoke p "reversed")` gives a working reversed `Comparator`, and Object's `equals`, `hashCode` and `toString`, which behave as `Object`'s do unless the map names them. A method with no body throws `UnsupportedOperationException` with the method's name, as Clojure's `proxy` does. A checked exception the method doesn't declare reaches the caller as `UndeclaredThrowableException`, the JDK's own rule for proxies.
 

@@ -37,7 +37,34 @@
   (is (= \z (ldk/invoke (ldk/proxy ["java.lang.CharSequence"] {"charAt" (fn [_] \z)}) "charAt" 0)))
   (let [in (ldk/proxy ["java.io.DataInput"] {"readShort" (fn [] 7) "readByte" (fn [] -3) "readFloat" (fn [] 1)})]
     (is (= [7 -3 1.0] [(ldk/invoke in "readShort") (ldk/invoke in "readByte") (ldk/invoke in "readFloat")])))
+  ;; arguments by the parameter's type: append(char) gets a char, writeChar(int) an int
+  (let [got (atom [])
+        out (ldk/proxy ["java.lang.Appendable" "java.io.DataOutput"]
+                       {"append" (fn ([c] (swap! got conj c) nil) ([s a b] nil))
+                        "writeChar" (fn [c] (swap! got conj c))})]
+    (ldk/invoke out "append" \a)
+    (ldk/invoke out "writeChar" 98)
+    (is (= [\a 98] @got)))
   (is (= "1+q" (ldk/invoke (ldk/proxy ["java.util.function.BiFunction"] {"apply" (fn [a b] (str a "+" b))}) "apply" 1 "q"))))
+
+(deftest nil-is-false-for-a-boolean
+  (is (false? (ldk/invoke (ldk/proxy ["java.util.function.Predicate"] {"test" (fn [_] nil)}) "test" 1)))
+  (is (true? (ldk/invoke (ldk/proxy ["java.util.function.Predicate"] {"test" (fn [_] :yes)}) "test" 1)))
+  ;; the same for a bare fn and for implement
+  (let [xs (ldk/construct "java.util.ArrayList")]
+    (doseq [n [1 2 3]] (ldk/invoke xs "add" n))
+    (ldk/invoke xs "removeIf" (fn [n] (when (= n 2) true)))
+    (is (= [1 3] (ldk/->clj xs))))
+  (let [p (ldk/implement "java/util/function/Predicate" "test" "(Ljava/lang/Object;)Z" (fn [_] nil))]
+    (is (false? (ldk/call p "test" "(Ljava/lang/Object;)Z" 1)))))
+
+(defn- answer [] 42)
+
+(deftest what-a-method-map-may-hold
+  ;; a var, or anything else callable
+  (is (= 42 (ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" #'answer}) "getAsInt")))
+  (is (= "x" (ldk/invoke (ldk/proxy ["java.util.function.Function"] {"apply" {1 "x"}}) "apply" 1)))
+  (is (= "proxy: \"get\" is not a fn" (thrown #(ldk/proxy ["java.util.function.Supplier"] {"get" 42})))))
 
 (deftest results-that-dont-fit-fail-as-on-the-jvm
   ;; the proxy's own cast to the return type's box throws, so a long for an

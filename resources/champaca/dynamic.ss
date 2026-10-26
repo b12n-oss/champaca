@@ -214,7 +214,10 @@
     (jlambda cname
              (lambda args
                (let ([r (call-from-java f (map dyn-out arg-ds args))])
-                 (if (char=? (string-ref ret-d 0) #\V) (void) (convert-arg r ret-d)))))))
+                 (case (string-ref ret-d 0)
+                   [(#\V) (void)]
+                   [(#\Z) (if (jolt-true? r) 1 0)]
+                   [else (convert-arg r ret-d)]))))))
 
 (define (length-of-name key) (string-length (car (string-split-paren key))))
 
@@ -534,8 +537,9 @@
 ;; --- java.lang.reflect.Proxy from jolt -------------------------------------------------
 ;; A proxy for interfaces whose handler finds a jolt fn by method name
 ;; (lookup gives the fn or jolt nil). Arguments come out as dyn-out gives
-;; them; the result goes back boxed for the method's return type, so a
-;; long method can return 5 and a double one 2. A result that doesn't fit
+;; them by its parameter types; the result goes back boxed for the method's
+;; return type, so a long method can return 5 and a double one 2, and a
+;; boolean one takes jolt's truth, nil being false. A result that doesn't fit
 ;; goes back as an Object, and the proxy's own cast throws, as on the JVM.
 ;; A method with no fn runs its own body on the proxy when it has one (a
 ;; default method, Object's equals, hashCode, toString), else throws
@@ -558,8 +562,9 @@
   (let ([c (string-ref d 0)])
     (cond
       [(char=? c #\V) #f]
+      [(char=? c #\Z) (jbox "Z" (if (jolt-true? r) 1 0))]
       [(memv c '(#\L #\[)) (convert-arg r d)]
-      ;; an int in range, a char or a boolean already gets the right box below
+      ;; an int in range or a char already gets the right box below
       [(case c
          [(#\J) (long-range? r)]
          [(#\S) (and (exact-int? r) (<= -32768 r 32767))]
@@ -577,7 +582,8 @@
            [f (lookup name)])
       (cond
         [(procedure? f)
-         (proxy-result rd (call-from-java f (map (lambda (a) (dyn-out "Ljava/lang/Object;" a)) argv)))]
+         (proxy-result rd (call-from-java f (map (lambda (d a) (dyn-out d (if (memv (string-ref d 0) '(#\L #\[)) a (junbox d a))))
+                                                 pds argv)))]
         [(vector-ref info 4) (jthrow "java/lang/UnsupportedOperationException" name)]
         [else
          (let ([r (apply (method-proc (vector-ref info 3)

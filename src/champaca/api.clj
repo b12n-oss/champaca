@@ -212,10 +212,17 @@
   names, dots or slashes), whose methods call the jolt fns in methods, a
   map from method name (a string or keyword) to fn. Overloads share their
   name's fn. Arguments arrive converted as invoke's results are, and the
-  fn's result goes back boxed for the method's return type. A method with
+  fn's result goes back boxed for the method's return type (a boolean
+  method takes jolt's truth). A method with
   no fn runs its own body when it has one (a default method, Object's
   equals, hashCode and toString), else throws
   UnsupportedOperationException."
   [ifaces methods]
-  (let [fs (into {} (map (fn [[k f]] [(if (keyword? k) (name k) k) f])) methods)]
+  (let [fs (into {} (map (fn [[k f]]
+                          [(if (keyword? k) (name k) k)
+                           (cond (fn? f) f
+                                 ;; a var, a keyword or a map: Scheme calls only procedures
+                                 (ifn? f) (fn [& args] (apply f args))
+                                 :else (throw (ex-info (str "proxy: " (pr-str k) " is not a fn") {:method k})))]))
+                 methods)]
     (rethrow #(s/call "dyn-proxy" (apply s/call "list" ifaces) (fn [n] (get fs n))))))
