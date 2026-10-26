@@ -213,7 +213,7 @@
          [arg-ds (desc-args desc)] [ret-d (desc-ret desc)])
     (jlambda cname
              (lambda args
-               (let ([r (apply f (map dyn-out arg-ds args))])
+               (let ([r (call-from-java f (map dyn-out arg-ds args))])
                  (if (char=? (string-ref ret-d 0) #\V) (void) (convert-arg r ret-d)))))))
 
 (define (length-of-name key) (string-length (car (string-split-paren key))))
@@ -530,3 +530,75 @@
                         (cons ((jvirt e "getKey()Ljava/lang/Object;") e) acc))))))))
 (define (dyn-alength a) (vector-length (jarr-vec a)))
 (define (dyn-aref a i) (dyn-out (jarr-elem a) (vector-ref (jarr-vec a) i)))
+
+;; --- java.lang.reflect.Proxy from jolt -------------------------------------------------
+;; A proxy for interfaces whose handler finds a jolt fn by method name
+;; (lookup gives the fn or jolt nil). Arguments come out as dyn-out gives
+;; them; the result goes back boxed for the method's return type, so a
+;; long method can return 5 and a double one 2. A result that doesn't fit
+;; goes back as an Object, and the proxy's own cast throws, as on the JVM.
+;; A method with no fn runs its own body on the proxy when it has one (a
+;; default method, Object's equals, hashCode, toString), else throws
+;; UnsupportedOperationException, as Clojure's proxy does.
+
+(define proxy-method-infos (make-weak-eq-hashtable))
+;; #(name param-descs return-desc declaring-class abstract?) of a Method
+(define (proxy-method-info m)
+  (or (eq-hashtable-ref proxy-method-infos m #f)
+      (let* ([slot (lambda (n) (jslot m (jfield-index "java/lang/reflect/Method" n)))]
+             [info (vector (jstring->scheme (slot "name"))
+                           (map mirror->desc (vector->list (jarr-vec (slot "parameterTypes"))))
+                           (mirror->desc (slot "returnType"))
+                           (jclass-cname (mirror-class (slot "clazz")))
+                           (fxpositive? (fxlogand (slot "modifiers") #x400)))])
+        (eq-hashtable-set! proxy-method-infos m info)
+        info)))
+
+(define (proxy-result d r)
+  (let ([c (string-ref d 0)])
+    (cond
+      [(char=? c #\V) #f]
+      [(memv c '(#\L #\[)) (convert-arg r d)]
+      ;; an int in range, a char or a boolean already gets the right box below
+      [(case c
+         [(#\J) (long-range? r)]
+         [(#\S) (and (exact-int? r) (<= -32768 r 32767))]
+         [(#\B) (and (exact-int? r) (<= -128 r 127))]
+         [(#\D #\F) (and (number? r) (real? r))]
+         [else #f])
+       (jbox d (convert-arg r d))]
+      [else (convert-arg r "Ljava/lang/Object;")])))
+
+(define (proxy-handler lookup)
+  (lambda (proxy m args)
+    (let* ([info (proxy-method-info m)]
+           [name (vector-ref info 0)] [pds (vector-ref info 1)] [rd (vector-ref info 2)]
+           [argv (if args (vector->list (jarr-vec args)) '())]
+           [f (lookup name)])
+      (cond
+        [(procedure? f)
+         (proxy-result rd (call-from-java f (map (lambda (a) (dyn-out "Ljava/lang/Object;" a)) argv)))]
+        [(vector-ref info 4) (jthrow "java/lang/UnsupportedOperationException" name)]
+        [else
+         (let ([r (apply (method-proc (vector-ref info 3)
+                                      (string-append name "(" (apply string-append pds) ")" rd))
+                         proxy
+                         (map (lambda (d a) (if (memv (string-ref d 0) '(#\L #\[)) a (junbox d a))) pds argv))])
+           (case (string-ref rd 0)
+             [(#\V) #f]
+             [(#\L #\[) r]
+             [else (jbox rd r)]))]))))
+
+(define (dyn-proxy ifaces lookup)
+  (with-java-errors (lambda () (make-proxy ifaces lookup))))
+(define (make-proxy ifaces lookup)
+  (let ([h (jlambda (lambda-class-hook "java/lang/reflect/InvocationHandler"
+                                       "invoke(Ljava/lang/Object;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;")
+                    (proxy-handler lookup))])
+    (jinit "java/lang/ClassLoader")
+    (jinit "java/lang/reflect/Proxy")
+    ((method-proc "java/lang/reflect/Proxy"
+                  "newProxyInstance(Ljava/lang/ClassLoader;[Ljava/lang/Class;Ljava/lang/reflect/InvocationHandler;)Ljava/lang/Object;")
+     ((method-proc "java/lang/ClassLoader" "getSystemClassLoader()Ljava/lang/ClassLoader;"))
+     (make-jarr "Ljava/lang/Class;" (list->vector (map (lambda (n) (jmirror-of (slashes n))) ifaces)))
+     h)))

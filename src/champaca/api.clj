@@ -6,6 +6,7 @@
 
   Class names use slashes (\"java/util/ArrayList\") and every call names
   its JVM descriptor, as in jolt-openldk."
+  (:refer-clojure :exclude [proxy])
   (:require [clojure.java.io :as io]
             [jolt.scheme :as s]
             [champaca.main :as main]))
@@ -32,8 +33,13 @@
            (s/call "java-halt?" e)
            (System/exit (s/call "java-halt-status" e))
            (s/call "ldk-java-exception?" e)
-           (throw (ex-info (s/call "ldk-exception-message" e)
-                           {:java/exception (s/call "ldk-exception-object" e)}))
+           (let [x (s/call "ldk-exception-object" e)]
+             ;; a jolt error that left a jolt fn through Java comes back as itself
+             (if-let [j (s/call "ldk-jolt-error-of" x)]
+               (throw j)
+               (let [m (s/call "ldk-exception-message" e) d {:java/exception x}
+                     c (s/call "ldk-jolt-cause" x)]
+                 (throw (if c (ex-info m d c) (ex-info m d))))))
            (and @dynamic-loaded (s/call "ldk-api-error?" e))
            (throw (ex-info (s/call "ldk-api-error-message" e) {:champaca/error :lookup}))
            :else (throw e)))))
@@ -45,6 +51,19 @@
   [f]
   (with-gil #(rethrow* f)))
 
+(defn- java-error-of
+  "The Java exception to raise for c, a condition escaping a jolt fn that
+  Java called (interop.ss call-from-java): a Java exception, thrown by the
+  fn or by a call it made, as itself, else a RuntimeException standing for
+  the jolt error, which comes back as itself if it reaches jolt again.
+  Raising c again lets jolt's catch unwrap what jolt's throw wrapped."
+  [c]
+  (try (s/call "raise" c)
+       (catch :default e
+         (cond (s/call "ldk-java-object?" e) e
+               (:java/exception (ex-data e)) (:java/exception (ex-data e))
+               :else (s/call "ldk-jolt-error->java" e (or (ex-message e) (str e)))))))
+
 (defn init!
   "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user classes."
   ([] (init! {}))
@@ -53,6 +72,7 @@
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "champaca/interop.ss")))
+     (s/call "set-jolt-error-hook!" java-error-of)
      (reset! interop-loaded true))
    (when-not @dynamic-loaded
      (s/eval-string (slurp (io/resource "champaca/dynamic.ss")))
@@ -186,3 +206,16 @@
   strings, numbers and keywords (as strings) are converted as Objects."
   [x]
   (rethrow #(s/call "dyn->java" (->arg x))))
+
+(defn proxy
+  "A java.lang.reflect.Proxy implementing the interfaces ifaces (class
+  names, dots or slashes), whose methods call the jolt fns in methods, a
+  map from method name (a string or keyword) to fn. Overloads share their
+  name's fn. Arguments arrive converted as invoke's results are, and the
+  fn's result goes back boxed for the method's return type. A method with
+  no fn runs its own body when it has one (a default method, Object's
+  equals, hashCode and toString), else throws
+  UnsupportedOperationException."
+  [ifaces methods]
+  (let [fs (into {} (map (fn [[k f]] [(if (keyword? k) (name k) k) f])) methods)]
+    (rethrow #(s/call "dyn-proxy" (apply s/call "list" ifaces) (fn [n] (get fs n))))))

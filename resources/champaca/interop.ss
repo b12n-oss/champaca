@@ -64,11 +64,44 @@
   (let ([arg-ds (desc-args desc)] [ret-d (desc-ret desc)])
     (jlambda cname
              (lambda args
-               (let ([r (apply f (map ldk-out arg-ds args))])
+               (let ([r (call-from-java f (map ldk-out arg-ds args))])
                  (if (char=? (string-ref ret-d 0) #\V) (void) (ldk-in ret-d r)))))))
 
 (define (ldk-to-string obj) (if (eq? obj jolt-nil) "null" (with-java-errors (lambda () (jstring-of obj)))))
 (define (ldk-java-exception? e) (java-exception? e))
 (define (ldk-exception-message e) (java-exception-message e))
 (define (ldk-exception-object e) (java-exception-object e))
+
+;; A jolt error escaping a jolt fn that Java called isn't a Java object, so
+;; no Java catch or finally would see it (they test jobj?): a synchronized
+;; block would keep its monitor. Every call from Java into a jolt fn goes
+;; through call-from-java, whose handler raises in its place the Java
+;; exception the api's hook (java-error-of) gives: a RuntimeException for a
+;; jolt error, remembered here, so that when it comes back out of Java the
+;; api throws the jolt error itself again. The hook runs only on an error.
+(define jolt-error-hook #f)
+(define (set-jolt-error-hook! f) (set! jolt-error-hook f))
+(define (call-from-java f args)
+  (with-exception-handler
+   (lambda (e)
+     (if (or (jobj? e) (java-halt? e) (warning? e) (not jolt-error-hook))
+         (raise-continuable e)
+         (raise (jolt-error-hook e))))
+   (lambda () (apply f args))))
+(define jolt-errors (make-weak-eq-hashtable))
+(define (ldk-jolt-error->java e msg)
+  (let ([x (ldk-new "java/lang/RuntimeException" "(Ljava/lang/String;)V" msg)])
+    (eq-hashtable-set! jolt-errors x e)
+    x))
+(define (ldk-java-object? v) (jobj? v))
+(define (ldk-jolt-error-of x) (eq-hashtable-ref jolt-errors x #f))
+;; the jolt error behind x or behind one of its causes (a Java wrapper such
+;; as ExecutionException), else #f
+(define (ldk-jolt-cause x)
+  (guard (e [#t #f])
+    (let loop ([x x] [n 0])
+      (and x (fx< n 64)
+           (or (eq-hashtable-ref jolt-errors x #f)
+               (let ([c ((jvirt x "getCause()Ljava/lang/Throwable;") x)])
+                 (and (not (eq? c x)) (loop c (fx+ n 1)))))))))
 
