@@ -207,6 +207,51 @@
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
                                 (if ok [] ["-jar"]))
+                    ;; the library cache (test/libcache): the same program over
+                    ;; changing jars, each run checked against the JVM's output.
+                    ;; Base changes between base-v1.jar and base-v2.jar, Sub's bytes
+                    ;; don't, and lc2.User in user.jar uses Sub's field b, whose
+                    ;; place Base decides
+                    lc "target/libcache"
+                    _ (fs/delete-tree lc)
+                    _ (doseq [v ["v1" "v2"]]
+                        (shell (str "javac -d " lc "/" v "-classes test/libcache/" v "/lc/Base.java")))
+                    _ (shell (str "javac -cp " lc "/v1-classes -d " lc "/sub-classes test/libcache/lc/Sub.java"))
+                    _ (doseq [v ["v1" "v2"]]
+                        (shell (str "jar cf " lc "/base-" v ".jar -C " lc "/" v "-classes . -C " lc "/sub-classes .")))
+                    _ (shell (str "javac -cp " lc "/v1-classes:" lc "/sub-classes -d " lc "/user-classes test/libcache/lc2/User.java"))
+                    _ (shell (str "jar cf " lc "/user.jar -C " lc "/user-classes ."))
+                    _ (shell (str "javac -cp " lc "/user.jar:" lc "/base-v1.jar -d " lc "/main-classes test/libcache/LibCacheMain.java"))
+                    sub-crcs (set (for [v ["v1" "v2"]]
+                                    (with-open [z (java.util.zip.ZipFile. (str lc "/base-" v ".jar"))]
+                                      (.getCrc (.getEntry z "lc/Sub.class")))))
+                    _ (when-not (= 1 (count sub-crcs))
+                        (println "bb test: lc/Sub.class differs between base-v1.jar and base-v2.jar, so test/libcache checks nothing")
+                        (System/exit 1))
+                    cache-on (not= "off" (System/getenv "CHAMPACA_CACHE"))
+                    libcache-fails (->> [["base-v1.jar" "v1" false] ["base-v1.jar" "v1" true] ["base-v2.jar" "v2" false]
+                                         ;; Base from a directory ahead of the jar, which the cache never keeps
+                                         ["v2-classes:" "v2dir" false "base-v1.jar"] ["base-v1.jar" "v1" false]]
+                                        (map-indexed
+                                         (fn [i [first-entry v restores? second-entry]]
+                                           (let [cp (str lc "/main-classes:" lc "/" first-entry
+                                                         (when second-entry (str lc "/" second-entry)) ":" lc "/user.jar")
+                                                 ;; CHAMPACA_STATS prints after boot, then at exit: the last counts
+                                                 {:keys [out err exit]} (run-limited 300 {:label (str "libcache-" (inc i)) :err :string
+                                                                                          :extra-env {"CHAMPACA_NPE_STRICT" "1" "CHAMPACA_STATS" "1"}}
+                                                                                     (jolt-bin) "-M" "-m" "champaca.main" cp "LibCacheMain")
+                                                 restored (some-> (re-seq (re-pattern "\\((\\d+) from the library cache\\)") (str err)) last second parse-long)
+                                                 ok (and (zero? exit) (= out (slurp (str "test/libcache/" v ".expected")))
+                                                         (or (not restores?) (not cache-on) (pos? (or restored 0))))
+                                                 what (str "test/libcache run " (inc i) " (" cp (when restores? ", restored from the cache") ")")]
+                                             (println (if ok "PASS" "FAIL") what)
+                                             (when-not ok
+                                               (println (str "  exit " exit ", out " (pr-str out) ", restored " restored))
+                                               (when-not (zero? exit) (print err) (flush)))
+                                             (when-not ok (str "libcache-" (inc i))))))
+                                        doall
+                                        (remove nil?)
+                                        vec)
                     ;; upstream OpenLDK's testsuite/aaa programs (test/aaa, see its
                     ;; README): compiled together into one aaa package, each run from a
                     ;; work dir of its own holding a fresh copy of it (some delete their
@@ -248,8 +293,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar"] aaa-mains (map first examples))]
+                    fails (remove nil? (concat fails jar-fails libcache-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 6)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"

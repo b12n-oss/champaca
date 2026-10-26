@@ -87,7 +87,7 @@ The first run builds a cache under `~/.cache/champaca/<key>/` and later runs loa
 
 The `examples/interop.clj` row timed `jolt -M examples/interop.clj` when that file was a program printing its results. The examples are `clojure.test` namespaces now, and `bb example interop` runs one.
 
-The key covers the JDK (`release`, the runtime image's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. User classes are never cached. `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
+The key covers the JDK (`release`, the runtime image's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. Classes from jars are cached too, in `library.img`, each entry checked against its jar entry's CRC and those of the classes it depends on before it's used, which takes a warm run of Jackson's probe from 5.2 s to 1.25 s; classes from directories compile on every run ([performance](docs/guide/performance.md#classes-from-jars)). `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
 The compiled code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 4.9 MB now, and was 1.7 MB before the module system booted, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. The class table in `state.img` works the same way: each class rides as edn text and parses the first time a run touches it, so a cache grown by many programs costs a warm run little. Before those changes a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. A cold start compiles each JDK method once and caches that same object code, rather than compiling it again to write the cache. Writing a new cache removes key directories no run has used for a week, and keeps at most the 16 most recently used.
 
@@ -111,8 +111,8 @@ bb site:build                                         # build the docs site into
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit
                         # (and say why an NPE got no message)
-CHAMPACA_STATS=1 ...    # print classes loaded, methods compiled, cached units loaded
-CHAMPACA_PROF=1 ...     # time spent per boot phase (parse, register, codegen, compile, cache)
+CHAMPACA_STATS=1 ...    # print classes loaded (and how many from the library cache), methods compiled, cached units loaded
+CHAMPACA_PROF=1 ...     # time spent per phase (parse, register, codegen, compile, cache), after boot and when main returns
 CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
 CHAMPACA_NPE_STRICT=1 ...    # throw when an NPE message can't be built, instead of a null message (bb test sets it)
 CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss

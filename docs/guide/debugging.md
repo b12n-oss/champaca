@@ -7,8 +7,8 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | Variable | What it does |
 |---|---|
 | `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception prints where it happened; names each native champaca lacks on stderr as it's hit; says why an NPE got no message |
-| `CHAMPACA_STATS=1` | prints how many classes were loaded, methods compiled and cached units loaded, after boot and at exit |
-| `CHAMPACA_PROF=1` | prints how long each boot phase took |
+| `CHAMPACA_STATS=1` | prints how many classes were loaded (and how many of them came from the library cache), methods compiled (and how many of classpath classes) and cached units loaded, after boot and at exit |
+| `CHAMPACA_PROF=1` | prints how long each phase took, after boot and again when `main` returns |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
 | `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `bb test` and `bb libs` set it |
@@ -88,15 +88,33 @@ A class that isn't there at all, named by an instruction (`new`, a field or meth
 
 A method compiled from the startup cache doesn't go through the translator, so it won't appear. Add `CHAMPACA_CACHE=off` to see everything.
 
-## Timing a boot
+## Timing a run
 
 ```console
 $ CHAMPACA_PROF=1 jolt -M -m champaca.main target/classes Hello
-champaca prof (boot, cache hit): wall 233.87 ms
-  cache-load-code 87.56 ms
-  cache-read-state 24.84 ms
-  java+runtime (rest) 121.46 ms
+champaca prof (boot, cache hit): wall 215.67 ms
+  cache-load-code 90.1 ms
+  cache-read-state 29.28 ms
+  cache-load-runtime 18.41 ms
+  cache-load-unit 0.25 ms
+  java+runtime (rest) 77.64 ms
 Hello, World!
+champaca prof (run, cache hit): wall 228.66 ms
+  cache-load-code 90.1 ms
+  cache-read-state 29.28 ms
+  cache-load-runtime 18.41 ms
+  cache-load-unit 2.4 ms
+  codegen 0.95 ms
+  chez-compile 0.61 ms
+  class-bytes 0.28 ms
+  link 0.2 ms
+  cf-parse 0.12 ms
+  register-text 0.09 ms
+  register-eval 0.08 ms
+  parse 0.02 ms
+  java+runtime (rest) 86.12 ms
 ```
+
+The second report covers the whole run up to `main`'s return, boot included. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars)).
 
 On a cache miss the phases are parsing, registering classes, code generation, Chez compilation and writing the cache.

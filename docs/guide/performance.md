@@ -38,7 +38,7 @@ Most of the cold start's five seconds is Chez compiling `SystemModules$default`.
 
 ### What's in it, and what isn't
 
-Only JDK code is cached. Your own classes, from the classpath, compile fresh on every run, so a big application still pays for its own code at startup.
+JDK code is cached, and so are classes from jars ([below](#classes-from-jars)). Classes from a directory on the classpath compile fresh on every run, so the program you're working on always runs what you last compiled.
 
 When a run compiles JDK methods the cache didn't have, `champaca.main` appends them as a new generation, `extra-<n>.so`, on the way out. From jolt, `(ldk/save-cache!)` does the same; call it before the process exits. It costs almost nothing when there's nothing new.
 
@@ -51,6 +51,20 @@ Before this, every run loaded every generation, and the cost followed the amount
 `state.img` is now written as one piece of edn text per class. Reading the image builds strings, and an entry is parsed the first time the run touches its class, so boot pays for the classes the program uses rather than for everything the cache has seen. After today's full `bb test` the table holds about 1,450 classes in a 1.6 MB image: decoding the old form took 144 ms, reading the text form takes 35 ms, and a warm `Hello` on that cache went from 0.43 s to 0.34 s (medians of nine interleaved runs). A save keeps the text of every entry the run never parsed, so rewriting the image doesn't re-print the whole table either.
 
 Class registrations turned out to be most of a generation's code: 9.4 MB of the 14.7 MB that `bb test` wrote, with method bodies the rest. So loading only the bodies lazily would have saved 40 ms.
+
+### Classes from jars
+
+A class from a jar goes in `library.img`, beside `state.img`, and its compiled code goes in the same generations as JDK code. The JDK can't change under a cache, since the key covers it, but a jar can, so each entry records what it was built from. A class's own fingerprint is its jar entry's CRC and size, read from the zip's directory without inflating anything. The entry also records the fingerprint of every other classpath class that its link or its compiled methods read, along with everything those classes inherit from: a field's slot is decided by the superclasses, so a class whose own bytes didn't change still moves its fields when a superclass gains one.
+
+When a run needs a class, it finds it on the classpath as before and uses the cached entry only when its fingerprint and every one it recorded still match. Otherwise the class compiles as if there were no cache, and the next save replaces the entry. A class that depends on one from a directory, or on one a class loader defined, isn't kept, and neither is a method whose code reads one. A lambda's class can't be made again from its name alone, so an entry whose code names one is used only while that class is in the class table.
+
+Jackson's probe in `test/libs` compiled about 2,170 methods of classpath classes on every run before this. A warm run took 5.22 s and now takes 1.25 s (medians of five interleaved runs; the JVM takes 0.28 s). Of what's left, boot is about 0.23 s and loading some 4,700 cached units about 0.25 s, and the class entries cost something to parse: all 584 of Jackson's take about 150 ms. The 19 methods it still compiles are the probe's own, from the directory `target/libs/Jack`.
+
+`library.img` is read the first time a run loads a class from a jar, so a program without one never pays for it. A warm `Hello` on a cache holding Jackson's 1 MB of entries doesn't read the file at all.
+
+Every program shares the one entry per class name. Two programs using different versions of a jar each compile its classes again whenever the other ran last, and a replaced entry's code stays in its generation file until the key directory goes. `CHAMPACA_STATS=1` says how many classes came from the library cache and how many methods of classpath classes compiled.
+
+`bb test` checks it with `test/libcache`, one program run five times over jars that change between runs: `Base` gains a field in `base-v2.jar`, `Sub`'s bytes are the same in both jars, and `lc2.User`, in a jar of its own, writes `Sub`'s field without naming `Base`. A fourth run puts `Base` in a directory ahead of the jar, and the second checks that the classes really came from the cache.
 
 ### When it's rebuilt
 

@@ -81,6 +81,11 @@
          (when-let [dir (:cache-dir @state)] (delete-tree! dir))
          (throw ex))))
 
+;; The classes whose table entries a classpath class's link or method compile
+;; reads, a volatile set while one runs: what its library cache entry depends
+;; on (user-deps).
+(def ^:private ^:dynamic *reads* nil)
+
 (defn- thaw!
   "The class table entry for cname as a map, or nil. A cache hit leaves
   every entry packed as edn text; the first read parses it and puts the
@@ -88,6 +93,7 @@
   a map that is already there, so a racing thaw or a concurrent assoc-in
   on the same entry is never overwritten."
   [cname]
+  (when-let [r *reads*] (vswap! r conj cname))
   (let [e (get-in @state [:classes cname])]
     (if (string? e)
       (let [u (parse-entry cname e)]
@@ -168,11 +174,21 @@
         (swap! state assoc-in [:jar-entries k] v)
         v))))
 
+(defn- note-class-entry!
+  "cname was read from classpath entry. The first class read from a package
+  also decides which entry defines that package, as the JVM's class loaders
+  define a package with the first class they define in it (package-info
+  reads that entry's manifest)."
+  [cname entry]
+  (swap! state (fn [st]
+                 (-> st
+                     (update :package-entries
+                             (fn [m] (let [d (package-dir cname)] (if (contains? m d) m (assoc m d entry)))))
+                     ;; the entry a class came from is its code source
+                     (assoc-in [:class-entries cname] entry)))))
+
 (defn- user-class-bytes
-  "cname's bytes from the first classpath entry that has it. The first class
-  read from a package also decides which entry defines that package, as the
-  JVM's class loaders define a package with the first class they define in
-  it (package-info reads that entry's manifest)."
+  "cname's bytes from the first classpath entry that has it."
   [cname]
   (let [rel (str cname ".class")]
     (some (fn [entry]
@@ -181,14 +197,30 @@
                             (let [f (io/file entry rel)]
                               (when (.exists f)
                                 (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))]
-              (swap! state (fn [st]
-                             (-> st
-                                 (update :package-entries
-                                         (fn [m] (let [d (package-dir cname)] (if (contains? m d) m (assoc m d entry)))))
-                                 ;; the entry a class came from is its code source
-                                 (assoc-in [:class-entries cname] entry))))
+              (note-class-entry! cname entry)
               bs))
           (:classpath @state))))
+
+(defn- class-source
+  "Where cname is on the classpath, found as user-class-bytes finds it:
+  {:entry e :fp fp}, fp being a jar entry's [CRC size] from the zip's
+  directory (nothing inflated), which stands for the class's bytes, or nil
+  for a directory's class, which the library cache leaves alone. nil when
+  no entry has it. Looked up once per class per run."
+  [cname]
+  (let [m (:class-sources @state)]
+    (if (contains? m cname)
+      (get m cname)
+      (let [rel (str cname ".class")
+            src (some (fn [entry]
+                        (if (jar-entry? entry)
+                          (when-let [e (.getEntry (jar entry) rel)]
+                            {:entry entry :fp [(.getCrc e) (.getSize e)]})
+                          (when (.exists (io/file entry rel))
+                            {:entry entry :fp nil})))
+                      (:classpath @state))]
+        (swap! state assoc-in [:class-sources cname] src)
+        src))))
 
 (defn- jdk-class-bytes [cname]
   (when-let [slash (str/last-index-of cname "/")]
@@ -361,14 +393,46 @@
       (str "jar:" (entry-url entry) "!/" (encode-path path))
       (str (entry-url entry) (encode-path path)))))
 
+(defn- library-cache
+  "The library cache's entries, classpath classes by name as edn text,
+  from library.img in the cache directory. Read on the first jar class a
+  run loads, so a program without one never pays for it; a damaged file is
+  dropped (its classes compile again)."
+  []
+  (or (:user-cache @state)
+      (let [f (some-> (:cache-dir @state) (io/file "library.img"))
+            m (or (when (and f (.exists f))
+                    (try (let [m (timed :cache-read-library #(img/read-image (str f)))]
+                           (when-not (map? m) (throw (ex-info "not a champaca library image" {})))
+                           m)
+                         (catch Exception e
+                           (binding [*out* *err*]
+                             (println "champaca: discarding a damaged library cache:" (ex-message e)))
+                           (.delete f)
+                           nil)))
+                  {})]
+        (:user-cache (swap! state update :user-cache #(or % m))))))
+
+(defn- cache-origin
+  "Whether a class's code may be cached: :jdk, :user for a classpath class
+  the library cache keeps (a jar's class whose dependencies can be checked,
+  :src-fp set by library-cache-keys), else nil."
+  [info]
+  (case (:origin info)
+    :jdk :jdk
+    :user (when (:src-fp info) :user)
+    nil))
+
 (defn- record!
-  "Keep code for the startup cache when it belongs to a JDK class: {:text t}
-  to compile when the cache is written, or {:fasl bv}, object code already
-  compiled (compile-unit). unit says what it defines: [cname] a class's
-  registration, [cname key] one method body."
+  "Keep code for the startup cache when origin, a cache-origin, says it may
+  be: {:text t} to compile when the cache is written, or {:fasl bv}, object
+  code already compiled (compile-unit). unit says what it defines: [cname]
+  a class's registration, [cname key] one method body."
   [origin unit code]
   (when-let [rec (:recording @state)]
-    (when (= origin :jdk) (vswap! rec conj (assoc code :unit unit)))))
+    (when origin
+      (when (= origin :user) (swap! state assoc :library-dirty true))
+      (vswap! rec conj (assoc code :unit unit)))))
 
 (defn- compile-to-cache?
   "Whether a JDK method should compile straight to object code kept for the
@@ -377,7 +441,7 @@
   recorded as text, cheaper to compile, and compiled again only if
   save-cache! is called after all."
   [origin]
-  (and (= origin :jdk) (:recording @state)
+  (and origin (:recording @state)
        (or (nil? (:boot-status @state)) (:saves-generation @state))))
 
 (defn- write-units!
@@ -538,7 +602,8 @@
                   (when (boolean (s/call "ask-resolving-loader" cname)) ::defined)
                   (throw (ex-info (str "class not found: " cname) {:class cname})))]
     (when-not (= bytes ::defined)
-      ;; only JDK classes are cached; user classes change between runs
+      ;; a classpath class is cached only through the library cache
+      ;; (restore-user-class!), which checks it hasn't changed
       (class-map cname (timed :cf-parse #(cf/parse bytes)) (if user :user :jdk)))))
 
 (defn- class-map
@@ -632,8 +697,8 @@
    "\n"
    (concat
     ;; a classpath class stays in the unnamed module whatever its package
-    ;; (runtime.ss user-class!); user classes are never cached, so a cached
-    ;; registration never carries this
+    ;; (runtime.ss user-class!); a registration the library cache keeps
+    ;; carries this too
     (when (= origin :user) [(cg/sx "user-class!" (cg/str-lit name))])
     [(cg/sx "register-class!" (cg/str-lit name) (if super (cg/str-lit super) "#f")
             (str "'" (apply cg/sx (map cg/str-lit interfaces)))
@@ -713,6 +778,69 @@
                                            (cg/method-global name (:name m) (:desc m))
                                            (if (:native m) "#t" "#f"))))))])))
 
+(defn- user-deps
+  "The dependencies of a library cache entry whose link or compile read the
+  classes in names: each classpath class among them and among everything
+  they inherit from (a class's layout and vtable come from its ancestors),
+  with its fingerprint (class-source). JDK classes need none, since the
+  cache key covers the JDK, but a synthetic one (champaca/, a lambda's)
+  has no bytes to make it again from, so it is :present, there when the
+  entry is used. nil when one can't be checked later (a directory's class,
+  one a loader defined, one not in the class table), which keeps the entry
+  out of the cache."
+  [names]
+  (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (string? e) :jdk (:origin e))))]
+    (when (every? origin names)
+      (reduce (fn [acc n]
+                (case (origin n)
+                  :jdk (if (str/starts-with? n "champaca/") (assoc acc n :present) acc)
+                  :user (if-let [fp (:fp (class-source n))] (assoc acc n fp) (reduced nil))
+                  (reduced nil)))
+              {} (distinct (mapcat ancestry names))))))
+
+(defn- library-cache-keys
+  "What a classpath class's entry carries for the library cache once
+  linked, its link having read the classes in reads: :src-fp, its own
+  fingerprint, and :deps (user-deps). nil when it can't be cached."
+  [cname reads]
+  (when-let [fp (:fp (class-source cname))]
+    (when-let [deps (user-deps (conj reads cname))]
+      {:src-fp fp :deps (dissoc deps cname)})))
+
+(defn- restore-user-class!
+  "Register classpath class cname from the library cache, when an earlier
+  run cached it and neither it nor any class it depends on has changed
+  since: true then. Else nil, the stale entry is dropped, and the class is
+  parsed and compiled as usual, which caches it again at the next save."
+  [cname]
+  (when-let [src (class-source cname)]
+    (when-let [packed (when (:fp src) (get (library-cache) cname))]
+      (let [info (parse-entry cname packed)]
+        (if (and (= (:fp src) (:src-fp info))
+                 (every? (fn [[d fp]]
+                           (let [e (get-in @state [:classes d])]
+                             (if (= fp :present)
+                               (some? e)
+                               ;; the classpath's copy, unchanged, and not some
+                               ;; other class of that name this run already has
+                               ;; (a loader's, the JDK's)
+                               (and (= fp (:fp (class-source d)))
+                                    (or (nil? e) (= :user (:origin e)))))))
+                         (:deps info)))
+          (do (swap! state update :restored (fnil inc 0))
+              (note-class-entry! cname (:entry src))
+              (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+                (ensure-loaded! dep))
+              (when-not (get-in @state [:classes cname])
+                (swap! state assoc-in [:classes cname] info)
+                (or (load-unit! (:cached-class info))
+                    (let [text (registration-text info)]
+                      (record! :user [cname] {:text text})
+                      (scheme! text :interpret))))
+              true)
+          (do (swap! state #(-> % (update :user-cache dissoc cname) (assoc :library-dirty true)))
+              nil))))))
+
 (defn ensure-loaded! [cname]
   (cond
     ;; registered by an earlier run: its class table entry came from the
@@ -729,19 +857,25 @@
           (throw e)))
       (or (load-unit! (:cached-class info))
           (let [text (registration-text info)]
-            (record! (:origin info) [cname] {:text text})
+            (record! (cache-origin info) [cname] {:text text})
             (scheme! text :interpret))))
 
     (not (get-in @state [:classes cname]))
-    (when-let [info (timed :parse #(normalize cname))]
-      (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
-        (ensure-loaded! dep))
-      (when-not (get-in @state [:classes cname])
-        (let [linked (timed :link #(link info))]
-          (swap! state assoc-in [:classes cname] linked)
-          (let [text (timed :register-text #(registration-text linked))]
-            (record! (:origin linked) [cname] {:text text})
-            (timed :register-eval #(scheme! text :interpret)))))))
+    (when-not (restore-user-class! cname)
+      (when-let [info (timed :parse #(normalize cname))]
+        (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+          (ensure-loaded! dep))
+        (when-not (get-in @state [:classes cname])
+          ;; a classpath class's link and registration record what they read
+          (let [reads (when (= :user (:origin info)) (volatile! #{}))
+                linked (binding [*reads* reads] (timed :link #(link info)))]
+            (swap! state assoc-in [:classes cname] linked)
+            (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
+                  linked (if-let [ks (when reads (library-cache-keys cname @reads))]
+                           (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
+                           linked)]
+              (record! (cache-origin linked) [cname] {:text text})
+              (timed :register-eval #(scheme! text :interpret))))))))
   cname)
 
 (defn lambda-class
@@ -761,6 +895,8 @@
             (let [text (registration-text linked)]
               (record! :jdk [n] {:text text}) ; pure data, safe to cache whoever asked
               (scheme! text :interpret)))))
+    ;; the code being compiled names n (user-deps)
+    (when-let [r *reads*] (vswap! r conj n))
     n))
 
 (defn- rename-class
@@ -829,8 +965,17 @@
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
         info (assoc (class-info cname) :parsed p)]
     (swap! state update :jitted inc)
+    (when (= :user (:origin info)) (swap! state update :jitted-user (fnil inc 0)))
     (when (trace?) (binding [*out* *err*] (println "jit" (str cname "." mname desc))))
-    (let [text (timed :codegen #(cg/compile-method (:parsed info) m resolver))
+    (let [reads (when (:src-fp info) (volatile! #{}))
+          text (binding [*reads* reads] (timed :codegen #(cg/compile-method (:parsed info) m resolver)))
+          ;; a library cache entry's dependencies grow with each method
+          ;; compiled; a method reading one that can't be checked isn't kept
+          origin (if reads
+                   (when-let [deps (user-deps (conj @reads cname))]
+                     (swap! state update-in [:classes cname :deps] merge (dissoc deps cname))
+                     :user)
+                   (cache-origin info))
           unit [cname (str mname desc)]
           ;; an instruction naming a class that isn't there throws when it
           ;; runs (codegen): such a method is never cached, so a cache can't
@@ -843,15 +988,15 @@
       (cond
         missing (timed :chez-compile #(scheme! text))
         ;; compiled once: the same object code runs now and goes in the cache
-        (compile-to-cache? (:origin info))
+        (compile-to-cache? origin)
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
                                            (s/call "compile-unit" text)))]
-          (record! :jdk unit {:fasl bv}))
+          (record! origin unit {:fasl bv}))
         ;; the text is kept (cheaply) so save-cache! can compile it into a
         ;; generation; without that a jolt program re-jits these every run
         :else
         (do (timed :chez-compile #(scheme! text))
-            (record! (:origin info) unit {:text text}))))))
+            (record! origin unit {:text text}))))))
 
 (defn saves-generation!
   "Tell the JIT this process will save a generation, so JDK methods compile
@@ -865,10 +1010,11 @@
       (compile-method! cname mname desc))))
 
 (defn- stats []
-  (let [{:keys [classes lazy jitted units-loaded]} @state]
+  (let [{:keys [classes lazy jitted jitted-user units-loaded restored]} @state]
     (binding [*out* *err*]
-      (println (str "champaca: " (- (count classes) (count lazy)) " classes loaded, " jitted " methods compiled, "
-                    (or units-loaded 0) " cached units loaded")))))
+      (println (str "champaca: " (- (count classes) (count lazy)) " classes loaded ("
+                    (or restored 0) " from the library cache), " jitted " methods compiled ("
+                    (or jitted-user 0) " of classpath classes), " (or units-loaded 0) " cached units loaded")))))
 
 ;; --- boot cache ---------------------------------------------------------------------
 ;; Modeled on Clojure's RT.load: one compiled unit per input, used only when
@@ -1001,21 +1147,37 @@
                      (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT"))])]
       (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
 
+(defn- packed-entry
+  "A class map as edn text without bytecode: methods keep :code as a flag."
+  [info]
+  (pr-str (-> info
+              (dissoc :parsed)
+              (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))))
+
 (defn- strip-for-cache
   "The linker's class map as edn text per class, JDK classes only, without
-  bytecode: methods keep :code as a flag. An entry this run never thawed is
-  already text and is kept as it is."
+  bytecode. An entry this run never thawed is already text and is kept as
+  it is."
   [classes]
   (into {}
         (for [[k info] classes
               :let [s (if (string? info)
                         info
                         (when (= :jdk (:origin info))   ; not a classpath class, not one a loader defined
-                          (pr-str (-> info
-                                      (dissoc :parsed)
-                                      (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms)))))))]
+                          (packed-entry info)))]
               :when s]
           [k s])))
+
+(defn- library-entries
+  "The library cache: classpath classes by name as edn text, kept apart
+  from the class table because the cache serves every program. An entry
+  this run didn't load is kept as read (another program's, maybe); one it
+  loaded is written again, with what this run compiled."
+  [classes]
+  (into (library-cache)
+        (for [[k info] classes
+              :when (and (map? info) (= :user (cache-origin info)))]
+          [k (packed-entry info)])))
 
 (defn- dump-classes!
   "state.img: each class entry as edn text, plus the set of classes whose
@@ -1024,7 +1186,7 @@
   [img]
   (let [{:keys [classes lazy]} @state]
     (img/dump! (str img) {:lazy (into (set lazy)
-                                      (for [[k v] classes :when (and (map? v) (:cached-class v))] k))
+                                      (for [[k v] classes :when (and (map? v) (= :jdk (:origin v)) (:cached-class v))] k))
                           :classes (strip-for-cache classes)})))
 
 (defn- delete-tree! [f] (doseq [x (reverse (file-seq f))] (.delete x)))
@@ -1129,7 +1291,13 @@
           (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
                  [file start (- end start)]))
         (dump-classes! img-tmp)
-        (.renameTo img-tmp (io/file dir "state.img"))))))
+        (.renameTo img-tmp (io/file dir "state.img"))))
+    ;; after the units above have their places
+    (when (and dir (.isDirectory dir) (:library-dirty @state))
+      (swap! state dissoc :library-dirty)
+      (let [tmp (io/file dir (str "library.img.tmp-" (System/nanoTime)))]
+        (img/dump! (str tmp) (library-entries (:classes @state)))
+        (.renameTo tmp (io/file dir "library.img"))))))
 
 (defn- boot!
   "Load the runtime, then run System.initPhase1 the way the JVM does before
@@ -1305,6 +1473,7 @@
     (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
       (let [status (apply s/call "run-main" cname args)]
+        (when (env "CHAMPACA_PROF") (prof-report "run" (- (System/nanoTime) t0)))
         (when (env "CHAMPACA_STATS") (stats))
         (save-generation!)
         status)
