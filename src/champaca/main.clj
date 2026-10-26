@@ -277,11 +277,13 @@
 
 (defn- class-bytes
   "cname's bytes for a class already loaded (its methods, stack traces, NPE
-  messages): the bytes a directory's class was loaded or restored from,
-  held for the run, else the classpath's or the JDK's.
+  messages): the bytes a loader defined it from, or the bytes a directory's
+  class was loaded or restored from, both held for the run, else the
+  classpath's or the JDK's.
   Nothing is recorded, so reading can't change what the cache keeps."
   [cname]
-  (or (second (get-in @state [:dir-bytes cname]))
+  (or (get-in @state [:defined-bytes cname])
+      (second (get-in @state [:dir-bytes cname]))
       (second (find-user-class cname))
       (jdk-class-bytes cname)))
 
@@ -1040,7 +1042,8 @@
   class is named <name>/0x<n>, as HotSpot names one, and renamed inside.
   Defined classes are never cached."
   [given text hidden?]
-  (let [c (try (cf/parse (.getBytes ^String text "ISO-8859-1"))
+  (let [bs (.getBytes ^String text "ISO-8859-1")
+        c (try (cf/parse bs)
                (catch Exception e {:bad (or (ex-message e) (str (class e)))}))]
     (cond
       (:bad c) (str "bad " (:bad c))
@@ -1050,8 +1053,9 @@
       (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
             n (:name c)
             info (class-map n c :defined)]
-        ;; bytes class-source held for a classpath class of this name won't be parsed
-        (swap! state update :dir-bytes dissoc n)
+        ;; bytes class-source held for a classpath class of this name won't
+        ;; be parsed; the defined bytes are kept for NPE messages and frames
+        (swap! state #(-> % (update :dir-bytes dissoc n) (assoc-in [:defined-bytes n] bs)))
         (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
         (let [linked (link info)]
           (swap! state assoc-in [:classes n] linked)

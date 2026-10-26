@@ -60,3 +60,4 @@ java.lang.NullPointerException: Cannot invoke "String.isEmpty()" because "<local
 same
 Cannot invoke "String.isEmpty()" because "<local1>" is null
 after fillInStackTrace: Cannot invoke "Object.toString()" because "<local2>" is null
+Cannot invoke "java.lang.Integer.intValue()" because the return value of "java.lang.reflect.InvocationHandler.invoke(Object, java.lang.reflect.Method, Object[])" is null

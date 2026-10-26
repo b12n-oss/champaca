@@ -147,6 +147,14 @@ public class NpeCheck {
         }
         early.fillInStackTrace();
         System.out.println("after fillInStackTrace: " + early.getMessage());
+        // a class defined at run time: the proxy's own unboxing of a null result
+        IntSupplier proxied = (IntSupplier) java.lang.reflect.Proxy.newProxyInstance(
+            NpeCheck.class.getClassLoader(), new Class<?>[] {IntSupplier.class}, (proxy, m, a) -> null);
+        try {
+            proxied.getAsInt();
+        } catch (NullPointerException e) {
+            System.out.println(e.getMessage());
+        }
     }
 }
 
