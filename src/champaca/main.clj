@@ -213,14 +213,17 @@
   "cname's bytes from the classpath, to load the class (normalize). The
   fingerprint the library cache records for it (class-source) is the one
   of the bytes parsed: a directory's class is parsed from the very bytes
-  class-source took it from, and bytes read any other way (a retried load,
-  an earlier classpath entry that gained the class since) replace
+  class-source took it from, and a load from any other bytes (a retried
+  load, an earlier classpath entry that gained the class since) replaces
   class-source's answer, so one version's fingerprint can't go with
-  another's code."
+  another's code. A directory's class keeps the bytes it loaded from for
+  the run (class-bytes), as a restored one does."
   [cname]
   (when-let [[entry bs held?] (find-user-class cname)]
     (note-class-entry! cname entry)
-    (swap! state #(cond-> (update % :dir-bytes dissoc cname)
+    (swap! state #(cond-> %
+                    true (update :dir-bytes dissoc cname)
+                    (not (jar-entry? entry)) (assoc-in [:dir-bytes cname] [entry bs])
                     (not held?) (assoc-in [:class-sources cname]
                                           {:entry entry :fp (bytes-fp bs) :jar (jar-path entry)})))
     bs))
@@ -274,8 +277,8 @@
 
 (defn- class-bytes
   "cname's bytes for a class already loaded (its methods, stack traces, NPE
-  messages): what a directory's class restored from the cache was restored
-  as, while those bytes are held, else the classpath's or the JDK's.
+  messages): the bytes a directory's class was loaded or restored from,
+  held for the run, else the classpath's or the JDK's.
   Nothing is recorded, so reading can't change what the cache keeps."
   [cname]
   (or (second (get-in @state [:dir-bytes cname]))
