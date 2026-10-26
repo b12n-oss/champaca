@@ -1139,9 +1139,12 @@
       (let ([x (read in)])
         (if (eof-object? x) (reverse forms) (loop (cons x forms)))))))
 
-(define (add-unit! text)
+;; inspect: keep inspector information, as a classpath class's method bodies
+;; do, since stack traces read their line numbers from it (JDK code goes
+;; without: see quiet-compile-file)
+(define (add-unit! text . inspect)
   (let ([start (port-position unit-out)])
-    (parameterize ([generate-inspector-information #f])   ; see quiet-compile-file
+    (parameterize ([generate-inspector-information (and (pair? inspect) (car inspect))])
       (compile-to-port (read-all text) unit-out))
     start))
 
@@ -1154,9 +1157,9 @@
 ;; Compile text once to object code, run it, and return the code's bytes for
 ;; the startup cache, which appends them unchanged (add-fasl!). Evaluating the
 ;; text and compiling it again for the cache cost a second compile per method.
-(define (compile-unit text)
+(define (compile-unit text . inspect)   ; inspect as for add-unit!
   (let-values ([(p get) (open-bytevector-output-port)])
-    (parameterize ([generate-inspector-information #f])   ; see quiet-compile-file
+    (parameterize ([generate-inspector-information (and (pair? inspect) (car inspect))])
       (compile-to-port (read-all text) p))
     (let ([bv (get)])
       (load-compiled-from-port (open-bytevector-input-port bv))

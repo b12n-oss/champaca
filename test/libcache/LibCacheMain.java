@@ -3,6 +3,7 @@ public class LibCacheMain {
         System.out.println(lc2.User.run());
         // a class from the cache still has its code source and its package
         System.out.println(where(lc2.User.class) + " " + where(lc.Base.class) + " " + lc.Sub.class.getPackage().getName());
+        System.out.println(lc2.User.frame());
     }
 
     // the last name in the class's code source: a jar's, or a directory's

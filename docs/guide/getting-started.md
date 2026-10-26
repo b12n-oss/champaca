@@ -90,7 +90,7 @@ These guides can be read as a local site. `bb site:serve` builds `docs/` into `_
 bb test
 ```
 
-It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, and one that runs past five minutes fails. `test/libcache` runs one program five times over jars that change between runs, which checks the cache of classes from jars. It runs upstream OpenLDK's own `aaa` test programs the same way as `test/java`'s, from `test/aaa` (its README says how they're laid out). Then it runs the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line says which jolt it used.
+It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, and one that runs past five minutes fails. `test/libcache` runs two programs over jars and directories that change between runs, ten runs in all, which checks the cache of classes from jars. It runs upstream OpenLDK's own `aaa` test programs the same way as `test/java`'s, from `test/aaa` (its README says how they're laid out). Then it runs the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line says which jolt it used.
 
 ## Where next
 

@@ -393,24 +393,29 @@
       (str "jar:" (entry-url entry) "!/" (encode-path path))
       (str (entry-url entry) (encode-path path)))))
 
+(defn- read-library-image
+  "library.img in the cache directory as a map, {} when there is none. A
+  damaged file is dropped (its classes compile again)."
+  []
+  (let [f (some-> (:cache-dir @state) (io/file "library.img"))]
+    (or (when (and f (.exists f))
+          (try (let [m (timed :cache-read-library #(img/read-image (str f)))]
+                 (when-not (map? m) (throw (ex-info "not a champaca library image" {})))
+                 m)
+               (catch Exception e
+                 (binding [*out* *err*]
+                   (println "champaca: discarding a damaged library cache:" (ex-message e)))
+                 (.delete f)
+                 nil)))
+        {})))
+
 (defn- library-cache
   "The library cache's entries, classpath classes by name as edn text,
-  from library.img in the cache directory. Read on the first jar class a
-  run loads, so a program without one never pays for it; a damaged file is
-  dropped (its classes compile again)."
+  from library.img. Read on the first jar class a run loads, so a program
+  without one never pays for it."
   []
   (or (:user-cache @state)
-      (let [f (some-> (:cache-dir @state) (io/file "library.img"))
-            m (or (when (and f (.exists f))
-                    (try (let [m (timed :cache-read-library #(img/read-image (str f)))]
-                           (when-not (map? m) (throw (ex-info "not a champaca library image" {})))
-                           m)
-                         (catch Exception e
-                           (binding [*out* *err*]
-                             (println "champaca: discarding a damaged library cache:" (ex-message e)))
-                           (.delete f)
-                           nil)))
-                  {})]
+      (let [m (read-library-image)]
         (:user-cache (swap! state update :user-cache #(or % m))))))
 
 (defn- cache-origin
@@ -456,7 +461,7 @@
                  (reduce (fn [acc run]
                            (if (:fasl (first run))
                              (into acc (map #(s/call "add-fasl!" (:fasl %)) run))
-                             (let [start (s/call "add-unit!" (str/join "\n" (map :text run)))]
+                             (let [start (s/call "add-unit!" (str/join "\n" (map :text run)) (boolean (some :inspect run)))]
                                (into acc (repeat (count run) start)))))
                          [] runs)
                  (catch Exception e
@@ -815,8 +820,14 @@
   [cname]
   (when-let [src (class-source cname)]
     (when-let [packed (when (:fp src) (get (library-cache) cname))]
-      (let [info (parse-entry cname packed)]
-        (if (and (= (:fp src) (:src-fp info))
+      ;; an entry that doesn't read back goes alone, unlike state.img's
+      ;; (parse-entry): the class compiles, and the next save rewrites it
+      (let [info (try (edn/read-string packed)
+                      (catch Exception e
+                        (binding [*out* *err*]
+                          (println (str "champaca: dropping the library cache's unreadable entry for " cname ":") (ex-message e)))
+                        nil))]
+        (if (and info (= (:fp src) (:src-fp info))
                  (every? (fn [[d fp]]
                            (let [e (get-in @state [:classes d])]
                              (if (= fp :present)
@@ -827,10 +838,10 @@
                                (and (= fp (:fp (class-source d)))
                                     (or (nil? e) (= :user (:origin e)))))))
                          (:deps info)))
-          (do (swap! state update :restored (fnil inc 0))
-              (note-class-entry! cname (:entry src))
+          (do (note-class-entry! cname (:entry src))
               (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
                 (ensure-loaded! dep))
+              (swap! state update :restored (fnil inc 0))
               (when-not (get-in @state [:classes cname])
                 (swap! state assoc-in [:classes cname] info)
                 (or (load-unit! (:cached-class info))
@@ -838,7 +849,11 @@
                       (record! :user [cname] {:text text})
                       (scheme! text :interpret))))
               true)
-          (do (swap! state #(-> % (update :user-cache dissoc cname) (assoc :library-dirty true)))
+          (do (swap! state #(-> %
+                                (update :user-cache dissoc cname)
+                                ;; what was dropped, for the save's merge
+                                (assoc-in [:library-dropped cname] packed)
+                                (assoc :library-dirty true)))
               nil))))))
 
 (defn ensure-loaded! [cname]
@@ -1000,13 +1015,14 @@
         ;; compiled once: the same object code runs now and goes in the cache
         (compile-to-cache? origin)
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
-                                           (s/call "compile-unit" text)))]
+                                           ;; a classpath class's frames keep their line numbers
+                                           (s/call "compile-unit" text (= origin :user))))]
           (record! origin unit {:fasl bv}))
         ;; the text is kept (cheaply) so save-cache! can compile it into a
         ;; generation; without that a jolt program re-jits these every run
         :else
         (do (timed :chez-compile #(scheme! text))
-            (record! origin unit {:text text}))))))
+            (record! origin unit {:text text :inspect (= origin :user)}))))))
 
 (defn saves-generation!
   "Tell the JIT this process will save a generation, so JDK methods compile
@@ -1182,11 +1198,14 @@
 
 (defn- library-entries
   "The library cache: classpath classes by name as edn text, kept apart
-  from the class table because the cache serves every program. An entry
-  this run didn't load is kept as read (another program's, maybe); one it
-  loaded is written again, with what this run compiled."
+  from the class table because the cache serves every program. It starts
+  from library.img as it is now, since another process may have saved
+  since this one read it, less the entries this run found stale (unless
+  they were replaced meanwhile); every class this run loaded is written
+  again, with what it compiled."
   [classes]
-  (into (library-cache)
+  (into (reduce-kv (fn [m k seen] (if (= seen (get m k)) (dissoc m k) m))
+                   (read-library-image) (:library-dropped @state))
         (for [[k info] classes
               :when (and (map? info) (= :user (cache-origin info)))]
           [k (packed-entry info)])))
@@ -1306,10 +1325,11 @@
         (.renameTo img-tmp (io/file dir "state.img"))))
     ;; after the units above have their places
     (when (and dir (.isDirectory dir) (:library-dirty @state))
-      (swap! state dissoc :library-dirty)
       (let [tmp (io/file dir (str "library.img.tmp-" (System/nanoTime)))]
         (img/dump! (str tmp) (library-entries (:classes @state)))
-        (.renameTo tmp (io/file dir "library.img"))))))
+        (if (.renameTo tmp (io/file dir "library.img"))
+          (swap! state dissoc :library-dirty :library-dropped)
+          (.delete tmp))))))
 
 (defn- boot!
   "Load the runtime, then run System.initPhase1 the way the JVM does before
