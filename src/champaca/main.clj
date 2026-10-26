@@ -201,12 +201,22 @@
               bs))
           (:classpath @state))))
 
+(defn- jar-path
+  "A classpath jar's canonical path, which names its file in the library
+  cache. Asked once per entry."
+  [entry]
+  (or (get-in @state [:jar-paths entry])
+      (let [p (.getCanonicalPath (io/file (str entry)))]
+        (swap! state assoc-in [:jar-paths entry] p)
+        p)))
+
 (defn- class-source
   "Where cname is on the classpath, found as user-class-bytes finds it:
-  {:entry e :fp fp}, fp being a jar entry's [CRC size] from the zip's
-  directory (nothing inflated), which stands for the class's bytes, or nil
-  for a directory's class, which the library cache leaves alone. nil when
-  no entry has it. Looked up once per class per run."
+  {:entry e :fp fp :jar j}, fp being a jar entry's [CRC size] from the
+  zip's directory (nothing inflated), which stands for the class's bytes,
+  and j the jar's canonical path; fp is nil for a directory's class, which
+  the library cache leaves alone. nil when no entry has it. Looked up once
+  per class per run."
   [cname]
   (let [m (:class-sources @state)]
     (if (contains? m cname)
@@ -215,7 +225,7 @@
             src (some (fn [entry]
                         (if (jar-entry? entry)
                           (when-let [e (.getEntry (jar entry) rel)]
-                            {:entry entry :fp [(.getCrc e) (.getSize e)]})
+                            {:entry entry :fp [(.getCrc e) (.getSize e)] :jar (jar-path entry)})
                           (when (.exists (io/file entry rel))
                             {:entry entry :fp nil})))
                       (:classpath @state))]
@@ -393,35 +403,48 @@
       (str "jar:" (entry-url entry) "!/" (encode-path path))
       (str (entry-url entry) (encode-path path)))))
 
+(defn- library-file
+  "The library cache's file for the jar at canonical path jar: lib/<hash>.img
+  in the cache directory, holding the entries of the classes that jar
+  supplied. A jar per file means a program reads only what its own jars
+  cached, and two programs on different versions of a library (different
+  paths) keep their own entries."
+  [jar]
+  (io/file (:cache-dir @state) "lib" (str (Long/toHexString (bit-and (hash jar) 0xffffffff)) ".img")))
+
 (defn- read-library-image
-  "library.img in the cache directory as a map, {} when there is none. A
-  damaged file is dropped (its classes compile again)."
-  []
-  (let [f (some-> (:cache-dir @state) (io/file "library.img"))]
-    (or (when (and f (.exists f))
+  "The entries in jar's library file, {} when there is none, or when it
+  belongs to another jar whose path hashes the same. Reading touches it, so
+  pruning (prune-library!) keeps the files programs use. A damaged file is
+  dropped (its classes compile again)."
+  [jar]
+  (let [f (library-file jar)]
+    (or (when (.exists f)
           (try (let [m (timed :cache-read-library #(img/read-image (str f)))]
-                 (when-not (map? m) (throw (ex-info "not a champaca library image" {})))
-                 m)
+                 (when-not (and (map? m) (map? (:entries m)))
+                   (throw (ex-info "not a champaca library image" {})))
+                 (.setLastModified f (System/currentTimeMillis))
+                 (when (= jar (:jar m)) (:entries m)))
                (catch Exception e
                  (binding [*out* *err*]
-                   (println "champaca: discarding a damaged library cache:" (ex-message e)))
+                   (println "champaca: discarding a damaged library cache file:" (str f) (ex-message e)))
                  (.delete f)
                  nil)))
         {})))
 
 (defn- library-cache
-  "The library cache's entries, classpath classes by name as edn text,
-  from library.img. Read on the first jar class a run loads, so a program
-  without one never pays for it."
-  []
-  (or (:user-cache @state)
-      (let [m (read-library-image)]
-        (:user-cache (swap! state update :user-cache #(or % m))))))
+  "The library cache's entries for the jar at canonical path jar, classpath
+  classes by name as edn text, read the first time a run loads one of its
+  classes."
+  [jar]
+  (or (get-in @state [:user-cache jar])
+      (let [m (read-library-image jar)]
+        (get-in (swap! state update-in [:user-cache jar] #(or % m)) [:user-cache jar]))))
 
 (defn- cache-origin
   "Whether a class's code may be cached: :jdk, :user for a classpath class
   the library cache keeps (a jar's class whose dependencies can be checked,
-  :src-fp set by library-cache-keys), else nil."
+  :src-fp and :src-jar set by library-cache-keys), else nil."
   [info]
   (case (:origin info)
     :jdk :jdk
@@ -436,7 +459,9 @@
   [origin unit code]
   (when-let [rec (:recording @state)]
     (when origin
-      (when (= origin :user) (swap! state assoc :library-dirty true))
+      ;; the jar whose library file the save rewrites
+      (when (= origin :user)
+        (swap! state (fn [st] (update st :library-dirty (fnil conj #{}) (get-in st [:classes (first unit) :src-jar])))))
       (vswap! rec conj (assoc code :unit unit)))))
 
 (defn- compile-to-cache?
@@ -806,11 +831,13 @@
 (defn- library-cache-keys
   "What a classpath class's entry carries for the library cache once
   linked, its link having read the classes in reads: :src-fp, its own
-  fingerprint, and :deps (user-deps). nil when it can't be cached."
+  fingerprint, :src-jar, the jar whose library file holds it, and :deps
+  (user-deps). nil when it can't be cached."
   [cname reads]
-  (when-let [fp (:fp (class-source cname))]
-    (when-let [deps (user-deps (conj reads cname))]
-      {:src-fp fp :deps (dissoc deps cname)})))
+  (let [src (class-source cname)]
+    (when-let [fp (:fp src)]
+      (when-let [deps (user-deps (conj reads cname))]
+        {:src-fp fp :src-jar (:jar src) :deps (dissoc deps cname)}))))
 
 (defn- restore-user-class!
   "Register classpath class cname from the library cache, when an earlier
@@ -819,7 +846,7 @@
   parsed and compiled as usual, which caches it again at the next save."
   [cname]
   (when-let [src (class-source cname)]
-    (when-let [packed (when (:fp src) (get (library-cache) cname))]
+    (when-let [packed (when (:fp src) (get (library-cache (:jar src)) cname))]
       ;; an entry that doesn't read back goes alone, unlike state.img's
       ;; (parse-entry): the class compiles, and the next save rewrites it
       (let [info (try (edn/read-string packed)
@@ -850,10 +877,10 @@
                       (scheme! text :interpret))))
               true)
           (do (swap! state #(-> %
-                                (update :user-cache dissoc cname)
+                                (update-in [:user-cache (:jar src)] dissoc cname)
                                 ;; what was dropped, for the save's merge
-                                (assoc-in [:library-dropped cname] packed)
-                                (assoc :library-dirty true)))
+                                (assoc-in [:library-dropped (:jar src) cname] packed)
+                                (update :library-dirty (fnil conj #{}) (:jar src))))
               nil))))))
 
 (defn ensure-loaded! [cname]
@@ -1197,17 +1224,17 @@
           [k s])))
 
 (defn- library-entries
-  "The library cache: classpath classes by name as edn text, kept apart
-  from the class table because the cache serves every program. It starts
-  from library.img as it is now, since another process may have saved
-  since this one read it, less the entries this run found stale (unless
-  they were replaced meanwhile); every class this run loaded is written
-  again, with what it compiled."
-  [classes]
+  "jar's library file's entries: classpath classes by name as edn text,
+  kept apart from the class table because the cache serves every program.
+  It starts from the file as it is now, since another process may have
+  saved since this one read it, less the entries this run found stale
+  (unless they were replaced meanwhile); every class of the jar this run
+  loaded is written again, with what it compiled."
+  [jar classes]
   (into (reduce-kv (fn [m k seen] (if (= seen (get m k)) (dissoc m k) m))
-                   (read-library-image) (:library-dropped @state))
+                   (read-library-image jar) (get-in @state [:library-dropped jar]))
         (for [[k info] classes
-              :when (and (map? info) (= :user (cache-origin info)))]
+              :when (and (map? info) (= :user (cache-origin info)) (= jar (:src-jar info)))]
           [k (packed-entry info)])))
 
 (defn- dump-classes!
@@ -1299,6 +1326,15 @@
           (swap! state assoc :classes {} :lazy #{})
           nil)))))
 
+(defn- prune-library!
+  "Drop library files no run has read for a week (a jar gone, a version no
+  longer used), and temp files a crash left."
+  [dir]
+  (let [cutoff (- (System/currentTimeMillis) stale-ms)]
+    (doseq [f (.listFiles (io/file dir "lib"))
+            :when (< (.lastModified f) cutoff)]
+      (.delete f))))
+
 (defn save-generation!
   "Append what this run compiled for JDK classes after boot as one more
   extra-N.so, compiled unit by unit, and rewrite state.img (written beside,
@@ -1324,12 +1360,17 @@
         (dump-classes! img-tmp)
         (.renameTo img-tmp (io/file dir "state.img"))))
     ;; after the units above have their places
-    (when (and dir (.isDirectory dir) (:library-dirty @state))
-      (let [tmp (io/file dir (str "library.img.tmp-" (System/nanoTime)))]
-        (img/dump! (str tmp) (library-entries (:classes @state)))
-        (if (.renameTo tmp (io/file dir "library.img"))
-          (swap! state dissoc :library-dirty :library-dropped)
-          (.delete tmp))))))
+    (when (and dir (.isDirectory dir) (seq (:library-dirty @state)))
+      (doseq [jar (remove nil? (:library-dirty @state))
+              :let [f (library-file jar)
+                    tmp (io/file (.getParentFile f) (str (.getName f) ".tmp-" (System/nanoTime)))]]
+        (.mkdirs (.getParentFile f))
+        (img/dump! (str tmp) {:jar jar :entries (library-entries jar (:classes @state))})
+        (if (.renameTo tmp f)
+          (swap! state #(-> % (update :library-dirty disj jar) (update :library-dropped dissoc jar)))
+          (.delete tmp)))
+      (swap! state update :library-dirty (fn [s] (set (remove nil? s))))
+      (prune-library! dir))))
 
 (defn- boot!
   "Load the runtime, then run System.initPhase1 the way the JVM does before

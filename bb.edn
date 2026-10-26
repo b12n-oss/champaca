@@ -229,11 +229,15 @@
                         (println "bb test: lc/Sub.class differs between base-v1.jar and base-v2.jar, so test/libcache checks nothing")
                         (System/exit 1))
                     cache-on (not= "off" (System/getenv "CHAMPACA_CACHE"))
-                    libcache-fails (->> [["base-v1.jar" "v1" false] ["base-v1.jar" "v1" true] ["base-v2.jar" "v2" false]
+                    ;; each run: the jar, the expected output, and how many classes
+                    ;; at least come from the cache. The last run gets Base back
+                    ;; from base-v1.jar's own library file, kept while base-v2.jar
+                    ;; ran, plus User's registration
+                    libcache-fails (->> [["base-v1.jar" "v1" 0] ["base-v1.jar" "v1" 1] ["base-v2.jar" "v2" 0] ["base-v2.jar" "v2" 1]
                                          ;; Base from a directory ahead of the jar, which the cache never keeps
-                                         ["v2-classes:" "v2dir" false "base-v1.jar"] ["base-v1.jar" "v1" false]]
+                                         ["v2-classes:" "v2dir" 0 "base-v1.jar"] ["base-v1.jar" "v1" 2]]
                                         (map-indexed
-                                         (fn [i [first-entry v restores? second-entry]]
+                                         (fn [i [first-entry v restores second-entry]]
                                            (let [cp (str lc "/main-classes:" lc "/" first-entry
                                                          (when second-entry (str lc "/" second-entry)) ":" lc "/user.jar")
                                                  ;; CHAMPACA_STATS prints after boot, then at exit: the last counts
@@ -242,8 +246,8 @@
                                                                                      (jolt-bin) "-M" "-m" "champaca.main" cp "LibCacheMain")
                                                  restored (some-> (re-seq (re-pattern "\\((\\d+) from the library cache\\)") (str err)) last second parse-long)
                                                  ok (and (zero? exit) (= out (slurp (str "test/libcache/" v ".expected")))
-                                                         (or (not restores?) (not cache-on) (pos? (or restored 0))))
-                                                 what (str "test/libcache run " (inc i) " (" cp (when restores? ", restored from the cache") ")")]
+                                                         (or (not cache-on) (>= (or restored 0) restores)))
+                                                 what (str "test/libcache run " (inc i) " (" cp (when (pos? restores) (str ", at least " restores " from the cache")) ")")]
                                              (println (if ok "PASS" "FAIL") what)
                                              (when-not ok
                                                (println (str "  exit " exit ", out " (pr-str out) ", restored " restored))
@@ -315,7 +319,7 @@
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
                     fails (remove nil? (concat fails jar-fails libcache-fails lam-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 6))
+                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 7))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 6)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
