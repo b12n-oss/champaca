@@ -192,22 +192,30 @@
     (when (.exists f)
       (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String []))))))
 
+(declare bytes-fp jar-path)
+
 (defn- user-class-bytes
-  "cname's bytes from the first classpath entry that has it. A directory's
-  class whose fingerprint class-source took is parsed from the very bytes
-  it took it from, so the cache can't pair one version's fingerprint with
-  another's code."
+  "cname's bytes from the first classpath entry that has it. The
+  fingerprint the library cache records for the class (class-source) is
+  the one of the bytes parsed: a directory's class is parsed from the very
+  bytes class-source took it from, which a class restored from the cache
+  keeps until its first uncached method compiles, and bytes read any other
+  way (a retried load, a jar's restored class, an earlier entry that gained
+  the class since) replace class-source's answer, so one version's
+  fingerprint can't go with another's code."
   [cname]
   (let [rel (str cname ".class")]
     (some (fn [entry]
-            (when-let [bs (if (jar-entry? entry)
-                            (read-entry (jar entry) rel)
-                            (let [[from held] (get-in @state [:dir-bytes cname])]
-                              (if (= from entry)
-                                (do (swap! state update :dir-bytes dissoc cname) held)
-                                (read-class-file entry rel))))]
-              (note-class-entry! cname entry)
-              bs))
+            (let [[from held] (get-in @state [:dir-bytes cname])
+                  held? (= from entry)]
+              (when-let [bs (cond (jar-entry? entry) (read-entry (jar entry) rel)
+                                  held? held
+                                  :else (read-class-file entry rel))]
+                (note-class-entry! cname entry)
+                (swap! state #(cond-> (update % :dir-bytes dissoc cname)
+                                (not held?) (assoc-in [:class-sources cname]
+                                                      {:entry entry :fp (bytes-fp bs) :jar (jar-path entry)})))
+                bs)))
           (:classpath @state))))
 
 (defn- bytes-fp
@@ -892,7 +900,9 @@
                                     (or (nil? e) (= :user (:origin e)))))))
                          (:deps info)))
           (do (note-class-entry! cname (:entry src))
-              (swap! state update :dir-bytes dissoc cname)
+              ;; a directory's class keeps the bytes it was restored as
+              ;; (held by class-source) until a method it lacks compiles
+              ;; (parsed): the file may have changed or gone by then
               (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
                 (ensure-loaded! dep))
               (swap! state update :restored (fnil inc 0))
@@ -1022,6 +1032,8 @@
       (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
             n (:name c)
             info (class-map n c :defined)]
+        ;; bytes class-source held for a classpath class of this name won't be parsed
+        (swap! state update :dir-bytes dissoc n)
         (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
         (let [linked (link info)]
           (swap! state assoc-in [:classes n] linked)
@@ -1035,12 +1047,15 @@
   carries no bytecode, so it is re-read on the first method compile; a
   classpath class restored from the library cache must read back as the
   bytes its entry was made from, or its new methods wouldn't match the
-  ones it has."
+  ones it has. A directory's class does, from the bytes it kept; a jar
+  changed in place under the run is an error."
   [cname]
   (or (:parsed (thaw! cname))
       (let [bs (class-bytes cname)
             fp (get-in @state [:classes cname :src-fp])
-            _ (when (and fp bs (not= fp (bytes-fp bs)))
+            _ (when (and fp (not bs))
+                (throw (ex-info (str cname " is no longer on the classpath") {:class cname})))
+            _ (when (and fp (not= fp (bytes-fp bs)))
                 (throw (ex-info (str cname " changed on the classpath while this program ran") {:class cname})))
             p (timed :parse #(cf/parse bs))]
         (swap! state assoc-in [:classes cname :parsed] p)

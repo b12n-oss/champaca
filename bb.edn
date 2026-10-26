@@ -302,6 +302,27 @@
                                    doall
                                    (remove nil?)
                                    vec)
+                    ;; a directory's class restored from the cache, its file
+                    ;; replaced mid-run before a method the cache lacks compiles
+                    ;; (test/libcache/edit): that method is the version the class
+                    ;; was restored as, then the next run takes the new file
+                    _ (shell (str "javac -d " lc "/edit-classes test/libcache/edit/v1/Q.java test/libcache/edit/EditMain.java"))
+                    _ (shell (str "javac -d " lc "/edit-q2 test/libcache/edit/v2/Q.java"))
+                    edit-fails (->> [[] [(str lc "/edit-q2/Q.class") (str lc "/edit-classes/Q.class")] []]
+                                    (map-indexed
+                                     (fn [i args]
+                                       (let [{:keys [out err exit]} (apply run-limited 300 {:label (str "libcache-edit-" (inc i)) :err :string
+                                                                                            :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
+                                                                           (jolt-bin) "-M" "-m" "champaca.main" (str lc "/edit-classes") "EditMain" args)
+                                             ok (and (zero? exit) (= out (slurp (str "test/libcache/edit/" (inc i) ".expected"))))]
+                                         (println (if ok "PASS" "FAIL") (str "test/libcache/edit run " (inc i)))
+                                         (when-not ok
+                                           (println (str "  exit " exit ", out " (pr-str out)))
+                                           (when-not (zero? exit) (print err) (flush)))
+                                         (when-not ok (str "libcache-edit-" (inc i))))))
+                                    doall
+                                    (remove nil?)
+                                    vec)
                     ;; upstream OpenLDK's testsuite/aaa programs (test/aaa, see its
                     ;; README): compiled together into one aaa package, each run from a
                     ;; work dir of its own holding a fresh copy of it (some delete their
@@ -343,9 +364,10 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails libcache-fails lam-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails libcache-fails lam-fails edit-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 15))
-                                  (map (fn [i] (str "libcache-lam-" i)) (range 1 9)) aaa-mains (map first examples))]
+                                  (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
+                                  (map (fn [i] (str "libcache-edit-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"
