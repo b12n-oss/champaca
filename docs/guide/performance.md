@@ -214,6 +214,10 @@ What's left is spread thin. Each method call still goes through a top-level name
 
 Thread support adds two things to every program, threaded or not: a monitor lookup on each `synchronized` entry and exit, and a check at each backward branch for a thread waiting to run. Measured against the same code without threads, a loop of 200,000 `StringBuffer.append`, `length` and `Hashtable.put` calls went from 377 ms to about 440 ms, a 20-million-step counting loop from 392 ms to about 420 ms, and `Bench` from 1.85 s to 1.86 to 1.90 s. Those numbers predate the monitor changes above, and the monitor lookup they blamed, unprofiled at the time, has since gone.
 
+### What calling a jolt fn costs Java
+
+Each call Java makes into one of your fns runs inside an exception handler, the one that turns a jolt error into a `RuntimeException` Java can catch ([calling-java](calling-java.md#exceptions)). The handler is only set up, and the jolt side is only asked to convert anything once an error is raised. `Collections.sort` on 200,000 integers with a jolt comparator makes 2,855,207 calls, and took 0.73 to 0.80 s without the handler and 0.82 to 0.88 s with it, alternating runs. That is about 30 ns of the roughly 270 ns each call costs.
+
 ### What method handles cost
 
 A method handle call goes through the runtime's handle table rather than straight to the method. In a loop of a million calls to a static `add(int, int)`, a direct call took 12 ns, `invokeExact` 117 ns, and `invoke` with boxed `Object` arguments about 1.35 µs, most of that in boxing through `Integer.valueOf` and unboxing through a virtual call. Linking a call site with a bootstrap of its own happens once, on its first call.

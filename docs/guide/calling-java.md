@@ -129,6 +129,24 @@ A fn fits any single-method interface, so a method overloaded on two of them is 
 (ldk/invoke pool "submit" (ldk/implement "java/util/concurrent/Callable" "call" "()Ljava/lang/Object;" (fn [] 42)))
 ```
 
+## Proxies
+
+`proxy` makes one object for several interfaces, or for an interface with more than one method, out of a map from method name to fn. It's a real `java.lang.reflect.Proxy`, built by the JDK's own `ProxyGenerator` (`examples/proxy.clj`):
+
+```clojure
+(def p (ldk/proxy ["java.lang.Runnable" "java.util.Comparator"]
+                  {"run" (fn [] (println "ran"))
+                   :compare (fn [a b] (- (count a) (count b)))}))
+(ldk/invoke-static "java.util.Collections" "sort" xs p)   ; sorts by length
+(ldk/invoke (ldk/construct "java.lang.Thread" p) "start")  ; prints "ran"
+```
+
+Names can be strings or keywords, and overloads of one name share its fn, so give it one arity per overload. Arguments arrive converted as `invoke` results are. The fn's result goes back boxed for the method's return type, so a `long` method can return `5` and a `double` method `2`. A result that doesn't fit goes back as it is, and the proxy's own cast fails as it would on the JVM: `5000000000` from an `int` method is a `ClassCastException`, and `nil` a `NullPointerException`.
+
+A method without a fn runs its own body when it has one. That covers default methods, so `(ldk/invoke p "reversed")` gives a working reversed `Comparator`, and Object's `equals`, `hashCode` and `toString`, which behave as `Object`'s do unless the map names them. A method with no body throws `UnsupportedOperationException` with the method's name, as Clojure's `proxy` does. A checked exception the method doesn't declare reaches the caller as `UndeclaredThrowableException`, the JDK's own rule for proxies.
+
+The proxy belongs to the application class loader, so it can implement interfaces from your classpath as well as the JDK's.
+
 ## Threads
 
 A Java thread can run a jolt fn, and it keeps running between your calls into Java, while your own jolt code does other work:
@@ -170,6 +188,16 @@ A Java exception that escapes a call turns into an `ex-info`. Its message is the
      (ldk/invoke (:java/exception (ex-data e)) "getMessage")]))
 ;=> ["java.lang.NumberFormatException: For input string: \"nope\""
 ;    "For input string: \"nope\""]
+```
+
+A fn of yours that Java calls (an interface implementation, a `proxy` method, a thread's `Runnable`) can throw too. A Java exception it throws, or one a Java call inside it threw, leaves as itself. Any other error leaves as a `java.lang.RuntimeException` with the error's message, so Java code sees it the way it would see Clojure's `ex-info` on the JVM: its `catch` blocks catch it, its `finally` blocks run, and a `synchronized` block gives its lock back. When that exception comes back out to your code, you get your own error again, the identical object with its ex-data. If Java wrapped it first, as `FutureTask.get` does in an `ExecutionException`, the wrapper's `ex-info` has your error as its `ex-cause`:
+
+```clojure
+(let [ft (ldk/construct "java.util.concurrent.FutureTask" (fn [] (throw (ex-info "boom" {:a 1}))))]
+  (ldk/invoke ft "run")
+  (try (ldk/invoke ft "get")
+       (catch :default e [(ex-message e) (ex-data (ex-cause e))])))
+;=> ["java.util.concurrent.ExecutionException: java.lang.RuntimeException: boom" {:a 1}]
 ```
 
 There is one other kind, `:lookup` under `:champaca/error`, for a call nothing fits (above). A JDK native method champaca doesn't provide yet throws `java.lang.UnsatisfiedLinkError`, so it arrives as a Java exception like any other; [debugging](debugging.md) covers it.

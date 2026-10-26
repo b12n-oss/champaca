@@ -44,7 +44,8 @@
   ;; int is the ClassCastException a Long gives on the JVM
   (is (= "java.lang.ClassCastException: class java/lang/Long cannot be cast to class java/lang/Integer"
          (thrown #(ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" (fn [] 5000000000)}) "getAsInt"))))
-  (is (= "java.lang.NullPointerException"
+  (is (= (str "java.lang.NullPointerException: Cannot invoke \"java.lang.Integer.intValue()\" because the return value of "
+              "\"java.lang.reflect.InvocationHandler.invoke(Object, java.lang.reflect.Method, Object[])\" is null")
          (thrown #(ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" (fn [] nil)}) "getAsInt"))))
   (is (= "java.lang.ClassCastException: class java/lang/String cannot be cast to class java/lang/Integer"
          (thrown #(ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" (fn [] "x")}) "getAsInt")))))
@@ -73,9 +74,11 @@
         caught (try (ldk/invoke (ldk/proxy ["java.util.function.Supplier"] {"get" (fn [] (throw boom))}) "get")
                     (catch :default e e))]
     (is (identical? boom caught)))
+  ;; through a Java frame that doesn't catch it: Method.invoke wraps it
   (let [boom (ex-info "impl" {:k 2})
-        c (ldk/implement "java/util/concurrent/Callable" "call" "()Ljava/lang/Object;" (fn [] (throw boom)))]
-    (is (identical? boom (try (ldk/call c "call" "()Ljava/lang/Object;") (catch :default e e))))))
+        c (ldk/implement "java/util/concurrent/Callable" "call" "()Ljava/lang/Object;" (fn [] (throw boom)))
+        m (ldk/invoke (ldk/invoke-static "java.lang.Class" "forName" "java.util.concurrent.Callable") "getMethod" "call" [])]
+    (is (identical? boom (ex-cause (try (ldk/invoke m "invoke" c []) (catch :default e e)))))))
 
 (deftest java-exceptions-from-a-fn
   (is (= "java.lang.IllegalStateException: bad"

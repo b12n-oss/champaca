@@ -38,6 +38,8 @@ A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because th
 - Every conversion copies. A Java method that changes a collection you passed it changes the copy, and a big collection is copied again on each call ([data-conversion](data-conversion.md#conversions-copy)).
 - A vector passed to a plain `Object` parameter becomes an array, not a `List`.
 - A Java object prints as `#object[:object]` in jolt. Use `ldk/to-string`.
+- A jolt error that leaves one of your fns through Java is a plain `java.lang.RuntimeException` to Java, where on the JVM it would be Clojure's own `ExceptionInfo`. Java code that catches every exception and only logs it, or retries, swallows your error the same way, as it would on the JVM.
+- `proxy` puts its proxies in the application class loader. Java code of your own that builds a proxy with `InvocationHandler.invokeDefault` fails with `AbstractMethodError` for `MethodHandle.rebind`, the same gap as the method handle loop builders; a `proxy` method left out of the map runs its default body without it.
 - A Java string can hold a lone surrogate (half of a UTF-16 pair) and a jolt string can't, so one comes back to jolt with U+FFFD in its place. Inside Java nothing is lost: string constants, concatenation and `switch` keep the code units exactly.
 
 ## Speed
