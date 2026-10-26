@@ -194,29 +194,36 @@
 
 (declare bytes-fp jar-path)
 
-(defn- user-class-bytes
-  "cname's bytes from the first classpath entry that has it. The
-  fingerprint the library cache records for the class (class-source) is
-  the one of the bytes parsed: a directory's class is parsed from the very
-  bytes class-source took it from, which a class restored from the cache
-  keeps until its first uncached method compiles, and bytes read any other
-  way (a retried load, a jar's restored class, an earlier entry that gained
-  the class since) replace class-source's answer, so one version's
-  fingerprint can't go with another's code."
+(defn- find-user-class
+  "[entry bytes held?] from the first classpath entry that has cname, the
+  JVM's order, or nil. The bytes class-source held for the class are used
+  for the entry they came from (held? true)."
   [cname]
-  (let [rel (str cname ".class")]
+  (let [rel (str cname ".class")
+        [from held] (get-in @state [:dir-bytes cname])]
     (some (fn [entry]
-            (let [[from held] (get-in @state [:dir-bytes cname])
-                  held? (= from entry)]
+            (let [held? (and held (= from entry))]
               (when-let [bs (cond (jar-entry? entry) (read-entry (jar entry) rel)
                                   held? held
                                   :else (read-class-file entry rel))]
-                (note-class-entry! cname entry)
-                (swap! state #(cond-> (update % :dir-bytes dissoc cname)
-                                (not held?) (assoc-in [:class-sources cname]
-                                                      {:entry entry :fp (bytes-fp bs) :jar (jar-path entry)})))
-                bs)))
+                [entry bs held?])))
           (:classpath @state))))
+
+(defn- user-class-bytes
+  "cname's bytes from the classpath, to load the class (normalize). The
+  fingerprint the library cache records for it (class-source) is the one
+  of the bytes parsed: a directory's class is parsed from the very bytes
+  class-source took it from, and bytes read any other way (a retried load,
+  an earlier classpath entry that gained the class since) replace
+  class-source's answer, so one version's fingerprint can't go with
+  another's code."
+  [cname]
+  (when-let [[entry bs held?] (find-user-class cname)]
+    (note-class-entry! cname entry)
+    (swap! state #(cond-> (update % :dir-bytes dissoc cname)
+                    (not held?) (assoc-in [:class-sources cname]
+                                          {:entry entry :fp (bytes-fp bs) :jar (jar-path entry)})))
+    bs))
 
 (defn- bytes-fp
   "A class's fingerprint from its bytes: [CRC-32 size], what a jar's
@@ -265,8 +272,15 @@
     (when-let [module (package-module (subs cname 0 slash))]
       (ji/entry (jdk-image) (str "/" module "/" cname ".class")))))
 
-(defn- class-bytes [cname]
-  (or (user-class-bytes cname) (jdk-class-bytes cname)))
+(defn- class-bytes
+  "cname's bytes for a class already loaded (its methods, stack traces, NPE
+  messages): what a directory's class restored from the cache was restored
+  as, while those bytes are held, else the classpath's or the JDK's.
+  Nothing is recorded, so reading can't change what the cache keeps."
+  [cname]
+  (or (second (get-in @state [:dir-bytes cname]))
+      (second (find-user-class cname))
+      (jdk-class-bytes cname)))
 
 (defn- user-resource-bytes [path]
   (some (fn [entry]
@@ -901,8 +915,9 @@
                          (:deps info)))
           (do (note-class-entry! cname (:entry src))
               ;; a directory's class keeps the bytes it was restored as
-              ;; (held by class-source) until a method it lacks compiles
-              ;; (parsed): the file may have changed or gone by then
+              ;; (held by class-source) for the run: a method it lacks
+              ;; (parsed) and its stack frames (frame-class) read them,
+              ;; since the file may have changed or gone by then
               (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
                 (ensure-loaded! dep))
               (swap! state update :restored (fnil inc 0))
