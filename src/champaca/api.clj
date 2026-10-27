@@ -314,6 +314,8 @@
         ctor-desc (fn [ts] (str "(" (apply str (map type-desc ts)) ")V"))
         ctors (when (some? constructors)
                 (into (sorted-map) (map (fn [[own sup]] [(ctor-desc own) (ctor-desc sup)])) constructors))
+        _ (when (and (nil? constructors) (or init post-init))
+            (throw (ex-info "define-class: :init and :post-init are for :constructors, and there are none" {:class cname})))
         cinit (when init (as-fn "define-class" :init init))
         post (when post-init (as-fn "define-class" :post-init post-init))
         shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))

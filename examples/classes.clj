@@ -442,13 +442,28 @@
      :post-init (fn [this p] (ldk/set-field! this "prefix" p))
      :methods {:handleGetObject (fn [this k] (str (ldk/get-field this "prefix") k)) :getKeys (fn [_] nil)}})
   (is (= "x-hello" (ldk/invoke (ldk/construct "demo.classes.Bundle" "x-") "getString" "hello")))
+  ;; an abstract superclass, two-slot and other primitive parameters
+  (ldk/define-class "demo.classes.Range"
+    {:extends "java.util.AbstractList"
+     :fields {"n" "int" "seen" "java.lang.String"}
+     :constructors {["long" "double" "boolean" "char"] []}
+     :post-init (fn [this n d b ch]
+                  (ldk/set-field! this "n" n)
+                  (ldk/set-field! this "seen" (pr-str [n d b ch])))
+     :methods {:get (fn [_ i] i) :size (fn [this] (ldk/get-field this "n"))}})
+  (let [r (ldk/construct "demo.classes.Range" 3 2.5 true \x)]
+    (is (= "[0, 1, 2]" (ldk/to-string r)))
+    (is (= "[3 2.5 true \\x]" (ldk/get-field r "seen"))))
   ;; the same shape again swaps :init and :post-init
-  (let [spec (fn [tag] {:fields ["tag"] :constructors {["java.lang.String"] []}
+  (let [spec (fn [tag] {:extends "java.lang.Thread" :fields ["tag"] :constructors {["java.lang.String"] ["java.lang.String"]}
+                        :init (fn [s] [(str tag "thread-" s)])
                         :post-init (fn [this s] (ldk/set-field! this "tag" (str tag s)))})]
     (ldk/define-class "demo.classes.Tagged" (spec "a-"))
-    (is (= "a-x" (ldk/get-field (ldk/construct "demo.classes.Tagged" "x") "tag")))
+    (let [t (ldk/construct "demo.classes.Tagged" "x")]
+      (is (= ["a-x" "a-thread-x"] [(ldk/get-field t "tag") (ldk/invoke t "getName")])))
     (ldk/define-class "demo.classes.Tagged" (spec "b-"))
-    (is (= "b-x" (ldk/get-field (ldk/construct "demo.classes.Tagged" "x") "tag")))
+    (let [t (ldk/construct "demo.classes.Tagged" "x")]
+      (is (= ["b-x" "b-thread-x"] [(ldk/get-field t "tag") (ldk/invoke t "getName")])))
     (is (= (str "define-class: demo.classes.Tagged is already defined with another superclass, interfaces,"
                 " fields, method keys, static initializer or constructors; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Tagged" (assoc (spec "c-") :constructors {["int"] []})))))))
@@ -456,14 +471,35 @@
 (deftest what-constructors-refuse
   ;; :init's result is checked against the superclass constructor
   (ldk/define-class "demo.classes.C1" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]} :init (fn [n] n)})
-  (is (= (str "java.lang.IllegalArgumentException: demo.classes.C1.<init>(I)V: :init returned the number 1,"
+  (is (= (str "java.lang.IllegalArgumentException: demo.classes.C1.<init>(I)V :init returned the number 1,"
               " not a vector of 1 argument(s) for java.lang.Thread.<init>(Ljava/lang/String;)V")
          (thrown #(ldk/construct "demo.classes.C1" 1))))
   (ldk/define-class "demo.classes.C2" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]} :init (fn [n] [n])})
   (is (= "java.lang.ClassCastException: demo.classes.C2.<init>(I)V :init returned a java.lang.Integer, not java.lang.String"
          (thrown #(ldk/construct "demo.classes.C2" 1))))
-  (ldk/define-class "demo.classes.C3" {:constructors {[] []} :post-init (fn [_] (throw (ex-info "post" {})))})
-  (is (= "post" (thrown #(ldk/construct "demo.classes.C3"))))
+  (ldk/define-class "demo.classes.C8" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]} :init (fn [n] [])})
+  (is (= (str "java.lang.IllegalArgumentException: demo.classes.C8.<init>(I)V :init returned a jolt value,"
+              " not a vector of 1 argument(s) for java.lang.Thread.<init>(Ljava/lang/String;)V")
+         (thrown #(ldk/construct "demo.classes.C8" 1))))
+  (ldk/define-class "demo.classes.C9" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]} :init (fn [n] nil)})
+  (is (= (str "java.lang.IllegalArgumentException: demo.classes.C9.<init>(I)V :init returned nil,"
+              " not a vector of 1 argument(s) for java.lang.Thread.<init>(Ljava/lang/String;)V")
+         (thrown #(ldk/construct "demo.classes.C9" 1))))
+  ;; errors from :init and :post-init come back as themselves, through Java too
+  (let [boom (ex-info "post" {})
+        c (ldk/define-class "demo.classes.C3" {:constructors {[] []} :post-init (fn [_] (throw boom))})]
+    (is (= "post" (thrown #(ldk/construct "demo.classes.C3"))))
+    (let [e (try (ldk/invoke (ldk/invoke c "getConstructor" []) "newInstance" []) (catch :default e e))]
+      (is (= "java.lang.reflect.InvocationTargetException" (ex-message e)))
+      (is (identical? boom (ex-cause e)))))
+  (ldk/define-class "demo.classes.C10" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]}
+                                        :init (fn [n] (throw (ex-info "init" {})))})
+  (is (= "init" (thrown #(ldk/construct "demo.classes.C10" 1))))
+  ;; :init and :post-init without :constructors would never run
+  (is (= "define-class: :init and :post-init are for :constructors, and there are none"
+         (thrown #(ldk/define-class "demo.classes.C11" {:extends "java.util.ArrayList" :init (fn [a] [a])}))))
+  (is (= "define-class: :init and :post-init are for :constructors, and there are none"
+         (thrown #(ldk/define-class "demo.classes.C11" {:post-init (fn [_])}))))
   (is (= "define-class: the constructor (I)V passes arguments to java.lang.Thread.<init>(Ljava/lang/String;)V, so it needs :init"
          (thrown #(ldk/define-class "demo.classes.C4" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]}}))))
   (is (= "define-class: java.lang.Thread has no public or protected constructor (D)V"

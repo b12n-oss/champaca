@@ -726,7 +726,7 @@
   (case c [(#\I) "int"] [(#\J) "long"] [(#\S) "short"] [(#\B) "byte"] [(#\C) "char"]
         [(#\D) "double"] [(#\F) "float"] [else "boolean"]))
 (define (value-kind v)
-  (cond [(string? v) "a string"] [(char? v) "a char"] [(boolean? v) "a boolean"]
+  (cond [(eq? v jolt-nil) "nil"] [(string? v) "a string"] [(char? v) "a char"] [(boolean? v) "a boolean"]
         [(java-value? v) (string-append "a " (dotted (class-name-of v)))]
         [(number? v) (string-append "the number " (number->string v))]
         [(procedure? v) "a fn"]
@@ -830,7 +830,7 @@
                         (let ([r (jolt-data (call-from-java (unbox ctor-init) jargs))])
                           (cond [(and (seq-arg? r) (fx= (length r) (length sds))) r]
                                 [else (jthrow "java/lang/IllegalArgumentException"
-                                              (format "~a: :init returned ~a, not a vector of ~a argument(s) for ~a.<init>~a"
+                                              (format "~a :init returned ~a, not a vector of ~a argument(s) for ~a.<init>~a"
                                                       where (value-kind r) (length sds) (dotted super) sdesc))]))
                         '())])
         (unless sproc (set! sproc (method-proc super (string-append "<init>" sdesc))))
