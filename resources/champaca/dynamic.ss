@@ -845,8 +845,9 @@
                           (map (lambda (m) (cons (cadr m) (caddr m)))
                                (filter (lambda (m) (string=? (car m) "<init>")) (meta-methods s))))]
            [exact (filter (lambda (f) (memv #\( (string->list (car f)))) fns)]
-           ;; (name desc cell) for every native
-           [natives
+           ;; (name desc cell) for every instance native (not the
+           ;; natives table)
+           [own
             (append
              (map (lambda (f)
                     (let* ([k (car f)] [p (string-split-paren k)] [n (car p)] [d (substring k (string-length n) (string-length k))])
@@ -874,7 +875,7 @@
       (let ([statics
              (map (lambda (f)
                     (let* ([k (car f)] [n (car (string-split-paren k))] [d (substring k (string-length n) (string-length k))])
-                      (when (or (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) natives)
+                      (when (or (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) own)
                                 (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) ms))
                         (fail "static " k " has an instance method's name and descriptor"))
                       (list n d (cdr f))))
@@ -882,7 +883,7 @@
         (for-each (lambda (m)
                     (define-native! (string-append name "." (car m) (cadr m))
                       (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
-                  natives)
+                  own)
         (for-each (lambda (m)
                     (define-native! (string-append name "." (car m) (cadr m))
                       (defined-static-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
@@ -891,13 +892,13 @@
                                                      (append (map (lambda (f) (list (car f) (cdr f) 1)) fields)
                                                              (map (lambda (f) (list (car f) (cdr f) 9)) sfields))
                                                      ctors
-                                                     (append (map (lambda (m) (list (car m) (cadr m) #x0101)) natives)
+                                                     (append (map (lambda (m) (list (car m) (cadr m) #x0101)) own)
                                                              (map (lambda (m) (list (car m) (cadr m) #x0109)) statics))))])
           ;; the natives must be there when the class registers; a definition
           ;; that fails takes them back, so a later class of the name can't
           ;; pick them up
           (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
-                                           (append natives statics))
+                                           (append own statics))
                                  (raise e)])
                      (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
             (hashtable-set! defined-supers name (cons super ifaces))

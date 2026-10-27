@@ -4,7 +4,8 @@
 ;;   bb example classes
 (ns examples.classes
   (:require [clojure.test :refer [deftest is]]
-            [champaca.api :as ldk]))
+            [champaca.api :as ldk]
+            [jolt.scheme :as scm]))
 
 (ldk/init!)
 
@@ -261,6 +262,8 @@
                                              (ldk/get-static cname "total"))
                                  "fresh()Ldemo/classes/Tally;" (fn [] (ldk/construct cname))
                                  "wrong()I" (fn [] "seven")
+                                 "flip(Z)Z" (fn [b] (not b))
+                                 "mix(JD)D" (fn [j d] (+ j d))
                                  "boom()V" (fn [] (throw (ex-info "static boom" {})))}})
         c (ldk/define-class cname (spec 1))
         int-type (ldk/get-static "java.lang.Integer" "TYPE")]
@@ -269,6 +272,10 @@
     (is (nil? (ldk/get-static cname "label")))
     (is (= 5 (ldk/invoke-static cname "add" 5)))
     (is (= "demo.classes.Tally" (ldk/invoke (ldk/invoke (ldk/invoke-static cname "fresh") "getClass") "getName")))
+    ;; arguments convert as invoke's results do: Java's false is jolt's
+    (is (= [true false] [(ldk/invoke-static cname "flip" false) (ldk/invoke-static cname "flip" true)]))
+    ;; two-slot arguments
+    (is (= 4.5 (ldk/invoke-static cname "mix" 3 1.5)))
     ;; Java sees and calls them: reflection and a method handle
     (let [m (ldk/invoke c "getMethod" "add" [int-type])]
       (is (= "public static native" (ldk/invoke-static "java.lang.reflect.Modifier" "toString" (ldk/invoke m "getModifiers"))))
@@ -323,6 +330,20 @@
          (ldk/to-string (ldk/define-class "demo.classes.S1" {:static-methods {"add(I)I" (fn [n] (inc n))}}))))
   (is (= 2 (ldk/invoke-static "demo.classes.S1" "add" 1))))
 
+(deftest a-failed-definition-takes-its-natives-back
+  ;; define-class! made to fail: the error is the one it threw, and the
+  ;; name and its natives are free for the next definition
+  (scm/eval-string "(define examples-saved-define-class! define-class!)")
+  (scm/eval-string "(set! define-class! (lambda args (error 'define-class! \"forced\")))")
+  (try
+    (is (= "define-class!: forced"
+           (thrown #(ldk/define-class "demo.classes.Forced"
+                      {:methods {"f()I" (fn [_] 1)} :static-methods {"g()I" (fn [] 2)}}))))
+    (is (= "(#f #f)" (scm/eval-string "(format \"~s\" (list (hashtable-contains? natives \"demo/classes/Forced.f()I\") (hashtable-contains? natives \"demo/classes/Forced.g()I\")))")))
+    (finally (scm/eval-string "(set! define-class! examples-saved-define-class!)")))
+  (ldk/define-class "demo.classes.Forced" {:methods {"f()I" (fn [_] 10)} :static-methods {"g()I" (fn [] 20)}})
+  (is (= [10 20] [(ldk/invoke (ldk/construct "demo.classes.Forced") "f") (ldk/invoke-static "demo.classes.Forced" "g")])))
+
 (deftest defining-again
   (let [spec (fn [n] {:implements ["java.util.function.IntSupplier"] :fields ["v"] :methods {:getAsInt (fn [_] n)}})
         c (ldk/define-class "demo.classes.Again" (spec 1))
@@ -333,7 +354,10 @@
     (is (= 2 (ldk/invoke o "getAsInt")))
     (is (= (str "define-class: demo.classes.Again is already defined with another superclass, interfaces,"
                 " fields or method keys; a class is defined once per process")
-           (thrown #(ldk/define-class "demo.classes.Again" (assoc (spec 3) :fields ["v" "w"])))))))
+           (thrown #(ldk/define-class "demo.classes.Again" (assoc (spec 3) :fields ["v" "w"])))))
+    ;; fields are compared in order
+    (ldk/define-class "demo.classes.Ordered" {:fields ["a" "b"]})
+    (is (some? (thrown #(ldk/define-class "demo.classes.Ordered" {:fields ["b" "a"]}))))))
 
 (deftest errors-through-java
   (let [boom (ex-info "boom" {:a 1})]
