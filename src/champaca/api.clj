@@ -233,7 +233,7 @@
 
 ;; --- classes defined from jolt -------------------------------------------------------
 
-(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :scells :class}
+(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :scells :icell :class}
 
 (def ^:private prim-descs
   {"boolean" "Z" "byte" "B" "char" "C" "short" "S" "int" "I" "long" "J" "float" "F" "double" "D"})
@@ -277,12 +277,14 @@
   invoke's results are; its result is checked against the return type.
   :static-fields and :static-methods are the same for public static fields
   and methods, every :static-methods key a full JVM name, and a static
-  method's fn gets the arguments alone. The
+  method's fn gets the arguments alone. :static-init is a fn of no
+  arguments run once, as the class's static initializer, when Java first
+  initializes the class (Class.forName, a constructor, a static member). The
   class has a public constructor for each public or protected one of its
   superclass, passing the arguments on. Defining the same name again with
   the same superclass, interfaces, fields and method keys swaps in the new
   fns; anything else is refused, since a class is defined once per process."
-  [cname {:keys [extends implements fields methods static-fields static-methods]}]
+  [cname {:keys [extends implements fields methods static-fields static-methods static-init]}]
   (let [extends (or extends "java.lang.Object")
         dotted (str/replace cname "/" ".")
         slashed #(str/replace % "." "/")
@@ -303,23 +305,27 @@
                          {} ms))
         fns (fn-map methods false)
         sfns (fn-map static-methods true)
-        shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))]
+        init (some->> static-init (as-fn "define-class" :static-init))
+        shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
+               (some? init)]
         scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
     (rethrow
-     #(if-let [{old :shape cells :cells scells :scells c :class} (get @jolt-classes dotted)]
+     #(if-let [{old :shape cells :cells scells :scells icell :icell c :class} (get @jolt-classes dotted)]
         (if (= old shape)
           (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f))
               (doseq [[k f] sfns] (s/call "set-box!" (get scells k) f))
+              (when init (s/call "set-box!" icell init))
               c)
           (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
-                               " fields or method keys; a class is defined once per process")
+                               " fields, method keys or static initializer; a class is defined once per process")
                           {:class dotted})))
         (let [boxes (fn [m] (into {} (map (fn [[k f]] [k (s/call "box" f)])) m))
               cells (boxes fns)
               scells (boxes sfns)
+              icell (when init (s/call "box" init))
               c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
-                        (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells))]
-          (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :class c})
+                        (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false))]
+          (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell :class c})
           c)))))
 
 (defn invoke-super

@@ -807,10 +807,11 @@
 ;; that name it can override, or "name(desc)ret" for that one method, which
 ;; wins over its name's, and may be a method of the class's own; sfields
 ;; and sfns the same for static fields and methods, every sfns key a
-;; "name(desc)ret". Answers the Class.
-(define (dyn-define-class name super ifaces fields fns sfields sfns)
-  (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns))))
-(define (define-jolt-class name super ifaces fields fns sfields sfns)
+;; "name(desc)ret"; init a cell holding the fn of its static initializer,
+;; or #f. Answers the Class.
+(define (dyn-define-class name super ifaces fields fns sfields sfns init)
+  (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns init))))
+(define (define-jolt-class name super ifaces fields fns sfields sfns init)
   (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
   (define (bad-name? n)   ; not a JVM unqualified name
     (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
@@ -879,7 +880,17 @@
                                 (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) ms))
                         (fail "static " k " has an instance method's name and descriptor"))
                       (list n d (cdr f))))
-                  sfns)])
+                  sfns)]
+            ;; the static initializer: a static native <clinit>, which jinit
+            ;; calls on the class's first active use as any class's, so a
+            ;; failure is an ExceptionInInitializerError, then
+            ;; NoClassDefFoundError (a class file only champaca loads: HotSpot
+            ;; wants code in a <clinit>)
+            [clinit (if init
+                        (list (list "<clinit>" "()V"
+                                    (lambda () (call-from-java (unbox init) '()) (void))))
+                        '())])
+        (for-each (lambda (m) (define-native! (string-append name "." (car m) (cadr m)) (caddr m))) clinit)
         (for-each (lambda (m)
                     (define-native! (string-append name "." (car m) (cadr m))
                       (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
@@ -893,12 +904,13 @@
                                                              (map (lambda (f) (list (car f) (cdr f) 9)) sfields))
                                                      ctors
                                                      (append (map (lambda (m) (list (car m) (cadr m) #x0101)) own)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0109)) statics))))])
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0109)) statics)
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0108)) clinit))))])
           ;; the natives must be there when the class registers; a definition
           ;; that fails takes them back, so a later class of the name can't
           ;; pick them up
           (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
-                                           (append own statics))
+                                           (append own statics clinit))
                                  (raise e)])
                      (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
             (hashtable-set! defined-supers name (cons super ifaces))

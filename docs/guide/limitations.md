@@ -45,7 +45,8 @@ A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because th
 ## Classes defined from jolt
 
 - A class `define-class` made is defined once per process, since one class table holds every class. Evaluating the same definition again swaps in its new fns, but a new field, a new method key, or another superclass or interface is refused. At the REPL, give the class a new name while you experiment, or restart the process.
-- The class is final, and has no constructors or initialization of its own: its fields, static ones too, start as Java's defaults (`null`, `0`, `false`), and its constructors are its superclass's, passed on. Static fields are set with `set-static!` after the class is defined, and a static method needs its full JVM name.
+- The class is final, and has no constructors of its own: its constructors are its superclass's, passed on, and its instance fields start as Java's defaults (`null`, `0`, `false`). Static fields can be set by `:static-init`, which runs once per process: a new fn given on a redefinition runs only if the class hasn't been initialized yet. A static method needs its full JVM name.
+- The static initializer is a native `<clinit>`. champaca runs it, but HotSpot ignores the native flag on a `<clinit>` and refuses such a class file (`ClassFormatError: Absent Code attribute`), so the bytes are of no use outside champaca.
 - Its methods are native methods, so reflection reports them with the `native` modifier, and they carry no generic signatures, annotations or `throws` lists.
 - A method name never covers a package-private method of the superclass. A full JVM name with the same signature makes a public method, which overrides it only when the class is in the superclass's package, as on the JVM. A name in one of the JDK's packages is refused.
 - When a method name has overloads that are final and others that aren't, the name covers the ones that aren't, and the final ones keep their bodies.

@@ -295,7 +295,7 @@
     (is (identical? c (ldk/define-class cname (spec 100))))
     (is (= 110 (ldk/invoke-static cname "add" 1)))
     (is (= (str "define-class: demo.classes.Tally is already defined with another superclass, interfaces,"
-                " fields or method keys; a class is defined once per process")
+                " fields, method keys or static initializer; a class is defined once per process")
            (thrown #(ldk/define-class cname (assoc (spec 1) :static-fields ["other"])))))))
 
 (deftest a-field-of-its-own-type
@@ -330,6 +330,63 @@
          (ldk/to-string (ldk/define-class "demo.classes.S1" {:static-methods {"add(I)I" (fn [n] (inc n))}}))))
   (is (= 2 (ldk/invoke-static "demo.classes.S1" "add" 1))))
 
+(deftest a-static-initializer
+  (let [runs (atom [])]
+    (ldk/define-class "demo.classes.Config"
+      {:static-fields {"PORT" "int" "NAME" "java.lang.String" "INSTANCE" "demo.classes.Config"}
+       :static-init (fn []
+                      (swap! runs conj :init)
+                      (ldk/set-static! "demo.classes.Config" "PORT" 8080)
+                      (ldk/set-static! "demo.classes.Config" "NAME"
+                                       (str "cfg-" (ldk/get-static "demo.classes.Config" "PORT")))
+                      (ldk/set-static! "demo.classes.Config" "INSTANCE" (ldk/construct "demo.classes.Config")))})
+    ;; defining doesn't initialize; the first use does, once
+    (is (= [] @runs))
+    (is (= [8080 "cfg-8080"] [(ldk/get-static "demo.classes.Config" "PORT") (ldk/get-static "demo.classes.Config" "NAME")]))
+    (is (some? (ldk/get-static "demo.classes.Config" "INSTANCE")))
+    (class-named "demo.classes.Config")
+    (is (= [:init] @runs)))
+  ;; Class.forName initializes only when asked to
+  (let [runs (atom 0)
+        c (ldk/define-class "demo.classes.Lazy" {:static-fields ["V"] :static-init (fn [] (swap! runs inc))})
+        loader (ldk/invoke c "getClassLoader")]
+    (ldk/invoke-static "java.lang.Class" "forName" "demo.classes.Lazy" false loader)
+    (is (= 0 @runs))
+    (ldk/invoke-static "java.lang.Class" "forName" "demo.classes.Lazy" true loader)
+    (is (= 1 @runs))
+    ;; the same shape again swaps the fn, but an initialized class isn't
+    ;; initialized again
+    (ldk/define-class "demo.classes.Lazy" {:static-fields ["V"] :static-init (fn [] (swap! runs + 100))})
+    (ldk/construct "demo.classes.Lazy")
+    (is (= 1 @runs))
+    (is (= (str "define-class: demo.classes.Lazy is already defined with another superclass, interfaces,"
+                " fields, method keys or static initializer; a class is defined once per process")
+           (thrown #(ldk/define-class "demo.classes.Lazy" {:static-fields ["V"]})))))
+  ;; redefined before its first use, the class runs the new fn
+  (let [ran (atom nil)]
+    (ldk/define-class "demo.classes.Early" {:static-fields ["V"] :static-init (fn [] (reset! ran :first))})
+    (ldk/define-class "demo.classes.Early" {:static-fields ["V"] :static-init (fn [] (reset! ran :second))})
+    (ldk/get-static "demo.classes.Early" "V")
+    (is (= :second @ran)))
+  (is (= "define-class: :static-init is not a fn" (thrown #(ldk/define-class "demo.classes.NoInit" {:static-init 5})))))
+
+(deftest a-static-initializer-that-fails
+  (let [boom (ex-info "no config" {})]
+    (ldk/define-class "demo.classes.Broken" {:static-fields ["V"] :static-init (fn [] (throw boom))})
+    ;; as on the JVM: ExceptionInInitializerError with the error as its cause,
+    ;; then NoClassDefFoundError for every later use
+    (let [e (try (ldk/get-static "demo.classes.Broken" "V") (catch :default e e))]
+      (is (= "java.lang.ExceptionInInitializerError" (ex-message e)))
+      (is (identical? boom (ex-cause e))))
+    (is (= "java.lang.NoClassDefFoundError: Could not initialize class demo.classes.Broken"
+           (thrown #(ldk/construct "demo.classes.Broken"))))
+    (is (= "java.lang.NoClassDefFoundError: Could not initialize class demo.classes.Broken"
+           (thrown #(ldk/get-static "demo.classes.Broken" "V")))))
+  ;; an Error passes as itself
+  (ldk/define-class "demo.classes.Fatal"
+    {:static-fields ["V"] :static-init (fn [] (throw (ldk/construct "java.lang.AssertionError" "fatal")))})
+  (is (= "java.lang.AssertionError: fatal" (thrown #(ldk/get-static "demo.classes.Fatal" "V")))))
+
 (deftest a-failed-definition-takes-its-natives-back
   ;; define-class! made to fail: the error is the one it threw, and the
   ;; name and its natives are free for the next definition
@@ -338,8 +395,8 @@
   (try
     (is (= "define-class!: forced"
            (thrown #(ldk/define-class "demo.classes.Forced"
-                      {:methods {"f()I" (fn [_] 1)} :static-methods {"g()I" (fn [] 2)}}))))
-    (is (= "(#f #f)" (scm/eval-string "(format \"~s\" (list (hashtable-contains? natives \"demo/classes/Forced.f()I\") (hashtable-contains? natives \"demo/classes/Forced.g()I\")))")))
+                      {:methods {"f()I" (fn [_] 1)} :static-methods {"g()I" (fn [] 2)} :static-init (fn [] nil)}))))
+    (is (= "(#f #f #f)" (scm/eval-string "(format \"~s\" (list (hashtable-contains? natives \"demo/classes/Forced.f()I\") (hashtable-contains? natives \"demo/classes/Forced.g()I\") (hashtable-contains? natives \"demo/classes/Forced.<clinit>()V\")))")))
     (finally (scm/eval-string "(set! define-class! examples-saved-define-class!)")))
   (ldk/define-class "demo.classes.Forced" {:methods {"f()I" (fn [_] 10)} :static-methods {"g()I" (fn [] 20)}})
   (is (= [10 20] [(ldk/invoke (ldk/construct "demo.classes.Forced") "f") (ldk/invoke-static "demo.classes.Forced" "g")])))
@@ -353,7 +410,7 @@
     (is (identical? c (ldk/define-class "demo.classes.Again" (spec 2))))
     (is (= 2 (ldk/invoke o "getAsInt")))
     (is (= (str "define-class: demo.classes.Again is already defined with another superclass, interfaces,"
-                " fields or method keys; a class is defined once per process")
+                " fields, method keys or static initializer; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Again" (assoc (spec 3) :fields ["v" "w"])))))
     ;; fields are compared in order
     (ldk/define-class "demo.classes.Ordered" {:fields ["a" "b"]})

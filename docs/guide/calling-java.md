@@ -173,7 +173,7 @@ Each fn gets the object first, then the method's arguments converted as `invoke`
 - A method name, as a string or keyword. Its fn implements every method of that name the class inherits and can override: abstract, default or concrete, public or protected, and not final. Give the fn one arity per overload.
 - A full JVM name such as `"twice(I)I"`. Its fn implements that one method, and it wins over its name's fn. It can be a method the class inherits or a new one of its own, which Java reaches through reflection.
 
-`:static-fields` and `:static-methods` give the class public static members. Static fields are written like `:fields`, and they start as Java's defaults, so set them with `set-static!` once the class is defined. Each `:static-methods` key is a full JVM name, and its fn gets the arguments alone, with no object:
+`:static-fields` and `:static-methods` give the class public static members. Static fields are written like `:fields`, and they start as Java's defaults. Each `:static-methods` key is a full JVM name, and its fn gets the arguments alone, with no object:
 
 ```clojure
 (ldk/define-class "demo.Tally"
@@ -183,6 +183,17 @@ Each fn gets the object first, then the method's arguments converted as `invoke`
                                 (ldk/get-static "demo.Tally" "total"))}})
 (ldk/invoke-static "demo.Tally" "add" 5)            ;=> 5
 ```
+
+`:static-init` is a fn of no arguments that runs as the class's static initializer. Defining the class doesn't run it. It runs once, when the class is first initialized: a constructor, a static field or method, or `Class.forName`, as for any Java class. It's the place to set the static fields:
+
+```clojure
+(ldk/define-class "demo.Config"
+  {:static-fields {"PORT" "int"}
+   :static-init (fn [] (ldk/set-static! "demo.Config" "PORT" 8080))})
+(ldk/get-static "demo.Config" "PORT")              ;=> 8080
+```
+
+An error thrown by the initializer fails the class as the JVM fails one. The first use throws `ExceptionInInitializerError`, whose cause is the error, and every later use throws `NoClassDefFoundError: Could not initialize class`. A Java `Error` passes through as itself.
 
 Java code reaches the statics through reflection or a method handle, and their results are checked the same way as an instance method's. A field's type can be the class being defined, as in a linked node's `next` or a static `INSTANCE`.
 
@@ -201,7 +212,7 @@ The fn's result is checked against the method's return type, as Clojure's casts 
 
 A method you leave out keeps what the class inherits. An abstract one left out throws `AbstractMethodError` when it's called, as a class compiled without it would on the JVM. The class is final, so `invoke-super` always means the class it was defined with.
 
-Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields in the same order and method keys, statics included, swaps in the new fns and keeps the static fields' values, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
+Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields in the same order, method keys and static initializer, statics included, swaps in the new fns and keeps the static fields' values, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
 
 ## Threads
 
