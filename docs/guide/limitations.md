@@ -42,6 +42,16 @@ A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because th
 - `proxy` puts its proxies in the application class loader. Java code of your own that builds a proxy with `InvocationHandler.invokeDefault` fails with `AbstractMethodError` for `MethodHandle.rebind`, the same gap as the method handle loop builders; a `proxy` method left out of the map runs its default body without it.
 - A Java string can hold a lone surrogate (half of a UTF-16 pair) and a jolt string can't, so one comes back to jolt with U+FFFD in its place. Inside Java nothing is lost: string constants, concatenation and `switch` keep the code units exactly.
 
+## Classes defined from jolt
+
+- A class `define-class` made is defined once per process, since one class table holds every class. Evaluating the same definition again swaps in its new fns, but a new field, a new method key, or another superclass or interface is refused. At the REPL, give the class a new name while you experiment, or restart the process.
+- The class is final, and has neither static members nor constructors or initialization of its own: its fields start as Java's defaults (`null`, `0`, `false`), and its constructors are its superclass's, passed on.
+- Its methods are native methods, so reflection reports them with the `native` modifier, and they carry no generic signatures, annotations or `throws` lists.
+- A package-private method of the superclass can't be overridden, and a name in one of the JDK's packages is refused.
+- Java code can't be compiled against the class, since it exists only at run time. Java reaches it through an interface or superclass it knows, through reflection, or through `Class.forName`.
+- A class from the classpath with the same name that hasn't been loaded yet is never loaded afterwards, because the name already belongs to the jolt class. One that has been loaded makes `define-class` refuse the name.
+- The class isn't kept in the startup cache. Each process defines it again, and its constructors are compiled again on their first call.
+
 ## Speed
 
 The startup cache makes boot quick, and plain computation now runs within a few times of the JVM: `test/java/Bench.java` spends about 0.17 s computing what the JVM does in about 0.04 s. Calls, allocation, `try` blocks and synchronization cost several to many times more than on the JVM ([performance](performance.md#the-generated-code) has the numbers). The startup cache still slows a little as generations pile up (a cache filled by the whole test suite costs a warm `Hello` a few tens of milliseconds), though `state.img` entries now parse only when a run touches their class.

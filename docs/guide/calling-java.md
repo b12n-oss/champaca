@@ -147,6 +147,49 @@ A method without a fn runs its own body when it has one. That covers default met
 
 The proxy belongs to the application class loader, so it can implement interfaces from your classpath as well as the JDK's.
 
+## Classes defined from jolt
+
+`define-class` makes a real Java class out of jolt fns. It can extend a class, implement any number of interfaces and have fields, and Java code, reflection and `Class.forName` see an ordinary class of the application loader (`examples/classes.clj`):
+
+```clojure
+(ldk/define-class "demo.Greeter"
+  {:implements ["java.util.function.Function"]
+   :fields {"greeting" "java.lang.String" "count" "int"}
+   :methods {:apply (fn [this who]
+                      (ldk/set-field! this "count" (inc (ldk/get-field this "count")))
+                      (str (ldk/get-field this "greeting") ", " who))}})
+;=> the Class, demo.Greeter
+
+(def g (ldk/construct "demo.Greeter"))
+(ldk/set-field! g "greeting" "hi")
+(ldk/invoke g "apply" "bob")                        ;=> "hi, bob"
+(ldk/invoke-static "java.lang.Class" "forName" "demo.Greeter")   ; the same class
+```
+
+`:extends` defaults to `java.lang.Object`. The class gets a public constructor for each public or protected constructor of its superclass, and each one passes its arguments on, so `(ldk/construct "demo.Worker" "w1")` works for a class extending `Thread`. `:fields` is a vector of names, each an `Object`, or a map from name to type, written as Java source writes it: `"int"`, `"java.lang.String"`, `"long[]"`. The fields are public, so `get-field`, `set-field!` and Java reflection all reach them.
+
+Each fn gets the object first, then the method's arguments converted as `invoke` results are. A key in `:methods` is one of two things:
+
+- A method name, as a string or keyword. Its fn implements every method of that name the class inherits and can override: abstract, default or concrete, public or protected, and not final. Give the fn one arity per overload.
+- A full JVM name such as `"twice(I)I"`. Its fn implements that one method, and it wins over its name's fn. It can be a method the class inherits or a new one of its own, which Java reaches through reflection.
+
+A name with nothing to override, a final method, a final superclass, an interface given as `:extends` or a class given in `:implements` is refused, with the reason, when the class is defined.
+
+The fn's result is checked against the method's return type, as Clojure's casts check one. A `boolean` method takes jolt's truth. `nil` for any other primitive is a `NullPointerException`, a value of the wrong kind (a string for an `int`) a `ClassCastException`, and a number out of the type's range an `IllegalArgumentException`. A `double` method can return `3`, and a `char` method an integer in range. For a reference type the result converts as an argument to `invoke` would, so a vector can be a `List` or an `int[]` and a map a `Map`. Anything that still isn't an instance of the return type is a `ClassCastException` that names the method.
+
+`invoke-super` calls the superclass's method, as `super.name(args)` does in Java, and picks the overload the same way `invoke` does. It reaches protected methods and the defaults of the class's own interfaces:
+
+```clojure
+(ldk/define-class "demo.Loud"
+  {:extends "java.util.ArrayList"
+   :methods {:add (fn [this x] (ldk/invoke-super this "add" (str x "!")))
+             :toString (fn [this] (str "Loud" (ldk/invoke-super this "toString")))}})
+```
+
+A method you leave out keeps what the class inherits. An abstract one left out throws `AbstractMethodError` when it's called, as a class compiled without it would on the JVM. The class is final, so `invoke-super` always means the class it was defined with.
+
+Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields and method keys, swaps in the new fns, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
+
 ## Threads
 
 A Java thread can run a jolt fn, and it keeps running between your calls into Java, while your own jolt code does other work:

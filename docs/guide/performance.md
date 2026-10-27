@@ -218,6 +218,8 @@ Thread support adds two things to every program, threaded or not: a monitor look
 
 Each call Java makes into one of your fns runs inside an exception handler, the one that turns a jolt error into a `RuntimeException` Java can catch ([calling-java](calling-java.md#exceptions)). The handler is only set up, and the jolt side is only asked to convert anything once an error is raised. `Collections.sort` on 200,000 integers with a jolt comparator makes 2,855,207 calls, and took 0.73 to 0.80 s without the handler and 0.82 to 0.88 s with it, alternating runs. That is about 30 ns of the roughly 270 ns each call costs.
 
+A method of a class `define-class` made costs about the same as a fn. The same sort through a `Comparator` class took 1.0 s in each of three runs, alternating with a plain fn comparator at 1.03 to 1.09 s, on a machine with a load average near 7, so both numbers are higher than the ones above.
+
 ### What method handles cost
 
 A method handle call goes through the runtime's handle table rather than straight to the method. In a loop of a million calls to a static `add(int, int)`, a direct call took 12 ns, `invokeExact` 117 ns, and `invoke` with boxed `Object` arguments about 1.35 µs, most of that in boxing through `Integer.valueOf` and unboxing through a virtual call. Linking a call site with a bootstrap of its own happens once, on its first call.
