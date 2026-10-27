@@ -127,7 +127,15 @@
                "list()Ljava/util/List;" (fn [this] [1 2])
                "ints()[I" (fn [this] [3 4])
                "map()Ljava/util/Map;" (fn [this] {:a 1})
-               "wrong()Ljava/util/List;" (fn [this] "x")}})
+               "wrong()Ljava/util/List;" (fn [this] "x")
+               "badInts()[I" (fn [this] [1 "a"])
+               "nilInts()[I" (fn [this] [nil])
+               "strs()[Ljava/lang/String;" (fn [this] [1 2])
+               "grid()[[J" (fn [this] [[1 2] [3]])
+               "boxed()Ljava/lang/Double;" (fn [this] 3)
+               "small()Ljava/lang/Short;" (fn [this] 70000)
+               "notSam()Ljava/lang/Object;" (fn [this] (fn [] 1))
+               "sam()Ljava/util/function/IntSupplier;" (fn [this] (fn [] 9))}})
   (let [r (ldk/construct "demo.classes.Results")
         int-of #(do (ldk/set-field! r "v" %) (thrown (fn [] (ldk/invoke r "getAsInt"))))]
     (is (= "java.lang.NullPointerException: demo.classes.Results.getAsInt()I returned nil, not int" (int-of nil)))
@@ -144,7 +152,25 @@
     (is (= {"a" 1} (ldk/->clj (ldk/invoke r "map"))))
     (is (= (str "java.lang.ClassCastException: demo.classes.Results.wrong()Ljava/util/List; returned a"
                 " java.lang.String, not java.util.List")
-           (thrown #(ldk/invoke r "wrong"))))))
+           (thrown #(ldk/invoke r "wrong"))))
+    ;; an array's elements are checked as results of the component type
+    (is (= "java.lang.ClassCastException: demo.classes.Results.badInts()[I returned a string, not int"
+           (thrown #(ldk/invoke r "badInts"))))
+    (is (= "java.lang.NullPointerException: demo.classes.Results.nilInts()[I returned nil, not int"
+           (thrown #(ldk/invoke r "nilInts"))))
+    (is (= (str "java.lang.ClassCastException: demo.classes.Results.strs()[Ljava/lang/String; returned a"
+                " java.lang.Integer, not java.lang.String")
+           (thrown #(ldk/invoke r "strs"))))
+    (is (= [[1 2] [3]] (ldk/->clj (ldk/invoke r "grid"))))
+    ;; a box takes a number as its primitive does
+    (is (= 3.0 (ldk/invoke r "boxed")))
+    (is (= (str "java.lang.IllegalArgumentException: demo.classes.Results.small()Ljava/lang/Short; returned 70000,"
+                " out of range for short")
+           (thrown #(ldk/invoke r "small"))))
+    ;; a fn only where an interface with one method is wanted
+    (is (= "java.lang.ClassCastException: demo.classes.Results.notSam()Ljava/lang/Object; returned a fn, not java.lang.Object"
+           (thrown #(ldk/invoke r "notSam"))))
+    (is (= 9 (ldk/invoke (ldk/invoke r "sam") "getAsInt")))))
 
 (deftest methods-of-its-own
   (ldk/define-class "demo.classes.Own" {:methods {"twice(I)I" (fn [_ n] (* 2 n))}})
@@ -169,7 +195,25 @@
   (is (= "define-class: java.util.Mine is in a package of the JDK's" (thrown #(ldk/define-class "java.util.Mine" {}))))
   (is (= "define-class: java.lang.Math is final" (thrown #(ldk/define-class "demo.classes.E8" {:extends "java.lang.Math"}))))
   (is (= "java.lang.NoClassDefFoundError: no/Such" (thrown #(ldk/define-class "demo.classes.E9" {:extends "no.Such"}))))
-  (is (= "define-class: java.util.ArrayList is already a class" (thrown #(ldk/define-class "java.util.ArrayList" {})))))
+  (is (= "define-class: java.util.ArrayList is already a class" (thrown #(ldk/define-class "java.util.ArrayList" {}))))
+  (is (= "define-class: demo..E10 isn't a class name" (thrown #(ldk/define-class "demo..E10" {}))))
+  (is (= "define-class: field a is named twice" (thrown #(ldk/define-class "demo.classes.E11" {:fields ["a" "a"]}))))
+  (is (= "define-class: \"a.b\" isn't a field name" (thrown #(ldk/define-class "demo.classes.E11" {:fields ["a.b"]}))))
+  (is (= "define-class: field n's type Integer isn't a class (a nested class is Outer$Inner)"
+         (thrown #(ldk/define-class "demo.classes.E11" {:fields {"n" "Integer"}}))))
+  (is (= "define-class: java.lang.Runnable is in :implements twice"
+         (thrown #(ldk/define-class "demo.classes.E11" {:implements ["java.lang.Runnable" "java.lang.Runnable"]}))))
+  (is (= "define-class: method \"toString\" is named twice"
+         (thrown #(ldk/define-class "demo.classes.E11" {:methods {:toString str "toString" str}}))))
+  ;; none of those took the name
+  (is (= 1 (count (ldk/->clj (ldk/invoke (ldk/define-class "demo.classes.E11" {:fields {"e" "java.util.Map$Entry"} :extends nil})
+                                         "getFields"))))))
+
+(deftest names-beyond-the-bmp
+  (let [n (str "demo.classes.G" (char 128512))]
+    (ldk/define-class n {:fields [(str "f" (char 128512))] :methods {:toString (fn [_] "ok")}})
+    (is (= "ok" (ldk/to-string (ldk/construct n))))
+    (is (= n (ldk/invoke (ldk/invoke-static "java.lang.Class" "forName" n) "getName")))))
 
 (deftest defining-again
   (let [spec (fn [n] {:implements ["java.util.function.IntSupplier"] :fields ["v"] :methods {:getAsInt (fn [_] n)}})

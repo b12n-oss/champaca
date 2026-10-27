@@ -640,9 +640,10 @@
              (loop (cdr cs) (cons* (fxior #x80 (fxlogand c #x3f)) (fxior #x80 (fxlogand (fxsrl c 6) #x3f))
                                    (fxior #xe0 (fxsrl c 12)) acc))]
             [else   ; beyond the BMP: its UTF-16 surrogates, each as three octets
-             (let ([v (fx- c #x10000)])
-               (loop (cons* (integer->char (fxior #xd800 (fxsrl v 10))) (integer->char (fxior #xdc00 (fxlogand v #x3ff))) (cdr cs))
-                     acc))])))))
+             (let* ([v (fx- c #x10000)]
+                    [three (lambda (u acc) (cons* (fxior #x80 (fxlogand u #x3f)) (fxior #x80 (fxlogand (fxsrl u 6) #x3f))
+                                                  (fxior #xe0 (fxsrl u 12)) acc))])
+               (loop (cdr cs) (three (fxior #xdc00 (fxlogand v #x3ff)) (three (fxior #xd800 (fxsrl v 10)) acc))))])))))
 ;; the slots a descriptor's arguments take, and the load opcode of each
 (define (arg-loads desc)
   (let loop ([ds (desc-args desc)] [slot 1] [acc '()])
@@ -746,6 +747,8 @@
 ;; IllegalArgumentException, as Clojure's casts throw.
 (define (defined-result where d r)
   (let ([c (string-ref d 0)])
+    (define (wrong-ref v t)
+      (jthrow "java/lang/ClassCastException" (string-append where " returned " (value-kind v) ", not " (dotted t))))
     (define (wrong) (jthrow "java/lang/ClassCastException"
                             (string-append where " returned " (value-kind r) ", not " (prim-type-name c))))
     (define (range lo hi)
@@ -758,11 +761,23 @@
       [(char=? c #\V) (void)]
       [(char=? c #\Z) (if (jolt-true? r) 1 0)]
       [(memv c '(#\L #\[))
-       (let ([v (convert-arg (jolt-data r) d)])
-         (if (or (not v) (jinstance? v (ref-class d)))
-             v
-             (jthrow "java/lang/ClassCastException"
-                     (string-append where " returned " (value-kind v) ", not " (dotted (ref-class d))))))]
+       (let* ([r (jolt-data r)]
+              [t (ref-class d)]
+              [box (assoc t boxes)]
+              [v (cond
+                   [(eq? r jolt-nil) #f]
+                   ;; a vector for an array: each element as the component
+                   ;; type takes a result, so a string can't land in an int[]
+                   [(and (char=? c #\[) (seq-arg? r))
+                    (let ([e (array-elem d)])
+                      (make-jarr e (list->vector (map (lambda (x) (defined-result where e x)) r))))]
+                   ;; a number or char for a box: boxed for its declared type
+                   [(and box (not (java-value? r)) (not (string=? (cdr box) "Z")))
+                    (jbox (cdr box) (defined-result where (cdr box) r))]
+                   ;; a fn only for an interface with one abstract method
+                   [(and (procedure? r) (not (sam-of t))) (wrong-ref r t)]
+                   [else (convert-arg r d)])])
+         (if (or (not v) (jinstance? v t)) v (wrong-ref v t)))]
       [(eq? r jolt-nil) (jthrow "java/lang/NullPointerException" (string-append where " returned nil, not " (prim-type-name c)))]
       [else
        (case c
@@ -791,7 +806,28 @@
   (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns))))
 (define (define-jolt-class name super ifaces fields fns)
   (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
+  (define (bad-name? n)   ; not a JVM unqualified name
+    (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
+  (when (exists bad-name?
+                (let split ([cs (string->list name)] [cur '()] [acc '()])   ; its package parts and simple name
+                  (cond [(null? cs) (cons (list->string (reverse cur)) acc)]
+                        [(char=? (car cs) #\/) (split (cdr cs) '() (cons (list->string (reverse cur)) acc))]
+                        [else (split (cdr cs) (cons (car cs) cur) acc)])))
+    (fail (dotted name) " isn't a class name"))
   (when (hashtable-ref classes name #f) (fail (dotted name) " is already a class"))
+  (let loop ([fs fields] [seen '()])
+    (unless (null? fs)
+      (let ([n (caar fs)] [d (cdar fs)])
+        (when (bad-name? n) (fail (format "~s isn't a field name" n)))
+        (when (member n seen) (fail "field " n " is named twice"))
+        (let ([t (let strip ([d d]) (if (char=? (string-ref d 0) #\[) (strip (array-elem d)) d))])
+          (when (and (char=? (string-ref t 0) #\L) (not (class-exists? (ref-class t))))
+            (fail "field " n "'s type " (dotted (ref-class t)) " isn't a class (a nested class is Outer$Inner)")))
+        (loop (cdr fs) (cons n seen)))))
+  (let loop ([is ifaces])
+    (when (pair? is)
+      (when (member (car is) (cdr is)) (fail (dotted (car is)) " is in :implements twice"))
+      (loop (cdr is))))
   (when (jdk-package? name) (fail (dotted name) " is in a package of the JDK's"))
   (let ([s (find-class super)])
     (when (eq? (jclass-kind s) 'interface) (fail (dotted super) " is an interface; name it in :implements"))
@@ -833,7 +869,13 @@
                 natives)
       (let ([bytes (list->vector (class-file-bytes name super ifaces fields ctors
                                                    (map (lambda (m) (cons (car m) (cadr m))) natives)))])
-        (let ([m (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f)])
+        ;; the natives must be there when the class registers; a definition
+        ;; that fails takes them back, so a later class of the name can't
+        ;; pick them up
+        (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
+                                         natives)
+                               (raise e)])
+                   (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
           (hashtable-set! defined-supers name (cons super ifaces))
           m)))))
 

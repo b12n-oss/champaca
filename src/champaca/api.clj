@@ -279,12 +279,18 @@
   superclass, passing the arguments on. Defining the same name again with
   the same superclass, interfaces, fields and method keys swaps in the new
   fns; anything else is refused, since a class is defined once per process."
-  [cname {:keys [extends implements fields methods] :or {extends "java.lang.Object"}}]
-  (let [dotted (str/replace cname "/" ".")
+  [cname {:keys [extends implements fields methods]}]
+  (let [extends (or extends "java.lang.Object")
+        dotted (str/replace cname "/" ".")
         slashed #(str/replace % "." "/")
         fields (mapv (fn [[n t]] [(name n) (type-desc t)])
                      (if (map? fields) fields (map vector fields (repeat "java.lang.Object"))))
-        fns (into {} (map (fn [[k f]] [(method-key k) (as-fn "define-class" k f)])) methods)
+        fns (reduce (fn [m [k f]]
+                      (let [mk (method-key k)]
+                        (when (contains? m mk)
+                          (throw (ex-info (str "define-class: method " (pr-str mk) " is named twice") {:method k})))
+                        (assoc m mk (as-fn "define-class" k f))))
+                    {} methods)
         shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns))]]
     (rethrow
      #(if-let [{old :shape cells :cells c :class} (get @jolt-classes dotted)]

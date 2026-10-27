@@ -47,7 +47,8 @@ A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because th
 - A class `define-class` made is defined once per process, since one class table holds every class. Evaluating the same definition again swaps in its new fns, but a new field, a new method key, or another superclass or interface is refused. At the REPL, give the class a new name while you experiment, or restart the process.
 - The class is final, and has neither static members nor constructors or initialization of its own: its fields start as Java's defaults (`null`, `0`, `false`), and its constructors are its superclass's, passed on.
 - Its methods are native methods, so reflection reports them with the `native` modifier, and they carry no generic signatures, annotations or `throws` lists.
-- A package-private method of the superclass can't be overridden, and a name in one of the JDK's packages is refused.
+- A method name never covers a package-private method of the superclass. A full JVM name with the same signature makes a public method, which overrides it only when the class is in the superclass's package, as on the JVM. A name in one of the JDK's packages is refused.
+- When a method name has overloads that are final and others that aren't, the name covers the ones that aren't, and the final ones keep their bodies.
 - Java code can't be compiled against the class, since it exists only at run time. Java reaches it through an interface or superclass it knows, through reflection, or through `Class.forName`.
 - A class from the classpath with the same name that hasn't been loaded yet is never loaded afterwards, because the name already belongs to the jolt class. One that has been loaded makes `define-class` refuse the name.
 - The class isn't kept in the startup cache. Each process defines it again, and its constructors are compiled again on their first call.
