@@ -8,6 +8,7 @@
   its JVM descriptor, as in jolt-openldk."
   (:refer-clojure :exclude [proxy])
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [jolt.scheme :as s]
             [champaca.main :as main]))
 
@@ -64,6 +65,8 @@
                (:java/exception (ex-data e)) (:java/exception (ex-data e))
                :else (s/call "ldk-jolt-error->java" e (or (ex-message e) (str e)))))))
 
+(declare ->arg)
+
 (defn init!
   "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user classes."
   ([] (init! {}))
@@ -77,6 +80,7 @@
    (when-not @dynamic-loaded
      (s/eval-string (slurp (io/resource "champaca/dynamic.ss")))
      (s/call "set-lambda-class-hook!" (fn [iface sam-key] (main/lambda-class [iface] [sam-key])))
+     (s/call "set-jolt-data-hook!" ->arg)
      (reset! dynamic-loaded true))
    ;; boot ran holding the lock; from here on each call takes it
    (when (compare-and-set! gil-released false true)
@@ -226,3 +230,80 @@
                                  :else (throw (ex-info (str "proxy: " (pr-str k) " is not a fn") {:method k})))]))
                  methods)]
     (rethrow #(s/call "dyn-proxy" (apply s/call "list" ifaces) (fn [n] (get fs n))))))
+
+;; --- classes defined from jolt -------------------------------------------------------
+
+(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :class}
+
+(def ^:private prim-descs
+  {"boolean" "Z" "byte" "B" "char" "C" "short" "S" "int" "I" "long" "J" "float" "F" "double" "D"})
+
+(defn- type-desc
+  "The descriptor of a type as Java source names it: int, java.lang.String,
+  String[] with its package, java/util/List."
+  [t]
+  (cond (str/ends-with? t "[]") (str "[" (type-desc (subs t 0 (- (count t) 2))))
+        (prim-descs t) (prim-descs t)
+        :else (str "L" (str/replace t "." "/") ";")))
+
+(defn- as-fn
+  "f as a Scheme procedure: a var, a keyword or a map is wrapped, since
+  Scheme calls only procedures; anything else isn't callable."
+  [who k f]
+  (cond (fn? f) f
+        (ifn? f) (fn [& args] (apply f args))
+        :else (throw (ex-info (str who ": " (pr-str k) " is not a fn") {:method k}))))
+
+(defn- method-key [k]
+  (let [k (if (keyword? k) (name k) k)]
+    (when (and (str/includes? k "(")
+               (not (re-matches #"[^()\[;/.<>]+\((\[*([BCDFIJSZ]|L[^;]+;))*\)(V|\[*([BCDFIJSZ]|L[^;]+;))" k)))
+      (throw (ex-info (str "define-class: " (pr-str k) " is neither a method name nor name(descriptor)return") {:method k})))
+    k))
+
+(defn define-class
+  "Define cname (a binary name, dots or slashes) as a real Java class, final,
+  extending :extends (default java.lang.Object) and implementing the
+  interfaces in :implements, and answer its Class. Java code, reflection and
+  Class.forName see an ordinary class of the application loader.
+  :fields names its public fields: a vector of names (each an Object) or a
+  map from name to type (\"int\", \"java.lang.String\", \"long[]\").
+  :methods maps a method name (string or keyword) to a fn, which implements
+  every method of that name the class inherits and can override (abstract,
+  default or concrete, public or protected, not final), or a full JVM name
+  such as \"greet(Ljava/lang/String;)Ljava/lang/String;\" to a fn for that one
+  method, which wins over its name's and may be a new method of the class's
+  own. Each fn gets the object, then the method's arguments converted as
+  invoke's results are; its result is checked against the return type. The
+  class has a public constructor for each public or protected one of its
+  superclass, passing the arguments on. Defining the same name again with
+  the same superclass, interfaces, fields and method keys swaps in the new
+  fns; anything else is refused, since a class is defined once per process."
+  [cname {:keys [extends implements fields methods] :or {extends "java.lang.Object"}}]
+  (let [dotted (str/replace cname "/" ".")
+        slashed #(str/replace % "." "/")
+        fields (mapv (fn [[n t]] [(name n) (type-desc t)])
+                     (if (map? fields) fields (map vector fields (repeat "java.lang.Object"))))
+        fns (into {} (map (fn [[k f]] [(method-key k) (as-fn "define-class" k f)])) methods)
+        shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns))]]
+    (rethrow
+     #(if-let [{old :shape cells :cells c :class} (get @jolt-classes dotted)]
+        (if (= old shape)
+          (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f)) c)
+          (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
+                               " fields or method keys; a class is defined once per process")
+                          {:class dotted})))
+        (let [cells (into {} (map (fn [[k f]] [k (s/call "box" f)])) fns)
+              c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
+                        (apply s/call "list" (map (fn [[n d]] (s/call "cons" n d)) fields))
+                        (apply s/call "list" (map (fn [[k cell]] (s/call "cons" k cell)) cells)))]
+          (swap! jolt-classes assoc dotted {:shape shape :cells cells :class c})
+          c)))))
+
+(defn invoke-super
+  "From a fn of a class define-class made: call its superclass's method
+  mname (public or protected) that fits args on obj, as super.mname(args)
+  does in Java. A default method of one of the class's own interfaces is
+  found when the superclass has no such method."
+  [obj mname & args]
+  (rethrow #(apply s/call "dyn-invoke-super" obj mname (map ->arg args))))

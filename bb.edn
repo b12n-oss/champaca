@@ -77,7 +77,8 @@
                          ["files" "files and MessageDigest from jolt"]
                          ["fields" "Java fields read and written from jolt"]
                          ["serialization" "Java serialization of the program's own classes from jolt"]
-                         ["proxy" "java.lang.reflect.Proxy from jolt, and jolt errors through Java"]])
+                         ["proxy" "java.lang.reflect.Proxy from jolt, and jolt errors through Java"]
+                         ["classes" "real Java classes defined from jolt"]])
           ;; test/jar packed into target/lib.jar, which jars, fields and
           ;; serialization put on their classpath
           (defn lib-jar! []

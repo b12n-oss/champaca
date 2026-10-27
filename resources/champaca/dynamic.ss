@@ -250,7 +250,10 @@
                     (lambda (np flags) (and (fxpositive? (fxlogand flags #x80)) (fx<= (fx- np 1) n)))))
 
 (define (candidates-where cname name static? arity-ok?)
-  (let loop ([todo (list cname)] [seen '()] [acc '()])
+  (candidates-from (list cname) name static? arity-ok? public?)) ; jolt calls from outside the class
+
+(define (candidates-from roots name static? arity-ok? access-ok?)
+  (let loop ([todo roots] [seen '()] [acc '()])
     (if (null? todo)
         (reverse acc)
         (let ([o (car todo)])
@@ -266,7 +269,7 @@
                          (if (and (string=? (car m) name)
                                   (arity-ok? (length (desc-args (cadr m))) (caddr m))
                                   (eq? static? (static-flag? (caddr m)))
-                                  (public? (caddr m)) ; jolt calls from outside the class
+                                  (access-ok? (caddr m))
                                   (fxzero? (fxlogand (caddr m) #x1040))
                                   ;; one per parameter list: a covariant override
                                   ;; (same params, narrower return) hides its parent's
@@ -608,3 +611,258 @@
      ((method-proc "java/lang/ClassLoader" "getSystemClassLoader()Ljava/lang/ClassLoader;"))
      (make-jarr "Ljava/lang/Class;" (list->vector (map (lambda (n) (jmirror-of (slashes n))) ifaces)))
      h)))
+
+;; --- classes defined from jolt ---------------------------------------------------------
+;; A real class (define-class in the api): a class file made here, with a
+;; public constructor for each public or protected one of its superclass and
+;; a public native method for each method a jolt fn implements, defined
+;; through the application loader as ClassLoader.defineClass would. Each
+;; native calls its fn with the object and the arguments converted as
+;; invoke's results are, through call-from-java, and checks what the fn
+;; returns against the method's return type. The fn sits in a box, so the
+;; same definition again (the REPL) swaps fns without a new class. The
+;; class is final, so the superclass invoke-super calls is always the one
+;; it was defined with.
+
+;; class file bytes, as a list of octets
+(define (u2 n) (list (fxsrl (fxlogand n #xffff) 8) (fxlogand n #xff)))
+(define (u4 n) (append (u2 (fxsrl n 16)) (u2 (fxlogand n #xffff))))
+(define (modified-utf8 s)
+  (let loop ([cs (string->list s)] [acc '()])
+    (if (null? cs)
+        (reverse acc)
+        (let ([c (char->integer (car cs))])
+          (cond
+            [(and (fx>= c 1) (fx<= c #x7f)) (loop (cdr cs) (cons c acc))]
+            [(fx<= c #x7ff)   ; NUL too, as two octets
+             (loop (cdr cs) (cons* (fxior #x80 (fxlogand c #x3f)) (fxior #xc0 (fxsrl c 6)) acc))]
+            [(fx<= c #xffff)
+             (loop (cdr cs) (cons* (fxior #x80 (fxlogand c #x3f)) (fxior #x80 (fxlogand (fxsrl c 6) #x3f))
+                                   (fxior #xe0 (fxsrl c 12)) acc))]
+            [else   ; beyond the BMP: its UTF-16 surrogates, each as three octets
+             (let ([v (fx- c #x10000)])
+               (loop (cons* (integer->char (fxior #xd800 (fxsrl v 10))) (integer->char (fxior #xdc00 (fxlogand v #x3ff))) (cdr cs))
+                     acc))])))))
+;; the slots a descriptor's arguments take, and the load opcode of each
+(define (arg-loads desc)
+  (let loop ([ds (desc-args desc)] [slot 1] [acc '()])
+    (if (null? ds)
+        (values (reverse acc) slot)
+        (let* ([c (string-ref (car ds) 0)]
+               [op (case c [(#\J) #x16] [(#\F) #x17] [(#\D) #x18] [(#\L #\[) #x19] [else #x15])])
+          (loop (cdr ds) (fx+ slot (if (memv c '(#\J #\D)) 2 1)) (cons (list op slot) acc))))))
+;; name, super and interfaces slashed; fields ((name . desc) ...); ctors
+;; ((desc . flags) ...), the superclass's; methods ((name . desc) ...)
+(define (class-file-bytes name super ifaces fields ctors methods)
+  (let ([pool '()] [count 0] [index (make-hashtable equal-hash equal?)])
+    (define (entry key octets)
+      (or (hashtable-ref index key #f)
+          (begin (set! pool (cons octets pool))
+                 (set! count (fx+ count 1))
+                 (hashtable-set! index key count)
+                 count)))
+    (define (utf8 s) (let ([b (modified-utf8 s)]) (entry (list 'utf8 s) (append '(1) (u2 (length b)) b))))
+    (define (class n) (let ([u (utf8 n)]) (entry (list 'class n) (cons 7 (u2 u)))))
+    (define (nat n d) (let ([a (utf8 n)] [b (utf8 d)]) (entry (list 'nat n d) (append '(12) (u2 a) (u2 b)))))
+    (define (methodref c n d) (let ([a (class c)] [b (nat n d)]) (entry (list 'mref c n d) (append '(10) (u2 a) (u2 b)))))
+    (let* ([this (class name)]
+           [sup (class super)]
+           [iis (map class ifaces)]
+           [code (utf8 "Code")]
+           [init (utf8 "<init>")]
+           [fos (apply append (map (lambda (f) (append (u2 1) (u2 (utf8 (car f))) (u2 (utf8 (cdr f))) (u2 0))) fields))]
+           ;; aload_0, each argument, invokespecial the superclass's, return
+           [cos (apply append
+                       (map (lambda (c)
+                              (let-values ([(loads slots) (arg-loads (car c))])
+                                (let ([bc (append '(#x2a)
+                                                  (apply append (map (lambda (l) (list (car l) (cadr l))) loads))
+                                                  '(#xb7) (u2 (methodref super "<init>" (car c))) '(#xb1))])
+                                  ;; public, and varargs when the superclass's is
+                                  (append (u2 (fxior 1 (fxlogand (cdr c) #x80))) (u2 init) (u2 (utf8 (car c))) (u2 1)
+                                          (u2 code) (u4 (fx+ 12 (length bc)))
+                                          (u2 slots) (u2 slots) (u4 (length bc)) bc (u2 0) (u2 0)))))
+                            ctors))]
+           [mos (apply append (map (lambda (m) (append (u2 #x0101) (u2 (utf8 (car m))) (u2 (utf8 (cdr m))) (u2 0))) methods))])
+      (append '(#xca #xfe #xba #xbe) (u2 0) (u2 52)
+              (u2 (fx+ count 1)) (apply append (reverse pool))
+              (u2 #x0031) (u2 this) (u2 sup)   ; public final super
+              (u2 (length iis)) (apply append (map u2 iis))
+              (u2 (length fields)) fos
+              (u2 (fx+ (length ctors) (length methods))) cos mos
+              (u2 0)))))
+
+(define (dotted n) (slashes->dots n))
+(define (class-flag? c bit) (fxpositive? (fxlogand (jclass-flags c) bit)))
+
+;; the instance methods a class extending super and implementing ifaces
+;; can override, as (name desc flags): the first declaration of each
+;; signature, the superclasses' before the interfaces', public or protected,
+;; neither final nor a bridge. A final one is (name desc #f), so the api
+;; can say so when it is named.
+(define (overridable-methods super ifaces)
+  (let ([seen (make-hashtable string-hash string=?)] [acc '()])
+    (define (visit c)
+      (for-each (lambda (m)
+                  (let ([n (car m)] [d (cadr m)] [f (caddr m)])
+                    (unless (or (char=? (string-ref n 0) #\<) (static-flag? f) (fxpositive? (fxlogand f 2))
+                                (hashtable-ref seen (string-append n d) #f))
+                      (hashtable-set! seen (string-append n d) #t)
+                      (when (and (fxpositive? (fxlogand f 5)) (fxzero? (fxlogand f #x1040)))
+                        (set! acc (cons (list n d (if (fxpositive? (fxlogand f #x10)) #f f)) acc))))))
+                (meta-methods c)))
+    (let chain ([n super] [is '()])
+      (if n
+          (let ([c (find-class n)]) (visit c) (chain (jclass-super c) (append is (jclass-interfaces c))))
+          (let walk ([todo (append ifaces is)] [done '()])
+            (cond [(null? todo) (reverse acc)]
+                  [(member (car todo) done) (walk (cdr todo) done)]
+                  [else (let ([c (find-class (car todo))])
+                          (visit c)
+                          (walk (append (cdr todo) (jclass-interfaces c)) (cons (car todo) done)))]))))))
+
+(define (prim-type-name c)
+  (case c [(#\I) "int"] [(#\J) "long"] [(#\S) "short"] [(#\B) "byte"] [(#\C) "char"]
+        [(#\D) "double"] [(#\F) "float"] [else "boolean"]))
+(define (value-kind v)
+  (cond [(string? v) "a string"] [(char? v) "a char"] [(boolean? v) "a boolean"]
+        [(java-value? v) (string-append "a " (dotted (class-name-of v)))]
+        [(number? v) (string-append "the number " (number->string v))]
+        [(procedure? v) "a fn"]
+        [else "a jolt value"]))
+;; jolt data (a map, vector, set or seq) as the api tags arguments, so a
+;; fn can return one for a reference type as invoke takes it; the hook
+;; (api ->arg) runs only for a value Scheme can't read itself
+(define jolt-data-hook #f)
+(define (set-jolt-data-hook! f) (set! jolt-data-hook f))
+(define (jolt-data r)
+  (if (or (eq? r jolt-nil) (java-value? r) (string? r) (number? r) (char? r) (boolean? r) (procedure? r)
+          (seq-arg? r) (coll-arg? r) (not jolt-data-hook))
+      r
+      (jolt-data-hook r)))
+;; what a fn returned, as the method's return type d takes it. nil for a
+;; primitive is a NullPointerException, a value of the wrong kind a
+;; ClassCastException and a number out of the type's range an
+;; IllegalArgumentException, as Clojure's casts throw.
+(define (defined-result where d r)
+  (let ([c (string-ref d 0)])
+    (define (wrong) (jthrow "java/lang/ClassCastException"
+                            (string-append where " returned " (value-kind r) ", not " (prim-type-name c))))
+    (define (range lo hi)
+      (cond [(char? r) (let ([n (char->integer r)]) (if (<= lo n hi) n (wrong)))]
+            [(not (exact-int? r)) (wrong)]
+            [(<= lo r hi) r]
+            [else (jthrow "java/lang/IllegalArgumentException"
+                          (string-append where " returned " (number->string r) ", out of range for " (prim-type-name c)))]))
+    (cond
+      [(char=? c #\V) (void)]
+      [(char=? c #\Z) (if (jolt-true? r) 1 0)]
+      [(memv c '(#\L #\[))
+       (let ([v (convert-arg (jolt-data r) d)])
+         (if (or (not v) (jinstance? v (ref-class d)))
+             v
+             (jthrow "java/lang/ClassCastException"
+                     (string-append where " returned " (value-kind v) ", not " (dotted (ref-class d))))))]
+      [(eq? r jolt-nil) (jthrow "java/lang/NullPointerException" (string-append where " returned nil, not " (prim-type-name c)))]
+      [else
+       (case c
+         [(#\I) (range -2147483648 2147483647)]
+         [(#\J) (range -9223372036854775808 9223372036854775807)]
+         [(#\S) (range -32768 32767)]
+         [(#\B) (range -128 127)]
+         [(#\C) (if (char? r) (char->integer r) (range 0 65535))]
+         [(#\D) (if (and (number? r) (real? r)) (inexact r) (wrong))]
+         [else (if (and (number? r) (real? r)) (f32 (inexact r)) (wrong))])])))
+
+(define (defined-method-proc where desc cell)
+  (let ([pds (desc-args desc)] [rd (desc-ret desc)])
+    (lambda (this . args)
+      (defined-result where rd (call-from-java (unbox cell) (cons this (map dyn-out pds args)))))))
+
+;; defined class -> (super . interfaces), for invoke-super
+(define defined-supers (make-hashtable string-hash string=?))
+
+;; name, super, ifaces (dots or slashes); fields ((name . desc) ...);
+;; fns ((key . cell) ...), a key being a method name, for every method of
+;; that name it can override, or "name(desc)ret" for that one method, which
+;; wins over its name's, and may be a method of the class's own. Answers
+;; the Class.
+(define (dyn-define-class name super ifaces fields fns)
+  (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns))))
+(define (define-jolt-class name super ifaces fields fns)
+  (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
+  (when (hashtable-ref classes name #f) (fail (dotted name) " is already a class"))
+  (when (jdk-package? name) (fail (dotted name) " is in a package of the JDK's"))
+  (let ([s (find-class super)])
+    (when (eq? (jclass-kind s) 'interface) (fail (dotted super) " is an interface; name it in :implements"))
+    (when (class-flag? s #x10) (fail (dotted super) " is final"))
+    (for-each (lambda (i) (unless (eq? (jclass-kind (find-class i)) 'interface) (fail (dotted i) " is not an interface")))
+              ifaces)
+    (let* ([ms (overridable-methods super ifaces)]
+           [ctors (filter (lambda (c) (fxpositive? (fxlogand (cdr c) 5)))
+                          (map (lambda (m) (cons (cadr m) (caddr m)))
+                               (filter (lambda (m) (string=? (car m) "<init>")) (meta-methods s))))]
+           [exact (filter (lambda (f) (memv #\( (string->list (car f)))) fns)]
+           ;; (name desc cell) for every native
+           [natives
+            (append
+             (map (lambda (f)
+                    (let* ([k (car f)] [p (string-split-paren k)] [n (car p)] [d (substring k (string-length n) (string-length k))])
+                      (when (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d) (not (caddr m)))) ms)
+                        (fail k " is final in " (dotted super)))
+                      (list n d (cdr f))))
+                  exact)
+             (apply append
+                    (map (lambda (f)
+                           (let* ([n (car f)]
+                                  [own (filter (lambda (m) (string=? (car m) n)) ms)]
+                                  [open (filter caddr own)])
+                             (when (null? open)
+                               (fail (if (null? own) (string-append "no method " n " to implement in ")
+                                         (string-append n " is final in "))
+                                     (dotted super)
+                                     (apply string-append (map (lambda (i) (string-append ", " (dotted i))) ifaces))))
+                             (map (lambda (m) (list n (cadr m) (cdr f)))
+                                  (filter (lambda (m) (not (exists (lambda (e) (string=? (car e) (string-append n (cadr m)))) exact)))
+                                          open))))
+                         (filter (lambda (f) (not (memv #\( (string->list (car f))))) fns))))])
+      (when (null? ctors) (fail (dotted super) " has no public or protected constructor"))
+      (for-each (lambda (m)
+                  (define-native! (string-append name "." (car m) (cadr m))
+                    (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
+                natives)
+      (let ([bytes (list->vector (class-file-bytes name super ifaces fields ctors
+                                                   (map (lambda (m) (cons (car m) (cadr m))) natives)))])
+        (let ([m (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f)])
+          (hashtable-set! defined-supers name (cons super ifaces))
+          m)))))
+
+;; obj's superclass's method name (public or protected) that fits args,
+;; called on obj without virtual dispatch, as super.name(args) in Java; an
+;; interface's default among the class's own interfaces when the superclass
+;; has none
+(define (dyn-invoke-super obj name . args)
+  (let* ([cname (class-name-of (nn obj))]
+         [sup (or (hashtable-ref defined-supers cname #f)
+                  (api-fail (string-append "invoke-super: " (dotted cname) " isn't a class define-class made")))]
+         [ok? (lambda (f) (fxpositive? (fxlogand f 5)))])
+    (let-values ([(site args)
+                  (site-for 'super cname name args
+                            (lambda ()
+                              (choose "invoke-super" (car sup) name
+                                      (candidates-from sup name #f (lambda (np f) (fx= np (length args))) ok?)
+                                      (candidates-from sup name #f (lambda (np f) (and (fxpositive? (fxlogand f #x80)) (fx<= (fx- np 1) (length args)))) ok?)
+                                      args))
+                            (lambda (owner mkey) #f))])
+      (with-java-errors
+       (lambda ()
+         (let* ([pick (call-site-pick site)]
+                [k (string->symbol (call-site-mkey site))]
+                [sym (eq-hashtable-ref (jclass-vtable (find-class (car sup))) k #f)]
+                [proc (cond [sym (top-level-value sym)]
+                            [(fxpositive? (fxlogand (cadddr pick) #x400))
+                             (jthrow "java/lang/AbstractMethodError"
+                                     (string-append "Method " (car pick) "." (call-site-mkey site) " is abstract"))]
+                            [else (method-proc (car pick) (call-site-mkey site))])])
+           (dyn-out (call-site-ret-d site)
+                    (apply proc obj (map convert-arg args (call-site-arg-ds site))))))))))
