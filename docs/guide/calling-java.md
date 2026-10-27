@@ -173,7 +173,20 @@ Each fn gets the object first, then the method's arguments converted as `invoke`
 - A method name, as a string or keyword. Its fn implements every method of that name the class inherits and can override: abstract, default or concrete, public or protected, and not final. Give the fn one arity per overload.
 - A full JVM name such as `"twice(I)I"`. Its fn implements that one method, and it wins over its name's fn. It can be a method the class inherits or a new one of its own, which Java reaches through reflection.
 
-A name with nothing to override, a final method, a final superclass, an interface given as `:extends`, a class given in `:implements`, a field named twice or with a type that isn't a class (a nested class is written `java.util.Map$Entry`), and a method key given twice (`:apply` and `"apply"`) are all refused, with the reason, when the class is defined. A refused definition leaves the name free.
+`:static-fields` and `:static-methods` give the class public static members. Static fields are written like `:fields`, and they start as Java's defaults, so set them with `set-static!` once the class is defined. Each `:static-methods` key is a full JVM name, and its fn gets the arguments alone, with no object:
+
+```clojure
+(ldk/define-class "demo.Tally"
+  {:static-fields {"total" "int"}
+   :static-methods {"add(I)I" (fn [n]
+                                (ldk/set-static! "demo.Tally" "total" (+ n (ldk/get-static "demo.Tally" "total")))
+                                (ldk/get-static "demo.Tally" "total"))}})
+(ldk/invoke-static "demo.Tally" "add" 5)            ;=> 5
+```
+
+Java code reaches the statics through reflection or a method handle, and their results are checked the same way as an instance method's. A field's type can be the class being defined, as in a linked node's `next` or a static `INSTANCE`.
+
+A name with nothing to override, a final method, a final superclass, an interface given as `:extends`, a class given in `:implements`, a field named twice or with a type that isn't a class (a nested class is written `java.util.Map$Entry`), a method key given twice (`:apply` and `"apply"`), a static method key without its descriptor, and a static method with the name and descriptor of an instance method, the class's own or inherited, are all refused, with the reason, when the class is defined. A refused definition leaves the name free.
 
 The fn's result is checked against the method's return type, as Clojure's casts check one. A `boolean` method takes jolt's truth. `nil` for any other primitive is a `NullPointerException`, a value of the wrong kind (a string for an `int`) a `ClassCastException`, and a number out of the type's range an `IllegalArgumentException`. A `double` method can return `3`, and a `char` method an integer in range. For a reference type the result converts as an argument to `invoke` would, so a vector can be a `List` and a map a `Map`. A vector for an array type is checked element by element, by the same rules, so `[1 "a"]` for an `int[]` is a `ClassCastException`. A number for a box type such as `Double` is boxed as that type, and a fn is taken only for an interface with one abstract method. Anything that still isn't an instance of the return type is a `ClassCastException` that names the method.
 
@@ -188,7 +201,7 @@ The fn's result is checked against the method's return type, as Clojure's casts 
 
 A method you leave out keeps what the class inherits. An abstract one left out throws `AbstractMethodError` when it's called, as a class compiled without it would on the JVM. The class is final, so `invoke-super` always means the class it was defined with.
 
-Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields and method keys, swaps in the new fns, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
+Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields and method keys, statics included, swaps in the new fns and keeps the static fields' values, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
 
 ## Threads
 

@@ -1,5 +1,5 @@
 ;; Real Java classes defined from jolt: a superclass, interfaces, fields and
-;; methods that are jolt fns, seen by Java code, reflection and
+;; methods that are jolt fns, statics too, seen by Java code, reflection and
 ;; Class.forName as any other class of the application loader.
 ;;   bb example classes
 (ns examples.classes
@@ -251,6 +251,77 @@
     (ldk/define-class n {:fields [(str "f" (char 128512))] :methods {:toString (fn [_] "ok")}})
     (is (= "ok" (ldk/to-string (ldk/construct n))))
     (is (= n (ldk/invoke (ldk/invoke-static "java.lang.Class" "forName" n) "getName")))))
+
+(deftest static-members
+  (let [cname "demo.classes.Tally"
+        spec (fn [step]
+               {:static-fields {"total" "int" "label" "java.lang.String"}
+                :static-methods {"add(I)I" (fn [n]
+                                             (ldk/set-static! cname "total" (+ (ldk/get-static cname "total") (* step n)))
+                                             (ldk/get-static cname "total"))
+                                 "fresh()Ldemo/classes/Tally;" (fn [] (ldk/construct cname))
+                                 "wrong()I" (fn [] "seven")
+                                 "boom()V" (fn [] (throw (ex-info "static boom" {})))}})
+        c (ldk/define-class cname (spec 1))
+        int-type (ldk/get-static "java.lang.Integer" "TYPE")]
+    ;; statics start at Java's defaults
+    (is (= 0 (ldk/get-static cname "total")))
+    (is (nil? (ldk/get-static cname "label")))
+    (is (= 5 (ldk/invoke-static cname "add" 5)))
+    (is (= "demo.classes.Tally" (ldk/invoke (ldk/invoke (ldk/invoke-static cname "fresh") "getClass") "getName")))
+    ;; Java sees and calls them: reflection and a method handle
+    (let [m (ldk/invoke c "getMethod" "add" [int-type])]
+      (is (= "public static native" (ldk/invoke-static "java.lang.reflect.Modifier" "toString" (ldk/invoke m "getModifiers"))))
+      (is (= 7 (ldk/invoke m "invoke" nil [2]))))
+    (is (= "public static" (ldk/invoke-static "java.lang.reflect.Modifier" "toString"
+                                              (ldk/invoke (ldk/invoke c "getField" "label") "getModifiers"))))
+    (let [mh (ldk/invoke (ldk/invoke-static "java.lang.invoke.MethodHandles" "publicLookup") "findStatic" c "add"
+                         (ldk/invoke-static "java.lang.invoke.MethodType" "methodType" int-type int-type))]
+      (is (= 10 (ldk/invoke mh "invokeWithArguments" [3]))))
+    ;; results are checked, errors come back as themselves
+    (is (= "java.lang.ClassCastException: demo.classes.Tally.wrong()I returned a string, not int"
+           (thrown #(ldk/invoke-static cname "wrong"))))
+    (is (= "static boom" (thrown #(ldk/invoke-static cname "boom"))))
+    (is (= "static boom" (ex-message (ex-cause (try (ldk/invoke (ldk/invoke c "getMethod" "boom" []) "invoke" nil [])
+                                                    (catch :default e e))))))
+    ;; the same shape again swaps the static fns and keeps the values
+    (is (identical? c (ldk/define-class cname (spec 100))))
+    (is (= 110 (ldk/invoke-static cname "add" 1)))
+    (is (= (str "define-class: demo.classes.Tally is already defined with another superclass, interfaces,"
+                " fields or method keys; a class is defined once per process")
+           (thrown #(ldk/define-class cname (assoc (spec 1) :static-fields ["other"])))))))
+
+(deftest a-field-of-its-own-type
+  (ldk/define-class "demo.classes.Link"
+    {:fields {"next" "demo.classes.Link"}
+     :static-fields {"FIRST" "demo.classes.Link" "ALL" "demo.classes.Link[]"}
+     :methods {"self()Ldemo/classes/Link;" (fn [this] this)}})
+  (let [a (ldk/construct "demo.classes.Link") b (ldk/construct "demo.classes.Link")]
+    (ldk/set-field! a "next" b)
+    (ldk/set-static! "demo.classes.Link" "FIRST" a)
+    (ldk/set-static! "demo.classes.Link" "ALL" [a b])
+    (is (identical? b (ldk/get-field (ldk/get-static "demo.classes.Link" "FIRST") "next")))
+    (is (identical? a (ldk/invoke a "self")))
+    (is (= 2 (count (ldk/->clj (ldk/get-static "demo.classes.Link" "ALL")))))
+    (is (= "field FIRST in demo/classes/Link has type demo.classes.Link, which the value doesn't fit"
+           (thrown #(ldk/set-static! "demo.classes.Link" "FIRST" "a string"))))))
+
+(deftest what-statics-refuse
+  (is (= "define-class: static method \"add\" needs its full JVM name, name(descriptor)return"
+         (thrown #(ldk/define-class "demo.classes.S1" {:static-methods {"add" (fn [n] n)}}))))
+  ;; Java can't have a static and an instance method of one signature
+  (is (= "define-class: static hashCode()I has an instance method's name and descriptor"
+         (thrown #(ldk/define-class "demo.classes.S2" {:static-methods {"hashCode()I" (fn [] 1)}}))))
+  (is (= "define-class: static f(I)I has an instance method's name and descriptor"
+         (thrown #(ldk/define-class "demo.classes.S3" {:methods {"f(I)I" (fn [_ n] n)} :static-methods {"f(I)I" (fn [n] n)}}))))
+  (is (= "define-class: field x is named twice"
+         (thrown #(ldk/define-class "demo.classes.S4" {:fields ["x"] :static-fields ["x"]}))))
+  (is (= "define-class: field y's type no.Such isn't a class (a nested class is Outer$Inner)"
+         (thrown #(ldk/define-class "demo.classes.S5" {:static-fields {"y" "no.Such"}}))))
+  ;; none of them took the name
+  (is (= "class demo.classes.S1"
+         (ldk/to-string (ldk/define-class "demo.classes.S1" {:static-methods {"add(I)I" (fn [n] (inc n))}}))))
+  (is (= 2 (ldk/invoke-static "demo.classes.S1" "add" 1))))
 
 (deftest defining-again
   (let [spec (fn [n] {:implements ["java.util.function.IntSupplier"] :fields ["v"] :methods {:getAsInt (fn [_] n)}})

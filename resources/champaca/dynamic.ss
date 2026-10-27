@@ -652,8 +652,8 @@
         (let* ([c (string-ref (car ds) 0)]
                [op (case c [(#\J) #x16] [(#\F) #x17] [(#\D) #x18] [(#\L #\[) #x19] [else #x15])])
           (loop (cdr ds) (fx+ slot (if (memv c '(#\J #\D)) 2 1)) (cons (list op slot) acc))))))
-;; name, super and interfaces slashed; fields ((name . desc) ...); ctors
-;; ((desc . flags) ...), the superclass's; methods ((name . desc) ...)
+;; name, super and interfaces slashed; fields ((name desc flags) ...); ctors
+;; ((desc . flags) ...), the superclass's; methods ((name desc flags) ...)
 (define (class-file-bytes name super ifaces fields ctors methods)
   (let ([pool '()] [count 0] [index (make-hashtable equal-hash equal?)])
     (define (entry key octets)
@@ -671,7 +671,7 @@
            [iis (map class ifaces)]
            [code (utf8 "Code")]
            [init (utf8 "<init>")]
-           [fos (apply append (map (lambda (f) (append (u2 1) (u2 (utf8 (car f))) (u2 (utf8 (cdr f))) (u2 0))) fields))]
+           [fos (apply append (map (lambda (f) (append (u2 (caddr f)) (u2 (utf8 (car f))) (u2 (utf8 (cadr f))) (u2 0))) fields))]
            ;; aload_0, each argument, invokespecial the superclass's, return
            [cos (apply append
                        (map (lambda (c)
@@ -684,7 +684,7 @@
                                           (u2 code) (u4 (fx+ 12 (length bc)))
                                           (u2 slots) (u2 slots) (u4 (length bc)) bc (u2 0) (u2 0)))))
                             ctors))]
-           [mos (apply append (map (lambda (m) (append (u2 #x0101) (u2 (utf8 (car m))) (u2 (utf8 (cdr m))) (u2 0))) methods))])
+           [mos (apply append (map (lambda (m) (append (u2 (caddr m)) (u2 (utf8 (car m))) (u2 (utf8 (cadr m))) (u2 0))) methods))])
       (append '(#xca #xfe #xba #xbe) (u2 0) (u2 52)
               (u2 (fx+ count 1)) (apply append (reverse pool))
               (u2 #x0031) (u2 this) (u2 sup)   ; public final super
@@ -793,6 +793,11 @@
   (let ([pds (desc-args desc)] [rd (desc-ret desc)])
     (lambda (this . args)
       (defined-result where rd (call-from-java (unbox cell) (cons this (map dyn-out pds args)))))))
+;; a static method's: the fn gets the arguments alone
+(define (defined-static-proc where desc cell)
+  (let ([pds (desc-args desc)] [rd (desc-ret desc)])
+    (lambda args
+      (defined-result where rd (call-from-java (unbox cell) (map dyn-out pds args))))))
 
 ;; defined class -> (super . interfaces), for invoke-super
 (define defined-supers (make-hashtable string-hash string=?))
@@ -800,11 +805,12 @@
 ;; name, super, ifaces (dots or slashes); fields ((name . desc) ...);
 ;; fns ((key . cell) ...), a key being a method name, for every method of
 ;; that name it can override, or "name(desc)ret" for that one method, which
-;; wins over its name's, and may be a method of the class's own. Answers
-;; the Class.
-(define (dyn-define-class name super ifaces fields fns)
-  (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns))))
-(define (define-jolt-class name super ifaces fields fns)
+;; wins over its name's, and may be a method of the class's own; sfields
+;; and sfns the same for static fields and methods, every sfns key a
+;; "name(desc)ret". Answers the Class.
+(define (dyn-define-class name super ifaces fields fns sfields sfns)
+  (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns))))
+(define (define-jolt-class name super ifaces fields fns sfields sfns)
   (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
   (define (bad-name? n)   ; not a JVM unqualified name
     (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
@@ -815,7 +821,7 @@
                         [else (split (cdr cs) (cons (car cs) cur) acc)])))
     (fail (dotted name) " isn't a class name"))
   (when (hashtable-ref classes name #f) (fail (dotted name) " is already a class"))
-  (let loop ([fs fields] [seen '()])
+  (let loop ([fs (append fields sfields)] [seen '()])
     (unless (null? fs)
       (let ([n (caar fs)] [d (cdar fs)])
         (when (bad-name? n) (fail (format "~s isn't a field name" n)))
@@ -863,21 +869,39 @@
                                           open))))
                          (filter (lambda (f) (not (memv #\( (string->list (car f))))) fns))))])
       (when (null? ctors) (fail (dotted super) " has no public or protected constructor"))
-      (for-each (lambda (m)
-                  (define-native! (string-append name "." (car m) (cadr m))
-                    (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
-                natives)
-      (let ([bytes (list->vector (class-file-bytes name super ifaces fields ctors
-                                                   (map (lambda (m) (cons (car m) (cadr m))) natives)))])
-        ;; the natives must be there when the class registers; a definition
-        ;; that fails takes them back, so a later class of the name can't
-        ;; pick them up
-        (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
-                                         natives)
-                               (raise e)])
-                   (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
-          (hashtable-set! defined-supers name (cons super ifaces))
-          m)))))
+      ;; (name desc cell) for every static native; a static method can't
+      ;; share a signature with an instance method, inherited or the class's
+      (let ([statics
+             (map (lambda (f)
+                    (let* ([k (car f)] [n (car (string-split-paren k))] [d (substring k (string-length n) (string-length k))])
+                      (when (or (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) natives)
+                                (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) ms))
+                        (fail "static " k " has an instance method's name and descriptor"))
+                      (list n d (cdr f))))
+                  sfns)])
+        (for-each (lambda (m)
+                    (define-native! (string-append name "." (car m) (cadr m))
+                      (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
+                  natives)
+        (for-each (lambda (m)
+                    (define-native! (string-append name "." (car m) (cadr m))
+                      (defined-static-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
+                  statics)
+        (let ([bytes (list->vector (class-file-bytes name super ifaces
+                                                     (append (map (lambda (f) (list (car f) (cdr f) 1)) fields)
+                                                             (map (lambda (f) (list (car f) (cdr f) 9)) sfields))
+                                                     ctors
+                                                     (append (map (lambda (m) (list (car m) (cadr m) #x0101)) natives)
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0109)) statics))))])
+          ;; the natives must be there when the class registers; a definition
+          ;; that fails takes them back, so a later class of the name can't
+          ;; pick them up
+          (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
+                                           (append natives statics))
+                                 (raise e)])
+                     (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
+            (hashtable-set! defined-supers name (cons super ifaces))
+            m))))))
 
 ;; obj's superclass's method name (public or protected) that fits args,
 ;; called on obj without virtual dispatch, as super.name(args) in Java; an

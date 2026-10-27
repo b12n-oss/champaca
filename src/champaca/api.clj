@@ -233,7 +233,7 @@
 
 ;; --- classes defined from jolt -------------------------------------------------------
 
-(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :class}
+(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :scells :class}
 
 (def ^:private prim-descs
   {"boolean" "Z" "byte" "B" "char" "C" "short" "S" "int" "I" "long" "J" "float" "F" "double" "D"})
@@ -274,36 +274,52 @@
   such as \"greet(Ljava/lang/String;)Ljava/lang/String;\" to a fn for that one
   method, which wins over its name's and may be a new method of the class's
   own. Each fn gets the object, then the method's arguments converted as
-  invoke's results are; its result is checked against the return type. The
+  invoke's results are; its result is checked against the return type.
+  :static-fields and :static-methods are the same for public static fields
+  and methods, every :static-methods key a full JVM name, and a static
+  method's fn gets the arguments alone. The
   class has a public constructor for each public or protected one of its
   superclass, passing the arguments on. Defining the same name again with
   the same superclass, interfaces, fields and method keys swaps in the new
   fns; anything else is refused, since a class is defined once per process."
-  [cname {:keys [extends implements fields methods]}]
+  [cname {:keys [extends implements fields methods static-fields static-methods]}]
   (let [extends (or extends "java.lang.Object")
         dotted (str/replace cname "/" ".")
         slashed #(str/replace % "." "/")
-        fields (mapv (fn [[n t]] [(name n) (type-desc t)])
-                     (if (map? fields) fields (map vector fields (repeat "java.lang.Object"))))
-        fns (reduce (fn [m [k f]]
-                      (let [mk (method-key k)]
-                        (when (contains? m mk)
-                          (throw (ex-info (str "define-class: method " (pr-str mk) " is named twice") {:method k})))
-                        (assoc m mk (as-fn "define-class" k f))))
-                    {} methods)
-        shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns))]]
+        field-descs (fn [fs] (mapv (fn [[n t]] [(name n) (type-desc t)])
+                                   (if (map? fs) fs (map vector fs (repeat "java.lang.Object")))))
+        fields (field-descs fields)
+        sfields (field-descs static-fields)
+        fn-map (fn [ms static?]
+                 (reduce (fn [m [k f]]
+                           (let [mk (method-key k)]
+                             (when (and static? (not (str/includes? mk "(")))
+                               (throw (ex-info (str "define-class: static method " (pr-str mk)
+                                                    " needs its full JVM name, name(descriptor)return")
+                                               {:method k})))
+                             (when (contains? m mk)
+                               (throw (ex-info (str "define-class: method " (pr-str mk) " is named twice") {:method k})))
+                             (assoc m mk (as-fn "define-class" k f))))
+                         {} ms))
+        fns (fn-map methods false)
+        sfns (fn-map static-methods true)
+        shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))]
+        scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
     (rethrow
-     #(if-let [{old :shape cells :cells c :class} (get @jolt-classes dotted)]
+     #(if-let [{old :shape cells :cells scells :scells c :class} (get @jolt-classes dotted)]
         (if (= old shape)
-          (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f)) c)
+          (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f))
+              (doseq [[k f] sfns] (s/call "set-box!" (get scells k) f))
+              c)
           (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
                                " fields or method keys; a class is defined once per process")
                           {:class dotted})))
-        (let [cells (into {} (map (fn [[k f]] [k (s/call "box" f)])) fns)
+        (let [boxes (fn [m] (into {} (map (fn [[k f]] [k (s/call "box" f)])) m))
+              cells (boxes fns)
+              scells (boxes sfns)
               c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
-                        (apply s/call "list" (map (fn [[n d]] (s/call "cons" n d)) fields))
-                        (apply s/call "list" (map (fn [[k cell]] (s/call "cons" k cell)) cells)))]
-          (swap! jolt-classes assoc dotted {:shape shape :cells cells :class c})
+                        (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells))]
+          (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :class c})
           c)))))
 
 (defn invoke-super
