@@ -368,7 +368,29 @@
     (ldk/define-class "demo.classes.Early" {:static-fields ["V"] :static-init (fn [] (reset! ran :second))})
     (ldk/get-static "demo.classes.Early" "V")
     (is (= :second @ran)))
-  (is (= "define-class: :static-init is not a fn" (thrown #(ldk/define-class "demo.classes.NoInit" {:static-init 5})))))
+  (is (= "define-class: :static-init is not a fn" (thrown #(ldk/define-class "demo.classes.NoInit" {:static-init 5}))))
+  ;; false is no initializer, as nil is
+  (is (some? (ldk/define-class "demo.classes.NoInit" {:static-init false})))
+  ;; reflection doesn't list it
+  (is (= ["public static native int demo.classes.Reflected.f()"]
+         (member-strings (ldk/invoke (ldk/define-class "demo.classes.Reflected"
+                                       {:static-methods {"f()I" (fn [] 1)} :static-init (fn [] nil)})
+                                     "getDeclaredMethods")))))
+
+(deftest a-static-initializer-and-threads
+  ;; a thread that uses the class while another initializes it waits for
+  ;; the initializer to finish
+  (let [started (promise)]
+    (ldk/define-class "demo.classes.Slow"
+      {:static-fields {"V" "int"}
+       :static-init (fn []
+                      (deliver started true)
+                      (ldk/invoke-static "java.lang.Thread" "sleep" 300)
+                      (ldk/set-static! "demo.classes.Slow" "V" 5))})
+    (let [other (future (ldk/get-static "demo.classes.Slow" "V"))]
+      (is (true? (deref started 10000 false)))
+      (is (= 5 (ldk/get-static "demo.classes.Slow" "V")))
+      (is (= 5 (deref other 10000 :timeout))))))
 
 (deftest a-static-initializer-that-fails
   (let [boom (ex-info "no config" {})]
@@ -382,6 +404,10 @@
            (thrown #(ldk/construct "demo.classes.Broken"))))
     (is (= "java.lang.NoClassDefFoundError: Could not initialize class demo.classes.Broken"
            (thrown #(ldk/get-static "demo.classes.Broken" "V")))))
+  ;; a redefinition doesn't bring a failed class back
+  (ldk/define-class "demo.classes.Broken" {:static-fields ["V"] :static-init (fn [] nil)})
+  (is (= "java.lang.NoClassDefFoundError: Could not initialize class demo.classes.Broken"
+         (thrown #(ldk/get-static "demo.classes.Broken" "V"))))
   ;; an Error passes as itself
   (ldk/define-class "demo.classes.Fatal"
     {:static-fields ["V"] :static-init (fn [] (throw (ldk/construct "java.lang.AssertionError" "fatal")))})

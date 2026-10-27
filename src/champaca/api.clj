@@ -278,7 +278,7 @@
   :static-fields and :static-methods are the same for public static fields
   and methods, every :static-methods key a full JVM name, and a static
   method's fn gets the arguments alone. :static-init is a fn of no
-  arguments run once, as the class's static initializer, when Java first
+  arguments (nil or false for none) run once, as the class's static initializer, when Java first
   initializes the class (Class.forName, a constructor, a static member). The
   class has a public constructor for each public or protected one of its
   superclass, passing the arguments on. Defining the same name again with
@@ -305,7 +305,7 @@
                          {} ms))
         fns (fn-map methods false)
         sfns (fn-map static-methods true)
-        init (some->> static-init (as-fn "define-class" :static-init))
+        init (when static-init (as-fn "define-class" :static-init static-init))
         shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
                (some? init)]
         scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
