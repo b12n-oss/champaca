@@ -295,7 +295,7 @@
     (is (identical? c (ldk/define-class cname (spec 100))))
     (is (= 110 (ldk/invoke-static cname "add" 1)))
     (is (= (str "define-class: demo.classes.Tally is already defined with another superclass, interfaces,"
-                " fields, method keys or static initializer; a class is defined once per process")
+                " fields, method keys, static initializer or constructors; a class is defined once per process")
            (thrown #(ldk/define-class cname (assoc (spec 1) :static-fields ["other"])))))))
 
 (deftest a-field-of-its-own-type
@@ -360,7 +360,7 @@
     (ldk/construct "demo.classes.Lazy")
     (is (= 1 @runs))
     (is (= (str "define-class: demo.classes.Lazy is already defined with another superclass, interfaces,"
-                " fields, method keys or static initializer; a class is defined once per process")
+                " fields, method keys, static initializer or constructors; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Lazy" {:static-fields ["V"]})))))
   ;; redefined before its first use, the class runs the new fn
   (let [ran (atom nil)]
@@ -413,6 +413,64 @@
     {:static-fields ["V"] :static-init (fn [] (throw (ldk/construct "java.lang.AssertionError" "fatal")))})
   (is (= "java.lang.AssertionError: fatal" (thrown #(ldk/get-static "demo.classes.Fatal" "V")))))
 
+(deftest constructors-of-its-own
+  (let [c (ldk/define-class "demo.classes.Named"
+            {:extends "java.lang.Thread"
+             :fields {"n" "int"}
+             :constructors {["java.lang.String" "int"] ["java.lang.String"]
+                            [] []}
+             :init (fn ([] []) ([who n] [(str "worker-" who)]))
+             :post-init (fn ([this]) ([this who n] (ldk/set-field! this "n" n)))
+             :methods {:run (fn [_] nil)}})
+        w (ldk/construct "demo.classes.Named" "a" 3)]
+    (is (= ["worker-a" 3] [(ldk/invoke w "getName") (ldk/get-field w "n")]))
+    (is (= 0 (ldk/get-field (ldk/construct "demo.classes.Named") "n")))
+    ;; only these: none passed on from Thread
+    (is (= ["public demo.classes.Named()" "public demo.classes.Named(java.lang.String,int)"]
+           (member-strings (ldk/invoke c "getDeclaredConstructors"))))
+    (is (= "no <init> in demo/classes/Named fits 1 argument(s) (no method of that name and arity)"
+           (thrown #(ldk/construct "demo.classes.Named" "a"))))
+    ;; Java reaches them through reflection, and sees no native constructor
+    (let [k (ldk/invoke c "getConstructor" [(class-named "java.lang.String") (ldk/get-static "java.lang.Integer" "TYPE")])]
+      (is (= "public" (ldk/invoke-static "java.lang.reflect.Modifier" "toString" (ldk/invoke k "getModifiers"))))
+      (is (= "worker-b" (ldk/invoke (ldk/invoke k "newInstance" ["b" 9]) "getName")))))
+  ;; a protected superclass constructor, no :init for one without arguments
+  (ldk/define-class "demo.classes.Bundle"
+    {:extends "java.util.ResourceBundle"
+     :fields ["prefix"]
+     :constructors {["java.lang.String"] []}
+     :post-init (fn [this p] (ldk/set-field! this "prefix" p))
+     :methods {:handleGetObject (fn [this k] (str (ldk/get-field this "prefix") k)) :getKeys (fn [_] nil)}})
+  (is (= "x-hello" (ldk/invoke (ldk/construct "demo.classes.Bundle" "x-") "getString" "hello")))
+  ;; the same shape again swaps :init and :post-init
+  (let [spec (fn [tag] {:fields ["tag"] :constructors {["java.lang.String"] []}
+                        :post-init (fn [this s] (ldk/set-field! this "tag" (str tag s)))})]
+    (ldk/define-class "demo.classes.Tagged" (spec "a-"))
+    (is (= "a-x" (ldk/get-field (ldk/construct "demo.classes.Tagged" "x") "tag")))
+    (ldk/define-class "demo.classes.Tagged" (spec "b-"))
+    (is (= "b-x" (ldk/get-field (ldk/construct "demo.classes.Tagged" "x") "tag")))
+    (is (= (str "define-class: demo.classes.Tagged is already defined with another superclass, interfaces,"
+                " fields, method keys, static initializer or constructors; a class is defined once per process")
+           (thrown #(ldk/define-class "demo.classes.Tagged" (assoc (spec "c-") :constructors {["int"] []})))))))
+
+(deftest what-constructors-refuse
+  ;; :init's result is checked against the superclass constructor
+  (ldk/define-class "demo.classes.C1" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]} :init (fn [n] n)})
+  (is (= (str "java.lang.IllegalArgumentException: demo.classes.C1.<init>(I)V: :init returned the number 1,"
+              " not a vector of 1 argument(s) for java.lang.Thread.<init>(Ljava/lang/String;)V")
+         (thrown #(ldk/construct "demo.classes.C1" 1))))
+  (ldk/define-class "demo.classes.C2" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]} :init (fn [n] [n])})
+  (is (= "java.lang.ClassCastException: demo.classes.C2.<init>(I)V :init returned a java.lang.Integer, not java.lang.String"
+         (thrown #(ldk/construct "demo.classes.C2" 1))))
+  (ldk/define-class "demo.classes.C3" {:constructors {[] []} :post-init (fn [_] (throw (ex-info "post" {})))})
+  (is (= "post" (thrown #(ldk/construct "demo.classes.C3"))))
+  (is (= "define-class: the constructor (I)V passes arguments to java.lang.Thread.<init>(Ljava/lang/String;)V, so it needs :init"
+         (thrown #(ldk/define-class "demo.classes.C4" {:extends "java.lang.Thread" :constructors {["int"] ["java.lang.String"]}}))))
+  (is (= "define-class: java.lang.Thread has no public or protected constructor (D)V"
+         (thrown #(ldk/define-class "demo.classes.C5" {:extends "java.lang.Thread" :constructors {["int"] ["double"]} :init (fn [n] [n])}))))
+  (is (= "define-class: :constructors names no constructor" (thrown #(ldk/define-class "demo.classes.C6" {:constructors {}}))))
+  (is (= "define-class: :init is not a fn" (thrown #(ldk/define-class "demo.classes.C7" {:constructors {[] []} :init 1})))))
+
 (deftest a-failed-definition-takes-its-natives-back
   ;; define-class! made to fail: the error is the one it threw, and the
   ;; name and its natives are free for the next definition
@@ -421,8 +479,9 @@
   (try
     (is (= "define-class!: forced"
            (thrown #(ldk/define-class "demo.classes.Forced"
-                      {:methods {"f()I" (fn [_] 1)} :static-methods {"g()I" (fn [] 2)} :static-init (fn [] nil)}))))
-    (is (= "(#f #f #f)" (scm/eval-string "(format \"~s\" (list (hashtable-contains? natives \"demo/classes/Forced.f()I\") (hashtable-contains? natives \"demo/classes/Forced.g()I\") (hashtable-contains? natives \"demo/classes/Forced.<clinit>()V\")))")))
+                      {:methods {"f()I" (fn [_] 1)} :static-methods {"g()I" (fn [] 2)} :static-init (fn [] nil)
+                       :constructors {["int"] []}}))))
+    (is (= "(#f #f #f #f)" (scm/eval-string "(format \"~s\" (list (hashtable-contains? natives \"demo/classes/Forced.f()I\") (hashtable-contains? natives \"demo/classes/Forced.g()I\") (hashtable-contains? natives \"demo/classes/Forced.<clinit>()V\") (hashtable-contains? natives \"demo/classes/Forced.<init>(I)V\")))")))
     (finally (scm/eval-string "(set! define-class! examples-saved-define-class!)")))
   (ldk/define-class "demo.classes.Forced" {:methods {"f()I" (fn [_] 10)} :static-methods {"g()I" (fn [] 20)}})
   (is (= [10 20] [(ldk/invoke (ldk/construct "demo.classes.Forced") "f") (ldk/invoke-static "demo.classes.Forced" "g")])))
@@ -436,7 +495,7 @@
     (is (identical? c (ldk/define-class "demo.classes.Again" (spec 2))))
     (is (= 2 (ldk/invoke o "getAsInt")))
     (is (= (str "define-class: demo.classes.Again is already defined with another superclass, interfaces,"
-                " fields, method keys or static initializer; a class is defined once per process")
+                " fields, method keys, static initializer or constructors; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Again" (assoc (spec 3) :fields ["v" "w"])))))
     ;; fields are compared in order
     (ldk/define-class "demo.classes.Ordered" {:fields ["a" "b"]})

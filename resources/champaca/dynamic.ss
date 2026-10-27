@@ -808,10 +808,37 @@
 ;; wins over its name's, and may be a method of the class's own; sfields
 ;; and sfns the same for static fields and methods, every sfns key a
 ;; "name(desc)ret"; init a cell holding the fn of its static initializer,
-;; or #f. Answers the Class.
-(define (dyn-define-class name super ifaces fields fns sfields sfns init)
-  (with-java-errors (lambda () (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns init))))
-(define (define-jolt-class name super ifaces fields fns sfields sfns init)
+;; or #f; own ((desc . super-desc) ...), the class's own constructors, or #f
+;; for one per superclass constructor, with cells for the :init fn (args ->
+;; the superclass constructor's args) and the :post-init fn (this, args), or
+;; #f. Answers the Class.
+(define (dyn-define-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init)
+  (with-java-errors
+   (lambda ()
+     (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns init
+                        own-ctors ctor-init post-init))))
+
+;; A constructor of the class's own: a native <init> (champaca calls it as
+;; any constructor; HotSpot would want code) that hands its arguments to
+;; :init, checks what comes back against the superclass constructor's
+;; parameters, runs that constructor on the object, then :post-init.
+(define (defined-ctor-proc where super desc sdesc ctor-init post-init)
+  (let ([pds (desc-args desc)] [sds (desc-args sdesc)] [sproc #f])
+    (lambda (this . args)
+      (let* ([jargs (map dyn-out pds args)]
+             [sargs (if ctor-init
+                        (let ([r (jolt-data (call-from-java (unbox ctor-init) jargs))])
+                          (cond [(and (seq-arg? r) (fx= (length r) (length sds))) r]
+                                [else (jthrow "java/lang/IllegalArgumentException"
+                                              (format "~a: :init returned ~a, not a vector of ~a argument(s) for ~a.<init>~a"
+                                                      where (value-kind r) (length sds) (dotted super) sdesc))]))
+                        '())])
+        (unless sproc (set! sproc (method-proc super (string-append "<init>" sdesc))))
+        (apply sproc this (map (lambda (d a) (defined-result (string-append where " :init") d a)) sds sargs))
+        (when post-init (call-from-java (unbox post-init) (cons this jargs)))
+        (void)))))
+
+(define (define-jolt-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init)
   (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
   (define (bad-name? n)   ; not a JVM unqualified name
     (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
@@ -871,6 +898,15 @@
                                           open))))
                          (filter (lambda (f) (not (memv #\( (string->list (car f))))) fns))))])
       (when (null? ctors) (fail (dotted super) " has no public or protected constructor"))
+      (when own-ctors
+        (when (null? own-ctors) (fail ":constructors names no constructor"))
+        (for-each (lambda (c)
+                    (unless (assoc (cdr c) ctors)
+                      (fail (dotted super) " has no public or protected constructor " (cdr c)))
+                    (when (and (not ctor-init) (not (string=? (cdr c) "()V")))
+                      (fail "the constructor " (car c) " passes arguments to " (dotted super) ".<init>" (cdr c)
+                            ", so it needs :init")))
+                  own-ctors))
       ;; (name desc cell) for every static native; a static method can't
       ;; share a signature with an instance method, inherited or the class's
       (let ([statics
@@ -886,11 +922,18 @@
             ;; failure is an ExceptionInInitializerError, then
             ;; NoClassDefFoundError (a class file only champaca loads: HotSpot
             ;; wants code in a <clinit>)
+            [natives-ctors
+             (map (lambda (c)
+                    (list "<init>" (car c)
+                          (defined-ctor-proc (string-append (dotted name) ".<init>" (car c)) super (car c) (cdr c)
+                                             ctor-init post-init)))
+                  (or own-ctors '()))]
             [clinit (if init
                         (list (list "<clinit>" "()V"
                                     (lambda () (call-from-java (unbox init) '()) (void))))
                         '())])
-        (for-each (lambda (m) (define-native! (string-append name "." (car m) (cadr m)) (caddr m))) clinit)
+        (for-each (lambda (m) (define-native! (string-append name "." (car m) (cadr m)) (caddr m)))
+                  (append clinit natives-ctors))
         (for-each (lambda (m)
                     (define-native! (string-append name "." (car m) (cadr m))
                       (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
@@ -902,15 +945,16 @@
         (let ([bytes (list->vector (class-file-bytes name super ifaces
                                                      (append (map (lambda (f) (list (car f) (cdr f) 1)) fields)
                                                              (map (lambda (f) (list (car f) (cdr f) 9)) sfields))
-                                                     ctors
+                                                     (if own-ctors '() ctors)
                                                      (append (map (lambda (m) (list (car m) (cadr m) #x0101)) own)
                                                              (map (lambda (m) (list (car m) (cadr m) #x0109)) statics)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0108)) clinit))))])
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0108)) clinit)
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0101)) natives-ctors))))])
           ;; the natives must be there when the class registers; a definition
           ;; that fails takes them back, so a later class of the name can't
           ;; pick them up
           (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
-                                           (append own statics clinit))
+                                           (append own statics clinit natives-ctors))
                                  (raise e)])
                      (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
             (hashtable-set! defined-supers name (cons super ifaces))

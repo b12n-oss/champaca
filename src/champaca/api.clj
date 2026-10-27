@@ -233,7 +233,7 @@
 
 ;; --- classes defined from jolt -------------------------------------------------------
 
-(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :scells :icell :class}
+(defonce ^:private jolt-classes (atom {}))   ; dotted name -> {:shape :cells :scells :icell :ccell :pcell :class}
 
 (def ^:private prim-descs
   {"boolean" "Z" "byte" "B" "char" "C" "short" "S" "int" "I" "long" "J" "float" "F" "double" "D"})
@@ -281,10 +281,15 @@
   arguments (nil or false for none) run once, as the class's static initializer, when Java first
   initializes the class (Class.forName, a constructor, a static member). The
   class has a public constructor for each public or protected one of its
-  superclass, passing the arguments on. Defining the same name again with
+  superclass, passing the arguments on, unless :constructors gives its own,
+  as gen-class's does: a map from a vector of parameter types to the vector
+  of a superclass constructor's. :init gets a constructor's arguments and
+  returns the superclass constructor's as a vector; :post-init then gets the
+  object and the arguments. Defining the same name again with
   the same superclass, interfaces, fields and method keys swaps in the new
   fns; anything else is refused, since a class is defined once per process."
-  [cname {:keys [extends implements fields methods static-fields static-methods static-init]}]
+  [cname {:keys [extends implements fields methods static-fields static-methods static-init
+                 constructors init post-init]}]
   (let [extends (or extends "java.lang.Object")
         dotted (str/replace cname "/" ".")
         slashed #(str/replace % "." "/")
@@ -305,27 +310,39 @@
                          {} ms))
         fns (fn-map methods false)
         sfns (fn-map static-methods true)
-        init (when static-init (as-fn "define-class" :static-init static-init))
+        sinit (when static-init (as-fn "define-class" :static-init static-init))
+        ctor-desc (fn [ts] (str "(" (apply str (map type-desc ts)) ")V"))
+        ctors (when (some? constructors)
+                (into (sorted-map) (map (fn [[own sup]] [(ctor-desc own) (ctor-desc sup)])) constructors))
+        cinit (when init (as-fn "define-class" :init init))
+        post (when post-init (as-fn "define-class" :post-init post-init))
         shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
-               (some? init)]
+               (some? sinit) ctors (some? cinit) (some? post)]
         scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
     (rethrow
-     #(if-let [{old :shape cells :cells scells :scells icell :icell c :class} (get @jolt-classes dotted)]
+     #(if-let [{old :shape cells :cells scells :scells icell :icell ccell :ccell pcell :pcell c :class}
+               (get @jolt-classes dotted)]
         (if (= old shape)
           (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f))
               (doseq [[k f] sfns] (s/call "set-box!" (get scells k) f))
-              (when init (s/call "set-box!" icell init))
+              (when sinit (s/call "set-box!" icell sinit))
+              (when cinit (s/call "set-box!" ccell cinit))
+              (when post (s/call "set-box!" pcell post))
               c)
           (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
-                               " fields, method keys or static initializer; a class is defined once per process")
+                               " fields, method keys, static initializer or constructors; a class is defined once per process")
                           {:class dotted})))
         (let [boxes (fn [m] (into {} (map (fn [[k f]] [k (s/call "box" f)])) m))
               cells (boxes fns)
               scells (boxes sfns)
-              icell (when init (s/call "box" init))
+              icell (when sinit (s/call "box" sinit))
+              ccell (when cinit (s/call "box" cinit))
+              pcell (when post (s/call "box" post))
               c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
-                        (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false))]
-          (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell :class c})
+                        (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
+                        (if ctors (scm-list ctors) false) (or ccell false) (or pcell false))]
+          (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell
+                                            :ccell ccell :pcell pcell :class c})
           c)))))
 
 (defn invoke-super

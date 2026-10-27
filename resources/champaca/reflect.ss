@@ -79,7 +79,9 @@
              (let* ([m (cdr im)] [desc (cadr m)] [flags (caddr m)])
                (construct "java/lang/reflect/Constructor"
                           "(Ljava/lang/Class;[Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B)V"
-                          this (mirror-array (desc-args desc)) (exception-mirrors m) (fxlogand flags #xffff) (car im)
+                          ;; never native: only a class define-class made has a
+                          ;; native <init>, which Java sees as an ordinary one
+                          this (mirror-array (desc-args desc)) (exception-mirrors m) (fxlogand flags #xfeff) (car im)
                           (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4)) (refl-bytes (member-attr m 5)))))
            (indexed-members (meta-methods c)
                             (lambda (m) (and (string=? (car m) "<init>")
