@@ -821,7 +821,7 @@
         (when (bad-name? n) (fail (format "~s isn't a field name" n)))
         (when (member n seen) (fail "field " n " is named twice"))
         (let ([t (let strip ([d d]) (if (char=? (string-ref d 0) #\[) (strip (array-elem d)) d))])
-          (when (and (char=? (string-ref t 0) #\L) (not (class-exists? (ref-class t))))
+          (when (and (char=? (string-ref t 0) #\L) (not (string=? (ref-class t) name)) (not (class-exists? (ref-class t))))
             (fail "field " n "'s type " (dotted (ref-class t)) " isn't a class (a nested class is Outer$Inner)")))
         (loop (cdr fs) (cons n seen)))))
   (let loop ([is ifaces])
