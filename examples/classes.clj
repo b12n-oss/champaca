@@ -76,7 +76,25 @@
       (is (= 41 (ldk/invoke (ldk/invoke pool "submit" task) "get")))
       (ldk/invoke pool "shutdown")
       (is (true? (ldk/invoke pool "awaitTermination" 5 (ldk/get-static "java.util.concurrent.TimeUnit" "SECONDS"))))
-      (is (= [:before :after] @seen)))))
+      (is (= [:before :after] @seen))))
+  ;; a varargs constructor stays varargs
+  (ldk/define-class "demo.classes.Provider" {:extends "java.util.spi.AbstractResourceBundleProvider"})
+  (is (true? (ldk/invoke (ldk/invoke (ldk/construct "demo.classes.Provider" "java.class" "java.properties") "getClass")
+                         "isInstance" (ldk/construct "demo.classes.Provider"))))
+  (is (= [false true] (sort (map #(ldk/invoke % "isVarArgs")
+                                 (ldk/->clj (ldk/invoke (ldk/invoke-static "java.lang.Class" "forName" "demo.classes.Provider")
+                                                        "getConstructors"))))))
+  ;; a method only a superinterface declares: forEach, from Iterable, which
+  ;; AbstractList's List extends; apply, from UnaryOperator's Function
+  (let [seen (atom [])]
+    (ldk/define-class "demo.classes.Each"
+      {:extends "java.util.AbstractList" :implements ["java.util.function.UnaryOperator"]
+       :methods {:size (fn [_] 2) :get (fn [_ i] i) :forEach (fn [this f] (swap! seen conj :each))
+                 :apply (fn [_ x] (str x "?"))}})
+    (let [e (ldk/construct "demo.classes.Each")]
+      (ldk/invoke e "forEach" (fn [x] nil))
+      (is (= [:each] @seen))
+      (is (= "a?" (ldk/invoke e "apply" "a"))))))
 
 (deftest calling-the-superclass
   (ldk/define-class "demo.classes.Marked"
@@ -187,6 +205,8 @@
          (thrown #(ldk/define-class "demo.classes.E3" {:implements ["java.lang.Object"]}))))
   (is (= "define-class: no method nope to implement in java.lang.Object, java.lang.Runnable"
          (thrown #(ldk/define-class "demo.classes.E4" {:implements ["java.lang.Runnable"] :methods {:nope (fn [_])}}))))
+  (is (= "define-class: getClass()Ljava/lang/Class; is final in java.lang.Object"
+         (thrown #(ldk/define-class "demo.classes.E5" {:methods {"getClass()Ljava/lang/Class;" (fn [_])}}))))
   (is (= "define-class: getClass is final in java.lang.Object"
          (thrown #(ldk/define-class "demo.classes.E5" {:methods {:getClass (fn [_])}}))))
   (is (= "define-class: \"bad(Q)V\" is neither a method name nor name(descriptor)return"
