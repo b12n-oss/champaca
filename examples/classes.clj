@@ -190,6 +190,23 @@
            (thrown #(ldk/invoke r "notSam"))))
     (is (= 9 (ldk/invoke (ldk/invoke r "sam") "getAsInt")))))
 
+(defn- answer [_] 42)
+
+(deftest what-a-class-may-hold
+  ;; a var as a method's fn, an array field, a name with NUL in it (modified
+  ;; UTF-8 writes NUL as two octets)
+  (ldk/define-class "demo.classes.Holds"
+    {:implements ["java.util.function.IntSupplier"]
+     :fields {"xs" "long[]" "a\u0000b" "int"}
+     :methods {:getAsInt #'answer}})
+  (let [h (ldk/construct "demo.classes.Holds")]
+    (is (= 42 (ldk/invoke h "getAsInt")))
+    (ldk/set-field! h "xs" [1 5000000000])
+    (is (= [1 5000000000] (ldk/->clj (ldk/get-field h "xs"))))
+    (is (= ["[J" "a\u0000b"]
+           (sort (map #(if (= "xs" (ldk/invoke % "getName")) (ldk/invoke (ldk/invoke % "getType") "getName") (ldk/invoke % "getName"))
+                      (ldk/->clj (ldk/invoke (ldk/invoke h "getClass") "getFields"))))))))
+
 (deftest methods-of-its-own
   (ldk/define-class "demo.classes.Own" {:methods {"twice(I)I" (fn [_ n] (* 2 n))}})
   (let [o (ldk/construct "demo.classes.Own")
