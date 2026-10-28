@@ -8,13 +8,22 @@ All numbers here were measured on macOS arm64 with the jolt pinned in `deps.edn`
 
 Booting the JDK means parsing classes, translating their methods to Scheme and compiling them: 387 classes and 819 methods before `main` can start, two thirds of them for the module system (below). The first run saves the result under `~/.cache/champaca/<key>/`: the compiled code as a Chez `boot.so` (4.9 MB) and the class table as a jolt image, `state.img`. Later runs load both and skip all of that. The runtime's own Scheme (`runtime.ss`, `natives.ss` and the rest) is compiled into the same directory as `runtime.so`, which loads in about 8 ms where compiling the source took about 130 ms on every start. The code is compiled without Chez's inspector information (variable names and source positions), which had made `boot.so` 12.1 MB and its load 40% slower; procedure names stay, and they're all `getCallerClass` needs.
 
+Today, on an M1 Pro on 2026-10-28 (medians of five runs, load average 5 to 7 from other work):
+
+| Program | Cache off | Cold, writing the cache | Warm cache | Warm, after a full `bb test` |
+|---|---|---|---|---|
+| `Hello` | 5.9 s | 6.5 s | 0.39 s | 0.46 s |
+| `Streams` | 6.6 s | 7.0 s | 0.49 s | 0.52 s |
+
+Before the module system booted, the same table read:
+
 | Program | Cache off | Cold, writing the cache | Warm cache |
 |---|---|---|---|
 | `Hello` | 1.17 s | 1.53 s | 0.31 s |
 | `Streams` | 1.68 s | 2.20 s | 0.47 s |
 | `examples/interop.clj` | 1.48 s | 1.82 s | 0.36 s |
 
-The last row timed `jolt -M examples/interop.clj` when that file printed its results. It's a set of tests now, which `bb example interop` runs. Each is the median of five runs, measured right after the version before the last change below on the same machine, so read them for the comparison more than the absolute values. The module system's boot came later and made every column dearer: see [the module system's share](#the-module-systems-share) below. A cold run is the first after the cache key changes, with the JDK's modules already extracted (that happens once per JDK). Without compiling each method once, the cold column read 1.87, 2.65 and 2.28 s, with the other two columns the same. Before the earlier changes, on a busier machine, it read 3.15, 4.79 and 4.29 s.
+The last row timed `jolt -M examples/interop.clj` when that file printed its results. It's a set of tests now, which `bb example interop` runs. Each is the median of five runs, measured right after the version before the last change below on the same machine, so read them for the comparison more than the absolute values. The module system's boot came later and made every column dearer: see [the module system's share](#the-module-systems-share) below. A cold run is the first after the cache key changes. Without compiling each method once, the cold column read 1.87, 2.65 and 2.28 s, with the other two columns the same. Before the earlier changes, on a busier machine, it read 3.15, 4.79 and 4.29 s.
 
 A cold start used to spend half its time writing the cache, and most of that compiling the class registrations into `boot.so`. Each method stub was its own top-level `define`, several thousand of them, and Chez's cost per top-level form is far above that of a quoted list, so a class's methods are now defined by one form holding a list (`define-methods!`). Each class's vtable also repeated every inherited entry, about a third of the registration text, and it's now registered as changes to its superclass's. Together they took `boot.so` from 6.8 MB to 1.5 MB, which warm starts load whole. A cold start also used to evaluate the runtime's source and then compile it again for the cache; it now compiles `runtime.so` first and loads that. And class files parse about twice as fast: ASCII constant-pool strings are decoded in Scheme, straight from the byte array.
 
@@ -40,7 +49,7 @@ Most of the cold start's five seconds is Chez compiling `SystemModules$default`.
 
 JDK code is cached, and so are classes from jars and directories on the classpath ([below](#classes-from-jars-and-directories)). A classpath class is used from the cache only while its bytes are the ones it was compiled from, so the program you're working on always runs what you last compiled.
 
-When a run compiles JDK methods the cache didn't have, `champaca.main` appends them as a new generation, `extra-<n>.so`, on the way out. That includes a warm start's own boot when it loads classes the cached boot didn't, which a `-D` option can make it do: `-Dstdout.encoding=ISO-8859-1` gives `System.out` an encoder no default boot loads, and its class goes into that run's generation like any other (`EncoderCheck` in `bb test` runs that sequence on a cache of its own). From jolt, `(ldk/save-cache!)` does the same; call it before the process exits. It costs almost nothing when there's nothing new.
+When a run compiles JDK methods the cache didn't have, `champaca.main` appends them as a new generation, `extra-<n>.so`, on the way out. That includes a warm start's own boot when it loads classes the cached boot didn't, which a `-D` option can make it do: `-Dstdout.encoding=ISO-8859-1` gives `System.out` an encoder no default boot loads, and its class goes into that run's generation like any other (`bb test` runs that sequence on a cache of its own, `EncoderCheck` being the program that uses the encoder). From jolt, `(ldk/save-cache!)` does the same; call it before the process exits. It costs almost nothing when there's nothing new.
 
 ### Generations
 
@@ -48,7 +57,7 @@ When a run compiles JDK methods the cache didn't have, `champaca.main` appends t
 
 Before this, every run loaded every generation, and the cost followed the amount of code. A full `bb test` from an empty cache leaves 14 generations, and a warm `Hello` on that cache took 0.58 s instead of 0.37 s. Right after the change it took 0.42 s and loaded 85 units. Most of the 60 ms left was `state.img`, which holds every class any run has loaded (775 KB against 250 KB, 73 ms to read against 25 ms).
 
-`state.img` is now written as one piece of edn text per class. Reading the image builds strings, and an entry is parsed the first time the run touches its class, so boot pays for the classes the program uses rather than for everything the cache has seen. After today's full `bb test` the table holds about 1,450 classes in a 1.6 MB image: decoding the old form took 144 ms, reading the text form takes 35 ms, and a warm `Hello` on that cache went from 0.43 s to 0.34 s (medians of nine interleaved runs). A save keeps the text of every entry the run never parsed, so rewriting the image doesn't re-print the whole table either.
+`state.img` is now written as one piece of edn text per class. Reading the image builds strings, and an entry is parsed the first time the run touches its class, so boot pays for the classes the program uses rather than for everything the cache has seen. After a full `bb test` on 2026-10-17 the table holds about 1,450 classes in a 1.6 MB image: decoding the old form took 144 ms, reading the text form takes 35 ms, and a warm `Hello` on that cache went from 0.43 s to 0.34 s (medians of nine interleaved runs). A save keeps the text of every entry the run never parsed, so rewriting the image doesn't re-print the whole table either.
 
 Class registrations turned out to be most of a generation's code: 9.4 MB of the 14.7 MB that `bb test` wrote, with method bodies the rest. So loading only the bodies lazily would have saved 40 ms.
 
@@ -128,9 +137,9 @@ bb jolt        # about 45 s, once per pin
 bb test        # prints which jolt it picked
 ```
 
-It makes a detached worktree of a jolt checkout (`$JOLT_SRC`, else `~/dev/jolt`, cloned from the URL if neither exists) at `~/.cache/champaca/jolt/<sha>/src`, runs `make build` there and copies the binary next to it. `bb test` uses `$JOLT` when it's set, then the pinned build, then whatever `jolt` is on your `PATH`.
+It makes a detached worktree of a jolt checkout (`$JOLT_SRC`, else `~/dev/jolt`, cloned from the URL if neither exists) at `~/.cache/champaca/jolt/<sha8>/src` (`<sha8>` being the commit's first eight characters), runs `make build` there and copies the binary next to it. `bb test` uses `$JOLT` when it's set, then the pinned build, then whatever `jolt` is on your `PATH`.
 
-The pin only affects `bb test` and `bb libs` in this repo. Champaca works on any released 0.8.23 or later.
+The pin only affects this repo's bb tasks that run jolt (`test`, `libs`, `example`, `nrepl`, `bench`). Champaca works on any released 0.8.23 or later.
 
 ## The generated code
 

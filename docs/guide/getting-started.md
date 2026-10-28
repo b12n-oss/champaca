@@ -16,7 +16,7 @@ From the repo root:
 jolt -M -e "(require '[champaca.api :as ldk]) (ldk/init!) (println (ldk/invoke \"champaca\" \"toUpperCase\"))"
 ```
 
-That prints `CHAMPACA`. `init!` boots the JDK, which takes about a second the first time and about 0.3 s once the startup cache exists. After that every call goes straight into compiled code.
+That prints `CHAMPACA`. `init!` boots the JDK, which takes six or seven seconds the first time and about 0.4 s once the startup cache exists. After that every call goes straight into compiled code.
 
 A file works the same way. This is a cut-down `examples/dynamic.clj`:
 
@@ -59,7 +59,7 @@ Call `init!` once per process, before any other champaca function. A second call
 
 ## From an editor
 
-Each file in `examples/` is a namespace of `clojure.test` tests, so it shows a call next to the value it returns. `bb examples` lists them, and `bb example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields` and `serialization` need `target/lib.jar`, which `bb test` builds from `test/jar`. `bb example` builds that jar too, when it's missing or older than its sources.
+Each file in `examples/` is a namespace of `clojure.test` tests, so it shows a call next to the value it returns. `bb examples` lists them, and `bb example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields`, `serialization` and `classes` need `target/lib.jar`, which `bb test` builds from `test/jar`. `bb example` builds that jar too, when it's missing or older than its sources.
 
 To work live from an editor, start jolt's nREPL server from the repo root:
 
@@ -90,7 +90,7 @@ These guides can be read as a local site. `bb site:serve` builds `docs/` into `_
 bb test
 ```
 
-It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, one with a `.options` file gets that file's lines as launcher options (`-D` ones) before the classpath, and one that runs past five minutes fails. `test/libcache` runs two programs over jars and directories that change between runs, twenty-five runs in all, which checks the cache of classpath classes. It runs upstream OpenLDK's own `aaa` test programs the same way as `test/java`'s, from `test/aaa` (its README says how they're laid out). Then it runs the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line says which jolt it used.
+It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, one with a `.options` file gets that file's lines as launcher options (`-D` ones) before the classpath, and one that runs past five minutes fails. `test/libcache` runs three programs (`LibCacheMain`, `LamMain`, `EditMain`) over jars and directories that change between runs, twenty-five runs in all, which checks the cache of classpath classes. It runs upstream OpenLDK's own `aaa` test programs the same way as `test/java`'s, from `test/aaa` (its README says how they're laid out). Then it runs the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line says which jolt it used.
 
 ## Where next
 

@@ -19,14 +19,17 @@ Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot
 (define |Hello.main([Ljava/lang/String;)V|
   (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
     (lambda (l0)
-      (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
-                (lambda (l0)
-                  (begin (jinit-ic ic0 '|java/lang/System|)
-                         (let ((s0 |java/lang/System:out|))
-                           (let ((s1 (jstring-lit "Hello, World!")))
-                             ((jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V|) s0 s1)))
-                         (void)))))
-        (|Hello.main([Ljava/lang/String;)V#B0| l0)))))
+      (let ((npe-tag '|Hello.main([Ljava/lang/String;)V|))
+        (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
+                  (lambda (l0)
+                    (begin (jinit-ic ic0 '|java/lang/System| (begin '(jpc . 0) npe-tag) 0)
+                           (let ((s0 |java/lang/System:out|))
+                             (let ((s1 (jstring-lit "Hello, World!")))
+                               ((begin '(jpc . 5)
+                                       (jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V| (begin '(jpc . 5) npe-tag) 5))
+                                s0 s1)))
+                           (void)))))
+          (|Hello.main([Ljava/lang/String;)V#B0| l0))))))
 ```
 
 The two arguments to `println` are scoped to that one call, and the `return` follows it. Closing the lets this way is what makes a long straight-line method compile in reasonable time: the module system's generated descriptor builder, 21 KB of bytecode, nested 12,000 lets deep, and Chez's expander, which walks the enclosing bindings for every variable it resolves, took 4.6 s on it; closed as it goes, it's 53 deep. A method over 4,000 bytes of bytecode also keeps its inline-cache cells in one vector rather than one variable each, for the same reason.
@@ -55,7 +58,7 @@ Sockets go the same way (`net.ss`): `sun.nio.ch.Net`, the socket dispatcher and 
 
 Child processes skip the JDK's launcher (`jspawnhelper` or `vfork`, a small C program that runs in the child before `exec`). `spawn.ss` does the same setup with `posix_spawn`'s file actions: the pipes or files onto descriptors 0, 1 and 2, the working directory, and every other descriptor closed (`POSIX_SPAWN_CLOEXEC_DEFAULT` on macOS, `addclosefrom_np` from glibc 2.34; the pipes are close-on-exec as well, which is all glibc 2.33 gets). PATH is searched the way the JDK's `JDK_execvpe` does, with each candidate checked by `access` first, and a file the kernel can't run goes to `/bin/sh`. Chez ignores SIGPIPE, and an ignored signal stays ignored across `exec`, so the child's SIGPIPE is reset to the default a JVM's child gets. The JDK's reaper thread then waits in `waitpid` with the GIL given up.
 
-Resources aren't native, and the JDK finds its own through the JVM's image reader, which champaca doesn't run. So `getResourceAsStream`, `getResource` and `getResources` are overridden to ask the loader, which looks in the JDK's runtime image first and then the classpath, as it does for classes. A classpath resource gets a `file:` or `jar:` URL, which the JDK's own URL handlers then open.
+Resources aren't native, and the JDK finds its own through the JVM's image reader, which champaca doesn't run. So `getResourceAsStream`, `getResource` and `getResources` are overridden to ask the loader, which looks in the JDK's runtime image first and then the classpath, the reverse of the order it uses for classes. A classpath resource gets a `file:` or `jar:` URL, which the JDK's own URL handlers then open.
 
 ## Booting the JDK
 

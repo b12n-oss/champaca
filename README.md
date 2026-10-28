@@ -73,31 +73,30 @@ Classes outside `java.base` come from the same image: `java.sql`, `java.logging`
 
 ## Reflection
 
-JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with method handles or with two VM natives, `invoke0` and `newInstance0`. It falls back to the natives while `java.lang.invoke` isn't initialized (it never is here) or when `jdk.reflect.useNativeAccessorOnly=true` (set here too). So the runtime supplies those natives, plus `Class.getDeclaredMethods0`, `getDeclaredFields0`, `getDeclaredConstructors0` and the rest, and builds real `java.lang.reflect` objects through their own constructors. Field access has no native path in JDK 25, so `Field.get`/`set` and the typed variants are overridden.
+JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with method handles or with two VM natives, `invoke0` and `newInstance0`. It uses the natives when `jdk.reflect.useNativeAccessorOnly=true`, which champaca always sets. So the runtime supplies those natives, plus `Class.getDeclaredMethods0`, `getDeclaredFields0`, `getDeclaredConstructors0` and the rest, and builds real `java.lang.reflect` objects through their own constructors. Field access has no native path in JDK 25, so `Field.get`/`set` and the typed variants are overridden.
 
 `Reflection.getCallerClass` and stack traces walk the Chez continuation. A translated method is a top-level `define` named `Class.name(desc)`, and its blocks and trampoline loop carry that name too, so each frame says which Java method it belongs to, and nothing is recorded on ordinary calls. `fillInStackTrace` keeps a pair per frame, the code object and the return offset, about as cheaply as HotSpot keeps its backtrace, and the elements are built when a trace is asked for. The line number comes from Chez's inspector information: every return point records the call it's waiting on, and the generated code wraps each call's operator as `(begin '(jpc . pc) op)`, a constant Chez drops, so the bytecode pc, and from the class file's `LineNumberTable` the line, is read off the frame.
 
 ## Startup cache
 
-The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 819 methods from 387 classes, two thirds of them for the module system (293 from 206 before it booted). The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`), and keeps the runtime's own Scheme compiled beside them (`runtime.so`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation, and a run loads only the parts of those generations it reaches. Measured on macOS arm64, median of five runs:
+The first run builds a cache under `~/.cache/champaca/<key>/` and later runs load it. Booting the JDK compiles 819 methods from 387 classes, two thirds of them for the module system (293 from 206 before it booted). The cache stores them, along with the class table, as Chez native code (`boot.so`) plus a jolt image (`state.img`), and keeps the runtime's own Scheme compiled beside them (`runtime.so`). Each later run that compiles more JDK code appends an `extra-<n>.so` generation, and a run loads only the parts of those generations it reaches. Measured on an M1 Pro with macOS on 2026-10-28, median of five runs, the whole process from exec to exit:
 
-| Program | No cache | Warm cache | Warm, after a full `bb test` |
-|---|---|---|---|
-| Hello | 1.18 s | 0.32 s | 0.33 s |
-| Streams | 1.72 s | 0.43 s | 0.44 s |
-| `examples/interop.clj` | 1.50 s | 0.37 s | 0.39 s |
+| Program | No cache | Cold, writing the cache | Warm cache | Warm, after a full `bb test` |
+|---|---|---|---|---|
+| Hello | 5.9 s | 6.5 s | 0.39 s | 0.46 s |
+| Streams | 6.6 s | 7.0 s | 0.49 s | 0.52 s |
 
-The `examples/interop.clj` row timed `jolt -M examples/interop.clj` when that file was a program printing its results. The examples are `clojure.test` namespaces now, and `bb example interop` runs one.
+Most of a cold start is the module system's boot, which a warm start loads from the cache ([performance](docs/guide/performance.md#the-module-systems-share)).
 
 The key covers the JDK (`release`, the runtime image's size and mtime), the translator's own source, jolt's runtime version and whether `CHAMPACA_BT` is on (it changes the generated code), so a change to any of them starts a fresh cache instead of reusing a stale one. Classes from jars and directories are cached too, in a file per jar or directory under `lib/`, each entry checked against its class file's CRC and those of the classes it depends on before it's used. That takes a warm run of Jackson's probe from 5.2 s to 1.3 s, and the same classes unpacked into a directory from 5.5 s to 1.5 s ([performance](docs/guide/performance.md#classes-from-jars-and-directories)). `CHAMPACA_CACHE=off` disables it and `CHAMPACA_CACHE_DIR` moves it. From jolt, call `(ldk/save-cache!)` before exit to keep what the process compiled.
 
-The compiled code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 4.9 MB now, and was 1.7 MB before the module system booted, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. The class table in `state.img` works the same way: each class rides as edn text and parses the first time a run touches it, so a cache grown by many programs costs a warm run little. Before those changes a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. A cold start compiles each JDK method once and caches that same object code, rather than compiling it again to write the cache. Writing a new cache removes key directories no run has used for a week, and keeps at most the 16 most recently used.
+The compiled JDK code leaves out Chez's inspector information, which halves `boot.so` and the time to load it (it's 4.9 MB now, and was 1.7 MB before the module system booted, with each class's method stubs in one form and its vtable stored as changes to its superclass's). `boot.so` loads whole, but a generation is stored one class registration or method body at a time, and each piece loads the first time something needs it. The class table in `state.img` works the same way: each class rides as edn text and parses the first time a run touches it, so a cache grown by many programs costs a warm run little. Before those changes a full `bb test` (14 generations) slowed a warm Hello to 0.58 s. A cold start compiles each JDK method once and caches that same object code, rather than compiling it again to write the cache. Writing a new cache removes key directories no run has used for a week, and keeps at most the 16 most recently used.
 
 ## Run it
 
 You need jolt 0.8.23 or later (`deps.edn` sets that as `:jolt/min-version`) and JDK 25 with `JAVA_HOME` set. Any build works, Temurin's included, since every JDK has a runtime image. Champaca used to read the jmods, which Temurin's builds of 25 don't ship; a `~/.cache/champaca/jmods/` left from then can be deleted.
 
-`deps.edn` also pins a jolt commit under `:champaca/jolt`, the v0.8.23 tag. That is the release's own code, built from source, because a local build of it ran a warm Hello in 0.32 s where one release binary of the same commit took 0.45 s. 0.8.23 is also the first release where `FileInputStream.skip` seeks instead of reading the bytes it skips ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), which is why it is the minimum. `bb jolt` builds that commit from a jolt checkout (`$JOLT_SRC`, or `~/dev/jolt`, cloned if missing) through a detached worktree, and puts the binary in `~/.cache/champaca/jolt/<sha>/jolt`. `bb test` runs on `$JOLT` if it's set, then on the pinned build if it exists, then on `jolt` from your `PATH`, and prints which one it picked. Everything also works on a released 0.8.23, just slower.
+`deps.edn` also pins a jolt commit under `:champaca/jolt`, the v0.8.23 tag. That is the release's own code, built from source, because a local build of it ran a warm Hello in 0.32 s where one release binary of the same commit took 0.45 s. 0.8.23 is also the first release where `FileInputStream.skip` seeks instead of reading the bytes it skips ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), which is why it is the minimum. `bb jolt` builds that commit from a jolt checkout (`$JOLT_SRC`, or `~/dev/jolt`, cloned if missing) through a detached worktree, and puts the binary in `~/.cache/champaca/jolt/<sha8>/jolt` (the commit's first eight characters). `bb test` runs on `$JOLT` if it's set, then on the pinned build if it exists, then on `jolt` from your `PATH`, and prints which one it picked. Everything also works on a released 0.8.23, just slower.
 
 ```sh
 bb jolt                                               # build the pinned jolt (about 45 s, once per pin)
@@ -132,12 +131,12 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (a port of HotSpot's) |
 | `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
-| `resources/champaca/natives.ss` | JDK native methods (149 named, plus pattern rules for `Unsafe`), resources, a few overrides |
+| `resources/champaca/natives.ss` | JDK native methods (named ones, plus pattern rules for `Unsafe`), resources, a few overrides |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` and the frame walk behind stack traces |
 | `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
-| `resources/champaca/files.ss` | file, channel and zlib natives (128) through libc, `UnsafeConstants` |
+| `resources/champaca/files.ss` | file, channel and zlib natives through libc, `UnsafeConstants` |
 | `resources/champaca/spawn.ss` | child processes: `forkAndExec` through `posix_spawn`, the reaper's `waitpid`, `destroy0` |
-| `resources/champaca/net.ss` | socket, datagram and selector natives (105) through libc: `sun.nio.ch.Net`, the socket and datagram dispatchers, `DatagramChannelImpl`, `Inet4AddressImpl`, `NetworkInterface`, `KQueue`, `EPoll`, the selector's wakeup pipe |
+| `resources/champaca/net.ss` | socket, datagram and selector natives through libc: `sun.nio.ch.Net`, the socket and datagram dispatchers, `DatagramChannelImpl`, `Inet4AddressImpl`, `NetworkInterface`, `KQueue`, `EPoll`, the selector's wakeup pipe |
 | `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
 | `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, the call-site cache, auto-wrapping jolt fns |
 

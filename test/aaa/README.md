@@ -33,7 +33,7 @@ The sources are upstream's, except:
   `test/java/VmCheck.java` covers the properties.
 
 Three programs have no `.expected` yet because champaca fails them.
-Each gets one when the roadmap item that fixes it lands:
+Each gets one once champaca passes it:
 
 - `childfirst` and `siblingloaders`: two class loaders each defining a
   class of the same name, which champaca's single class table refuses.

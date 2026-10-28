@@ -767,8 +767,8 @@
      ("jdk.debug" . "release")
      ;; reflection through invoke0/newInstance0 (reflect.ss), never method handles
      ("jdk.reflect.useNativeAccessorOnly" . "true")
-     ;; sun.misc.Unsafe's default "warn" finds its caller with StackWalker,
-     ;; which has no natives here; "allow" skips the stderr warning and the walk
+     ;; sun.misc.Unsafe's default "warn" finds its caller with StackWalker
+     ;; and prints a warning on stderr; "allow" skips both
      ("sun.misc.unsafe.memory.access" . "allow")
      ;; what the launcher sets: the main class or jar and its arguments,
      ;; when champaca.main started the program

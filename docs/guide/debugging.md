@@ -74,17 +74,20 @@ A class that isn't there at all, named by an instruction (`new`, a field or meth
 (define |Hello.main([Ljava/lang/String;)V|
   (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
     (lambda (l0)
-      (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
-                (lambda (l0)
-                  (begin (jinit-ic ic0 '|java/lang/System|)
-                         (let ((s0 |java/lang/System:out|))
-                           (let ((s1 (jstring-lit "Hello, World!")))
-                             (begin ((jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V|) s0 s1)
-                                    (void))))))))
-        (|Hello.main([Ljava/lang/String;)V#B0| l0)))))
+      (let ((npe-tag '|Hello.main([Ljava/lang/String;)V|))
+        (letrec ((|Hello.main([Ljava/lang/String;)V#B0|
+                  (lambda (l0)
+                    (begin (jinit-ic ic0 '|java/lang/System| (begin '(jpc . 0) npe-tag) 0)
+                           (let ((s0 |java/lang/System:out|))
+                             (let ((s1 (jstring-lit "Hello, World!")))
+                               ((begin '(jpc . 5)
+                                       (jvirt-ic ic1 s0 '|println(Ljava/lang/String;)V| (begin '(jpc . 5) npe-tag) 5))
+                                s0 s1)))
+                           (void)))))
+          (|Hello.main([Ljava/lang/String;)V#B0| l0))))))
 ```
 
-(The file has it on one line; it's indented here.) `l0` is local 0, `s0` and `s1` are stack slots, `ic0` remembers that `System` is initialized, `ic1` is the `println` call's inline cache, and `#B0` is the method's only basic block. [how-it-works](how-it-works.md) explains the shape.
+(The file has it on one line; it's indented here.) `l0` is local 0, `s0` and `s1` are stack slots, `ic0` remembers that `System` is initialized, `ic1` is the `println` call's inline cache, and `#B0` is the method's only basic block. `npe-tag` names the method for a helpful `NullPointerException` message, which gets it with the bytecode index (0 and 5 here), and each `(begin '(jpc . 5) ...)` marks the bytecode pc a stack trace reads its line number from. [how-it-works](how-it-works.md) explains the shape.
 
 A method compiled from the startup cache doesn't go through the translator, so it won't appear. Add `CHAMPACA_CACHE=off` to see everything.
 

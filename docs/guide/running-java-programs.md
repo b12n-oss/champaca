@@ -79,4 +79,4 @@ A stack trace matches frame for frame, except that champaca's natives have no fr
 
 ## Speed
 
-The first run of a program boots the JDK and fills the startup cache, so expect about a second before `main` starts. Later runs load the cache and start in about 0.3 s. Classes from jars and directories are cached too, so a library's code compiles once, and after you rebuild your own classes only the ones whose bytes changed, and those that depend on them, compile again. [performance](performance.md) has numbers.
+The first run of a program boots the JDK and fills the startup cache, so expect six or seven seconds before `main` starts. Later runs load the cache and start in about 0.4 s. Classes from jars and directories are cached too, so a library's code compiles once, and after you rebuild your own classes only the ones whose bytes changed, and those that depend on them, compile again. [performance](performance.md) has numbers.

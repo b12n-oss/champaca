@@ -79,8 +79,8 @@
                          ["serialization" "Java serialization of the program's own classes from jolt"]
                          ["proxy" "java.lang.reflect.Proxy from jolt, and jolt errors through Java"]
                          ["classes" "real Java classes defined from jolt"]])
-          ;; test/jar packed into target/lib.jar, which jars, fields and
-          ;; serialization put on their classpath
+          ;; test/jar packed into target/lib.jar, which jars, fields,
+          ;; serialization and classes put on their classpath
           (defn lib-jar! []
             (shell "mkdir -p target/lib-classes")
             (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
@@ -145,7 +145,7 @@
           (defn sha1-hex [f]
             (let [md (java.security.MessageDigest/getInstance "SHA-1")]
               (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))
-  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha>/jolt"
+  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha8>/jolt"
         :task (let [sha (:git/sha jolt-pin)
                     src (or (System/getenv "JOLT_SRC") (str (System/getenv "HOME") "/dev/jolt"))
                     wt (str jolt-dir "/src")]
@@ -238,12 +238,15 @@
                                           (apply run-limited 300 {:label label :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_NPE_STRICT" "1"}}
                                                  (jolt-bin) "-M" "-m" "champaca.main" args))
                                      expected (slurp "test/java/EncoderCheck.expected")
-                                     _ (ch "bootgen-fill" "target/classes" "Hello")
-                                     runs [(ch "bootgen-option" "-Dstdout.encoding=ISO-8859-1" "target/classes" "EncoderCheck")
-                                           (ch "bootgen-after" "target/classes" "EncoderCheck")
-                                           (ch "bootgen-again" "target/classes" "EncoderCheck")]
-                                     ok (every? (fn [r] (and (zero? (:exit r)) (= expected (:out r)))) runs)]
-                                 (fs/delete-tree cache)
+                                     ok (try
+                                          ;; the fill must leave a cache, or the -D run boots cold and proves nothing
+                                          (let [fill (ch "bootgen-fill" "target/classes" "Hello")
+                                                filled (and (zero? (:exit fill)) (seq (fs/glob cache "*/state.img")))
+                                                runs [(ch "bootgen-option" "-Dstdout.encoding=ISO-8859-1" "target/classes" "EncoderCheck")
+                                                      (ch "bootgen-after" "target/classes" "EncoderCheck")
+                                                      (ch "bootgen-again" "target/classes" "EncoderCheck")]]
+                                            (and filled (every? (fn [r] (and (zero? (:exit r)) (= expected (:out r)))) runs)))
+                                          (finally (fs/delete-tree cache)))]
                                  (println (if ok "PASS" "FAIL") "a warm boot's new classes reach the startup cache (EncoderCheck)")
                                  (if ok [] ["boot generation"]))
                     ;; the library cache (test/libcache): the same program over
