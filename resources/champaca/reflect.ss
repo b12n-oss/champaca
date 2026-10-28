@@ -427,7 +427,46 @@
       (jthrow "java/lang/IllegalArgumentException"
               (string-append "wrong number of arguments: " (number->string (length argv))
                              " expected: " (number->string (length ptypes)))))
-    (map (lambda (t v) (if (prim-desc? t) (junbox t (nn v)) v)) ptypes argv)))
+    (map reflect-arg ptypes argv)))
+
+;; an argument as the JVM's reflection takes it: for a primitive parameter a
+;; box of that type or of one that widens to it (never narrows), unboxed;
+;; for a reference parameter null or an instance. Anything else is
+;; IllegalArgumentException "argument type mismatch". null for a primitive
+;; is the IllegalArgumentException the JDK's method handle accessor throws,
+;; wrapping the NullPointerException its unboxing hits.
+(define (reflect-arg t v)
+  (cond
+    [(prim-desc? t)
+     (let ([e (and v (jobj? v) (find (lambda (b) (string=? (cadr b) (class-name-of v))) box-classes))])
+       (cond
+         [(not v)
+          (raise (construct "java/lang/IllegalArgumentException" "(Ljava/lang/Throwable;)V"
+                            (construct "java/lang/NullPointerException" "(Ljava/lang/String;)V"
+                                       (jstring-lit
+                                        (string-append
+                                         "Cannot invoke \"java.lang.Number."
+                                         (case (string-ref t 0)
+                                           [(#\J) "long"] [(#\F) "float"] [(#\D) "double"] [(#\S) "short"] [(#\B) "byte"]
+                                           [else "int"])
+                                         "Value()\" because the return value of \"sun.invoke.util.ValueConversions"
+                                         ".primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)\" is null")))))]
+         [(not e) (reflect-type-mismatch)]
+         [(string=? (car e) t) (junbox t v)]
+         [(let ([w (assoc (car e) prim-widenings)]) (and w (member t (cdr w))))
+          (widen (car e) t (junbox (car e) v))]
+         [else (reflect-type-mismatch)]))]
+    [(or (not v) (jinstance? v (desc->class-name t))) v]
+    [else (reflect-type-mismatch)]))
+
+;; Method.invoke's receiver: as DirectMethodHandleAccessor.checkReceiver
+(define (reflect-receiver obj cname)
+  (unless obj
+    (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"obj\" is null"))
+  (unless (jinstance? obj cname)
+    (jthrow "java/lang/IllegalArgumentException"
+            (string-append "object of type " (slashes->dots (class-name-of obj))
+                           " is not an instance of " (slashes->dots cname)))))
 
 ;; Run thunk; a Java exception it throws comes back wrapped in
 ;; InvocationTargetException, as Method.invoke promises.
@@ -470,7 +509,8 @@
   (let-values ([(c meta) (reflected-member "java/lang/reflect/Method" m)])
     (let* ([cname (jclass-cname c)] [desc (cadr meta)] [key (string-append (car meta) desc)]
            [static? (static-flag? (caddr meta))]
-           [argv (reflect-arg-list (desc-args desc) args)]
+           [argv (begin (unless static? (reflect-receiver obj cname))
+                        (reflect-arg-list (desc-args desc) args))]
            [ret (desc-ret desc)])
       (when static? (jinit cname))
       (let ([r (invoke-wrapped
@@ -488,6 +528,8 @@
            ;; runs its first non-serializable superclass's constructor on it
            [serial (eq-hashtable-ref serial-allocs ctor #f)]
            [alloc (or serial cname)])
+      ;; the class first, then the arguments: the JVM initializes the class
+      ;; even when an argument doesn't fit
       (jinit alloc)
       (let ([argv (reflect-arg-list (desc-args desc) args)])
         (invoke-wrapped
@@ -582,43 +624,87 @@
 
 ;; --- field access (overrides of java.lang.reflect.Field) -----------------------------
 
-;; -> (values getter setter field-descriptor) for field f on obj
-(define (field-access f obj)
+;; -> (values getter setter field-descriptor what qname) for field f on obj.
+;; what names the field as the JDK's messages do ("static final int field
+;; A.x"), qname is "A.x".
+;; A null receiver for an instance field is a NullPointerException and one
+;; of another class an IllegalArgumentException, with the JDK's texts (set?
+;; picks Field.set's or Field.get's).
+(define (field-access f obj set?)
   (let* ([c (mirror-class (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))]
          [slot (jslot f (jfield-index "java/lang/reflect/Field" "slot"))]
          [meta (list-ref (meta-fields c) slot)]
-         [cname (jclass-cname c)] [name (car meta)] [desc (cadr meta)])
-    (if (static-flag? (caddr meta))
+         [cname (jclass-cname c)] [name (car meta)] [desc (cadr meta)]
+         [static? (static-flag? (caddr meta))]
+         [qname (string-append (slashes->dots cname) "." name)]
+         [what (string-append (if static? "static " "") (if (fxpositive? (fxlogand (caddr meta) #x10)) "final " "")
+                              (field-type-name desc) " field " qname)])
+    (if static?
         (let ([sym (string->symbol (string-append cname ":" name))])
           (jinit cname)
           (values (lambda () (top-level-value sym))
                   (lambda (v) (set-top-level-value! sym v))
-                  desc))
+                  desc what qname))
         (let ([i (jfield-index cname name)])
+          (unless obj
+            (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"obj\" is null"))
           (unless (jinstance? obj cname)
             (jthrow "java/lang/IllegalArgumentException"
-                    (string-append "Can not get field " name " on " (if obj (class-name-of obj) "null"))))
+                    (string-append "Can not " (if set? "set " "get ") what (if set? " to " " on ")
+                                   (slashes->dots (class-name-of obj)))))
           (values (lambda () (vector-ref (jobj-slots obj) i))
                   (lambda (v) (vector-set! (jobj-slots obj) i v))
-                  desc)))))
+                  desc what qname)))))
+
+(define (field-type-name d)
+  (cond [(assoc d prim-names) => cdr] [else (slashes->dots (desc->class-name d))]))
+
+;; whether a primitive of type from fits one of type to: the same or wider
+(define (prim-widens? from to)
+  (or (string=? from to) (let ([w (assoc from prim-widenings)]) (and w (member to (cdr w)) #t))))
 
 (define-override! "java/lang/reflect/Field.get(Ljava/lang/Object;)Ljava/lang/Object;"
   (lambda (this obj)
-    (let-values ([(get set desc) (field-access this obj)])
+    (let-values ([(get set desc what qname) (field-access this obj #f)])
       (let ([v (get)]) (if (prim-desc? desc) (jbox desc v) v)))))
 
+;; set takes v as Method.invoke takes an argument: a box unboxed and
+;; widened for a primitive field, null or an instance for a reference one
 (define-override! "java/lang/reflect/Field.set(Ljava/lang/Object;Ljava/lang/Object;)V"
   (lambda (this obj v)
-    (let-values ([(get set desc) (field-access this obj)])
-      (set (if (prim-desc? desc) (junbox desc (nn v)) v)))))
+    (let-values ([(get set desc what qname) (field-access this obj #t)])
+      (define (refuse)
+        (jthrow "java/lang/IllegalArgumentException"
+                (string-append "Can not set " what " to " (if v (slashes->dots (class-name-of v)) "null value"))))
+      (set (cond
+             [(prim-desc? desc)
+              (let ([e (and v (jobj? v) (find (lambda (b) (string=? (cadr b) (class-name-of v))) box-classes))])
+                (if (and e (prim-widens? (car e) desc))
+                    (widen (car e) desc (junbox (car e) v))
+                    (refuse)))]
+             [(or (not v) (jinstance? v (desc->class-name desc))) v]
+             [else (refuse)])))))
 
+;; getInt and friends: a primitive field whose type widens to the getter's;
+;; setInt and friends: a primitive field the setter's type widens to
 (for-each
  (lambda (p)
-   (let ([name (car p)] [t (cdr p)])
+   (let ([name (car p)] [t (cdr p)] [tname (cdr (assoc (cdr p) prim-names))])
      (define-override! (string-append "java/lang/reflect/Field.get" name "(Ljava/lang/Object;)" t)
-       (lambda (this obj) (let-values ([(get set desc) (field-access this obj)]) (get))))
+       (lambda (this obj)
+         (let-values ([(get set desc what qname) (field-access this obj #f)])
+           (unless (and (prim-desc? desc) (prim-widens? desc t))
+             (jthrow "java/lang/IllegalArgumentException"
+                     (string-append "Attempt to get " (field-type-name desc) " field \"" qname
+                                    "\" with illegal data type conversion to " tname)))
+           (widen desc t (get)))))
      (define-override! (string-append "java/lang/reflect/Field.set" name "(Ljava/lang/Object;" t ")V")
-       (lambda (this obj v) (let-values ([(get set desc) (field-access this obj)]) (set v))))))
+       (lambda (this obj v)
+         (let-values ([(get set desc what qname) (field-access this obj #t)])
+           (unless (and (prim-desc? desc) (prim-widens? t desc))
+             (jthrow "java/lang/IllegalArgumentException"
+                     (string-append "Can not set " what " to (" tname ")" (jstring-of (jbox t v)))))
+           (set (widen t desc v)))))))
  '(("Boolean" . "Z") ("Byte" . "B") ("Char" . "C") ("Short" . "S")
    ("Int" . "I") ("Long" . "J") ("Float" . "F") ("Double" . "D")))
 

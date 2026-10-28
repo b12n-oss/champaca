@@ -1,0 +1,67 @@
+int Integer: int 5
+int Short: int 6
+int Byte: int 7
+int Character: int 97
+long Integer: long 8
+long Character: long 98
+float Long: float 9.0
+float Integer: float 1.6777216E7
+double Float: double 1.5
+double Long: double 10.0
+short Byte: short 11
+char Character: char c
+boolean Boolean: boolean true
+int Long: java.lang.IllegalArgumentException: argument type mismatch
+int Double: java.lang.IllegalArgumentException: argument type mismatch
+int String: java.lang.IllegalArgumentException: argument type mismatch
+int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+long null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.longValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+float null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.floatValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+double null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.doubleValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+short null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.shortValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+byte null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.byteValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+char null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+boolean null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+short Character: java.lang.IllegalArgumentException: argument type mismatch
+char Byte: java.lang.IllegalArgumentException: argument type mismatch
+char Short: java.lang.IllegalArgumentException: argument type mismatch
+byte Short: java.lang.IllegalArgumentException: argument type mismatch
+boolean Integer: java.lang.IllegalArgumentException: argument type mismatch
+long Float: java.lang.IllegalArgumentException: argument type mismatch
+String Integer: java.lang.IllegalArgumentException: argument type mismatch
+String null: String null
+Number Integer: Number 5
+Number String: java.lang.IllegalArgumentException: argument type mismatch
+Object int[]: Object [I
+int[] int[]: int[] [1, 2]
+int[] long[]: java.lang.IllegalArgumentException: argument type mismatch
+int[] Integer[]: java.lang.IllegalArgumentException: argument type mismatch
+String[] Object[]: java.lang.IllegalArgumentException: argument type mismatch
+String[] String[]: String[] [a]
+two ok: two 1 x
+two second: java.lang.IllegalArgumentException: argument type mismatch
+count less: java.lang.IllegalArgumentException: wrong number of arguments: 1 expected: 2
+count more: java.lang.IllegalArgumentException: wrong number of arguments: 2 expected: 1
+count null array: java.lang.IllegalArgumentException: wrong number of arguments: 0 expected: 1
+none null array: none
+none empty: none
+receiver ok: inst 3
+receiver other: java.lang.IllegalArgumentException: object of type java.lang.String is not an instance of ReflectArgCheck
+receiver null: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+receiver ok, argument wrong: java.lang.IllegalArgumentException: argument type mismatch
+ctor int Integer: Box(int 4)
+ctor int Character: Box(int 101)
+ctor int Long: java.lang.IllegalArgumentException: argument type mismatch
+ctor int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+ctor String,long ok: Box(String s, long 5)
+ctor String,long first wrong: java.lang.IllegalArgumentException: argument type mismatch
+ctor String,long second wrong: java.lang.IllegalArgumentException: argument type mismatch
+ctor count: java.lang.IllegalArgumentException: wrong number of arguments: 1 expected: 2
+ctor JDK StringBuilder Integer: java.lang.IllegalArgumentException: argument type mismatch
+ctor JDK StringBuilder String: sb
+Lazy initialized
+ctor Lazy String: java.lang.IllegalArgumentException: argument type mismatch
+ctor Lazy int: Lazy
+JDK concat Integer: java.lang.IllegalArgumentException: argument type mismatch
+JDK concat String: ab
+JDK Math.abs(int) Long: java.lang.IllegalArgumentException: argument type mismatch

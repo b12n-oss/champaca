@@ -1,0 +1,57 @@
+set int Short: ok
+set int Character: ok
+set long Integer: ok
+set double Float: ok
+set float Long: ok
+set Number Integer: ok
+set Object int[]: ok
+set String null: ok
+after: 97 6 0.5 3.0 8 null
+set int Long: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to java.lang.Long
+set int null: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to null value
+set int String: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to java.lang.String
+set short Character: java.lang.IllegalArgumentException: Can not set short field FieldArgCheck.s to java.lang.Character
+set char Byte: java.lang.IllegalArgumentException: Can not set char field FieldArgCheck.c to java.lang.Byte
+set boolean Integer: java.lang.IllegalArgumentException: Can not set boolean field FieldArgCheck.z to java.lang.Integer
+set String Integer: java.lang.IllegalArgumentException: Can not set java.lang.String field FieldArgCheck.str to java.lang.Integer
+set Number String: java.lang.IllegalArgumentException: Can not set java.lang.Number field FieldArgCheck.num to java.lang.String
+set int[] long[]: java.lang.IllegalArgumentException: Can not set [I field FieldArgCheck.arr to [J
+set static int Long: java.lang.IllegalArgumentException: Can not set static int field FieldArgCheck.si to java.lang.Long
+set static String Integer: java.lang.IllegalArgumentException: Can not set static java.lang.String field FieldArgCheck.sstr to java.lang.Integer
+unchanged: 97 3 c true null 8 9 sstr
+setInt long: ok
+setChar int: ok
+setByte short: ok
+setFloat double: ok
+setInt double: ok
+setInt Object: java.lang.IllegalArgumentException: Can not set java.lang.Object field FieldArgCheck.obj to (int)1
+setLong int: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to (long)10
+setShort char: java.lang.IllegalArgumentException: Can not set char field FieldArgCheck.c to (short)1
+setBoolean int: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to (boolean)true
+setDouble float: java.lang.IllegalArgumentException: Can not set float field FieldArgCheck.f to (double)1.0
+setInt String: java.lang.IllegalArgumentException: Can not set java.lang.String field FieldArgCheck.str to (int)1
+setInt boolean: java.lang.IllegalArgumentException: Can not set boolean field FieldArgCheck.z to (int)1
+setInt static int: ok
+after typed: 10 98 2 7.0 null 11
+getLong int: 98
+getInt char: 99
+getShort byte: 4
+getDouble float: 3.0
+getDouble int: 98.0
+getInt long: java.lang.IllegalArgumentException: Attempt to get long field "FieldArgCheck.j" with illegal data type conversion to int
+getChar int: java.lang.IllegalArgumentException: Attempt to get int field "FieldArgCheck.i" with illegal data type conversion to char
+getBoolean int: java.lang.IllegalArgumentException: Attempt to get int field "FieldArgCheck.i" with illegal data type conversion to boolean
+getInt String: java.lang.IllegalArgumentException: Attempt to get java.lang.String field "FieldArgCheck.str" with illegal data type conversion to int
+getByte short: java.lang.IllegalArgumentException: Attempt to get short field "FieldArgCheck.s" with illegal data type conversion to byte
+getFloat double: java.lang.IllegalArgumentException: Attempt to get double field "FieldArgCheck.d" with illegal data type conversion to float
+get other receiver: java.lang.IllegalArgumentException: Can not get int field FieldArgCheck.i on java.lang.String
+get null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+set other receiver: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to java.lang.String
+set null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+get static null receiver: 11
+get static other receiver: 11
+set final int String: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin to java.lang.String
+setLong final int: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin to (long)1
+get final other receiver: java.lang.IllegalArgumentException: Can not get final int field FieldArgCheck.fin on java.lang.String
+set final int Integer: ok
+final after set: 13
