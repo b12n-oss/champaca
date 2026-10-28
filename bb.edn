@@ -239,9 +239,12 @@
                                                  (jolt-bin) "-M" "-m" "champaca.main" args))
                                      expected (slurp "test/java/EncoderCheck.expected")
                                      ok (try
-                                          ;; the fill must leave a cache, or the -D run boots cold and proves nothing
+                                          ;; the fill must leave a cache, or the -D run boots cold and proves
+                                          ;; nothing; with CHAMPACA_CACHE=off only the outputs are checked
                                           (let [fill (ch "bootgen-fill" "target/classes" "Hello")
-                                                filled (and (zero? (:exit fill)) (seq (fs/glob cache "*/state.img")))
+                                                filled (and (zero? (:exit fill))
+                                                            (or (= "off" (System/getenv "CHAMPACA_CACHE"))
+                                                                (seq (fs/glob cache "*/state.img"))))
                                                 runs [(ch "bootgen-option" "-Dstdout.encoding=ISO-8859-1" "target/classes" "EncoderCheck")
                                                       (ch "bootgen-after" "target/classes" "EncoderCheck")
                                                       (ch "bootgen-again" "target/classes" "EncoderCheck")]]
