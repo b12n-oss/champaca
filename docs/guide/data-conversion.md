@@ -34,7 +34,7 @@ A vector given to an array parameter becomes a fresh array of that type, element
 (ldk/->clj (ldk/invoke-static "java.util.Arrays" "copyOf" [3 1 2] 5))  ;=> [3 1 2 0 0]
 ```
 
-A vector of integers becomes a `byte[]` or `short[]` too, when the method has no overload that takes it without narrowing, so `(ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 2 3])`, `(ldk/construct "java.lang.String" [104 105])` and a `MessageDigest`'s `update` work, as long as every element is in the type's range. `->clj` reads a `byte[]` back as a vector of integers, `[104 105]`.
+A vector of integers becomes a `byte[]` or `short[]` too, when the method has no overload that takes it without narrowing, so `(ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 2 3])`, `(ldk/construct "java.lang.String" [104 105])` and a `MessageDigest`'s `update` work, as long as every element is in the type's range. A Java `byte` is signed, -128 to 127, so a byte written as `0xCA` or `200` fits nothing: write it as the negative number with the same bits (`0xCA` is -54, `0xFF` is -1), or let Java parse hex, `(ldk/invoke (ldk/invoke-static "java.util.HexFormat" "of") "parseHex" "cafebabe")`. Nothing wraps a value silently, as Clojure's `byte` refuses one out of range. `->clj` reads a `byte[]` back as a vector of signed integers: `[104 105]`, or `[-54 -2 -70 -66]` for that hex.
 
 When the parameter is just `Object`, nothing says which array type to build, so the contents decide: all small integers make an `int[]`, any integer beyond 32 bits makes a `long[]`, all doubles a `double[]`, all strings (keywords count as strings) a `String[]`, vectors of one kind a nested array, and anything else an `Object[]`: characters, booleans, `nil`s, an empty vector, or integers mixed with doubles.
 
