@@ -1075,7 +1075,11 @@
   [given text hidden?]
   (let [bs (.getBytes ^String text "ISO-8859-1")
         c (try (cf/parse bs)
-               (catch Exception e {:bad (or (ex-message e) (str (class e)))}))]
+               (catch Exception e
+                 ;; a wrong magic number's text ends with the name the caller
+                 ;; gave, as HotSpot's, or <Unknown>
+                 {:bad (let [m (or (ex-message e) (str (class e)))]
+                         (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))]
     (cond
       (:bad c) (str "bad " (:bad c))
       (and given (not= given (:name c))) (str "wrong " (:name c))

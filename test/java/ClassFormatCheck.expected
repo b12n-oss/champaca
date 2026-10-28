@@ -11,3 +11,6 @@ newBadMagic: java.lang.ClassFormatError: Incompatible magic value 305419896 in c
 newSub: java.lang.ClassFormatError: Truncated class file
 forName: java.lang.ClassFormatError: Truncated class file
 fine after: fine
+defineClass p.Q: java.lang.ClassFormatError: Incompatible magic value 305419896 in class file p/Q
+defineClass null: java.lang.ClassFormatError: Incompatible magic value 305419896 in class file <Unknown>
+every prefix: [java.lang.ClassFormatError: Truncated class file]
