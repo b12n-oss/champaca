@@ -532,12 +532,9 @@
               :float (push! (num-lit (:value e)) "F")
               :double (push! (num-lit (:value e)) "D")
               :string (push! (jstring-lit-form (:value e)) "A")
-              ;; resolved as checkcast resolves, through the defining
-              ;; loader, so a class only that loader sees is found
-              :class (let [c (:name e) el (str/replace c #"^\[+" "")]
-                       (cond (not (str/starts-with? c "[")) ((:ensure-loaded resolve) c)
-                             (str/starts-with? el "L") ((:ensure-loaded resolve) (subs el 1 (dec (count el)))))
-                       (push! (sx "jmirror-of" (str-lit c)) "A"))
+              ;; resolved when it runs, as the JVM resolves it, through this
+              ;; class's defining loader (runtime.ss jldc-class)
+              :class (push! (sx "jldc-class" (str-lit (:name e)) (str-lit this-class)) "A")
               (:methodtype :methodhandle :dynamic)
               (let [d (if (= :dynamic (:tag e)) (:desc e) "Ljava/lang/Object;")]
                 ;; resolved once per site, keyed by an interned symbol

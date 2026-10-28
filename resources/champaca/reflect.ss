@@ -167,10 +167,10 @@
                  (set o "typeAnnotations" (refl-bytes (list-ref rc 4)))
                  o))
              (or (class-record c) '()))))))))
-  ;; The constant pool that AnnotationParser reads names and values from. Its oop
-  ;; is the class mirror; entries come from the parsed classfile through a jolt
-  ;; callback (set-cp-hook!), which answers the entry's value (a String's text,
-  ;; a number) or a Class entry's name.
+;; The constant pool that AnnotationParser reads names and values from. Its oop
+;; is the class mirror; entries come from the parsed classfile through a jolt
+;; callback (set-cp-hook!), which answers the entry's value (a String's text,
+;; a number) or a Class entry's name.
 (define cp-hook #f)
 (define (set-cp-hook! f) (set! cp-hook f))
 (defnative "java/lang/Class.getConstantPool()Ljdk/internal/reflect/ConstantPool;" (this)
@@ -187,7 +187,8 @@
 (defnative "jdk/internal/reflect/ConstantPool.getFloatAt0(Ljava/lang/Object;I)F" (this oop i) (cp-value oop i))
 (defnative "jdk/internal/reflect/ConstantPool.getDoubleAt0(Ljava/lang/Object;I)D" (this oop i) (cp-value oop i))
 (defnative "jdk/internal/reflect/ConstantPool.getClassAt0(Ljava/lang/Object;I)Ljava/lang/Class;" (this oop i)
-  (jmirror-of (cp-value oop i)))
+  ;; annotation parsing's class values, resolved as an ldc of the class's own
+  (jldc-class (cp-value oop i) (jclass-cname (mirror-class oop))))
 (defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this) (no-classes))
 ;; Nests (JVMS 5.4.4): a class's host is the class its NestHost attribute
 ;; names, once that class loads, is in the same runtime package and lists

@@ -960,6 +960,14 @@
               package-names)))
 
 (define (jmirror-of name) (jmirror (find-class name)))
+;; ldc of a class: its mirror, the class resolved when the ldc runs (a class
+;; defined after the method was translated is found; one that fails to load
+;; fails there) and through the defining loader of the class whose code it
+;; is, which alone may see it (Quarkus's RunnerClassLoader)
+(define (jldc-class name from)
+  (if (hashtable-contains? classes name)
+      (jmirror-of name)
+      (parameterize ([resolving-loader (hashtable-ref class-loaders from #f)]) (jmirror-of name))))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'champaca "not a mirror" m)))
 
 ;; --- identity hash ------------------------------------------------------------

@@ -1,3 +1,6 @@
+ldc later not run: not called
+ldc later run: class LinkLaterHid
+ldc broken not run: not called
 new not run: ran (absent)
 checkcast not run: ran (absent)
 instanceof not run: ran (absent)

@@ -140,9 +140,31 @@ public class LinkCheck {
         return (c.getClassLoader() == l) + " " + ((Supplier<String>) c.getDeclaredConstructor().newInstance()).get();
     }
 
+    // ldc of a class resolves when it runs: a class defined after the method
+    // was first run is found, and one that can't load fails only there
+    static Object ldcLater(boolean go) { return go ? LinkLaterHid.class : "not called"; }
+    static Object ldcBroken(boolean go) { return go ? LinkBroken.class : "not called"; }
+
     public static void main(String[] args) throws Exception {
-        for (String n : List.of("LinkGone", "LinkGoneException", "LinkGoneListener"))
+        for (String n : List.of("LinkGone", "LinkGoneException", "LinkGoneListener", "LinkLaterHid"))
             new File(LinkCheck.class.getResource(n + ".class").toURI()).delete();
+        File broken = new File(LinkCheck.class.getResource("LinkBroken.class").toURI());
+        byte[] whole = java.nio.file.Files.readAllBytes(broken.toPath());
+        java.nio.file.Files.write(broken.toPath(), Arrays.copyOf(whole, 20));
+        row("ldc later not run", ldcLater(false));
+        byte[] later;
+        try (InputStream in = LinkCheck.class.getResourceAsStream("LinkLaterGen.class")) { later = in.readAllBytes(); }
+        byte[] gen = "LinkLaterGen".getBytes(), hid = "LinkLaterHid".getBytes();
+        outer:
+        for (int i = 0; i + gen.length <= later.length; i++) {
+            for (int j = 0; j < gen.length; j++) if (later[i + j] != gen[j]) continue outer;
+            System.arraycopy(hid, 0, later, i, hid.length);
+        }
+        java.lang.invoke.MethodHandles.lookup().defineClass(later);
+        row("ldc later run", ldcLater(true));
+        // (run, it is the JVM's ClassFormatError; champaca's load failure
+        // isn't a Java error yet, so the row stops at not run)
+        row("ldc broken not run", ldcBroken(false));
         for (Map.Entry<String, Callable0> p : PROBES.entrySet()) row(p.getKey() + " not run", fails(p.getValue()));
         present = true;
         for (Map.Entry<String, Callable0> p : PROBES.entrySet()) row(p.getKey() + " run", fails(p.getValue()));
@@ -176,3 +198,6 @@ class LinkGone {
 class LinkGoneException extends RuntimeException { }
 interface LinkGoneListener { void handle(long a, long b); }
 class LinkOrphan extends LinkGone { }
+class LinkLaterGen { }
+class LinkLaterHid { }
+class LinkBroken { }
