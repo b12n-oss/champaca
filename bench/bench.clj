@@ -68,6 +68,7 @@
                       "-jar" "extracted/boot-demo-1.0.jar"]}
                {:name "champaca, extracted jar, cold" :champaca ["-jar" "extracted/boot-demo-1.0.jar"] :cold true}
                {:name "champaca, extracted jar" :champaca ["-jar" "extracted/boot-demo-1.0.jar"]}
+               {:name "champaca + Spring AOT" :champaca ["-Dspring.aot.enabled=true" "-jar" "extracted/boot-demo-1.0.jar"]}
                {:name "champaca, fat jar" :champaca ["-jar" "boot-demo-fat.jar"]}]}
 
    "quarkus"

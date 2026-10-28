@@ -1,0 +1,13 @@
+-Dchampaca.test.plain=bar
+-Dchampaca.test.eq=a=b=c
+-Dchampaca.test.spaces=two words
+-Dchampaca.test.twice=first
+-Dchampaca.test.twice=second
+-Dchampaca.test.flag=true
+-Dchampaca.test.n=42
+-D
+-Dsun.java.command=not-this
+-Duser.home=/props-home
+-Djava.library.path=/props-lib
+-Dfile.encoding=ISO-8859-1
+-Dchampaca.test.empty

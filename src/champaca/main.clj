@@ -1496,6 +1496,8 @@
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (s/call "set-classpath!" (str/join ":" (:classpath-given @state)))
   (when-let [c (:java-command @state)] (s/call "set-java-command!" c))
+  (when-let [ps (seq (:command-line-properties @state))]
+    (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (s/call "set-define-class-hook!" define-class!)
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
@@ -1639,15 +1641,42 @@
         status)
       status)))
 
+(defn- jvm-options
+  "The options before the class path or -jar, as the java launcher reads
+  them: -Dkey=value pairs (-Dkey is an empty value, a bare -D nothing), and
+  the rest of argv. A heap or stack size (-Xmx, -Xms, -Xmn, -Xss) and any
+  -XX: flag are ignored with a warning, as HotSpot warns of an option it
+  ignores, since start scripts pass them and none changes what a program
+  prints; any other option is the launcher's Unrecognized option."
+  [argv]
+  (loop [argv argv props []]
+    (let [a (first argv)]
+      (cond (or (nil? a) (= a "-jar") (not (str/starts-with? a "-"))) [props argv]
+            (str/starts-with? a "-D")
+            (let [kv (subs a 2) i (str/index-of kv "=")
+                  k (if i (subs kv 0 i) kv)]
+              (recur (rest argv) (if (= "" k) props (conj props [k (if i (subs kv (inc i)) "")]))))
+            (or (re-matches #"-X(mx|ms|mn|ss)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a))
+            (do (binding [*out* *err*] (println (str "champaca: ignoring option " a "; it has no counterpart here")))
+                (recur (rest argv) props))
+            :else
+            (binding [*out* *err*]
+              (println (str "Unrecognized option: " a))
+              (println "Error: Could not create the Java Virtual Machine.")
+              (println "Error: A fatal exception has occurred. Program will exit.")
+              (System/exit 1))))))
+
 (defn -main [& argv]
-  (let [[cp cname & args] argv]
+  (let [[props argv] (jvm-options argv)
+        _ (swap! state assoc :command-line-properties props)
+        [cp cname & args] argv]
     (when (and (= cp "-jar") (not cname))
       (binding [*out* *err*] (println "Error: -jar requires jar file specification"))
       (System/exit 1))
     (when-not cname
       (binding [*out* *err*]
-        (println "usage: jolt -M -m champaca.main <classpath[:entry...] (dirs and jars)> <MainClass> [args...]")
-        (println "   or: jolt -M -m champaca.main -jar <jarfile> [args...]"))
+        (println "usage: jolt -M -m champaca.main [-Dkey=value...] <classpath[:entry...] (dirs and jars)> <MainClass> [args...]")
+        (println "   or: jolt -M -m champaca.main [-Dkey=value...] -jar <jarfile> [args...]"))
       (System/exit 2))
     (if (= cp "-jar")
       ;; as java -jar: the manifest's Main-Class, the jar alone as the class

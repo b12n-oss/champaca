@@ -746,8 +746,14 @@
                        (apply append (map (lambda (p) (list (jstring (car p)) (jstring (cdr p)))) pairs))))
 
 (defnative "jdk/internal/util/SystemProps$Raw.vmProperties()[Ljava/lang/String;" ()
+  ;; the -D options come after java.library.path, which they can replace (the
+  ;; JDK's cmdProperties keeps the last of a key), and before the properties
+  ;; the VM owns, which they can't, as HotSpot ignores -Djava.vm.name; champaca
+  ;; also keeps java.home, java.class.path and its reflection's accessor mode
   (props-array
-   `(("java.home" . ,java-home-dir)
+   `(("java.library.path" . "")
+     ,@command-line-properties
+     ("java.home" . ,java-home-dir)
      ("java.vm.name" . "champaca")
      ("java.vm.vendor" . "champaca")
      ("java.vm.version" . "0.0-spike")
@@ -756,7 +762,6 @@
      ("java.vm.specification.version" . "25")
      ("java.class.path" . ,classpath-string)
      ("sun.boot.library.path" . ,(string-append java-home-dir "/lib"))
-     ("java.library.path" . "")
      ("jdk.debug" . "release")
      ;; reflection through invoke0/newInstance0 (reflect.ss), never method handles
      ("jdk.reflect.useNativeAccessorOnly" . "true")
@@ -770,6 +775,20 @@
            '()))))
 (define java-command #f)
 (define (set-java-command! s) (set! java-command s))
+;; champaca.main's -D options, in order: (key . value) pairs, given as one
+;; string of key NUL value NUL ... (no argument holds a NUL)
+(define command-line-properties '())
+(define (set-command-line-properties! s)
+  (set! command-line-properties
+        (let loop ([fields (let split ([i 0] [start 0])
+                             (cond [(fx= 0 (string-length s)) '()]
+                                   [(fx= i (string-length s)) (list (substring s start i))]
+                                   [(char=? (string-ref s i) #\nul)
+                                    (cons (substring s start i) (split (fx+ i 1) (fx+ i 1)))]
+                                   [else (split (fx+ i 1) start)]))])
+          (if (or (null? fields) (null? (cdr fields)))
+              '()
+              (cons (cons (car fields) (cadr fields)) (loop (cddr fields)))))))
 
 ;; The locale properties (user.language, user.script, user.country, and
 ;; their .format forms when the format locale differs) as the JDK finds

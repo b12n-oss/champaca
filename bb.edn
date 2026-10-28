@@ -201,15 +201,35 @@
                     fails (doall
                            (for [m mains
                                  :let [stdin (str "test/java/" m ".stdin")
-                                       {:keys [out exit]} (run-limited 300 (cond-> {:extra-env {"CHAMPACA_NPE_STRICT" "1" "CHAMPACA_TEST_VAR" "a=b=c"}}
-                                                                             (fs/exists? stdin) (assoc :in (fs/file stdin)))
-                                                                       (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m)
+                                       ;; launcher options, one per line, before the class path
+                                       opts-file (str "test/java/" m ".options")
+                                       opts (if (fs/exists? opts-file) (remove str/blank? (str/split-lines (slurp opts-file))) [])
+                                       {:keys [out exit]} (apply run-limited 300 (cond-> {:extra-env {"CHAMPACA_NPE_STRICT" "1" "CHAMPACA_TEST_VAR" "a=b=c"}}
+                                                                                   (fs/exists? stdin) (assoc :in (fs/file stdin)))
+                                                                 (jolt-bin) "-M" "-m" "champaca.main"
+                                                                 (concat opts ["target/classes:target/lib.jar:target/lib2.jar" m]))
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
                              (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
                     jar-fails (let [{:keys [out exit]} (run-limited 300 {:label "jarmain"} (jolt-bin) "-M" "-m" "champaca.main" "-jar" "target/app.jar" "a" "b")
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
                                 (if ok [] ["-jar"]))
+                    ;; launcher options: -D before -jar, an option java doesn't know, and the ignored ones
+                    opt-fails (let [{:keys [out exit]} (run-limited 300 {:label "jarmain-opts"} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-Dchampaca.test.plain=bar" "-jar" "target/app.jar" "a" "b")
+                                    jar-ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))
+                                    {:keys [err exit]} (run-limited 300 {:label "bad-option" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-Dchampaca.test.plain=bar" "-Xbogus" "target/classes" "Hello")
+                                    bad-ok (and (= 1 exit) (str/starts-with? err "Unrecognized option: -Xbogus\n"))
+                                    {:keys [out err exit]} (run-limited 300 {:label "ignored-options" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-Xmx512m" "-XX:+UseG1GC" "target/classes" "Hello")
+                                    ignored-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected"))
+                                                    (str/includes? err "champaca: ignoring option -Xmx512m; it has no counterpart here\n")
+                                                    (str/includes? err "champaca: ignoring option -XX:+UseG1GC; it has no counterpart here\n"))]
+                                (println (if jar-ok "PASS" "FAIL") "-D before -jar target/app.jar")
+                                (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
+                                (println (if ignored-ok "PASS" "FAIL") "-Xmx and -XX: ignored with a warning")
+                                (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])))
                     ;; the library cache (test/libcache): the same program over
                     ;; changing jars, each run checked against the JVM's output.
                     ;; Base changes between base-v1.jar and base-v2.jar, Sub's bytes
@@ -367,8 +387,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails libcache-fails lam-fails edit-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar"] (map (fn [i] (str "libcache-" i)) (range 1 15))
+                    fails (remove nil? (concat fails jar-fails opt-fails libcache-fails lam-fails edit-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))

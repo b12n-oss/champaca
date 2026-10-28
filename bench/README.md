@@ -49,6 +49,7 @@ reported as `same` or `DIFFERENT`.
 | HotSpot, fast-jar / uber-jar | Quarkus's default packaging, which loads the application through its RunnerClassLoader, and one jar with every class |
 | champaca, cold | through champaca with an empty startup cache: every class parsed and every method translated and compiled, the JDK's boot included |
 | champaca | through champaca with the startup cache its first run filled |
+| champaca + Spring AOT | the extracted jar through champaca with `-Dspring.aot.enabled=true`, sharing the extracted jar's cache |
 
 champaca's startup cache keeps compiled code and the class table, never
 Java objects, so every run starts the framework from scratch and every
@@ -121,6 +122,5 @@ Running these applications turned up these gaps, now fixed:
 - `ldc` of a class and reflection's member types didn't resolve through the
   defining loader, so Quarkus's generated classes couldn't see classes only
   its RunnerClassLoader sees (`test/java/LinkCheck.java`).
-
-Left: `champaca.main` takes no `-D` options yet, so the Spring AOT variant
-runs on HotSpot only.
+- `champaca.main` took no `-D` options, so the Spring AOT variant ran on
+  HotSpot only (`test/java/PropsCheck.java`).

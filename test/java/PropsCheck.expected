@@ -1,0 +1,15 @@
+plain: bar
+empty: []
+value with =: a=b=c
+value with spaces: two words
+last of a key: second
+absent: null
+Boolean.getBoolean: true
+Integer.getInteger: 42
+user.home: /props-home
+java.library.path: /props-lib
+file.encoding: ISO-8859-1
+default charset: ISO-8859-1
+sun.java.command: PropsCheck
+in getProperties: true
+set later: changed
