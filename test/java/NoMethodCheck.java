@@ -32,6 +32,7 @@ public class NoMethodCheck {
         System.out.println("virtual, called: " + call(virt, null, true));
         System.out.println("virtual, called again: " + call(virt, null, true));
         System.out.println("virtual on null: " + call0(c.getMethod("callNull"), null));
+        System.out.println("virtual, a name with another descriptor: " + call0(c.getMethod("callWrongDesc"), null));
         System.out.println("virtual the receiver has: " + call0(c.getMethod("callOwn"), o));
         System.out.println("interface: " + call0(c.getMethod("callIface"), null));
         System.out.println("interface, Object's method: " + call0(c.getMethod("callIfaceObject"), null));

@@ -7,6 +7,7 @@ virtual, not called: not called
 virtual, called: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.vgone(int)'
 virtual, called again: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.vgone(int)'
 virtual on null: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.vgone(int)'
+virtual, a name with another descriptor: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.toString(int)'
 virtual the receiver has: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.own()'
 interface: java.lang.NoSuchMethodError: 'int java.lang.CharSequence.gone()'
 interface, Object's method: 96354

@@ -86,6 +86,16 @@ public class NoMethodGen {
                 cb.invokevirtual(target, "vgone", MethodTypeDesc.of(CD_String, CD_int));
                 cb.areturn();
             });
+            // static String callWrongDesc(): new NmTarget().toString(5), a name
+            // Object has, but not with that descriptor
+            clb.withMethodBody("callWrongDesc", MethodTypeDesc.of(CD_String), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> {
+                cb.new_(target);
+                cb.dup();
+                cb.invokespecial(target, INIT_NAME, MTD_void);
+                cb.iconst_5();
+                cb.invokevirtual(target, "toString", MethodTypeDesc.of(CD_String, CD_int));
+                cb.areturn();
+            });
             // String own() is NmCaller's alone; callOwn calls it as
             // NmTarget.own() on a NmCaller, which the receiver has but the
             // class the call names doesn't
