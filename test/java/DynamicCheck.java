@@ -29,5 +29,19 @@ public class DynamicCheck {
         p("split", "a,b,c".split(",").length);
         p("MAX_VALUE", Integer.MAX_VALUE);
         try { Integer.parseInt("x"); } catch (NumberFormatException e) { p("caught", e); }
+        // what jolt reaches through a byte or short parameter, which takes an
+        // integer only when no other overload fits
+        p("byte", Byte.valueOf((byte) 5) + " " + Byte.valueOf((byte) -128) + " " + Short.valueOf((short) 300));
+        p("byte[]", java.nio.ByteBuffer.wrap(new byte[] {1, 2, 3}).remaining() + " " + new String(new byte[] {104, 105})
+          + " " + java.util.Base64.getEncoder().encodeToString(new byte[] {104, 105}));
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            md.update(new byte[] {104, 105});
+            p("sha-256", java.util.HexFormat.of().formatHex(md.digest()));
+        } catch (java.security.NoSuchAlgorithmException e) { p("sha-256", e); }
+        java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(4); bb.put((byte) 5); bb.putShort((short) 1000);
+        p("put", bb.get(0) + " " + bb.getShort(1));
+        p("short[]", java.util.Arrays.toString(java.nio.ShortBuffer.wrap(new short[] {1, -2, 30000}).array()));
+        p("append-int", new StringBuilder().append(65));
     }
 }

@@ -66,6 +66,35 @@
          (map int (str (ldk/invoke-static "java.lang.String" "valueOf" (ldk/invoke-static "java.lang.Character" "toChars" 0x1F600))
                        (ldk/invoke-static "java.lang.String" "valueOf" (ldk/invoke-static "java.lang.Character" "toChars" 0xD800)))))))
 
+(deftest bytes-and-shorts
+  ;; jolt has no byte type, so an integer in range goes to a byte or short
+  ;; parameter, and a vector of them to a byte[] or short[], when no other
+  ;; overload fits; Java never narrows, so nothing that fits otherwise changes
+  (is (= [5 -128 300]
+         [(ldk/invoke-static "java.lang.Byte" "valueOf" 5) (ldk/invoke-static "java.lang.Byte" "valueOf" -128)
+          (ldk/invoke-static "java.lang.Short" "valueOf" 300)]))
+  (is (= [3 "hi" "aGk="]
+         [(ldk/invoke (ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 2 3]) "remaining")
+          (ldk/to-string (ldk/construct "java.lang.String" [104 105]))
+          (ldk/invoke (ldk/invoke-static "java.util.Base64" "getEncoder") "encodeToString" [104 105])]))
+  (is (= "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4"
+         (let [md (ldk/invoke-static "java.security.MessageDigest" "getInstance" "SHA-256")]
+           (ldk/invoke md "update" [104 105])
+           (ldk/invoke (ldk/invoke-static "java.util.HexFormat" "of") "formatHex" (ldk/invoke md "digest")))))
+  (is (= [5 1000]
+         (let [bb (ldk/invoke-static "java.nio.ByteBuffer" "allocate" 4)]
+           (ldk/invoke bb "put" 5) (ldk/invoke bb "putShort" 1000)
+           [(ldk/invoke bb "get" 0) (ldk/invoke bb "getShort" 1)])))
+  (is (= [1 -2 30000] (ldk/->clj (ldk/invoke (ldk/invoke-static "java.nio.ShortBuffer" "wrap" [1 -2 30000]) "array"))))
+  ;; an int overload still wins, and an integer out of range fits nothing,
+  ;; a second time too (the call-site cache keys byte, short and int apart)
+  (is (= "65" (ldk/invoke (ldk/invoke (ldk/construct "java.lang.StringBuilder") "append" 65) "toString")))
+  (dotimes [_ 2]
+    (is (= :lookup (try (ldk/invoke-static "java.lang.Byte" "valueOf" 300)
+                        (catch Exception e (:champaca/error (ex-data e))))))
+    (is (= :lookup (try (ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 200])
+                        (catch Exception e (:champaca/error (ex-data e))))))))
+
 (deftest exceptions
   (is (= "java.lang.NumberFormatException: For input string: \"x\""
          (try (ldk/invoke-static "java.lang.Integer" "parseInt" "x")

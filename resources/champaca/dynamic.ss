@@ -22,6 +22,14 @@
 (define (exact-int? v) (and (number? v) (exact? v) (integer? v)))
 (define (int-range? v) (and (exact-int? v) (<= -2147483648 v 2147483647)))
 (define (long-range? v) (and (exact-int? v) (<= -9223372036854775808 v 9223372036854775807)))
+(define (byte-range? v) (and (exact-int? v) (<= -128 v 127)))
+(define (short-range? v) (and (exact-int? v) (<= -32768 v 32767)))
+;; An integer fits a byte or short parameter, and a vector of them a byte[]
+;; or short[], only in choose's last pass, when nothing fits without: Java
+;; never narrows an argument, so a call that resolves without narrowing
+;; resolves as before, and one that only a byte or short overload takes
+;; (Byte.valueOf, ByteBuffer.wrap) gets it. jolt has no byte type to say so.
+(define narrowing? (make-thread-parameter #f))
 
 (define boxes
   '(("java/lang/Integer" . "I") ("java/lang/Long" . "J") ("java/lang/Double" . "D")
@@ -151,7 +159,9 @@
        (case c0
          [(#\I) (and (int-range? v) 0)]
          [(#\J) (and (long-range? v) 1)]
-         [(#\S) #f] [(#\B) #f] [(#\C) #f]
+         [(#\S) (and (narrowing?) (short-range? v) 8)]
+         [(#\B) (and (narrowing?) (byte-range? v) 8)]
+         [(#\C) #f]
          [(#\F) 4] [(#\D) 3] [(#\Z) #f]
          [else (if (int-range? v)
                    (or (box-cost "java/lang/Integer" d 5) (box-cost "java/lang/Long" d 7))
@@ -309,20 +319,25 @@
 ;; and 2, scored together), and varargs only when nothing fixed fits (phase 3).
 ;; Returns (candidate . effective-args).
 (define (choose who cname name fixed varargs args)
-  (let ([scored (filter car (map (lambda (c) (cons (score (caddr c) args) (cons c args))) fixed))])
-    (if (pair? scored)
-        (best-of cname name scored)
-        (let ([vscored (filter car (map (lambda (c)
-                                          (let ([packed (pack-varargs (caddr c) args)])
-                                            (cons (score (caddr c) packed) (cons c packed))))
-                                        varargs))])
-          (when (null? vscored)
-            (let ([all (append fixed varargs)])
-              (api-fail
-               (string-append "no " name " in " cname " fits " (number->string (length args)) " argument(s)"
-                              (if (null? all) " (no method of that name and arity)"
-                                  (string-append "; candidates:" (describe-candidates all)))))))
-          (best-of cname name vscored)))))
+  (define (fixed-scored) (filter car (map (lambda (c) (cons (score (caddr c) args) (cons c args))) fixed)))
+  (define (varargs-scored)
+    (filter car (map (lambda (c)
+                       (let ([packed (pack-varargs (caddr c) args)])
+                         (cons (score (caddr c) packed) (cons c packed))))
+                     varargs)))
+  ;; fixed, then varargs, then the same two again letting integers narrow
+  (let ([scored (or (pair-or-false (fixed-scored))
+                    (pair-or-false (varargs-scored))
+                    (parameterize ([narrowing? #t])
+                      (or (pair-or-false (fixed-scored)) (pair-or-false (varargs-scored)))))])
+    (unless scored
+      (let ([all (append fixed varargs)])
+        (api-fail
+         (string-append "no " name " in " cname " fits " (number->string (length args)) " argument(s)"
+                        (if (null? all) " (no method of that name and arity)"
+                            (string-append "; candidates:" (describe-candidates all)))))))
+    (best-of cname name scored)))
+(define (pair-or-false l) (and (pair? l) l))
 
 ;; m1 is at least as specific as m2: each parameter type of m1 converts to
 ;; m2's by subtyping or primitive widening
@@ -360,7 +375,9 @@
         [(string? v) 'string]
         [(boolean? v) 'boolean]
         [(char? v) 'char]
-        [(exact-int? v) (cond [(int-range? v) 'int] [(long-range? v) 'long] [else 'big])]
+        ;; byte and short apart, since only those fit a narrowing pick
+        [(exact-int? v) (cond [(byte-range? v) 'byte] [(short-range? v) 'short] [(int-range? v) 'int]
+                              [(long-range? v) 'long] [else 'big])]
         [(flonum? v) 'double]
         [(coll-arg? v) (coll-arg-kind v)]
         [(procedure? v) 'fn]
