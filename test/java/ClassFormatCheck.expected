@@ -1,0 +1,13 @@
+fine: fine
+newIt: java.lang.ClassFormatError: Truncated class file
+newIt: java.lang.ClassFormatError: Truncated class file
+ldcIt: java.lang.ClassFormatError: Truncated class file
+callIt: java.lang.ClassFormatError: Truncated class file
+getIt: java.lang.ClassFormatError: Truncated class file
+castIt: java.lang.ClassFormatError: Truncated class file
+isIt: java.lang.ClassFormatError: Truncated class file
+newBadMagic: java.lang.ClassFormatError: Incompatible magic value 305419896 in class file CfBadMagic
+newBadMagic: java.lang.ClassFormatError: Incompatible magic value 305419896 in class file CfBadMagic
+newSub: java.lang.ClassFormatError: Truncated class file
+forName: java.lang.ClassFormatError: Truncated class file
+fine after: fine

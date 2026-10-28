@@ -438,6 +438,14 @@
     (when (and (= (set (keys d)) #{:class}) (str/starts-with? (str (ex-message e)) "class not found"))
       (:class d))))
 
+(defn- bad-class
+  "[class message] of a class whose file isn't a class file (main.clj's
+  normalize), or nil for any other failure."
+  [e]
+  (let [d (ex-data e)]
+    (when (= (set (keys d)) #{:class :class-format})
+      [(:class d) (:class-format d)])))
+
 (defn- missing-method
   "[class name desc] of a method a call names that its class doesn't have
   (main.clj's resolve-method, check-virtual), or nil for any other failure."
@@ -775,10 +783,11 @@
         (catch Exception e
           (let [c (missing-class e)
                 m (missing-method e)
-                ncdfe (if m
-                        (apply sx "jthrow-no-method" (map str-lit m))
-                        (sx "jthrow-missing" (str-lit c)))]
-            (when-not (or c m) (throw e))
+                bad (bad-class e)
+                ncdfe (cond m (apply sx "jthrow-no-method" (map str-lit m))
+                            bad (apply sx "jthrow-class-format" (map str-lit bad))
+                            :else (sx "jthrow-missing" (str-lit c)))]
+            (when-not (or c m bad) (throw e))
             (case (when-not m op)
               ;; on null, neither resolves its class, as HotSpot doesn't: a
               ;; cast passes and instanceof is false; only an object throws

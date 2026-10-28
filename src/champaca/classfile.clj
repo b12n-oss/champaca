@@ -43,8 +43,14 @@
   attribute's body, read again in place)."
   [bs]
   (if (vector? bs)
-    {:at (fn [i] (nth bs i)) :pos (volatile! 0)}
-    {:at (fn [i] (bit-and (aget ^bytes bs i) 0xff)) :pos (volatile! 0) :bv (bytevector-of bs)}))
+    {:at (fn [i] (nth bs i)) :pos (volatile! 0) :len (count bs)}
+    {:at (fn [i] (bit-and (aget ^bytes bs i) 0xff)) :pos (volatile! 0) :len (alength bs) :bv (bytevector-of bs)}))
+
+(defn- format-error
+  "A class file that can't be parsed: ex-data :class-format holds the JVM's
+  ClassFormatError text, and :named says the caller appends the class name."
+  ([msg] (format-error msg false))
+  ([msg named] (ex-info msg {:class-format msg :named named})))
 
 (declare decode-mutf8 take-bytes)
 
@@ -53,6 +59,7 @@
   plain ASCII, the common case and many times faster than decoding here."
   [r n]
   (let [p (:pos r) start @p]
+    (when (> (+ start n) (:len r)) (throw (format-error "Truncated class file")))
     (or (when-let [bv (:bv r)]
           (when-let [s (ascii-at bv start n)]
             (vreset! p (+ start n))
@@ -317,13 +324,30 @@
 (defn native? [m] (pos? (bit-and (:flags m) ACC-NATIVE)))
 (defn interface? [c] (pos? (bit-and (:flags c) ACC-INTERFACE)))
 
+(declare parse*)
+
 (defn parse
   "Parse the bytes of a class file into a map of :name :super :interfaces
-  :fields :methods :cp :bootstrap-methods."
+  :fields :methods :cp :bootstrap-methods. Bytes that aren't a class file
+  throw format-error's ex-info."
   [^bytes bs]
-  (let [r (reader bs)
-        magic (u4 r)
-        _ (when-not (= magic 0xCAFEBABE) (throw (ex-info "not a class file" {:magic magic})))
+  (let [r (reader bs)]
+    ;; HotSpot's texts: a read past the end is a truncated file, whatever
+    ;; was being read (u1, u2 and take-bytes move the cursor first, utf8-at
+    ;; checks, a skipped attribute is caught at the end); any other failure
+    ;; keeps its own message
+    (try
+      (let [c (parse* r)]
+        (when (> @(:pos r) (:len r)) (throw (format-error "Truncated class file")))
+        c)
+      (catch Exception e
+        (throw (cond (:class-format (ex-data e)) e
+                     (> @(:pos r) (:len r)) (format-error "Truncated class file")
+                     :else (format-error (or (ex-message e) (str e)))))))))
+
+(defn- parse* [r]
+  (let [magic (u4 r)
+        _ (when-not (= magic 0xCAFEBABE) (throw (format-error (str "Incompatible magic value " magic " in class file") true)))
         _minor (u2 r)
         _major (u2 r)
         cp (resolve-cp (read-constant-pool r))

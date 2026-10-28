@@ -219,7 +219,9 @@
         ;; that named it (an ldc, a catch clause's type, a descriptor); one
         ;; that is there but fails otherwise stays the error it is, which
         ;; names the cause (class-exists?, condition-text: natives.ss)
-        [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing])
+        [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing]
+                        [(and (not (jobj? e)) (class-format-of e))
+                         => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))])
                 (load-hook name))
               (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
@@ -233,6 +235,21 @@
           (cond [(fx> (fx+ i m) n) #f]
                 [(string=? (substring t i (fx+ i m)) k) (substring t (fx+ i m) n)]
                 [else (loop (fx+ i 1))])))))
+;; HotSpot's ClassFormatError text from a load whose class file (the class
+;; named or one it needs) isn't one: main.clj normalize's "class format
+;; error in X: <text>", or #f
+(define (class-format-of e)
+  (let* ([t (condition-text e)] [k "class format error in "] [n (string-length t)] [m (string-length k)])
+    (let loop ([i 0])
+      (cond [(fx> (fx+ i m) n) #f]
+            [(string=? (substring t i (fx+ i m)) k)
+             (let skip ([j (fx+ i m)])
+               (cond [(fx>= (fx+ j 1) n) #f]
+                     [(and (char=? (string-ref t j) #\:) (char=? (string-ref t (fx+ j 1)) #\space)) (substring t (fx+ j 2) n)]
+                     [else (skip (fx+ j 1))]))]
+            [else (loop (fx+ i 1))]))))
+;; the same from generated code: an instruction naming such a class (codegen)
+(define (jthrow-class-format name msg) (jthrow "java/lang/ClassFormatError" msg))
 ;; the JVM's error for a class nothing has: the slashed name, caused by a
 ;; ClassNotFoundException with the dotted one; or the error the class's
 ;; loader threw resolving it, every time, as JVMS 5.4.3 has a failed

@@ -707,7 +707,18 @@
     (when-not (= bytes ::defined)
       ;; a classpath class is cached only through the library cache
       ;; (restore-user-class!), which checks it hasn't changed
-      (class-map cname (timed :cf-parse #(cf/parse bytes)) (if user :user :jdk)))))
+      ;; bytes that aren't a class file are the JVM's ClassFormatError for
+      ;; the code that needs the class (codegen, runtime.ss find-class): the
+      ;; message ends with HotSpot's text, which find-class reads off
+      (let [p (try (timed :cf-parse #(cf/parse bytes))
+                   (catch Exception e
+                     (let [{:keys [class-format named]} (ex-data e)]
+                       (if class-format
+                         (let [msg (if named (str class-format " " cname) class-format)]
+                           (throw (ex-info (str "class format error in " cname ": " msg)
+                                           {:class cname :class-format msg})))
+                         (throw e)))))]
+        (class-map cname p (if user :user :jdk))))))
 
 (defn- class-map
   "The linker's class map for cname from its parsed classfile c, of origin
@@ -1124,17 +1135,20 @@
           ;; runs (codegen): such a method is never cached, so a cache can't
           ;; carry a throw for a class a later run has, and CHAMPACA_BT says so
           missing (seq (map second (re-seq (re-pattern "\\(jthrow-missing \"([^\"]+)\"") text)))
+          ;; and for a class whose file isn't a class file (ClassFormatError)
+          bad-format (seq (map second (re-seq (re-pattern "\\(jthrow-class-format \"([^\"]+)\"") text)))
           ;; the same for a method its class doesn't have (NoSuchMethodError)
           no-method (seq (map (fn [[_ c n d]] (str c "." n d))
                               (re-seq (re-pattern "\\(jthrow-no-method \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"") text)))
-          report (fn [names what]
+          report (fn [names why what]
                    (when (and names (System/getenv "CHAMPACA_BT"))
                      (binding [*out* *err*]
                        (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
-                                     ", not found; that code throws " what)))))
-          _ (report missing "NoClassDefFoundError")
-          _ (report no-method "NoSuchMethodError")
-          missing (or missing no-method)]
+                                     ", " why "; that code throws " what)))))
+          _ (report missing "not found" "NoClassDefFoundError")
+          _ (report no-method "not found" "NoSuchMethodError")
+          _ (report bad-format "not a class file" "ClassFormatError")
+          missing (or missing no-method bad-format)]
       (cond
         missing (timed :chez-compile #(scheme! text))
         ;; compiled once: the same object code runs now and goes in the cache
