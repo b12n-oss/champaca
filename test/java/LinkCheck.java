@@ -101,6 +101,10 @@ public class LinkCheck {
         public static class GenF { }
         // members typed by classes only the loader can see
         public static class GenH { }
+        // an annotation whose Class value only the loader can see
+        @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+        public @interface GenTag { Class<?> value(); }
+        @GenTag(GenH.class) public static class GenK { }
         public static class GenG {
             public GenH h;
             public GenG() { }
@@ -185,6 +189,9 @@ public class LinkCheck {
         row("lazy member types", g.getDeclaredField("h").getType().getName() + " "
             + g.getMethod("swap", g.getDeclaredField("h").getType()).getReturnType().getName() + " "
             + g.getDeclaredConstructors().length);
+        java.lang.annotation.Annotation[] tags = l.loadClass("LinkCheck$LinkLazy$HidK").getAnnotations();
+        row("lazy annotation class value", tags.length + " " + tags[0].annotationType().getName() + " "
+            + ((Class<?>) tags[0].annotationType().getMethod("value").invoke(tags[0])).getName());
         row("lazy asked", l.asked);
         row("lazy not ours", fails(() -> lazy(new Lazy(), "GenA")));
     }
