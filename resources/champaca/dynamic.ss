@@ -955,6 +955,14 @@
                   (unless (assoc (car c) (or own-ctors ctors))
                     (fail ":constructor-annotations names the constructor " (car c) ", which the class doesn't have")))
                 (cadddr anns))
+      ;; a method name annotates the methods it implements, so it must
+      ;; implement one that has no key of its own
+      (for-each (lambda (a)
+                  (let ([k (car a)])
+                    (unless (or (memv #\( (string->list k))
+                                (exists (lambda (m) (and (string=? (car m) k) (not (assoc (string-append k (cadr m)) exact)))) own))
+                      (fail ":method-annotations names " k ", but every method of that name has a key of its own"))))
+                (caddr anns))
       ;; (name desc cell anns) for every static native; a static method can't
       ;; share a signature with an instance method, inherited or the class's
       (let ([statics

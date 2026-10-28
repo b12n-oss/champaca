@@ -541,8 +541,9 @@
                                                :parts [{} {:value "q"}] :types ["int" "void" "java.util.List[]"]}
                            "java.lang.Deprecated" {:since "1.0" :forRemoval true}}
              :field-annotations {"n" {"champaca.lib.Tag$OnFields" nil}
-                                 :total {"champaca.lib.Tag" {:name "total" :l -9223372036854775808 :i -2147483648
-                                                             :c 65535 :f ##Inf :d ##NaN}}}
+                                 :total {"champaca.lib.Tag" {:name (apply str (repeat 65535 "a"))
+                                                             :l -9223372036854775808 :i -2147483648
+                                                             :c 65535 :f 3.4028235E38 :d ##NaN}}}
              :method-annotations {:write {"champaca.lib.Tag" {:name "w"}}
                                   "make()Ljava/lang/Object;" {"java.lang.Deprecated" {}}}
              :constructor-annotations {[] {"champaca.lib.Tag" {:name "k" :type (class-named "java.util.Map")}}}})
@@ -564,8 +565,9 @@
     ;; fields, the edges of each type; elements left out take their defaults
     (is (some? (annotation-on (ldk/invoke c "getField" "n") "champaca.lib.Tag$OnFields")))
     (let [t (annotation-on (ldk/invoke c "getField" "total") "champaca.lib.Tag")]
-      (is (= [-9223372036854775808 -2147483648 (char 65535) ##Inf true 2 "LOW"]
-             [(ldk/invoke t "l") (ldk/invoke t "i") (ldk/invoke t "c") (ldk/invoke t "f") (NaN? (ldk/invoke t "d"))
+      (is (= [65535 -9223372036854775808 -2147483648 (char 65535) 3.4028234663852886E38 true 2 "LOW"]
+             [(count (ldk/invoke t "name")) (ldk/invoke t "l") (ldk/invoke t "i") (ldk/invoke t "c") (ldk/invoke t "f")
+              (NaN? (ldk/invoke t "d"))
               (ldk/invoke t "s") (ldk/invoke (ldk/invoke t "level") "name")])))
     ;; a name key annotates every method it implements: write's three overloads
     (let [ws (filter #(= "write" (ldk/invoke % "getName")) (ldk/->clj (ldk/invoke c "getDeclaredMethods")))]
@@ -594,6 +596,8 @@
 
 (deftest annotations-and-defining-again
   (let [spec (fn [s f] {:methods {"toString" f} :annotations {"java.lang.Deprecated" {:since s}}})]
+    ;; a NaN element is the same element again
+    (dotimes [_ 2] (ldk/define-class "demo.classes.NaNs" {:annotations {"champaca.lib.Tag" {:name "n" :d ##NaN}}}))
     (ldk/define-class "demo.classes.Noted" (spec "1" (fn [_] "one")))
     (ldk/define-class "demo.classes.Noted" (spec "1" (fn [_] "two")))
     (is (= "two" (ldk/invoke (ldk/construct "demo.classes.Noted") "toString")))
@@ -617,7 +621,11 @@
     (is (= (on-class "@champaca.lib.Tag: element i is 1.5, not an integer (int)") (refused (tag {:i 1.5}))))
     (is (= (on-class "@champaca.lib.Tag: element l is 9223372036854775808, out of range for long")
            (refused (tag {:l 9223372036854775808}))))
-    (is (= (on-class "@champaca.lib.Tag: element f is 1.0E300, out of range for float") (refused (tag {:f 1e300}))))
+    (is (= (on-class "@champaca.lib.Tag: element f is 3.4028235677973366E38, out of range for float")
+           (refused (tag {:f 3.4028235677973366E38}))))
+    (is (= (on-class "@champaca.lib.Tag: element f is 1.0E-50, too small for float") (refused (tag {:f 1e-50}))))
+    (is (= (on-class "@champaca.lib.Tag: element name is a string of more than 65535 bytes in a class file's UTF-8")
+           (refused (tag {:name (apply str (repeat 32768 "é"))}))))
     (is (= (on-class "@champaca.lib.Tag: element on is nil, not a boolean") (refused (tag {:on nil}))))
     (is (= (on-class "@champaca.lib.Tag: element level is :MID, not a constant of champaca.lib.Tag$Level (LOW, HIGH)")
            (refused (tag {:level :MID}))))
@@ -653,7 +661,12 @@
            (refused {:constructors {["int"] []} :init (fn [_] []) :constructor-annotations {[] {}}})))
     (is (= "define-class: :constructor-annotations names \"x\", which isn't a vector of parameter types"
            (refused {:constructor-annotations {"x" {}}})))
-    (is (= "define-class: :method-annotations is [], not a map" (refused {:method-annotations []})))))
+    (is (= "define-class: :method-annotations is [], not a map" (refused {:method-annotations []})))
+    (is (= "define-class: :method-annotations names equals, but every method of that name has a key of its own"
+           (refused {:methods {"equals" (fn [_ _] true) "equals(Ljava/lang/Object;)Z" (fn [_ _] false)}
+                     :method-annotations {"equals" {"java.lang.Deprecated" {}}}})))
+    (is (= "define-class: :field-annotations names 3, which isn't in :fields or :static-fields"
+           (refused {:fields ["x"] :field-annotations {3 {}}})))))
 
 (deftest defining-again
   (let [spec (fn [n] {:implements ["java.util.function.IntSupplier"] :fields ["v"] :methods {:getAsInt (fn [_] n)}})

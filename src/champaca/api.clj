@@ -301,12 +301,23 @@
       (= rname "long") (whole "J" -9223372036854775808 9223372036854775807 "long")
       (= rname "char") (if (char? v) ["C" (int v)] (whole "C" 0 65535 "char"))
       (= rname "float")
-      (cond (not (number? v)) (bad "a float")
-            (let [d (double v)] (and (not (NaN? d)) (not (infinite? d)) (> (abs d) 3.4028234663852886E38)))
-            (throw (ex-info (str who " is " v ", out of range for float") {:value v}))
-            :else ["F" (double v)])
+      ;; as javac: a value that rounds to infinity is too large, one that
+      ;; rounds to zero too small (the bounds are half an ulp past the
+      ;; largest and smallest floats)
+      (let [d (when (number? v) (double v))]
+        (cond (nil? d) (bad "a float")
+              (and (not (infinite? d)) (>= (abs d) 3.4028235677973366E38))
+              (throw (ex-info (str who " is " v ", out of range for float") {:value v}))
+              (and (not (zero? d)) (<= (abs d) 7.006492321624085E-46))
+              (throw (ex-info (str who " is " v ", too small for float") {:value v}))
+              :else ["F" d]))
       (= rname "double") (if (number? v) ["D" (double v)] (bad "a double"))
-      (= rname "java.lang.String") (if (string? v) ["s" v] (bad "a string"))
+      (= rname "java.lang.String")
+      (cond (not (string? v)) (bad "a string")
+            ;; a class file's strings are at most 65535 bytes of modified UTF-8
+            (> (reduce + (map #(let [c (int %)] (cond (<= 1 c 0x7f) 1 (<= c 0x7ff) 2 (<= c 0xffff) 3 :else 6)) v)) 65535)
+            (throw (ex-info (str who " is a string of more than 65535 bytes in a class file's UTF-8") {:value (subs v 0 20)}))
+            :else ["s" v])
       (= rname "java.lang.Class")
       (cond (with-gil #(s/call "dyn-instance?" v "java/lang/Class")) ["c" (invoke v "descriptorString")]
             (string? v) (let [d (if (= v "void") "V" (type-desc v))
@@ -465,7 +476,8 @@
                               (sorted-map) m))
         field-names (set (map first (concat fields sfields)))
         anns [(annotations-for "on the class" "TYPE" annotations)
-              (member-anns ":field-annotations" field-annotations name field-names "FIELD"
+              (member-anns ":field-annotations" field-annotations #(when (or (string? %) (keyword? %)) (name %))
+                           field-names "FIELD"
                            #(if (= % :missing) "which isn't in :fields or :static-fields" (str "field " %)))
               (member-anns ":method-annotations" method-annotations method-key #(or (contains? fns %) (contains? sfns %))
                            "METHOD" #(if (= % :missing) "which isn't a key of :methods or :static-methods" (str "method " %)))
@@ -473,7 +485,8 @@
                            #(when (sequential? %) (ctor-desc %)) some? "CONSTRUCTOR"
                            #(if (= % :missing) "which isn't a vector of parameter types" (str "constructor " %)))]
         shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
-               (some? sinit) ctors (some? cinit) (some? post) anns]
+               ;; printed, so a NaN element compares equal to itself
+               (some? sinit) ctors (some? cinit) (some? post) (pr-str anns)]
         scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
     (rethrow
      #(if-let [{old :shape cells :cells scells :scells icell :icell ccell :ccell pcell :pcell c :class}

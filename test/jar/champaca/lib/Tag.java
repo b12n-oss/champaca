@@ -27,6 +27,9 @@ public @interface Tag {
     Part[] parts() default {};
     Class<?>[] types() default {};
 
+    /** A constant whose lambda makes a private static synthetic method, which isn't an element. */
+    java.util.function.Supplier<String> HINT = () -> "hint";
+
     enum Level { LOW, HIGH }
 
     @Retention(RetentionPolicy.RUNTIME)
