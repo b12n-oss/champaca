@@ -97,6 +97,11 @@ public class LinkCheck {
         public static class GenD implements Supplier<String> {
             public String get() { return "D made " + new GenBad(); }
         }
+        // ldc of a class only the loader can see, and of an array of it
+        public static class GenF { }
+        public static class GenE implements Supplier<String> {
+            public String get() { return "E names " + GenF.class.getName() + " " + GenF[].class.getName(); }
+        }
     }
     static class Lazy extends ClassLoader {
         final List<String> asked = new ArrayList<>();
@@ -145,6 +150,7 @@ public class LinkCheck {
         row("lazy forName", Class.forName("LinkCheck$LinkLazy$HidB", true, l).getClassLoader() == l);
         row("lazy missing", fails(() -> Class.forName("LinkCheck$LinkLazy$HidZ", true, l)));
         row("lazy loader error", fails(() -> lazy(l, "HidD")));
+        row("lazy class constant", lazy(l, "HidE"));
         row("lazy asked", l.asked);
         row("lazy not ours", fails(() -> lazy(new Lazy(), "GenA")));
     }
