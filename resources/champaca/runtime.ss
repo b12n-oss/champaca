@@ -261,6 +261,24 @@
     (unless (eq? (jclass-state c) 'initialized)
       (jinit-slow c name))))
 
+;; JVMS 5.5 step 7: a class's initialization, after its superclass's,
+;; initializes each superinterface, direct or not, that declares a
+;; non-abstract, non-static method, walking each interfaces array in order
+;; and an interface's superinterfaces before it. One with only abstract or
+;; static methods waits for a use of its own.
+(define (init-default-interfaces c)
+  (let walk ([is (jclass-interfaces c)] [seen '()])
+    (if (null? is)
+        seen
+        (let ([n (car is)])
+          (if (member n seen)
+              (walk (cdr is) seen)
+              (let* ([i (find-class n)]
+                     [seen (walk (jclass-interfaces i) (cons n seen))])
+                (when (exists (lambda (m) (fxzero? (fxlogand (caddr m) #x408))) (car (jclass-meta i)))
+                  (jinit n))
+                (walk (cdr is) seen)))))))
+
 (define (jinit-slow c name)
   (case (jclass-state c)
     [(loaded)
@@ -286,6 +304,7 @@
                                   w)
                                 e))])
          (when (jclass-super c) (jinit (jclass-super c)))
+         (unless (eq? (jclass-kind c) 'interface) (init-default-interfaces c))
          (let ([sym (string->symbol (string-append name ".<clinit>()V"))])
            (when (top-level-bound? sym) ((top-level-value sym)))))
        (done 'initialized))]

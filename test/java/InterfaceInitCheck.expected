@@ -1,0 +1,22 @@
+-- new Impl
+init Other
+init Super
+init Base
+init Mid
+init Impl
+base Base mid Mid other Other
+-- Statics.hello
+init Statics
+hello
+-- Plain.P
+init Plain
+Plain
+-- new Sub (Impl already initialized)
+init Sub
+-- a default method reading its interface's static
+init Getter
+init UsesGetter
+get Getter
+-- Top.T
+init Top
+Top
