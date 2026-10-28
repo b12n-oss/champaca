@@ -99,6 +99,14 @@ public class LinkCheck {
         }
         // ldc of a class only the loader can see, and of an array of it
         public static class GenF { }
+        // members typed by classes only the loader can see
+        public static class GenH { }
+        public static class GenG {
+            public GenH h;
+            public GenG() { }
+            public GenG(GenH h) { this.h = h; }
+            public GenH swap(GenH x) { return x; }
+        }
         public static class GenE implements Supplier<String> {
             public String get() { return "E names " + GenF.class.getName() + " " + GenF[].class.getName(); }
         }
@@ -151,6 +159,10 @@ public class LinkCheck {
         row("lazy missing", fails(() -> Class.forName("LinkCheck$LinkLazy$HidZ", true, l)));
         row("lazy loader error", fails(() -> lazy(l, "HidD")));
         row("lazy class constant", lazy(l, "HidE"));
+        Class<?> g = l.loadClass("LinkCheck$LinkLazy$HidG");
+        row("lazy member types", g.getDeclaredField("h").getType().getName() + " "
+            + g.getMethod("swap", g.getDeclaredField("h").getType()).getReturnType().getName() + " "
+            + g.getDeclaredConstructors().length);
         row("lazy asked", l.asked);
         row("lazy not ours", fails(() -> lazy(new Lazy(), "GenA")));
     }

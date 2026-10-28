@@ -62,44 +62,55 @@
                (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4))
                (refl-bytes (member-attr m 5)) (refl-bytes (member-attr m 6)))))
 
+;; Run thunk resolving names through the defining loader of the class whose
+;; mirror is mirror, as the JVM resolves a member's types through its
+;; declaring class's loader: a field typed by a class only that loader sees
+;; (Quarkus's generated classes, under its RunnerClassLoader) is found.
+(define (with-loader-of mirror thunk)
+  (parameterize ([resolving-loader (hashtable-ref class-loaders (jclass-cname (mirror-class mirror)) #f)])
+    (thunk)))
+
 (defnative "java/lang/Class.getDeclaredMethods0(Z)[Ljava/lang/reflect/Method;" (this public-only)
-  (let ([c (mirror-class this)])
-    (make-jarr "Ljava/lang/reflect/Method;"
-     (list->vector
-      (map (lambda (im) (method-object this im))
-           (indexed-members (meta-methods c)
-                            (lambda (m) (and (not (char=? (string-ref (car m) 0) #\<))
-                                             (or (eqv? public-only 0) (public? (caddr m)))))))))))
+  (with-loader-of this (lambda ()
+    (let ([c (mirror-class this)])
+      (make-jarr "Ljava/lang/reflect/Method;"
+       (list->vector
+        (map (lambda (im) (method-object this im))
+             (indexed-members (meta-methods c)
+                              (lambda (m) (and (not (char=? (string-ref (car m) 0) #\<))
+                                               (or (eqv? public-only 0) (public? (caddr m)))))))))))))
 
 (defnative "java/lang/Class.getDeclaredConstructors0(Z)[Ljava/lang/reflect/Constructor;" (this public-only)
-  (let ([c (mirror-class this)])
-    (make-jarr "Ljava/lang/reflect/Constructor;"
-     (list->vector
-      (map (lambda (im)
-             (let* ([m (cdr im)] [desc (cadr m)] [flags (caddr m)])
-               (construct "java/lang/reflect/Constructor"
-                          "(Ljava/lang/Class;[Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B)V"
-                          ;; never native: only a class define-class made has a
-                          ;; native <init>, which Java sees as an ordinary one
-                          this (mirror-array (desc-args desc)) (exception-mirrors m) (fxlogand flags #xfeff) (car im)
-                          (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4)) (refl-bytes (member-attr m 5)))))
-           (indexed-members (meta-methods c)
-                            (lambda (m) (and (string=? (car m) "<init>")
-                                             (or (eqv? public-only 0) (public? (caddr m)))))))))))
+  (with-loader-of this (lambda ()
+    (let ([c (mirror-class this)])
+      (make-jarr "Ljava/lang/reflect/Constructor;"
+       (list->vector
+        (map (lambda (im)
+               (let* ([m (cdr im)] [desc (cadr m)] [flags (caddr m)])
+                 (construct "java/lang/reflect/Constructor"
+                            "(Ljava/lang/Class;[Ljava/lang/Class;[Ljava/lang/Class;IILjava/lang/String;[B[B)V"
+                            ;; never native: only a class define-class made has a
+                            ;; native <init>, which Java sees as an ordinary one
+                            this (mirror-array (desc-args desc)) (exception-mirrors m) (fxlogand flags #xfeff) (car im)
+                            (refl-string (member-attr m 3)) (refl-bytes (member-attr m 4)) (refl-bytes (member-attr m 5)))))
+             (indexed-members (meta-methods c)
+                              (lambda (m) (and (string=? (car m) "<init>")
+                                               (or (eqv? public-only 0) (public? (caddr m)))))))))))))
 
 (defnative "java/lang/Class.getDeclaredFields0(Z)[Ljava/lang/reflect/Field;" (this public-only)
-  (let ([c (mirror-class this)])
-    (make-jarr "Ljava/lang/reflect/Field;"
-     (list->vector
-      (map (lambda (im)
-             (let* ([f (cdr im)] [flags (caddr f)])
-               (construct "java/lang/reflect/Field"
-                          "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;IZILjava/lang/String;[B)V"
-                          this (jstring-lit (car f)) (desc->mirror (cadr f)) (fxlogand flags #xffff)
-                          (if (and (static-flag? flags) (fxpositive? (fxlogand flags #x10))) 1 0)
-                          (car im) (refl-string (member-attr f 3)) (refl-bytes (member-attr f 4)))))
-           (indexed-members (meta-fields c)
-                            (lambda (f) (or (eqv? public-only 0) (public? (caddr f))))))))))
+  (with-loader-of this (lambda ()
+    (let ([c (mirror-class this)])
+      (make-jarr "Ljava/lang/reflect/Field;"
+       (list->vector
+        (map (lambda (im)
+               (let* ([f (cdr im)] [flags (caddr f)])
+                 (construct "java/lang/reflect/Field"
+                            "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;IZILjava/lang/String;[B)V"
+                            this (jstring-lit (car f)) (desc->mirror (cadr f)) (fxlogand flags #xffff)
+                            (if (and (static-flag? flags) (fxpositive? (fxlogand flags #x10))) 1 0)
+                            (car im) (refl-string (member-attr f 3)) (refl-bytes (member-attr f 4)))))
+             (indexed-members (meta-fields c)
+                              (lambda (f) (or (eqv? public-only 0) (public? (caddr f))))))))))))
 
 (defnative "java/lang/Class.getInterfaces0()[Ljava/lang/Class;" (this)
   (make-jarr "Ljava/lang/Class;" (list->vector (map jmirror-of (jclass-interfaces (mirror-class this))))))
@@ -108,15 +119,17 @@
 (define (class-inner c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 2) (caddr r))))
 (define (class-enclosing c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 3) (cadddr r))))
 (defnative "java/lang/Class.getDeclaringClass0()Ljava/lang/Class;" (this)
-  (let ([inner (class-inner (mirror-class this))])
-    (and inner (car inner) (jmirror-of (car inner)))))
+  (with-loader-of this (lambda ()
+    (let ([inner (class-inner (mirror-class this))])
+      (and inner (car inner) (jmirror-of (car inner)))))))
 (defnative "java/lang/Class.getSimpleBinaryName0()Ljava/lang/String;" (this)
   (let ([inner (class-inner (mirror-class this))])
     (and inner (cadr inner) (jstring-lit (cadr inner)))))
 (defnative "java/lang/Class.getEnclosingMethod0()[Ljava/lang/Object;" (this)
-  (let ([e (class-enclosing (mirror-class this))])
-    (and e (make-jarr "Ljava/lang/Object;"
-                      (vector (jmirror-of (car e)) (refl-string (cadr e)) (refl-string (caddr e)))))))
+  (with-loader-of this (lambda ()
+    (let ([e (class-enclosing (mirror-class this))])
+      (and e (make-jarr "Ljava/lang/Object;"
+                        (vector (jmirror-of (car e)) (refl-string (cadr e)) (refl-string (caddr e)))))))))
 (defnative "java/lang/Class.getGenericSignature0()Ljava/lang/String;" (this)
   (refl-string (car (meta-class-refl (mirror-class this)))))
 (defnative "java/lang/Class.getRawAnnotations()[B" (this)
@@ -131,32 +144,33 @@
 ;; as the JVM's: each component with its accessor, the declared method named
 ;; after it taking nothing and returning its type
 (defnative "java/lang/Class.getRecordComponents0()[Ljava/lang/reflect/RecordComponent;" (this)
-  (let* ([c (mirror-class this)]
-         [rc-class "java/lang/reflect/RecordComponent"]
-         [set (lambda (o f v) (jslot-set! o (jfield-index rc-class f) v))])
-    (jinit rc-class)
-    (make-jarr "Ljava/lang/reflect/RecordComponent;"
-     (list->vector
-      (map (lambda (rc)
-             (let* ([name (car rc)] [desc (cadr rc)] [getter (string-append "()" desc)]
-                    [im (let loop ([ms (meta-methods c)] [i 0])
-                          (cond [(null? ms) #f]
-                                [(and (string=? (caar ms) name) (string=? (cadar ms) getter)) (cons i (car ms))]
-                                [else (loop (cdr ms) (fx+ i 1))]))]
-                    [o (jnew rc-class)])
-               (set o "clazz" this)
-               (set o "name" (jstring-lit name))
-               (set o "type" (desc->mirror desc))
-               (set o "accessor" (and im (method-object this im)))
-               (set o "signature" (refl-string (caddr rc)))
-               (set o "annotations" (refl-bytes (cadddr rc)))
-               (set o "typeAnnotations" (refl-bytes (list-ref rc 4)))
-               o))
-           (or (class-record c) '()))))))
-;; The constant pool that AnnotationParser reads names and values from. Its oop
-;; is the class mirror; entries come from the parsed classfile through a jolt
-;; callback (set-cp-hook!), which answers the entry's value (a String's text,
-;; a number) or a Class entry's name.
+  (with-loader-of this (lambda ()
+    (let* ([c (mirror-class this)]
+           [rc-class "java/lang/reflect/RecordComponent"]
+           [set (lambda (o f v) (jslot-set! o (jfield-index rc-class f) v))])
+      (jinit rc-class)
+      (make-jarr "Ljava/lang/reflect/RecordComponent;"
+       (list->vector
+        (map (lambda (rc)
+               (let* ([name (car rc)] [desc (cadr rc)] [getter (string-append "()" desc)]
+                      [im (let loop ([ms (meta-methods c)] [i 0])
+                            (cond [(null? ms) #f]
+                                  [(and (string=? (caar ms) name) (string=? (cadar ms) getter)) (cons i (car ms))]
+                                  [else (loop (cdr ms) (fx+ i 1))]))]
+                      [o (jnew rc-class)])
+                 (set o "clazz" this)
+                 (set o "name" (jstring-lit name))
+                 (set o "type" (desc->mirror desc))
+                 (set o "accessor" (and im (method-object this im)))
+                 (set o "signature" (refl-string (caddr rc)))
+                 (set o "annotations" (refl-bytes (cadddr rc)))
+                 (set o "typeAnnotations" (refl-bytes (list-ref rc 4)))
+                 o))
+             (or (class-record c) '()))))))))
+  ;; The constant pool that AnnotationParser reads names and values from. Its oop
+  ;; is the class mirror; entries come from the parsed classfile through a jolt
+  ;; callback (set-cp-hook!), which answers the entry's value (a String's text,
+  ;; a number) or a Class entry's name.
 (define cp-hook #f)
 (define (set-cp-hook! f) (set! cp-hook f))
 (defnative "java/lang/Class.getConstantPool()Ljdk/internal/reflect/ConstantPool;" (this)

@@ -40,5 +40,6 @@ lazy forName: true
 lazy missing: java.lang.ClassNotFoundException: LinkCheck$LinkLazy$HidZ
 lazy loader error: java.lang.ClassFormatError: bad bytes for LinkCheck$LinkLazy$HidBad
 lazy class constant: true E names LinkCheck$LinkLazy$HidF [LLinkCheck$LinkLazy$HidF;
-lazy asked: [HidA, HidB, HidC, HidBase, HidZ, HidD, HidBad, HidE, HidF]
+lazy member types: LinkCheck$LinkLazy$HidH LinkCheck$LinkLazy$HidH 2
+lazy asked: [HidA, HidB, HidC, HidBase, HidZ, HidD, HidBad, HidE, HidF, HidG, HidH]
 lazy not ours: ran (false A sees 42)
