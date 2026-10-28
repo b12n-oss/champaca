@@ -71,3 +71,9 @@ ctor Lazy int: Lazy
 JDK concat Integer: java.lang.IllegalArgumentException: argument type mismatch
 JDK concat String: ab
 JDK Math.abs(int) Long: java.lang.IllegalArgumentException: argument type mismatch
+CSM Class.forName: class java.lang.String
+CSM Class.forName wrong: java.lang.IllegalArgumentException: argument type mismatch
+CSM Method.invoke: 7
+CSM Class.getMethod: public int java.lang.String.length()
+CSM setAccessible: null
+CSM after setAccessible: secret

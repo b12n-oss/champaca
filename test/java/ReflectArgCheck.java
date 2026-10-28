@@ -25,6 +25,7 @@ public class ReflectArgCheck {
     public static String third(double x) { return "third " + (x / 3); }
     public static String fthird(float x) { return "fthird " + (x / 3); }
     public String inst(int x) { return "inst " + x; }
+    private static String secret() { return "secret"; }
 
     public static class Box {
         public final String v;
@@ -154,5 +155,17 @@ public class ReflectArgCheck {
         row("JDK concat Integer", String.class.getMethod("concat", String.class), "a", 1);
         row("JDK concat String", String.class.getMethod("concat", String.class), "a", "b");
         row("JDK Math.abs(int) Long", Math.class.getMethod("abs", int.class), null, 1L);
+        // caller-sensitive methods called through reflection: with an
+        // adapter taking the caller (Class.forName), and without one
+        row("CSM Class.forName", Class.class.getMethod("forName", String.class), null, "java.lang.String");
+        row("CSM Class.forName wrong", Class.class.getMethod("forName", String.class), null, 5);
+        row("CSM Method.invoke", Method.class.getMethod("invoke", Object.class, Object[].class),
+            String.class.getMethod("valueOf", int.class), null, new Object[] {7});
+        row("CSM Class.getMethod", Class.class.getMethod("getMethod", String.class, Class[].class),
+            String.class, "length", new Class<?>[0]);
+        Method sa = java.lang.reflect.AccessibleObject.class.getMethod("setAccessible", boolean.class);
+        Method priv = ReflectArgCheck.class.getDeclaredMethod("secret");
+        row("CSM setAccessible", sa, priv, true);
+        row("CSM after setAccessible", priv, null);
     }
 }

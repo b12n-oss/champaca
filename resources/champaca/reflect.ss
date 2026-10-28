@@ -533,6 +533,26 @@
 
 (defnative "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke0(Ljava/lang/reflect/Method;Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;"
   (m obj args)
+  (reflect-invoke m obj args))
+
+;; A caller-sensitive method called through Method.invoke. The JDK's
+;; native accessor puts the caller first in its adapter's arguments, where
+;; findCSMethodAdapter gives the adapter (Class.forName(String, Class)) the
+;; caller last; HotSpot takes that path only before java.lang.invoke is up,
+;; champaca always. So the caller goes last here, and a method without an
+;; adapter runs as itself, finding its caller by the frames as any call does
+;; (the JDK's other path needs java.lang.invoke).
+(define-override! "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke(Ljava/lang/Object;[Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;"
+  (lambda (this obj args caller)
+    (let* ([cn "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor"]
+           [adapter (jslot this (jfield-index cn "csmAdapter"))])
+      (if adapter
+          (reflect-invoke adapter obj
+                          (make-jarr "Ljava/lang/Object;"
+                                     (list->vector (append (if args (vector->list (jarr-vec args)) '()) (list caller)))))
+          (reflect-invoke (jslot this (jfield-index cn "method")) obj args)))))
+
+(define (reflect-invoke m obj args)
   (let-values ([(c meta) (reflected-member "java/lang/reflect/Method" m)])
     (let* ([cname (jclass-cname c)] [desc (cadr meta)] [key (string-append (car meta) desc)]
            [static? (static-flag? (caddr meta))]
