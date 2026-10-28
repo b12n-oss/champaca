@@ -1,0 +1,7 @@
+US-ASCII: sun.nio.cs.US_ASCII$Encoder sun.nio.cs.US_ASCII$Decoder max 1.0 bytes 7 round trip false 7
+ISO-8859-1: sun.nio.cs.ISO_8859_1$Encoder sun.nio.cs.ISO_8859_1$Decoder max 1.0 bytes 7 round trip false 7
+UTF-8: sun.nio.cs.UTF_8$Encoder sun.nio.cs.UTF_8$Decoder max 3.0 bytes 10 round trip true 7
+UTF-16: sun.nio.cs.UTF_16$Encoder sun.nio.cs.UTF_16$Decoder max 4.0 bytes 16 round trip true 7
+UTF-16BE: sun.nio.cs.UTF_16BE$Encoder sun.nio.cs.UTF_16BE$Decoder max 2.0 bytes 14 round trip true 7
+UTF-16LE: sun.nio.cs.UTF_16LE$Encoder sun.nio.cs.UTF_16LE$Decoder max 2.0 bytes 14 round trip true 7
+windows-1252: sun.nio.cs.SingleByte$Encoder sun.nio.cs.SingleByte$Decoder max 1.0 bytes 7 round trip true 7

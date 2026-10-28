@@ -230,6 +230,22 @@
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
                                 (println (if ignored-ok "PASS" "FAIL") "-Xmx and -XX: ignored with a warning")
                                 (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])))
+                    ;; a warm start whose boot loads classes the cached boot never
+                    ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
+                    ;; plain runs that use them, on a cache of their own
+                    boot-fails (let [cache (str (fs/create-temp-dir {:prefix "champaca-bootgen-"}))
+                                     ch (fn [label & args]
+                                          (apply run-limited 300 {:label label :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_NPE_STRICT" "1"}}
+                                                 (jolt-bin) "-M" "-m" "champaca.main" args))
+                                     expected (slurp "test/java/EncoderCheck.expected")
+                                     _ (ch "bootgen-fill" "target/classes" "Hello")
+                                     runs [(ch "bootgen-option" "-Dstdout.encoding=ISO-8859-1" "target/classes" "EncoderCheck")
+                                           (ch "bootgen-after" "target/classes" "EncoderCheck")
+                                           (ch "bootgen-again" "target/classes" "EncoderCheck")]
+                                     ok (every? (fn [r] (and (zero? (:exit r)) (= expected (:out r)))) runs)]
+                                 (fs/delete-tree cache)
+                                 (println (if ok "PASS" "FAIL") "a warm boot's new classes reach the startup cache (EncoderCheck)")
+                                 (if ok [] ["boot generation"]))
                     ;; the library cache (test/libcache): the same program over
                     ;; changing jars, each run checked against the JVM's output.
                     ;; Base changes between base-v1.jar and base-v2.jar, Sub's bytes
@@ -387,8 +403,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails libcache-fails lam-fails edit-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options"] (map (fn [i] (str "libcache-" i)) (range 1 15))
+                    fails (remove nil? (concat fails jar-fails opt-fails boot-fails libcache-fails lam-fails edit-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "boot generation"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))

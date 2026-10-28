@@ -1552,10 +1552,17 @@
                        (error 'champaca \"the boot layer failed to initialize\"))
                      ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
-        (when (and (not hit?) (zero? status))
-          (timed :cache-write #(write-cache! dir @rec)))
-        ;; from here on, record only what later code compiles
-        (vreset! rec []))
+        ;; a cold boot's code goes to boot.so, and from here on only what
+        ;; later code compiles is recorded. A warm boot keeps what it
+        ;; recorded for this run's generation: it compiles only classes the
+        ;; cached boot never loaded (a -Dstdout.encoding brings the boot a
+        ;; new encoder), and dropping their registrations left their linked
+        ;; maps in state.img with no code behind them, so a later run took
+        ;; them for registered and failed with "class not registered"
+        (when-not hit?
+          (when (zero? status)
+            (timed :cache-write #(write-cache! dir @rec)))
+          (vreset! rec [])))
       (swap! state assoc :cache (cond hit? :hit dir :miss :else :off))
       status)))
 
@@ -1645,9 +1652,9 @@
   "The options before the class path or -jar, as the java launcher reads
   them: -Dkey=value pairs (-Dkey is an empty value, a bare -D nothing), and
   the rest of argv. A heap or stack size (-Xmx, -Xms, -Xmn, -Xss) and any
-  -XX: flag are ignored with a warning, as HotSpot warns of an option it
-  ignores, since start scripts pass them and none changes what a program
-  prints; any other option is the launcher's Unrecognized option."
+  -XX: flag are ignored with a warning, since start scripts pass them and
+  most tune the VM only; any other option is the launcher's Unrecognized
+  option."
   [argv]
   (loop [argv argv props []]
     (let [a (first argv)]

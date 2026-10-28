@@ -40,7 +40,7 @@ Most of the cold start's five seconds is Chez compiling `SystemModules$default`.
 
 JDK code is cached, and so are classes from jars and directories on the classpath ([below](#classes-from-jars-and-directories)). A classpath class is used from the cache only while its bytes are the ones it was compiled from, so the program you're working on always runs what you last compiled.
 
-When a run compiles JDK methods the cache didn't have, `champaca.main` appends them as a new generation, `extra-<n>.so`, on the way out. From jolt, `(ldk/save-cache!)` does the same; call it before the process exits. It costs almost nothing when there's nothing new.
+When a run compiles JDK methods the cache didn't have, `champaca.main` appends them as a new generation, `extra-<n>.so`, on the way out. That includes a warm start's own boot when it loads classes the cached boot didn't, which a `-D` option can make it do: `-Dstdout.encoding=ISO-8859-1` gives `System.out` an encoder no default boot loads, and its class goes into that run's generation like any other (`EncoderCheck` in `bb test` runs that sequence on a cache of its own). From jolt, `(ldk/save-cache!)` does the same; call it before the process exits. It costs almost nothing when there's nothing new.
 
 ### Generations
 

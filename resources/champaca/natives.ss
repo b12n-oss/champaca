@@ -748,8 +748,10 @@
 (defnative "jdk/internal/util/SystemProps$Raw.vmProperties()[Ljava/lang/String;" ()
   ;; the -D options come after java.library.path, which they can replace (the
   ;; JDK's cmdProperties keeps the last of a key), and before the properties
-  ;; the VM owns, which they can't, as HotSpot ignores -Djava.vm.name; champaca
-  ;; also keeps java.home, java.class.path and its reflection's accessor mode
+  ;; the VM owns, which they can't, as HotSpot ignores -Djava.vm.name and
+  ;; -Djava.class.path. HotSpot takes -Djava.home (and fails to start when it
+  ;; isn't a JDK) and appends -Dsun.boot.library.path to its own; champaca
+  ;; keeps both, and the Unsafe and reflection modes it needs
   (props-array
    `(("java.library.path" . "")
      ,@command-line-properties
