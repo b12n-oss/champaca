@@ -246,6 +246,137 @@
         (prim-descs t) (prim-descs t)
         :else (str "L" (str/replace t "." "/") ";")))
 
+;; --- annotations for define-class ------------------------------------------------
+;; Checked here against the annotation type through reflection, as javac
+;; checks them, and handed to class-file-bytes (dynamic.ss) as element_values.
+
+(defn- class-exists? [slashed] (with-gil #(boolean (s/call "class-exists?" slashed))))
+
+(defn- annotation-type
+  "The Class of the annotation type t (dots or slashes), refusing a name
+  that isn't a class, a class that isn't an annotation type, one without
+  RUNTIME retention (reflection would never see it) and one whose @Target
+  leaves out kind, an ElementType name."
+  [who t kind]
+  (let [t (str/replace (if (keyword? t) (name t) (str t)) "/" ".")]
+    (when-not (class-exists? (str/replace t "." "/"))
+      (throw (ex-info (str who ": " t " isn't a class (a nested class is Outer$Inner)") {:annotation t})))
+    (let [c (invoke-static "java.lang.Class" "forName" t)
+          who (str who ": @" t)
+          meta-ann (fn [n] (invoke c "getAnnotation" (invoke-static "java.lang.Class" "forName" n)))]
+      (when-not (invoke c "isAnnotation")
+        (throw (ex-info (str who " isn't an annotation type") {:annotation t})))
+      (let [r (meta-ann "java.lang.annotation.Retention")
+            policy (if r (invoke (invoke r "value") "name") "CLASS")]
+        (when-not (= policy "RUNTIME")
+          (throw (ex-info (str who " has " policy " retention, so reflection would never see it") {:annotation t}))))
+      (when-let [tg (meta-ann "java.lang.annotation.Target")]
+        (let [kinds (set (map #(invoke % "name") (->clj (invoke tg "value"))))]
+          (when-not (or (kinds kind) (and (= kind "TYPE") (kinds "TYPE_USE")))
+            (throw (ex-info (str who " isn't for a " (str/lower-case kind) ", only " (str/join ", " (sort kinds)))
+                            {:annotation t})))))
+      c)))
+
+(declare annotation-of)
+
+(defn- annotation-value
+  "v as an element of type rt (a Class) takes it, as the element_value
+  class-file-bytes encodes: [tag & payload]. A single value for an array
+  element is an array of one, as in Java source."
+  [who rt v]
+  (let [rname (invoke rt "getName")
+        bad (fn [what] (throw (ex-info (str who " is " (pr-str v) ", not " what) {:value v})))
+        whole (fn [tag lo hi what]
+                (cond (and (integer? v) (<= lo v hi)) [tag v]
+                      (integer? v) (throw (ex-info (str who " is " v ", out of range for " what) {:value v}))
+                      :else (bad (str "an integer (" what ")"))))]
+    (cond
+      (invoke rt "isArray")
+      (let [ct (invoke rt "getComponentType")]
+        (into ["["] (map-indexed (fn [i x] (annotation-value (str who "[" i "]") ct x)) (if (sequential? v) v [v]))))
+      (= rname "boolean") (if (boolean? v) ["Z" (if v 1 0)] (bad "a boolean"))
+      (= rname "byte") (whole "B" -128 127 "byte")
+      (= rname "short") (whole "S" -32768 32767 "short")
+      (= rname "int") (whole "I" -2147483648 2147483647 "int")
+      (= rname "long") (whole "J" -9223372036854775808 9223372036854775807 "long")
+      (= rname "char") (if (char? v) ["C" (int v)] (whole "C" 0 65535 "char"))
+      (= rname "float")
+      (cond (not (number? v)) (bad "a float")
+            (let [d (double v)] (and (not (NaN? d)) (not (infinite? d)) (> (abs d) 3.4028234663852886E38)))
+            (throw (ex-info (str who " is " v ", out of range for float") {:value v}))
+            :else ["F" (double v)])
+      (= rname "double") (if (number? v) ["D" (double v)] (bad "a double"))
+      (= rname "java.lang.String") (if (string? v) ["s" v] (bad "a string"))
+      (= rname "java.lang.Class")
+      (cond (with-gil #(s/call "dyn-instance?" v "java/lang/Class")) ["c" (invoke v "descriptorString")]
+            (string? v) (let [d (if (= v "void") "V" (type-desc v))
+                              e (str/replace d #"^\[+" "")]
+                          (when (and (str/starts-with? e "L") (not (class-exists? (subs e 1 (dec (count e))))))
+                            (throw (ex-info (str who " is " (pr-str v) ", which isn't a class") {:value v})))
+                          ["c" d])
+            :else (bad "a type name or a Class"))
+      (invoke rt "isEnum")
+      (let [n (if (keyword? v) (name v) v)
+            names (mapv #(invoke % "name") (->clj (invoke rt "getEnumConstants")))]
+        (if (and (string? n) (some #{n} names))
+          ["e" (invoke rt "descriptorString") n]
+          (bad (str "a constant of " rname " (" (str/join ", " names) ")"))))
+      (invoke rt "isAnnotation")
+      (if (map? v) ["@" (annotation-of who rt v)] (bad (str "a map of " rname "'s elements")))
+      :else (bad rname))))
+
+(defn- annotation-of
+  "The annotation of type c (a Class) with the elements in m, as
+  [desc [[element value] ...]] in the order c declares them. Refuses an
+  element c doesn't have and leaving out one that has no default."
+  [who c m]
+  (let [given (reduce (fn [g [k v]]
+                        (let [n (if (keyword? k) (name k) k)]
+                          (when-not (string? n)
+                            (throw (ex-info (str who ": " (pr-str k) " isn't an element name") {:element k})))
+                          (when (contains? g n) (throw (ex-info (str who ": element " n " is given twice") {:element n})))
+                          (assoc g n v)))
+                      {} m)
+        elems (->> (->clj (invoke c "getDeclaredMethods"))
+                   (remove #(or (invoke % "isSynthetic") (pos? (bit-and (invoke % "getModifiers") 8))))
+                   (mapv (fn [e] [(invoke e "getName") (invoke e "getReturnType") (some? (invoke e "getDefaultValue"))])))]
+    (doseq [n (keys given)]
+      (when-not (some #(= n (first %)) elems)
+        (throw (ex-info (str who " has no element " n) {:element n}))))
+    [(invoke c "descriptorString")
+     (vec (keep (fn [[n rt default?]]
+                  (cond (contains? given n) [n (annotation-value (str who ": element " n) rt (given n))]
+                        default? nil
+                        :else (throw (ex-info (str who " needs element " n ", which has no default") {:element n}))))
+                elems))]))
+
+(defn- annotations-for
+  "m, a map from annotation type to a map of its elements (nil for none), as
+  a vector of annotations sorted by type, for a target of kind (an
+  ElementType name) that where names."
+  [where kind m]
+  (when-not (or (nil? m) (map? m))
+    (throw (ex-info (str "define-class: the annotations " where " are " (pr-str m) ", not a map of type to elements") {})))
+  (let [who (str "define-class: " where)
+        anns (map (fn [[t elems]]
+                    (when-not (or (nil? elems) (map? elems))
+                      (throw (ex-info (str who ": @" t "'s elements are " (pr-str elems) ", not a map") {:annotation t})))
+                    (let [c (annotation-type who t kind)]
+                      (annotation-of (str who ": @" (invoke c "getName")) c elems)))
+                  m)]
+    (doseq [[d n] (frequencies (map first anns))]
+      (when (> n 1)
+        (throw (ex-info (str who ": @" (str/replace (subs d 1 (dec (count d))) "/" ".") " is given twice") {:annotation d}))))
+    (vec (sort-by first anns))))
+
+(defn- scm-annotation [[desc elems]]
+  (letfn [(value [[tag & xs :as v]]
+            (case tag
+              "@" (s/call "list" tag (scm-annotation (first xs)))
+              "[" (apply s/call "list" tag (map value xs))
+              (apply s/call "list" v)))]
+    (apply s/call "list" desc (map (fn [[n v]] (s/call "cons" n (value v))) elems))))
+
 (defn- as-fn
   "f as a Scheme procedure: a var, a keyword or a map is wrapped, since
   Scheme calls only procedures; anything else isn't callable."
@@ -289,7 +420,8 @@
   the same superclass, interfaces, fields and method keys swaps in the new
   fns; anything else is refused, since a class is defined once per process."
   [cname {:keys [extends implements fields methods static-fields static-methods static-init
-                 constructors init post-init]}]
+                 constructors init post-init annotations field-annotations method-annotations
+                 constructor-annotations]}]
   (let [extends (or extends "java.lang.Object")
         dotted (str/replace cname "/" ".")
         slashed #(str/replace % "." "/")
@@ -318,8 +450,30 @@
             (throw (ex-info "define-class: :init and :post-init are for :constructors, and there are none" {:class cname})))
         cinit (when init (as-fn "define-class" :init init))
         post (when post-init (as-fn "define-class" :post-init post-init))
+        ;; {target [annotation ...]}, a target named once whatever its spelling
+        member-anns (fn [what m norm known? kind where]
+                      (when-not (or (nil? m) (map? m))
+                        (throw (ex-info (str "define-class: " what " is " (pr-str m) ", not a map") {})))
+                      (reduce (fn [acc [k anns]]
+                                (let [t (norm k)]
+                                  (when-not (known? t)
+                                    (throw (ex-info (str "define-class: " what " names " (pr-str k) ", " (where :missing))
+                                                    {:target k})))
+                                  (when (contains? acc t)
+                                    (throw (ex-info (str "define-class: " what " names " (pr-str t) " twice") {:target k})))
+                                  (assoc acc t (annotations-for (str "on " (where t)) kind anns))))
+                              (sorted-map) m))
+        field-names (set (map first (concat fields sfields)))
+        anns [(annotations-for "on the class" "TYPE" annotations)
+              (member-anns ":field-annotations" field-annotations name field-names "FIELD"
+                           #(if (= % :missing) "which isn't in :fields or :static-fields" (str "field " %)))
+              (member-anns ":method-annotations" method-annotations method-key #(or (contains? fns %) (contains? sfns %))
+                           "METHOD" #(if (= % :missing) "which isn't a key of :methods or :static-methods" (str "method " %)))
+              (member-anns ":constructor-annotations" constructor-annotations
+                           #(when (sequential? %) (ctor-desc %)) some? "CONSTRUCTOR"
+                           #(if (= % :missing) "which isn't a vector of parameter types" (str "constructor " %)))]
         shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
-               (some? sinit) ctors (some? cinit) (some? post)]
+               (some? sinit) ctors (some? cinit) (some? post) anns]
         scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
     (rethrow
      #(if-let [{old :shape cells :cells scells :scells icell :icell ccell :ccell pcell :pcell c :class}
@@ -332,7 +486,7 @@
               (when post (s/call "set-box!" pcell post))
               c)
           (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
-                               " fields, method keys, static initializer or constructors; a class is defined once per process")
+                               " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
                           {:class dotted})))
         (let [boxes (fn [m] (into {} (map (fn [[k f]] [k (s/call "box" f)])) m))
               cells (boxes fns)
@@ -342,7 +496,11 @@
               pcell (when post (s/call "box" post))
               c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
                         (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
-                        (if ctors (scm-list ctors) false) (or ccell false) (or pcell false))]
+                        (if ctors (scm-list ctors) false) (or ccell false) (or pcell false)
+                        (let [[canns fanns manns cnanns] anns
+                              alist (fn [m] (scm-list (map (fn [[k v]] [k (apply s/call "list" (map scm-annotation v))]) m)))]
+                          (s/call "list" (apply s/call "list" (map scm-annotation canns))
+                                  (alist fanns) (alist manns) (alist cnanns))))]
           (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell
                                             :ccell ccell :pcell pcell :class c})
           c)))))

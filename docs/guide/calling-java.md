@@ -225,7 +225,22 @@ The fn's result is checked against the method's return type, as Clojure's casts 
 
 A method you leave out keeps what the class inherits. An abstract one left out throws `AbstractMethodError` when it's called, as a class compiled without it would on the JVM. The class is final, so `invoke-super` always means the class it was defined with.
 
-Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields in the same order, method keys, static initializer and constructors, statics included, swaps in the new fns and keeps the static fields' values, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
+`:annotations` puts annotations on the class, as a map from an annotation type to a map of its elements. `:field-annotations`, `:method-annotations` and `:constructor-annotations` do the same for members, keyed by a field name, a key of `:methods` or `:static-methods` (a method name annotates every method it implements), and a constructor's vector of parameter types. Reflection sees them as it sees a compiled class's, and so do libraries that read annotations, so Jackson binds this class as it would a Java one:
+
+```clojure
+(def ja "com.fasterxml.jackson.annotation.")
+(ldk/define-class "demo.Person"
+  {:fields {"name" "java.lang.String" "age" "int"}
+   :annotations {(str ja "JsonPropertyOrder") {:value ["age" "name"]}}
+   :field-annotations {"name" {(str ja "JsonProperty") {:value "full_name"}}}
+   :methods {"getSecret()Ljava/lang/String;" (fn [_] "hidden")}
+   :method-annotations {"getSecret()Ljava/lang/String;" {(str ja "JsonIgnore") {}}}})
+;; with name "Ada" and age 36 set, an ObjectMapper writes {"age":36,"full_name":"Ada"}
+```
+
+An element's value is checked against its type, as javac checks one. A primitive takes a number in its range (a `char` a char too, a `boolean` only `true` or `false`), a `String` a string, a `Class` a type name such as `"int"`, `"void"` or `"java.util.List[]"` or a `Class`, an enum a constant's name as a keyword or string, a nested annotation a map of its elements, and an array a vector, or a single value as an array of one. An element left out takes its default. An element the type doesn't have, a missing element with no default, a type that isn't an annotation, one whose retention isn't `RUNTIME` (reflection would never see it) and one whose `@Target` leaves out what it's on are refused, and so is a member key that names nothing the class has.
+
+Errors cross as they do for any fn Java calls ([Exceptions](#exceptions)). A class is defined once per process. Evaluating the same `define-class` again, with the same superclass, interfaces, fields in the same order, method keys, static initializer, constructors and annotations, statics included, swaps in the new fns and keeps the static fields' values, which suits the REPL. Objects made before see the new fns too. Any other change is refused, so change the name or restart the process ([limitations](limitations.md#classes-defined-from-jolt)).
 
 ## Threads
 

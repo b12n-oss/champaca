@@ -7,7 +7,7 @@
             [champaca.api :as ldk]
             [jolt.scheme :as scm]))
 
-(ldk/init!)
+(ldk/init! {:classpath ["target/lib.jar"]})   ; champaca.lib.Tag, for annotations
 
 (defn- thrown
   "The ex-message of what f throws."
@@ -295,7 +295,7 @@
     (is (identical? c (ldk/define-class cname (spec 100))))
     (is (= 110 (ldk/invoke-static cname "add" 1)))
     (is (= (str "define-class: demo.classes.Tally is already defined with another superclass, interfaces,"
-                " fields, method keys, static initializer or constructors; a class is defined once per process")
+                " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
            (thrown #(ldk/define-class cname (assoc (spec 1) :static-fields ["other"])))))))
 
 (deftest a-field-of-its-own-type
@@ -360,7 +360,7 @@
     (ldk/construct "demo.classes.Lazy")
     (is (= 1 @runs))
     (is (= (str "define-class: demo.classes.Lazy is already defined with another superclass, interfaces,"
-                " fields, method keys, static initializer or constructors; a class is defined once per process")
+                " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Lazy" {:static-fields ["V"]})))))
   ;; redefined before its first use, the class runs the new fn
   (let [ran (atom nil)]
@@ -465,7 +465,7 @@
     (let [t (ldk/construct "demo.classes.Tagged" "x")]
       (is (= ["b-x" "b-thread-x"] [(ldk/get-field t "tag") (ldk/invoke t "getName")])))
     (is (= (str "define-class: demo.classes.Tagged is already defined with another superclass, interfaces,"
-                " fields, method keys, static initializer or constructors; a class is defined once per process")
+                " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Tagged" (assoc (spec "c-") :constructors {["int"] []})))))))
 
 (deftest what-constructors-refuse
@@ -522,6 +522,139 @@
   (ldk/define-class "demo.classes.Forced" {:methods {"f()I" (fn [_] 10)} :static-methods {"g()I" (fn [] 20)}})
   (is (= [10 20] [(ldk/invoke (ldk/construct "demo.classes.Forced") "f") (ldk/invoke-static "demo.classes.Forced" "g")])))
 
+(defn- annotation-on
+  "The annotation of type t (a class name) on the reflective object r, or nil."
+  [r t]
+  (ldk/invoke r "getAnnotation" (class-named t)))
+
+(deftest annotations
+  ;; champaca.lib.Tag (test/jar) has an element of every kind
+  (let [c (ldk/define-class "demo.classes.Annotated"
+            {:extends "java.io.OutputStream"
+             :fields {"n" "int"}
+             :static-fields {"total" "long"}
+             :methods {:write (fn [& _] nil)}
+             :static-methods {"make()Ljava/lang/Object;" (fn [] "made")}
+             :annotations {"champaca.lib.Tag" {:name "cls" :on false :b -5 :c \z :s 300 :i -7 :l 12345678901234
+                                               :f 1.5 :d -2.75 :type "java.lang.String" :level :HIGH
+                                               :part {:value "p"} :names ["x" "y"] :counts 9 :levels [:LOW "HIGH"]
+                                               :parts [{} {:value "q"}] :types ["int" "void" "java.util.List[]"]}
+                           "java.lang.Deprecated" {:since "1.0" :forRemoval true}}
+             :field-annotations {"n" {"champaca.lib.Tag$OnFields" nil}
+                                 :total {"champaca.lib.Tag" {:name "total" :l -9223372036854775808 :i -2147483648
+                                                             :c 65535 :f ##Inf :d ##NaN}}}
+             :method-annotations {:write {"champaca.lib.Tag" {:name "w"}}
+                                  "make()Ljava/lang/Object;" {"java.lang.Deprecated" {}}}
+             :constructor-annotations {[] {"champaca.lib.Tag" {:name "k" :type (class-named "java.util.Map")}}}})
+        a (annotation-on c "champaca.lib.Tag")]
+    (is (= ["cls" false -5 \z 300 -7 12345678901234 1.5 -2.75]
+           (mapv #(ldk/invoke a %) ["name" "on" "b" "c" "s" "i" "l" "f" "d"])))
+    (is (= "java.lang.String" (ldk/invoke (ldk/invoke a "type") "getName")))
+    (is (= "HIGH" (ldk/invoke (ldk/invoke a "level") "name")))
+    (is (= "p" (ldk/invoke (ldk/invoke a "part") "value")))
+    (is (= [["x" "y"] [9] ["LOW" "HIGH"] ["part" "q"] ["int" "void" "[Ljava.util.List;"]]
+           [(ldk/->clj (ldk/invoke a "names")) (ldk/->clj (ldk/invoke a "counts"))
+            (mapv #(ldk/invoke % "name") (ldk/->clj (ldk/invoke a "levels")))
+            (mapv #(ldk/invoke % "value") (ldk/->clj (ldk/invoke a "parts")))
+            (mapv #(ldk/invoke % "getName") (ldk/->clj (ldk/invoke a "types")))]))
+    (is (= "@java.lang.Deprecated(forRemoval=true, since=\"1.0\")"
+           (ldk/to-string (annotation-on c "java.lang.Deprecated"))))
+    (is (= 2 (count (ldk/->clj (ldk/invoke c "getDeclaredAnnotations")))))
+    (is (ldk/invoke c "isAnnotationPresent" (class-named "champaca.lib.Tag")))
+    ;; fields, the edges of each type; elements left out take their defaults
+    (is (some? (annotation-on (ldk/invoke c "getField" "n") "champaca.lib.Tag$OnFields")))
+    (let [t (annotation-on (ldk/invoke c "getField" "total") "champaca.lib.Tag")]
+      (is (= [-9223372036854775808 -2147483648 (char 65535) ##Inf true 2 "LOW"]
+             [(ldk/invoke t "l") (ldk/invoke t "i") (ldk/invoke t "c") (ldk/invoke t "f") (NaN? (ldk/invoke t "d"))
+              (ldk/invoke t "s") (ldk/invoke (ldk/invoke t "level") "name")])))
+    ;; a name key annotates every method it implements: write's three overloads
+    (let [ws (filter #(= "write" (ldk/invoke % "getName")) (ldk/->clj (ldk/invoke c "getDeclaredMethods")))]
+      (is (= 3 (count ws)))
+      (is (= ["w" "w" "w"] (map #(ldk/invoke (annotation-on % "champaca.lib.Tag") "name") ws))))
+    (is (some? (annotation-on (ldk/invoke c "getMethod" "make") "java.lang.Deprecated")))
+    ;; a constructor passed on from the superclass
+    (let [k (annotation-on (ldk/invoke c "getConstructor") "champaca.lib.Tag")]
+      (is (= ["k" "java.util.Map"] [(ldk/invoke k "name") (ldk/invoke (ldk/invoke k "type") "getName")])))
+    ;; a class without annotations has none
+    (is (= [] (ldk/->clj (ldk/invoke (ldk/define-class "demo.classes.Bare" {}) "getDeclaredAnnotations")))))
+  ;; a TYPE_USE annotation applies to a class declaration, as in Java
+  (is (some? (annotation-on (ldk/define-class "demo.classes.Typed" {:annotations {"champaca.lib.Tag$OnTypes" {}}})
+                            "champaca.lib.Tag$OnTypes"))))
+
+(deftest annotations-on-constructors-of-its-own
+  (let [c (ldk/define-class "demo.classes.Built"
+            {:fields ["v"]
+             :constructors {["java.lang.String"] []}
+             :init (fn [_] [])
+             :post-init (fn [this s] (ldk/set-field! this "v" s))
+             :constructor-annotations {["java.lang.String"] {"java.beans.ConstructorProperties" {:value "v"}}}})
+        k (ldk/invoke c "getConstructor" (class-named "java.lang.String"))]
+    (is (= ["v"] (ldk/->clj (ldk/invoke (annotation-on k "java.beans.ConstructorProperties") "value"))))
+    (is (= "x" (ldk/get-field (ldk/invoke k "newInstance" ["x"]) "v")))))
+
+(deftest annotations-and-defining-again
+  (let [spec (fn [s f] {:methods {"toString" f} :annotations {"java.lang.Deprecated" {:since s}}})]
+    (ldk/define-class "demo.classes.Noted" (spec "1" (fn [_] "one")))
+    (ldk/define-class "demo.classes.Noted" (spec "1" (fn [_] "two")))
+    (is (= "two" (ldk/invoke (ldk/construct "demo.classes.Noted") "toString")))
+    (is (some? (thrown #(ldk/define-class "demo.classes.Noted" (spec "2" (fn [_] "three"))))))))
+
+(deftest what-annotations-refuse
+  (let [n (atom 0)
+        refused (fn [opts] (thrown #(ldk/define-class (str "demo.classes.Ann" (swap! n inc)) opts)))
+        tag (fn [m] {:annotations {"champaca.lib.Tag" (merge {:name "a"} m)}})
+        on-class (fn [msg] (str "define-class: on the class: " msg))]
+    (is (= (on-class "@champaca.lib.Tag$Kept has CLASS retention, so reflection would never see it")
+           (refused {:annotations {"champaca.lib.Tag$Kept" {}}})))
+    (is (= (on-class "@champaca.lib.Tag$OnFields isn't for a type, only FIELD")
+           (refused {:annotations {"champaca.lib.Tag$OnFields" {}}})))
+    (is (= (on-class "@champaca.lib.Tag needs element name, which has no default")
+           (refused {:annotations {"champaca.lib.Tag" {}}})))
+    (is (= (on-class "@champaca.lib.Tag has no element nope") (refused (tag {:nope 1}))))
+    (is (= (on-class "@champaca.lib.Tag: element name is 3, not a string") (refused (tag {:name 3}))))
+    (is (= (on-class "@champaca.lib.Tag: element b is 200, out of range for byte") (refused (tag {:b 200}))))
+    (is (= (on-class "@champaca.lib.Tag: element c is -1, out of range for char") (refused (tag {:c -1}))))
+    (is (= (on-class "@champaca.lib.Tag: element i is 1.5, not an integer (int)") (refused (tag {:i 1.5}))))
+    (is (= (on-class "@champaca.lib.Tag: element l is 9223372036854775808, out of range for long")
+           (refused (tag {:l 9223372036854775808}))))
+    (is (= (on-class "@champaca.lib.Tag: element f is 1.0E300, out of range for float") (refused (tag {:f 1e300}))))
+    (is (= (on-class "@champaca.lib.Tag: element on is nil, not a boolean") (refused (tag {:on nil}))))
+    (is (= (on-class "@champaca.lib.Tag: element level is :MID, not a constant of champaca.lib.Tag$Level (LOW, HIGH)")
+           (refused (tag {:level :MID}))))
+    (is (= (on-class "@champaca.lib.Tag: element type is \"no.Such\", which isn't a class") (refused (tag {:type "no.Such"}))))
+    (is (= (on-class "@champaca.lib.Tag: element type is 1, not a type name or a Class") (refused (tag {:type 1}))))
+    (is (= (on-class "@champaca.lib.Tag: element counts[1] is \"x\", not an integer (int)") (refused (tag {:counts [1 "x"]}))))
+    (is (= (on-class "@champaca.lib.Tag: element part: element value is 1, not a string") (refused (tag {:part {:value 1}}))))
+    (is (= (on-class "@champaca.lib.Tag: element part is \"p\", not a map of champaca.lib.Tag$Part's elements")
+           (refused (tag {:part "p"}))))
+    (is (= (on-class "@champaca.lib.Tag: element name is given twice") (refused (tag {"name" "b"}))))
+    (is (= (on-class "@java.lang.String isn't an annotation type") (refused {:annotations {"java.lang.String" {}}})))
+    (is (= (on-class "no.Such isn't a class (a nested class is Outer$Inner)") (refused {:annotations {"no.Such" {}}})))
+    (is (= (on-class "@java.lang.Deprecated is given twice")
+           (refused {:annotations {"java.lang.Deprecated" {} "java/lang/Deprecated" {}}})))
+    (is (= "define-class: the annotations on the class are [\"java.lang.Deprecated\"], not a map of type to elements"
+           (refused {:annotations ["java.lang.Deprecated"]})))
+    (is (= (on-class "@java.lang.Deprecated's elements are [], not a map") (refused {:annotations {"java.lang.Deprecated" []}})))
+    (is (= "define-class: :field-annotations names \"x\", which isn't in :fields or :static-fields"
+           (refused {:field-annotations {"x" {"java.lang.Deprecated" {}}}})))
+    (is (= "define-class: :field-annotations names \"x\" twice"
+           (refused {:fields ["x"] :field-annotations {"x" {} :x {}}})))
+    (is (= "define-class: on field x: @java.lang.FunctionalInterface isn't for a field, only TYPE"
+           (refused {:fields ["x"] :field-annotations {"x" {"java.lang.FunctionalInterface" {}}}})))
+    (is (= "define-class: on field x: @champaca.lib.Tag$OnTypes isn't for a field, only TYPE_USE"
+           (refused {:fields ["x"] :field-annotations {"x" {"champaca.lib.Tag$OnTypes" {}}}})))
+    (is (= "define-class: :method-annotations names \"run\", which isn't a key of :methods or :static-methods"
+           (refused {:method-annotations {"run" {"java.lang.Deprecated" {}}}})))
+    (is (= "define-class: :method-annotations names \"run\" twice"
+           (refused {:implements ["java.lang.Runnable"] :methods {"run" (fn [_])} :method-annotations {:run {} "run" {}}})))
+    (is (= "define-class: :constructor-annotations names the constructor (I)V, which the class doesn't have"
+           (refused {:constructor-annotations {["int"] {"java.lang.Deprecated" {}}}})))
+    (is (= "define-class: :constructor-annotations names the constructor ()V, which the class doesn't have"
+           (refused {:constructors {["int"] []} :init (fn [_] []) :constructor-annotations {[] {}}})))
+    (is (= "define-class: :constructor-annotations names \"x\", which isn't a vector of parameter types"
+           (refused {:constructor-annotations {"x" {}}})))
+    (is (= "define-class: :method-annotations is [], not a map" (refused {:method-annotations []})))))
+
 (deftest defining-again
   (let [spec (fn [n] {:implements ["java.util.function.IntSupplier"] :fields ["v"] :methods {:getAsInt (fn [_] n)}})
         c (ldk/define-class "demo.classes.Again" (spec 1))
@@ -531,7 +664,7 @@
     (is (identical? c (ldk/define-class "demo.classes.Again" (spec 2))))
     (is (= 2 (ldk/invoke o "getAsInt")))
     (is (= (str "define-class: demo.classes.Again is already defined with another superclass, interfaces,"
-                " fields, method keys, static initializer or constructors; a class is defined once per process")
+                " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
            (thrown #(ldk/define-class "demo.classes.Again" (assoc (spec 3) :fields ["v" "w"])))))
     ;; fields are compared in order
     (ldk/define-class "demo.classes.Ordered" {:fields ["a" "b"]})

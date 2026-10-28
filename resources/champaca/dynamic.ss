@@ -652,26 +652,64 @@
         (let* ([c (string-ref (car ds) 0)]
                [op (case c [(#\J) #x16] [(#\F) #x17] [(#\D) #x18] [(#\L #\[) #x19] [else #x15])])
           (loop (cdr ds) (fx+ slot (if (memv c '(#\J #\D)) 2 1)) (cons (list op slot) acc))))))
-;; name, super and interfaces slashed; fields ((name desc flags) ...); ctors
-;; ((desc . flags) ...), the superclass's; methods ((name desc flags) ...)
-(define (class-file-bytes name super ifaces fields ctors methods)
+;; name, super and interfaces slashed; fields ((name desc flags anns) ...);
+;; ctors ((desc . flags) ...), the superclass's; methods ((name desc flags
+;; anns) ...); class-anns and each anns a list of annotations, each
+;; (type-desc (element . value) ...), a value an element_value (JVMS
+;; 4.7.16.1) as a list: (tag n) for a primitive (boolean as 0 or 1),
+;; ("s" string), ("e" enum-desc constant), ("c" class-desc), ("@"
+;; annotation), ("[" value ...); ctor-anns ((desc . anns) ...)
+(define (class-file-bytes name super ifaces fields ctors methods class-anns ctor-anns)
   (let ([pool '()] [count 0] [index (make-hashtable equal-hash equal?)])
-    (define (entry key octets)
+    (define (entry key octets . wide)   ; a long or double takes two slots
       (or (hashtable-ref index key #f)
-          (begin (set! pool (cons octets pool))
-                 (set! count (fx+ count 1))
-                 (hashtable-set! index key count)
-                 count)))
+          (let ([i (fx+ count 1)])
+            (set! pool (cons octets pool))
+            (set! count (fx+ count (if (null? wide) 1 2)))
+            (hashtable-set! index key i)
+            i)))
     (define (utf8 s) (let ([b (modified-utf8 s)]) (entry (list 'utf8 s) (append '(1) (u2 (length b)) b))))
     (define (class n) (let ([u (utf8 n)]) (entry (list 'class n) (cons 7 (u2 u)))))
     (define (nat n d) (let ([a (utf8 n)] [b (utf8 d)]) (entry (list 'nat n d) (append '(12) (u2 a) (u2 b)))))
     (define (methodref c n d) (let ([a (class c)] [b (nat n d)]) (entry (list 'mref c n d) (append '(10) (u2 a) (u2 b)))))
+    ;; the integer n as k big-endian octets, two's complement
+    (define (octets n k)
+      (let loop ([i 0] [n n] [acc '()])
+        (if (fx= i k) acc (loop (fx+ i 1) (bitwise-arithmetic-shift-right n 8) (cons (bitwise-and n 255) acc)))))
+    (define (ieee x single?)
+      (let ([bv (make-bytevector (if single? 4 8))])
+        (if single?
+            (bytevector-ieee-single-set! bv 0 x (endianness big))
+            (bytevector-ieee-double-set! bv 0 x (endianness big)))
+        (bytevector->u8-list bv)))
+    (define (element v)
+      (let ([tag (string-ref (car v) 0)] [x (cdr v)])
+        (cons (char->integer tag)
+              (case tag
+                [(#\B #\C #\I #\S #\Z) (u2 (entry (list 'int (car x)) (cons 3 (octets (car x) 4))))]
+                [(#\J) (u2 (entry (list 'long (car x)) (cons 5 (octets (car x) 8)) #t))]
+                [(#\F) (let ([o (ieee (inexact (car x)) #t)]) (u2 (entry (cons 'float o) (cons 4 o))))]
+                [(#\D) (let ([o (ieee (inexact (car x)) #f)]) (u2 (entry (cons 'double o) (cons 6 o) #t)))]
+                [(#\s #\c) (u2 (utf8 (car x)))]
+                [(#\e) (append (u2 (utf8 (car x))) (u2 (utf8 (cadr x))))]
+                [(#\@) (annotation (car x))]
+                [else (append (u2 (length x)) (apply append (map element x)))]))))
+    (define (annotation a)
+      (append (u2 (utf8 (car a))) (u2 (length (cdr a)))
+              (apply append (map (lambda (p) (append (u2 (utf8 (car p))) (element (cdr p)))) (cdr a)))))
+    ;; a RuntimeVisibleAnnotations attribute, as a list of one, or none
+    (define (annotations-attr anns)
+      (if (null? anns)
+          '()
+          (let ([body (append (u2 (length anns)) (apply append (map annotation anns)))])
+            (list (append (u2 (utf8 "RuntimeVisibleAnnotations")) (u4 (length body)) body)))))
+    (define (member-bytes flags n d attrs)
+      (append (u2 flags) (u2 (utf8 n)) (u2 (utf8 d)) (u2 (length attrs)) (apply append attrs)))
     (let* ([this (class name)]
            [sup (class super)]
            [iis (map class ifaces)]
            [code (utf8 "Code")]
-           [init (utf8 "<init>")]
-           [fos (apply append (map (lambda (f) (append (u2 (caddr f)) (u2 (utf8 (car f))) (u2 (utf8 (cadr f))) (u2 0))) fields))]
+           [fos (apply append (map (lambda (f) (member-bytes (caddr f) (car f) (cadr f) (annotations-attr (cadddr f)))) fields))]
            ;; aload_0, each argument, invokespecial the superclass's, return
            [cos (apply append
                        (map (lambda (c)
@@ -680,18 +718,20 @@
                                                   (apply append (map (lambda (l) (list (car l) (cadr l))) loads))
                                                   '(#xb7) (u2 (methodref super "<init>" (car c))) '(#xb1))])
                                   ;; public, and varargs when the superclass's is
-                                  (append (u2 (fxior 1 (fxlogand (cdr c) #x80))) (u2 init) (u2 (utf8 (car c))) (u2 1)
-                                          (u2 code) (u4 (fx+ 12 (length bc)))
-                                          (u2 slots) (u2 slots) (u4 (length bc)) bc (u2 0) (u2 0)))))
+                                  (member-bytes (fxior 1 (fxlogand (cdr c) #x80)) "<init>" (car c)
+                                                (cons (append (u2 code) (u4 (fx+ 12 (length bc)))
+                                                              (u2 slots) (u2 slots) (u4 (length bc)) bc (u2 0) (u2 0))
+                                                      (annotations-attr (cond [(assoc (car c) ctor-anns) => cdr] [else '()])))))))
                             ctors))]
-           [mos (apply append (map (lambda (m) (append (u2 (caddr m)) (u2 (utf8 (car m))) (u2 (utf8 (cadr m))) (u2 0))) methods))])
+           [mos (apply append (map (lambda (m) (member-bytes (caddr m) (car m) (cadr m) (annotations-attr (cadddr m)))) methods))]
+           [cattrs (annotations-attr class-anns)])
       (append '(#xca #xfe #xba #xbe) (u2 0) (u2 52)
               (u2 (fx+ count 1)) (apply append (reverse pool))
               (u2 #x0031) (u2 this) (u2 sup)   ; public final super
               (u2 (length iis)) (apply append (map u2 iis))
               (u2 (length fields)) fos
               (u2 (fx+ (length ctors) (length methods))) cos mos
-              (u2 0)))))
+              (u2 (length cattrs)) (apply append cattrs)))))
 
 (define (dotted n) (slashes->dots n))
 (define (class-flag? c bit) (fxpositive? (fxlogand (jclass-flags c) bit)))
@@ -811,12 +851,15 @@
 ;; or #f; own ((desc . super-desc) ...), the class's own constructors, or #f
 ;; for one per superclass constructor, with cells for the :init fn (args ->
 ;; the superclass constructor's args) and the :post-init fn (this, args), or
-;; #f. Answers the Class.
-(define (dyn-define-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init)
+;; #f; anns (class field method ctor): the class's annotations, then
+;; ((field-name . anns) ...), ((key . anns) ...) for a key of fns or sfns,
+;; on every method it implements, and ((desc . anns) ...) for constructors,
+;; each annotation as class-file-bytes takes it. Answers the Class.
+(define (dyn-define-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init anns)
   (with-java-errors
    (lambda ()
      (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns init
-                        own-ctors ctor-init post-init))))
+                        own-ctors ctor-init post-init anns))))
 
 ;; A constructor of the class's own: a native <init> (champaca calls it as
 ;; any constructor; HotSpot would want code) that hands its arguments to
@@ -838,8 +881,9 @@
         (when post-init (call-from-java (unbox post-init) (cons this jargs)))
         (void)))))
 
-(define (define-jolt-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init)
+(define (define-jolt-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init anns)
   (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
+  (define (anns-of key alist) (cond [(assoc key alist) => cdr] [else '()]))
   (define (bad-name? n)   ; not a JVM unqualified name
     (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
   (when (exists bad-name?
@@ -873,7 +917,7 @@
                           (map (lambda (m) (cons (cadr m) (caddr m)))
                                (filter (lambda (m) (string=? (car m) "<init>")) (meta-methods s))))]
            [exact (filter (lambda (f) (memv #\( (string->list (car f)))) fns)]
-           ;; (name desc cell) for every instance native (not the
+           ;; (name desc cell anns) for every instance native (not the
            ;; natives table)
            [own
             (append
@@ -881,7 +925,7 @@
                     (let* ([k (car f)] [p (string-split-paren k)] [n (car p)] [d (substring k (string-length n) (string-length k))])
                       (when (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d) (not (caddr m)))) ms)
                         (fail k " is final in " (dotted super)))
-                      (list n d (cdr f))))
+                      (list n d (cdr f) (anns-of k (caddr anns)))))
                   exact)
              (apply append
                     (map (lambda (f)
@@ -893,7 +937,7 @@
                                          (string-append n " is final in "))
                                      (dotted super)
                                      (apply string-append (map (lambda (i) (string-append ", " (dotted i))) ifaces))))
-                             (map (lambda (m) (list n (cadr m) (cdr f)))
+                             (map (lambda (m) (list n (cadr m) (cdr f) (anns-of n (caddr anns))))
                                   (filter (lambda (m) (not (exists (lambda (e) (string=? (car e) (string-append n (cadr m)))) exact)))
                                           open))))
                          (filter (lambda (f) (not (memv #\( (string->list (car f))))) fns))))])
@@ -907,7 +951,11 @@
                       (fail "the constructor " (car c) " passes arguments to " (dotted super) ".<init>" (cdr c)
                             ", so it needs :init")))
                   own-ctors))
-      ;; (name desc cell) for every static native; a static method can't
+      (for-each (lambda (c)
+                  (unless (assoc (car c) (or own-ctors ctors))
+                    (fail ":constructor-annotations names the constructor " (car c) ", which the class doesn't have")))
+                (cadddr anns))
+      ;; (name desc cell anns) for every static native; a static method can't
       ;; share a signature with an instance method, inherited or the class's
       (let ([statics
              (map (lambda (f)
@@ -915,7 +963,7 @@
                       (when (or (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) own)
                                 (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) ms))
                         (fail "static " k " has an instance method's name and descriptor"))
-                      (list n d (cdr f))))
+                      (list n d (cdr f) (anns-of k (caddr anns)))))
                   sfns)]
             ;; the static initializer: a static native <clinit>, which jinit
             ;; calls on the class's first active use as any class's, so a
@@ -943,13 +991,15 @@
                       (defined-static-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
                   statics)
         (let ([bytes (list->vector (class-file-bytes name super ifaces
-                                                     (append (map (lambda (f) (list (car f) (cdr f) 1)) fields)
-                                                             (map (lambda (f) (list (car f) (cdr f) 9)) sfields))
+                                                     (append (map (lambda (f) (list (car f) (cdr f) 1 (anns-of (car f) (cadr anns)))) fields)
+                                                             (map (lambda (f) (list (car f) (cdr f) 9 (anns-of (car f) (cadr anns)))) sfields))
                                                      (if own-ctors '() ctors)
-                                                     (append (map (lambda (m) (list (car m) (cadr m) #x0101)) own)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0109)) statics)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0108)) clinit)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0101)) natives-ctors))))])
+                                                     (append (map (lambda (m) (list (car m) (cadr m) #x0101 (cadddr m))) own)
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0109 (cadddr m))) statics)
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0108 '())) clinit)
+                                                             (map (lambda (m) (list (car m) (cadr m) #x0101 (anns-of (cadr m) (cadddr anns))))
+                                                                  natives-ctors))
+                                                     (car anns) (cadddr anns)))])
           ;; the natives must be there when the class registers; a definition
           ;; that fails takes them back, so a later class of the name can't
           ;; pick them up
