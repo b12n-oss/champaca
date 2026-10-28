@@ -42,6 +42,21 @@ $ echo $?
 
 The trace is the JVM's, file names and line numbers included; [debugging](debugging.md#java-stack-traces) has more.
 
+## Frameworks
+
+Spring Boot and Quarkus applications run as they do on `java`, from any of their packagings:
+
+```sh
+jolt -M -m champaca.main -jar target/boot-demo-1.0.jar               # Boot's fat jar
+jolt -M -m champaca.main -jar extracted/boot-demo-1.0.jar            # after -Djarmode=tools extract
+jolt -M -m champaca.main -jar target/quarkus-app/quarkus-run.jar     # Quarkus's fast-jar
+jolt -M -m champaca.main -jar target/quarkus-uber.jar                # an uber-jar
+```
+
+Which one you pick matters more here than on the JVM. The fat jar loads its nested jars through Spring Boot's launcher, and the fast-jar loads the application through Quarkus's RunnerClassLoader; classes a loader of the program's own defines aren't kept in the startup cache, so their code is compiled again on every run. The extracted jar and the uber-jar put everything on the class path, which the cache keeps, and they start several times faster once it's warm. `bench/` holds upstream OpenLDK's two benchmark applications and times each packaging against HotSpot (`bb bench spring-boot`, `bb bench quarkus`; [bench/README](../../bench/README.md)).
+
+`champaca.main` takes no JVM options yet: no `-D` system properties, `-Xmx` or `-XX` flags. So a setting such as `-Dspring.aot.enabled=true` has to reach the framework some other way it offers, if it offers one ([limitations](limitations.md#other-gaps)).
+
 ## Checking output against the JVM
 
 This is how `bb test` works: every program in `test/java` has a `.expected` file recorded from `java`, and the test compares champaca's output with it byte for byte. To check a program of your own the same way:

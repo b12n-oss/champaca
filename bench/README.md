@@ -66,7 +66,44 @@ the class path, which the cache keeps.
 
 ## Results
 
-RESULTS
+On an Apple M1 Pro (10 CPUs), macOS 26.5.2, JDK 25.0.2, champaca at
+`07eafcc` with the pinned jolt, load average 5 to 10 from other work, on
+2026-10-28. Ten timed runs each, three for a cold variant:
+
+| Spring Boot | Median | Min | Max | Peak RSS |
+|---|---|---|---|---|
+| HotSpot, fat jar | 974 ms | 894 ms | 2670 ms | 241 MB |
+| HotSpot, extracted jar | 718 ms | 706 ms | 744 ms | 190 MB |
+| HotSpot + Spring AOT | 599 ms | 586 ms | 609 ms | 197 MB |
+| HotSpot + JDK AOT cache | 360 ms | 343 ms | 391 ms | 145 MB |
+| HotSpot + Spring AOT + AOT cache | 267 ms | 261 ms | 279 ms | 118 MB |
+| champaca, extracted jar, cold | 60.1 s | 49.2 s | 60.3 s | 2098 MB |
+| champaca, extracted jar | 4571 ms | 4251 ms | 4945 ms | 1101 MB |
+| champaca, fat jar | 24.7 s | 22.7 s | 30.5 s | 995 MB |
+
+| Quarkus | Median | Min | Max | Peak RSS |
+|---|---|---|---|---|
+| HotSpot, fast-jar | 506 ms | 501 ms | 5485 ms | 100 MB |
+| HotSpot, uber-jar | 516 ms | 497 ms | 518 ms | 111 MB |
+| HotSpot + JDK AOT cache | 321 ms | 307 ms | 347 ms | 91 MB |
+| champaca, uber-jar, cold | 40.0 s | 39.4 s | 41.3 s | 1917 MB |
+| champaca, uber-jar | 3056 ms | 3020 ms | 3567 ms | 760 MB |
+| champaca, fast-jar | 11.1 s | 10.3 s | 11.6 s | 809 MB |
+
+Every variant printed what HotSpot prints. A warm champaca start is about
+six times HotSpot's for both frameworks, and needs five to seven times its
+memory. The cold rows include the JDK's own first boot, every method of the
+framework translated and compiled once and the cache written. The fat jar
+and the fast-jar sit between the two, because the classes their own loaders
+define compile again on every run (see the variants above). Upstream's
+OpenLDK images can't keep such classes either, which is why they run the
+class path for Spring Boot and the uber-jar for Quarkus. For scale, upstream measured its OpenLDK warm
+image at 4.3 s (Spring Boot) and 1.5 s (Quarkus) on a 16-CPU Xeon E5-2670,
+with HotSpot at 2.9 s and 1.3 s on the same machine, so the two projects'
+numbers aren't comparable directly; the HotSpot rows are the yardstick.
+
+Two HotSpot maxima (the fat jar's 2.7 s, the fast-jar's 5.5 s) are single
+slow runs while other work was busy; their medians stand.
 
 ## What it took
 
