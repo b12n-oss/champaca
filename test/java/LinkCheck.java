@@ -101,7 +101,8 @@ public class LinkCheck {
         public static class GenF { }
         // members typed by classes only the loader can see
         public static class GenH { }
-        // an annotation whose Class value only the loader can see
+        // an annotation whose Class value only the loader can see (the
+        // JDK's AnnotationParser resolves it in Java, through the loader)
         @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
         public @interface GenTag { Class<?> value(); }
         @GenTag(GenH.class) public static class GenK { }

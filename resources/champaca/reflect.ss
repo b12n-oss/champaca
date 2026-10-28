@@ -187,8 +187,7 @@
 (defnative "jdk/internal/reflect/ConstantPool.getFloatAt0(Ljava/lang/Object;I)F" (this oop i) (cp-value oop i))
 (defnative "jdk/internal/reflect/ConstantPool.getDoubleAt0(Ljava/lang/Object;I)D" (this oop i) (cp-value oop i))
 (defnative "jdk/internal/reflect/ConstantPool.getClassAt0(Ljava/lang/Object;I)Ljava/lang/Class;" (this oop i)
-  ;; annotation parsing's class values, resolved as an ldc of the class's own
-  (jldc-class (cp-value oop i) (jclass-cname (mirror-class oop))))
+  (jmirror-of (cp-value oop i)))
 (defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this) (no-classes))
 ;; Nests (JVMS 5.4.4): a class's host is the class its NestHost attribute
 ;; names, once that class loads, is in the same runtime package and lists
