@@ -3,3 +3,10 @@ static, called: java.lang.NoSuchMethodError: 'java.lang.Object NmTarget.gone(int
 static, called again: java.lang.NoSuchMethodError: 'java.lang.Object NmTarget.gone(int, java.lang.String, long[])'
 super, not called: not called
 super, called: java.lang.NoSuchMethodError: 'void NmTarget.setThing(java.lang.Object)'
+virtual, not called: not called
+virtual, called: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.vgone(int)'
+virtual, called again: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.vgone(int)'
+virtual on null: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.vgone(int)'
+virtual the receiver has: java.lang.NoSuchMethodError: 'java.lang.String NmTarget.own()'
+interface: java.lang.NoSuchMethodError: 'int java.lang.CharSequence.gone()'
+interface, Object's method: 96354

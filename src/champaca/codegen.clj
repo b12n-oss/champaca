@@ -439,8 +439,8 @@
       (:class d))))
 
 (defn- missing-method
-  "[class name desc] of a method a direct call names that its class doesn't
-  have (main.clj's resolve-method), or nil for any other failure."
+  "[class name desc] of a method a call names that its class doesn't have
+  (main.clj's resolve-method, check-virtual), or nil for any other failure."
   [e]
   (let [d (ex-data e)]
     (when (and (= (set (keys d)) #{:class :method :desc}) (= "no such method" (ex-message e)))
@@ -672,6 +672,9 @@
                          (apply sx (at pc "mh-call") (sx "nn-at" recv (site pc)) (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
+                             ;; a method nothing declares is NoSuchMethodError
+                             ;; when the call runs, whatever the receiver
+                             ((:check-virtual resolve) class name desc)
                              (if-let [decl ((:direct-target resolve) class name desc)]
                                ;; nothing can override it: call it directly,
                                ;; after the null check dispatch would do. For

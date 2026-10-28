@@ -9,7 +9,8 @@ import static java.lang.constant.ConstantDescs.*;
 // compile: a static one, and a superclass one through invokespecial (as
 // Spring's CGLIB subclasses call setBeanFactory on a class without it). A
 // JVM resolves such a call when it runs, so the methods holding them run
-// fine until then. Run with `java NoMethodGen.java <dir>`.
+// fine until then. It also calls virtual and interface methods nothing
+// declares, which a JVM refuses the same way. Run with `java NoMethodGen.java <dir>`.
 public class NoMethodGen {
     public static void main(String[] args) throws Exception {
         Path dir = Path.of(args[0]);
@@ -60,6 +61,56 @@ public class NoMethodGen {
                 cb.aload(0);
                 cb.invokespecial(target, "setThing", set);
                 cb.loadConstant("called");
+                cb.areturn();
+            });
+            // static String callVirtual(boolean go): go ? new NmTarget().vgone(5) : "not called"
+            clb.withMethodBody("callVirtual", MethodTypeDesc.of(CD_String, CD_boolean), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> {
+                Label call = cb.newLabel();
+                cb.iload(0);
+                cb.ifne(call);
+                cb.loadConstant("not called");
+                cb.areturn();
+                cb.labelBinding(call);
+                cb.new_(target);
+                cb.dup();
+                cb.invokespecial(target, INIT_NAME, MTD_void);
+                cb.iconst_5();
+                cb.invokevirtual(target, "vgone", MethodTypeDesc.of(CD_String, CD_int));
+                cb.areturn();
+            });
+            // static String callNull(): ((NmTarget) null).vgone(5), which
+            // resolves before the null check
+            clb.withMethodBody("callNull", MethodTypeDesc.of(CD_String), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> {
+                cb.aconst_null();
+                cb.iconst_5();
+                cb.invokevirtual(target, "vgone", MethodTypeDesc.of(CD_String, CD_int));
+                cb.areturn();
+            });
+            // String own() is NmCaller's alone; callOwn calls it as
+            // NmTarget.own() on a NmCaller, which the receiver has but the
+            // class the call names doesn't
+            clb.withMethodBody("own", MethodTypeDesc.of(CD_String), ClassFile.ACC_PUBLIC, cb -> {
+                cb.loadConstant("own called");
+                cb.areturn();
+            });
+            clb.withMethodBody("callOwn", MethodTypeDesc.of(CD_String), ClassFile.ACC_PUBLIC, cb -> {
+                cb.aload(0);
+                cb.invokevirtual(target, "own", MethodTypeDesc.of(CD_String));
+                cb.areturn();
+            });
+            // static String callIface(): ((CharSequence) "abc").gone()
+            clb.withMethodBody("callIface", MethodTypeDesc.of(CD_String), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> {
+                cb.loadConstant("abc");
+                cb.invokeinterface(ClassDesc.of("java.lang.CharSequence"), "gone", MethodTypeDesc.of(CD_int));
+                cb.invokestatic(CD_String, "valueOf", MethodTypeDesc.of(CD_String, CD_int));
+                cb.areturn();
+            });
+            // static String callIfaceObject(): ((CharSequence) "abc").hashCode(),
+            // which resolves through Object's public methods
+            clb.withMethodBody("callIfaceObject", MethodTypeDesc.of(CD_String), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> {
+                cb.loadConstant("abc");
+                cb.invokeinterface(ClassDesc.of("java.lang.CharSequence"), "hashCode", MethodTypeDesc.of(CD_int));
+                cb.invokestatic(CD_String, "valueOf", MethodTypeDesc.of(CD_String, CD_int));
                 cb.areturn();
             });
         }));

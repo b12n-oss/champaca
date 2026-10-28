@@ -626,6 +626,25 @@
         (some #(when (has? % true) %) (ancestry cname))
         (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
+(defn- check-virtual
+  "Throws resolve-method's \"no such method\" when nothing in cname's
+  ancestry declares mname(desc), as a JVM's resolution of an invokevirtual
+  or invokeinterface does when the call runs (JVMS 5.4.3.3, 5.4.3.4), before
+  it looks at the receiver. An interface's ancestry ends in Object, so its
+  calls resolve to Object's methods too. A signature-polymorphic method of
+  MethodHandle or VarHandle (native, varargs) takes any descriptor."
+  [cname mname desc]
+  (let [has? (fn [c] (some #(and (= mname (:name %)) (= desc (:desc %))) (:methods (class-info c))))
+        polymorphic? (and (#{"java/lang/invoke/MethodHandle" "java/lang/invoke/VarHandle"} cname)
+                          (some #(and (= mname (:name %)) (:native %) (pos? (bit-and (:flags %) 0x0080)))
+                                (:methods (class-info cname))))]
+    (when-not (or (str/starts-with? cname "[")
+                  ;; the superclass chain first, lazily: nearly every call hits there
+                  (some has? (take-while some? (iterate #(:super (class-info %)) cname)))
+                  (some has? (ancestry cname))
+                  polymorphic?)
+      (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
+
 (declare parsed overridden?)
 
 (defn- inline-candidate
@@ -669,6 +688,7 @@
    :resolve-static-field resolve-static-field
    :field-index field-index
    :resolve-method resolve-method
+   :check-virtual check-virtual
    :lambda-class #(lambda-class %1 %2)})
 
 ;; --- loading -----------------------------------------------------------------------

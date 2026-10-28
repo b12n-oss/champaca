@@ -11,6 +11,12 @@ public class NoMethodCheck {
         catch (Throwable t) { return "unexpected " + t; }
     }
 
+    static String call0(Method m, Object recv) {
+        try { return String.valueOf(m.invoke(recv)); }
+        catch (InvocationTargetException e) { return e.getCause().getClass().getName() + ": " + e.getCause().getMessage(); }
+        catch (Throwable t) { return "unexpected " + t; }
+    }
+
     public static void main(String[] args) throws Exception {
         Class<?> c = Class.forName("NmCaller");
         Object o = c.getConstructor().newInstance();
@@ -21,5 +27,13 @@ public class NoMethodCheck {
         System.out.println("static, called again: " + call(gone, null, true));
         System.out.println("super, not called: " + call(sup, o, false));
         System.out.println("super, called: " + call(sup, o, true));
+        Method virt = c.getMethod("callVirtual", boolean.class);
+        System.out.println("virtual, not called: " + call(virt, null, false));
+        System.out.println("virtual, called: " + call(virt, null, true));
+        System.out.println("virtual, called again: " + call(virt, null, true));
+        System.out.println("virtual on null: " + call0(c.getMethod("callNull"), null));
+        System.out.println("virtual the receiver has: " + call0(c.getMethod("callOwn"), o));
+        System.out.println("interface: " + call0(c.getMethod("callIface"), null));
+        System.out.println("interface, Object's method: " + call0(c.getMethod("callIfaceObject"), null));
     }
 }
