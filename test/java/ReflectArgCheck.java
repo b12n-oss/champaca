@@ -22,6 +22,8 @@ public class ReflectArgCheck {
     public static String strs(String[] x) { return "String[] " + Arrays.toString(x); }
     public static String two(int a, String b) { return "two " + a + " " + b; }
     public static String none() { return "none"; }
+    public static String third(double x) { return "third " + (x / 3); }
+    public static String fthird(float x) { return "fthird " + (x / 3); }
     public String inst(int x) { return "inst " + x; }
 
     public static class Box {
@@ -112,6 +114,15 @@ public class ReflectArgCheck {
         row("receiver other", inst, "a string", 3);
         row("receiver null", inst, null, 3);
         row("receiver ok, argument wrong", inst, new ReflectArgCheck(), "3");
+        // made accessible, Method.invoke skips its own access check, so the
+        // receiver is checked by the accessor alone
+        Method open = m("inst", int.class);
+        open.setAccessible(true);
+        row("accessible receiver null", open, null, 3);
+        row("accessible receiver other", open, "a string", 3);
+        // a widened argument is a real double or float
+        row("double Integer arithmetic", m("third", double.class), null, 7);
+        row("float Long arithmetic", m("fthird", float.class), null, 7L);
         // constructors
         Constructor<Box> k1 = Box.class.getConstructor(int.class);
         Constructor<Box> k2 = Box.class.getConstructor(String.class, long.class);

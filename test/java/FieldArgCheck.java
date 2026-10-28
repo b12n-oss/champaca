@@ -77,12 +77,16 @@ public class FieldArgCheck {
         row("setInt boolean", () -> f("z").setInt(o, 1));
         row("setInt static int", () -> f("si").setInt(null, 11));
         System.out.println("after typed: " + o.j + " " + o.i + " " + o.s + " " + o.d + " " + o.str + " " + si);
+        System.out.println("d / 3 after setInt: " + (o.d / 3));
+        row("set double Integer", () -> f("d").set(o, 5));
+        System.out.println("d / 3 after set: " + (o.d / 3));
         // typed getters
         val("getLong int", () -> f("i").getLong(o));
         val("getInt char", () -> f("c").getInt(o));
         val("getShort byte", () -> f("b").getShort(o));
         val("getDouble float", () -> f("f").getDouble(o));
         val("getDouble int", () -> f("i").getDouble(o));
+        val("getDouble int / 3", () -> f("i").getDouble(o) / 3);
         val("getInt long", () -> f("j").getInt(o));
         val("getChar int", () -> f("i").getChar(o));
         val("getBoolean int", () -> f("i").getBoolean(o));
@@ -102,6 +106,8 @@ public class FieldArgCheck {
         row("set final int String", () -> fin.set(o, "x"));
         row("setLong final int", () -> fin.setLong(o, 1L));
         val("get final other receiver", () -> fin.get("a string"));
+        val("accessible get null receiver", () -> fin.get(null));
+        row("accessible set null receiver", () -> fin.set(null, 1));
         row("set final int Integer", () -> fin.set(o, 13));
         val("final after set", () -> fin.get(o));
     }

@@ -459,10 +459,12 @@
     [(or (not v) (jinstance? v (desc->class-name t))) v]
     [else (reflect-type-mismatch)]))
 
-;; Method.invoke's receiver: as DirectMethodHandleAccessor.checkReceiver
+;; Method.invoke's receiver: as DirectMethodHandleAccessor.checkReceiver.
+;; Method.invoke's own access check reaches obj.getClass() first unless the
+;; method was made accessible, so these texts are the accessible case's.
 (define (reflect-receiver obj cname)
   (unless obj
-    (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"obj\" is null"))
+    (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"o\" is null"))
   (unless (jinstance? obj cname)
     (jthrow "java/lang/IllegalArgumentException"
             (string-append "object of type " (slashes->dots (class-name-of obj))
@@ -629,7 +631,9 @@
 ;; A.x"), qname is "A.x".
 ;; A null receiver for an instance field is a NullPointerException and one
 ;; of another class an IllegalArgumentException, with the JDK's texts (set?
-;; picks Field.set's or Field.get's).
+;; picks Field.set's or Field.get's). These overrides replace Field's own
+;; access check too, which reaches obj.getClass() first unless the field was
+;; made accessible, so a null receiver's text depends on that.
 (define (field-access f obj set?)
   (let* ([c (mirror-class (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))]
          [slot (jslot f (jfield-index "java/lang/reflect/Field" "slot"))]
@@ -647,7 +651,11 @@
                   desc what qname))
         (let ([i (jfield-index cname name)])
           (unless obj
-            (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"obj\" is null"))
+            (jthrow "java/lang/NullPointerException"
+                    (cond [(not (eqv? 1 (jslot f (jfield-index "java/lang/reflect/Field" "override"))))
+                           "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
+                          [set? "Cannot invoke \"Object.getClass()\" because \"o\" is null"]
+                          [else #f])))
           (unless (jinstance? obj cname)
             (jthrow "java/lang/IllegalArgumentException"
                     (string-append "Can not " (if set? "set " "get ") what (if set? " to " " on ")

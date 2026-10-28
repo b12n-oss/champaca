@@ -49,6 +49,10 @@ receiver ok: inst 3
 receiver other: java.lang.IllegalArgumentException: object of type java.lang.String is not an instance of ReflectArgCheck
 receiver null: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
 receiver ok, argument wrong: java.lang.IllegalArgumentException: argument type mismatch
+accessible receiver null: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "o" is null
+accessible receiver other: java.lang.IllegalArgumentException: object of type java.lang.String is not an instance of ReflectArgCheck
+double Integer arithmetic: third 2.3333333333333335
+float Long arithmetic: fthird 2.3333333
 ctor int Integer: Box(int 4)
 ctor int Character: Box(int 101)
 ctor int Long: java.lang.IllegalArgumentException: argument type mismatch

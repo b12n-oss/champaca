@@ -33,11 +33,15 @@ setInt String: java.lang.IllegalArgumentException: Can not set java.lang.String 
 setInt boolean: java.lang.IllegalArgumentException: Can not set boolean field FieldArgCheck.z to (int)1
 setInt static int: ok
 after typed: 10 98 2 7.0 null 11
+d / 3 after setInt: 2.3333333333333335
+set double Integer: ok
+d / 3 after set: 1.6666666666666667
 getLong int: 98
 getInt char: 99
 getShort byte: 4
 getDouble float: 3.0
 getDouble int: 98.0
+getDouble int / 3: 32.666666666666664
 getInt long: java.lang.IllegalArgumentException: Attempt to get long field "FieldArgCheck.j" with illegal data type conversion to int
 getChar int: java.lang.IllegalArgumentException: Attempt to get int field "FieldArgCheck.i" with illegal data type conversion to char
 getBoolean int: java.lang.IllegalArgumentException: Attempt to get int field "FieldArgCheck.i" with illegal data type conversion to boolean
@@ -53,5 +57,7 @@ get static other receiver: 11
 set final int String: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin to java.lang.String
 setLong final int: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin to (long)1
 get final other receiver: java.lang.IllegalArgumentException: Can not get final int field FieldArgCheck.fin on java.lang.String
+accessible get null receiver: java.lang.NullPointerException: null
+accessible set null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "o" is null
 set final int Integer: ok
 final after set: 13
