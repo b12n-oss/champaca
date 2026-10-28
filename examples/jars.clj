@@ -14,6 +14,15 @@
                                                  2 "x"))))
   (is (= [3 3] (mapv count (ldk/->clj (ldk/invoke-static "champaca.lib.Shelf" "grid" 2 3))))))
 
+(deftest narrowing-only-when-nothing-else-fits
+  ;; champaca.lib.Overloads: what javac picks for an int 5 (a Java caller's
+  ;; output, as an int variable can't narrow), and only(byte), which only
+  ;; narrowing reaches
+  (is (= ["varargs 1" "long 5" "byte 5"]
+         [(ldk/invoke-static "champaca.lib.Overloads" "pick" 5)
+          (ldk/invoke-static "champaca.lib.Overloads" "wide" 5)
+          (ldk/invoke-static "champaca.lib.Overloads" "only" 5)])))
+
 (deftest unsafe-from-the-jar
   ;; Shelf.bumpThroughUnsafe adds one to the static count through
   ;; sun.misc.Unsafe and returns it
