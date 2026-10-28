@@ -356,8 +356,10 @@
 ;; The overload choice depends on the arguments only through what `fit` looks
 ;; at: a Java value's class, an integer's range, the kind of a jolt value. So
 ;; (kind class name . arg-keys) names the choice, and a hit skips the candidate
-;; walk and the scoring. A vector's fit depends on its contents, so a call with
-;; one isn't cached. Failed lookups aren't cached, so they raise every time.
+;; walk and the scoring. A vector counts by the kind its elements share, or
+;; for integers by the widest of their ranges, since a vector fits an array
+;; whose element type its widest element fits; any other mixed vector isn't
+;; cached. Failed lookups aren't cached, so they raise every time.
 ;; The entry keeps the method's symbol, not its procedure: a method compiles on
 ;; first call and its top-level value is replaced then.
 
@@ -382,11 +384,17 @@
         [(coll-arg? v) (coll-arg-kind v)]
         [(procedure? v) 'fn]
         ;; a vector whose elements share one key fits like any other of that
-        ;; key, whatever its length; a mixed one isn't cached
+        ;; key, whatever its length; integers key by the widest range among
+        ;; them ([1 300] as int), and any other mixed vector isn't cached
         [(null? v) 'empty-vector]
+        [(and (pair? v) (for-all exact-int? v))
+         (list 'vector (fold-left (lambda (k x) (wider-int-key k (arg-key x))) 'byte v))]
         [(pair? v) (let ([k (arg-key (car v))])
                      (and k (for-all (lambda (x) (equal? (arg-key x) k)) (cdr v)) (list 'vector k)))]
         [else #f]))
+
+(define int-keys '(byte short int long big))
+(define (wider-int-key a b) (if (memq b (memq a int-keys)) b a))
 
 (define (args-key args)
   (let loop ([as args] [acc '()])

@@ -96,7 +96,7 @@ Old key directories are cleaned up when a new cache is written: any sibling dire
 
 Picking an overload ([calling-java](calling-java.md#which-overload-runs)) walks the class and its supertypes for methods with the right name, then scores each one against the arguments. That's slow to repeat in a loop, so `invoke`, `invoke-static` and `construct` remember the choice.
 
-The key is the class, the method name and the *kind* of each argument: a Java value's class, an integer's range (byte, short, int, long or bigger: a `byte` or `short` parameter takes only an integer in its range), or the jolt type for anything else. A vector counts by the kind its elements share, whatever its length. Those are exactly the things the scoring looks at, so the cached answer is the one a fresh lookup would give. A vector whose elements are of mixed kinds isn't cached, and a lookup that fails is never stored, so it fails the same way every time.
+The key is the class, the method name and the *kind* of each argument: a Java value's class, an integer's range (byte, short, int, long or bigger: a `byte` or `short` parameter takes only an integer in its range), or the jolt type for anything else. A vector counts by the kind its elements share, whatever its length, and a vector of integers by the widest range among them, since that is what decides which array it fits. Those are exactly the things the scoring looks at, so the cached answer is the one a fresh lookup would give. Any other vector whose elements are of mixed kinds isn't cached, and a lookup that fails is never stored, so it fails the same way every time.
 
 Microseconds per call after warm-up, cache off and on:
 

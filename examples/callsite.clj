@@ -50,6 +50,14 @@
   ;; nil picks the most specific overload, every time
   (is (= ["null" "null"] (mapv (fn [_] (ldk/invoke-static "java.util.Objects" "toString" nil)) (range 2)))))
 
+(deftest integer-vectors-key-by-their-widest
+  ;; [1 300 70000] mixes byte, short and int ranges and keys as int, as
+  ;; [5 100000] does: one entry for both, and [1 2 3] (all bytes) a second
+  (s/call "call-cache-clear!")
+  (is (= ["[1, 300, 70000]" "[5, 100000]" "[1, 2, 3]"]
+         (mapv (fn [v] (ldk/invoke-static "java.util.Arrays" "toString" v)) [[1 300 70000] [5 100000] [1 2 3]])))
+  (is (= (if (= "off" (System/getenv "CHAMPACA_CALL_CACHE")) 0 2) (s/call "call-cache-size"))))
+
 (deftest the-cache-is-used
   (max-of 1 2)
   (is (= (not= "off" (System/getenv "CHAMPACA_CALL_CACHE"))

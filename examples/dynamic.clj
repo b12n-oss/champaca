@@ -93,6 +93,10 @@
     (is (= :lookup (try (ldk/invoke-static "java.lang.Byte" "valueOf" 300)
                         (catch Exception e (:champaca/error (ex-data e))))))
     (is (= :lookup (try (ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 200])
+                        (catch Exception e (:champaca/error (ex-data e))))))
+    ;; a byte vector's pick is cached; a vector of shorts doesn't share it
+    (is (= 3 (ldk/invoke (ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 2 3]) "remaining")))
+    (is (= :lookup (try (ldk/invoke-static "java.nio.ByteBuffer" "wrap" [200 300])
                         (catch Exception e (:champaca/error (ex-data e))))))))
 
 (deftest exceptions
