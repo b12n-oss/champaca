@@ -245,6 +245,21 @@
         [cnfe (construct "java/lang/ClassNotFoundException" "(Ljava/lang/String;)V" (jstring (slashes->dots name)))])
     ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;") e cnfe)
     (raise e)))
+;; A call to a method its class doesn't have, which a JVM resolves only
+;; when the call runs (JVMS 5.4.3.3): NoSuchMethodError with HotSpot's text,
+;; 'ret Class.name(param, param)' in Java's spelling
+(define (jthrow-no-method cname name desc)
+  (define (external d)
+    (cond [(char=? (string-ref d 0) #\[) (string-append (external (substring d 1 (string-length d))) "[]")]
+          [(assoc d prim-names) => cdr]
+          [else (slashes->dots (desc->class-name d))]))
+  (jthrow "java/lang/NoSuchMethodError"
+          (string-append "'" (external (desc-ret desc)) " " (slashes->dots cname) "." name "("
+                         (let loop ([ps (desc-args desc)])
+                           (cond [(null? ps) ""]
+                                 [(null? (cdr ps)) (external (car ps))]
+                                 [else (string-append (external (car ps)) ", " (loop (cdr ps)))]))
+                         ")'")))
 (define (method-proc cname key)
   (top-level-value (string->symbol (string-append cname "." key))))
 

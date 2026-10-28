@@ -1,0 +1,5 @@
+static, not called: not called
+static, called: java.lang.NoSuchMethodError: 'java.lang.Object NmTarget.gone(int, java.lang.String, long[])'
+static, called again: java.lang.NoSuchMethodError: 'java.lang.Object NmTarget.gone(int, java.lang.String, long[])'
+super, not called: not called
+super, called: java.lang.NoSuchMethodError: 'void NmTarget.setThing(java.lang.Object)'

@@ -1103,11 +1103,18 @@
           ;; an instruction naming a class that isn't there throws when it
           ;; runs (codegen): such a method is never cached, so a cache can't
           ;; carry a throw for a class a later run has, and CHAMPACA_BT says so
-          missing (seq (map second (re-seq (re-pattern "\\(jthrow-missing \"([^\"]+)\"") text)))]
-      (when (and missing (System/getenv "CHAMPACA_BT"))
-        (binding [*out* *err*]
-          (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct missing))
-                        ", not found; that code throws NoClassDefFoundError"))))
+          missing (seq (map second (re-seq (re-pattern "\\(jthrow-missing \"([^\"]+)\"") text)))
+          ;; the same for a method its class doesn't have (NoSuchMethodError)
+          no-method (seq (map (fn [[_ c n d]] (str c "." n d))
+                              (re-seq (re-pattern "\\(jthrow-no-method \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"") text)))
+          report (fn [names what]
+                   (when (and names (System/getenv "CHAMPACA_BT"))
+                     (binding [*out* *err*]
+                       (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
+                                     ", not found; that code throws " what)))))
+          _ (report missing "NoClassDefFoundError")
+          _ (report no-method "NoSuchMethodError")
+          missing (or missing no-method)]
       (cond
         missing (timed :chez-compile #(scheme! text))
         ;; compiled once: the same object code runs now and goes in the cache

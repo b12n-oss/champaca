@@ -186,6 +186,7 @@
                     _ (shell "java test/gen/DefaultConflictGen.java target/classes")
                     ;; ModuleCheck's Truncated.class: present but unloadable
                     _ (shell "java test/gen/TruncatedGen.java target/classes")
+                    _ (shell "java test/gen/NoMethodGen.java target/classes")
                     ;; run as -jar: target/app.jar's manifest names JarMain and a
                     ;; Class-Path of lib.jar beside it
                     _ (shell "mkdir -p target/jarmain-classes")

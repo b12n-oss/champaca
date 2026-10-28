@@ -438,6 +438,14 @@
     (when (and (= (set (keys d)) #{:class}) (str/starts-with? (str (ex-message e)) "class not found"))
       (:class d))))
 
+(defn- missing-method
+  "[class name desc] of a method a direct call names that its class doesn't
+  have (main.clj's resolve-method), or nil for any other failure."
+  [e]
+  (let [d (ex-data e)]
+    (when (and (= (set (keys d)) #{:class :method :desc}) (= "no such method" (ex-message e)))
+      [(:class d) (:method d) (:desc d)])))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
   linker callbacks), :next-pc, :live (the locals a jump passes), :boxed (the
@@ -761,9 +769,12 @@
         false
         (catch Exception e
           (let [c (missing-class e)
-                ncdfe (sx "jthrow-missing" (str-lit c))]
-            (when-not c (throw e))
-            (case op
+                m (missing-method e)
+                ncdfe (if m
+                        (apply sx "jthrow-no-method" (map str-lit m))
+                        (sx "jthrow-missing" (str-lit c)))]
+            (when-not (or c m) (throw e))
+            (case (when-not m op)
               ;; on null, neither resolves its class, as HotSpot doesn't: a
               ;; cast passes and instanceof is false; only an object throws
               :checkcast (let [v (s (dec (count @st)))]
