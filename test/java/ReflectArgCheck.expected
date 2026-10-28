@@ -14,14 +14,14 @@ boolean Boolean: boolean true
 int Long: java.lang.IllegalArgumentException: argument type mismatch
 int Double: java.lang.IllegalArgumentException: argument type mismatch
 int String: java.lang.IllegalArgumentException: argument type mismatch
-int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-long null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.longValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-float null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.floatValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-double null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.doubleValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-short null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.shortValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-byte null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.byteValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-char null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
-boolean null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+long null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.longValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.longValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+float null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.floatValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.floatValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+double null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.doubleValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.doubleValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+short null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.shortValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.shortValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+byte null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.byteValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.byteValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+char null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+boolean null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
 short Character: java.lang.IllegalArgumentException: argument type mismatch
 char Byte: java.lang.IllegalArgumentException: argument type mismatch
 char Short: java.lang.IllegalArgumentException: argument type mismatch
@@ -55,16 +55,18 @@ double Integer arithmetic: third 2.3333333333333335
 float Long arithmetic: fthird 2.3333333
 ctor int Integer: Box(int 4)
 ctor int Character: Box(int 101)
-ctor int Long: java.lang.IllegalArgumentException: argument type mismatch
-ctor int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
+ctor int Long: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.Long to java.lang.Integer
+ctor int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
 ctor String,long ok: Box(String s, long 5)
-ctor String,long first wrong: java.lang.IllegalArgumentException: argument type mismatch
-ctor String,long second wrong: java.lang.IllegalArgumentException: argument type mismatch
+ctor String,long first wrong: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
+ctor String,long second wrong: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number
 ctor count: java.lang.IllegalArgumentException: wrong number of arguments: 1 expected: 2
-ctor JDK StringBuilder Integer: java.lang.IllegalArgumentException: argument type mismatch
+ctor JDK StringBuilder Integer: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
+ctor JDK ArrayList String: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.String to java.util.Collection
+ctor JDK String char[] for byte[]: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast [C to [B
 ctor JDK StringBuilder String: sb
 Lazy initialized
-ctor Lazy String: java.lang.IllegalArgumentException: argument type mismatch
+ctor Lazy String: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number
 ctor Lazy int: Lazy
 JDK concat Integer: java.lang.IllegalArgumentException: argument type mismatch
 JDK concat String: ab

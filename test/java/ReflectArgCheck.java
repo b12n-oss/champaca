@@ -39,16 +39,24 @@ public class ReflectArgCheck {
         public String toString() { return "Lazy"; }
     }
 
+    // a cause, without the module clause HotSpot's checkcast text ends with
+    // (champaca's ClassCastException texts don't have it yet)
+    static String cause(Throwable t) {
+        if (t.getCause() == null) return "";
+        String c = String.valueOf(t.getCause());
+        int i = c.indexOf(" (");
+        return " | cause " + (c.contains(" cannot be cast to class ") && i > 0 ? c.substring(0, i) : c);
+    }
     static void row(String name, Method m, Object recv, Object... args) {
         String r;
         try { r = String.valueOf(m.invoke(recv, args)); }
-        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage(); }
+        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage() + cause(t); }
         System.out.println(name + ": " + r);
     }
     static void ctor(String name, Constructor<?> k, Object... args) {
         String r;
         try { r = String.valueOf(k.newInstance(args)); }
-        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage(); }
+        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage() + cause(t); }
         System.out.println(name + ": " + r);
     }
     static Method m(String n, Class<?>... ps) throws Exception { return ReflectArgCheck.class.getMethod(n, ps); }
@@ -135,6 +143,8 @@ public class ReflectArgCheck {
         ctor("ctor String,long second wrong", k2, "s", "5");
         ctor("ctor count", k2, "s");
         ctor("ctor JDK StringBuilder Integer", StringBuilder.class.getConstructor(String.class), 5);
+        ctor("ctor JDK ArrayList String", java.util.ArrayList.class.getConstructor(java.util.Collection.class), "s");
+        ctor("ctor JDK String char[] for byte[]", String.class.getConstructor(byte[].class), (Object) new char[0]);
         ctor("ctor JDK StringBuilder String", StringBuilder.class.getConstructor(String.class), "sb");
         // the class is initialized even when an argument doesn't fit
         Constructor<Lazy> lazy = Lazy.class.getConstructor(int.class);

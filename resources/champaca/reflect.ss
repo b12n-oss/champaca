@@ -421,21 +421,46 @@
 
 (define (prim-desc? d) (not (memv (string-ref d 0) '(#\L #\[))))
 
-(define (reflect-arg-list ptypes args)
+;; a class name as Class.getName gives it: dots, but a hidden class keeps
+;; the slash before its suffix (Name/0x1000)
+(define (binary-name n)
+  (let ([i (string-search "/0x" n)])
+    (if i
+        (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
+        (slashes->dots n))))
+
+(define (reflect-arg-list ptypes args . ctor?)
   (let ([argv (if args (vector->list (jarr-vec args)) '())])
     (unless (fx= (length argv) (length ptypes))
       (jthrow "java/lang/IllegalArgumentException"
               (string-append "wrong number of arguments: " (number->string (length argv))
                              " expected: " (number->string (length ptypes)))))
-    (map reflect-arg ptypes argv)))
+    (map (lambda (t v) (reflect-arg t v (pair? ctor?))) ptypes argv)))
 
 ;; an argument as the JVM's reflection takes it: for a primitive parameter a
 ;; box of that type or of one that widens to it (never narrows), unboxed;
 ;; for a reference parameter null or an instance. Anything else is
 ;; IllegalArgumentException "argument type mismatch". null for a primitive
 ;; is the IllegalArgumentException the JDK's method handle accessor throws,
-;; wrapping the NullPointerException its unboxing hits.
-(define (reflect-arg t v)
+;; wrapping the NullPointerException its unboxing hits. A constructor's
+;; mismatch carries the ClassCastException the JDK's constructor accessor
+;; keeps as its cause (DirectConstructorHandleAccessor; the method accessor
+;; drops it): "Cannot cast" to the parameter's class, or to its box for a
+;; primitive one given a box, and HotSpot's checkcast text against Number
+;; for anything else, without the module clause.
+(define (reflect-arg t v ctor?)
+  (define (mismatch)
+    (if ctor?
+        (raise (construct "java/lang/IllegalArgumentException" "(Ljava/lang/String;Ljava/lang/Throwable;)V"
+                          (jstring-lit "argument type mismatch")
+                          (construct "java/lang/ClassCastException" "(Ljava/lang/String;)V"
+                                     (jstring-lit
+                                      (let ([from (binary-name (class-name-of v))])
+                                        (cond [(not (prim-desc? t)) (string-append "Cannot cast " from " to " (field-type-name t))]
+                                              [(exists (lambda (b) (jinstance? v b)) '("java/lang/Number" "java/lang/Character" "java/lang/Boolean"))
+                                               (string-append "Cannot cast " from " to " (binary-name (cadr (assoc t box-classes))))]
+                                              [else (string-append "class " from " cannot be cast to class java.lang.Number")]))))))
+        (reflect-type-mismatch)))
   (cond
     [(prim-desc? t)
      (let ([e (and v (jobj? v) (find (lambda (b) (string=? (cadr b) (class-name-of v))) box-classes))])
@@ -451,13 +476,13 @@
                                            [else "int"])
                                          "Value()\" because the return value of \"sun.invoke.util.ValueConversions"
                                          ".primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)\" is null")))))]
-         [(not e) (reflect-type-mismatch)]
+         [(not e) (mismatch)]
          [(string=? (car e) t) (junbox t v)]
          [(let ([w (assoc (car e) prim-widenings)]) (and w (member t (cdr w))))
           (widen (car e) t (junbox (car e) v))]
-         [else (reflect-type-mismatch)]))]
+         [else (mismatch)]))]
     [(or (not v) (jinstance? v (desc->class-name t))) v]
-    [else (reflect-type-mismatch)]))
+    [else (mismatch)]))
 
 ;; Method.invoke's receiver: as DirectMethodHandleAccessor.checkReceiver.
 ;; Method.invoke's own access check reaches obj.getClass() first unless the
@@ -467,8 +492,8 @@
     (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"o\" is null"))
   (unless (jinstance? obj cname)
     (jthrow "java/lang/IllegalArgumentException"
-            (string-append "object of type " (slashes->dots (class-name-of obj))
-                           " is not an instance of " (slashes->dots cname)))))
+            (string-append "object of type " (binary-name (class-name-of obj))
+                           " is not an instance of " (binary-name cname)))))
 
 ;; Run thunk; a Java exception it throws comes back wrapped in
 ;; InvocationTargetException, as Method.invoke promises.
@@ -533,7 +558,7 @@
       ;; the class first, then the arguments: the JVM initializes the class
       ;; even when an argument doesn't fit
       (jinit alloc)
-      (let ([argv (reflect-arg-list (desc-args desc) args)])
+      (let ([argv (reflect-arg-list (desc-args desc) args 'ctor)])
         (invoke-wrapped
          (lambda ()
            (when serial (check-allocatable alloc))
@@ -550,7 +575,7 @@
   (let ([c (find-class cname)])
     (cond [(string=? cname "java/lang/Class") (jthrow "java/lang/IllegalAccessException" "java.lang.Class")]
           [(or (memq (jclass-kind c) '(array interface)) (fxpositive? (fxlogand (jclass-flags c) #x400)))
-           (jthrow "java/lang/InstantiationException" (slashes->dots cname))]
+           (jthrow "java/lang/InstantiationException" (binary-name cname))]
           [else (void)])))
 
 ;; --- serialization ---------------------------------------------------------------
@@ -580,7 +605,7 @@
       (unless (constructor-in-superclass? dn cn)
         (jthrow "java/lang/UnsupportedOperationException"
                 (string-append (jstring->scheme ((jvirt ctor "toString()Ljava/lang/String;") ctor))
-                               " not a superclass of " (slashes->dots dn))))
+                               " not a superclass of " (binary-name dn))))
       ;; as the JDK: initialized here, so an ExceptionInInitializerError
       ;; isn't wrapped in an InvocationTargetException later
       (jinit dn)
@@ -626,46 +651,53 @@
 
 ;; --- field access (overrides of java.lang.reflect.Field) -----------------------------
 
-;; -> (values getter setter field-descriptor what qname) for field f on obj.
+;; -> (values getter setter field-descriptor what qname read-only?) for
+;; field f on obj, as mode ('get, 'set for Field.set, 'set-typed for setInt
+;; and friends) reaches it. read-only? is the JDK's: a static final field,
+;; a final one not made accessible, and a record's or hidden class's final
+;; field, which Field refuses to set with IllegalAccessException.
 ;; what names the field as the JDK's messages do ("static final int field
 ;; A.x"), qname is "A.x".
 ;; A null receiver for an instance field is a NullPointerException and one
-;; of another class an IllegalArgumentException, with the JDK's texts (set?
-;; picks Field.set's or Field.get's). These overrides replace Field's own
+;; of another class an IllegalArgumentException, with the JDK's texts for
+;; mode. These overrides replace Field's own
 ;; access check too, which reaches obj.getClass() first unless the field was
 ;; made accessible, so a null receiver's text depends on that.
-(define (field-access f obj set?)
+(define (field-access f obj mode)
   (let* ([c (mirror-class (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))]
          [slot (jslot f (jfield-index "java/lang/reflect/Field" "slot"))]
          [meta (list-ref (meta-fields c) slot)]
          [cname (jclass-cname c)] [name (car meta)] [desc (cadr meta)]
          [static? (static-flag? (caddr meta))]
-         [qname (string-append (slashes->dots cname) "." name)]
-         [what (string-append (if static? "static " "") (if (fxpositive? (fxlogand (caddr meta) #x10)) "final " "")
+         [final? (fxpositive? (fxlogand (caddr meta) #x10))]
+         [override? (eqv? 1 (jslot f (jfield-index "java/lang/reflect/Field" "override")))]
+         [read-only? (and final? (or static? (not override?) (equal? (jclass-super c) "java/lang/Record")
+                                     (string-search "/0x" cname)))]
+         [qname (string-append (binary-name cname) "." name)]
+         [what (string-append (if static? "static " "") (if final? "final " "")
                               (field-type-name desc) " field " qname)])
     (if static?
         (let ([sym (string->symbol (string-append cname ":" name))])
           (jinit cname)
           (values (lambda () (top-level-value sym))
                   (lambda (v) (set-top-level-value! sym v))
-                  desc what qname))
+                  desc what qname read-only?))
         (let ([i (jfield-index cname name)])
           (unless obj
             (jthrow "java/lang/NullPointerException"
-                    (cond [(not (eqv? 1 (jslot f (jfield-index "java/lang/reflect/Field" "override"))))
-                           "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
-                          [set? "Cannot invoke \"Object.getClass()\" because \"o\" is null"]
+                    (cond [(not override?) "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
+                          [(eq? mode 'set) "Cannot invoke \"Object.getClass()\" because \"o\" is null"]
                           [else #f])))
           (unless (jinstance? obj cname)
             (jthrow "java/lang/IllegalArgumentException"
-                    (string-append "Can not " (if set? "set " "get ") what (if set? " to " " on ")
-                                   (slashes->dots (class-name-of obj)))))
+                    (string-append "Can not " (if (eq? mode 'get) "get " "set ") what (if (eq? mode 'set) " to " " on ")
+                                   (binary-name (class-name-of obj)))))
           (values (lambda () (vector-ref (jobj-slots obj) i))
                   (lambda (v) (vector-set! (jobj-slots obj) i v))
-                  desc what qname)))))
+                  desc what qname read-only?)))))
 
 (define (field-type-name d)
-  (cond [(assoc d prim-names) => cdr] [else (slashes->dots (desc->class-name d))]))
+  (cond [(assoc d prim-names) => cdr] [else (binary-name (desc->class-name d))]))
 
 ;; whether a primitive of type from fits one of type to: the same or wider
 (define (prim-widens? from to)
@@ -673,25 +705,25 @@
 
 (define-override! "java/lang/reflect/Field.get(Ljava/lang/Object;)Ljava/lang/Object;"
   (lambda (this obj)
-    (let-values ([(get set desc what qname) (field-access this obj #f)])
+    (let-values ([(get set desc what qname read-only?) (field-access this obj 'get)])
       (let ([v (get)]) (if (prim-desc? desc) (jbox desc v) v)))))
 
 ;; set takes v as Method.invoke takes an argument: a box unboxed and
 ;; widened for a primitive field, null or an instance for a reference one
 (define-override! "java/lang/reflect/Field.set(Ljava/lang/Object;Ljava/lang/Object;)V"
   (lambda (this obj v)
-    (let-values ([(get set desc what qname) (field-access this obj #t)])
-      (define (refuse)
-        (jthrow "java/lang/IllegalArgumentException"
-                (string-append "Can not set " what " to " (if v (slashes->dots (class-name-of v)) "null value"))))
+    (let-values ([(get set desc what qname read-only?) (field-access this obj 'set)])
+      (define (refuse cname)
+        (jthrow cname (string-append "Can not set " what " to " (if v (binary-name (class-name-of v)) "null value"))))
+      (when read-only? (refuse "java/lang/IllegalAccessException"))
       (set (cond
              [(prim-desc? desc)
               (let ([e (and v (jobj? v) (find (lambda (b) (string=? (cadr b) (class-name-of v))) box-classes))])
                 (if (and e (prim-widens? (car e) desc))
                     (widen (car e) desc (junbox (car e) v))
-                    (refuse)))]
+                    (refuse "java/lang/IllegalArgumentException")))]
              [(or (not v) (jinstance? v (desc->class-name desc))) v]
-             [else (refuse)])))))
+             [else (refuse "java/lang/IllegalArgumentException")])))))
 
 ;; getInt and friends: a primitive field whose type widens to the getter's;
 ;; setInt and friends: a primitive field the setter's type widens to
@@ -700,7 +732,7 @@
    (let ([name (car p)] [t (cdr p)] [tname (cdr (assoc (cdr p) prim-names))])
      (define-override! (string-append "java/lang/reflect/Field.get" name "(Ljava/lang/Object;)" t)
        (lambda (this obj)
-         (let-values ([(get set desc what qname) (field-access this obj #f)])
+         (let-values ([(get set desc what qname read-only?) (field-access this obj 'get)])
            (unless (and (prim-desc? desc) (prim-widens? desc t))
              (jthrow "java/lang/IllegalArgumentException"
                      (string-append "Attempt to get " (field-type-name desc) " field \"" qname
@@ -708,7 +740,10 @@
            (widen desc t (get)))))
      (define-override! (string-append "java/lang/reflect/Field.set" name "(Ljava/lang/Object;" t ")V")
        (lambda (this obj v)
-         (let-values ([(get set desc what qname) (field-access this obj #t)])
+         (let-values ([(get set desc what qname read-only?) (field-access this obj 'set-typed)])
+           (when read-only?
+             (jthrow "java/lang/IllegalAccessException"
+                     (string-append "Can not set " what " to (" tname ")" (jstring-of (jbox t v)))))
            (unless (and (prim-desc? desc) (prim-widens? t desc))
              (jthrow "java/lang/IllegalArgumentException"
                      (string-append "Can not set " what " to (" tname ")" (jstring-of (jbox t v)))))

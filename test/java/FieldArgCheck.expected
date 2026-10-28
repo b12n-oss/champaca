@@ -52,6 +52,10 @@ get other receiver: java.lang.IllegalArgumentException: Can not get int field Fi
 get null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
 set other receiver: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i to java.lang.String
 set null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+setInt other receiver: java.lang.IllegalArgumentException: Can not set int field FieldArgCheck.i on java.lang.String
+setInt null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+getInt other receiver: java.lang.IllegalArgumentException: Can not get int field FieldArgCheck.i on java.lang.String
+getInt null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
 get static null receiver: 11
 get static other receiver: 11
 set final int String: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin to java.lang.String
@@ -61,3 +65,22 @@ accessible get null receiver: java.lang.NullPointerException: null
 accessible set null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "o" is null
 set final int Integer: ok
 final after set: 13
+accessible setInt null receiver: java.lang.NullPointerException: null
+accessible setInt other receiver: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin on java.lang.String
+accessible getInt null receiver: java.lang.NullPointerException: null
+final set: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck.fin2 to java.lang.Integer
+final setInt: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck.fin2 to (int)5
+final set null: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck.fin2 to null value
+final set String: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck.fin2 to java.lang.String
+final set other receiver: java.lang.IllegalArgumentException: Can not set final int field FieldArgCheck.fin2 to java.lang.String
+final set null receiver: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+static final set: java.lang.IllegalAccessException: Can not set static final int field FieldArgCheck.SF to java.lang.Integer
+static final setInt: java.lang.IllegalAccessException: Can not set static final int field FieldArgCheck.SF to (int)2
+static final String set: java.lang.IllegalAccessException: Can not set static final java.lang.String field FieldArgCheck.SFS to java.lang.String
+static final accessible set: java.lang.IllegalAccessException: Can not set static final int field FieldArgCheck.SF to java.lang.Integer
+record field set: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck$R.x to java.lang.Integer
+record field setInt: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck$R.x to (int)2
+interface constant set: java.lang.IllegalAccessException: Can not set static final int field FieldArgCheck$K.C to java.lang.Integer
+hidden class final set: java.lang.IllegalAccessException: Can not set final int field FieldArgCheck$H/0xN.v to java.lang.Integer
+hidden class final after: 1
+finals: 3 1 sfs 1 4

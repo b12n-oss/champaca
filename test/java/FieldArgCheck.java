@@ -20,19 +20,34 @@ public class FieldArgCheck {
     public static int si = 9;
     public static String sstr = "sstr";
     public final int fin = 12;
+    public final int fin2 = 3;
+    public static final int SF = 1;
+    public static final String SFS = "sfs";
+    record R(int x) {}
+    interface K { int C = 4; }
+    public static class H { public final int v = 1; public H() {} }
 
+    // a cause, without the module clause HotSpot's checkcast text ends with
+    // (champaca's ClassCastException texts don't have it yet)
+    static String cause(Throwable t) {
+        if (t.getCause() == null) return "";
+        String c = String.valueOf(t.getCause());
+        int i = c.indexOf(" (");
+        return " | cause " + (c.contains(" cannot be cast to class ") && i > 0 ? c.substring(0, i) : c);
+    }
     interface Op { void run() throws Exception; }
     static void row(String name, Op op) {
         String r;
         try { op.run(); r = "ok"; }
-        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage(); }
-        System.out.println(name + ": " + r);
+        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage() + cause(t); }
+        // a hidden class's name ends in an address
+        System.out.println(name + ": " + r.replaceAll("/0x[0-9a-f]+", "/0xN"));
     }
     interface Get { Object get() throws Exception; }
     static void val(String name, Get g) {
         String r;
         try { r = String.valueOf(g.get()); }
-        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage(); }
+        catch (Throwable t) { r = t.getClass().getName() + ": " + t.getMessage() + cause(t); }
         System.out.println(name + ": " + r);
     }
     static Field f(String n) throws Exception { return FieldArgCheck.class.getField(n); }
@@ -98,6 +113,10 @@ public class FieldArgCheck {
         val("get null receiver", () -> f("i").get(null));
         row("set other receiver", () -> f("i").set("a string", 1));
         row("set null receiver", () -> f("i").set(null, 1));
+        row("setInt other receiver", () -> f("i").setInt("a string", 1));
+        row("setInt null receiver", () -> f("i").setInt(null, 1));
+        val("getInt other receiver", () -> f("i").getInt("a string"));
+        val("getInt null receiver", () -> f("i").getInt(null));
         val("get static null receiver", () -> f("si").get(null));
         val("get static other receiver", () -> f("si").get("ignored"));
         // a final field made accessible: set works, and the messages say final
@@ -110,5 +129,35 @@ public class FieldArgCheck {
         row("accessible set null receiver", () -> fin.set(null, 1));
         row("set final int Integer", () -> fin.set(o, 13));
         val("final after set", () -> fin.get(o));
+        row("accessible setInt null receiver", () -> fin.setInt(null, 1));
+        row("accessible setInt other receiver", () -> fin.setInt("a string", 1));
+        val("accessible getInt null receiver", () -> fin.getInt(null));
+        // final fields: refused unless an instance field made accessible
+        row("final set", () -> f("fin2").set(o, 5));
+        row("final setInt", () -> f("fin2").setInt(o, 5));
+        row("final set null", () -> f("fin2").set(o, null));
+        row("final set String", () -> f("fin2").set(o, "x"));
+        row("final set other receiver", () -> f("fin2").set("a string", 5));
+        row("final set null receiver", () -> f("fin2").set(null, 5));
+        row("static final set", () -> f("SF").set(null, 2));
+        row("static final setInt", () -> f("SF").setInt(null, 2));
+        row("static final String set", () -> f("SFS").set(null, "t"));
+        Field sf = f("SF");
+        sf.setAccessible(true);
+        row("static final accessible set", () -> sf.set(null, 2));
+        Field rx = R.class.getDeclaredField("x");
+        rx.setAccessible(true);
+        R rec = new R(1);
+        row("record field set", () -> rx.set(rec, 2));
+        row("record field setInt", () -> rx.setInt(rec, 2));
+        row("interface constant set", () -> K.class.getField("C").set(null, 5));
+        byte[] hb = FieldArgCheck.class.getResourceAsStream("FieldArgCheck$H.class").readAllBytes();
+        Class<?> hidden = java.lang.invoke.MethodHandles.lookup().defineHiddenClass(hb, true).lookupClass();
+        Object h = hidden.getConstructor().newInstance();
+        Field hv = hidden.getField("v");
+        hv.setAccessible(true);
+        row("hidden class final set", () -> hv.set(h, 2));
+        val("hidden class final after", () -> hv.get(h));
+        System.out.println("finals: " + o.fin2 + " " + f("SF").get(null) + " " + f("SFS").get(null) + " " + rec.x() + " " + K.class.getField("C").get(null));
     }
 }
