@@ -470,6 +470,9 @@
                                   (fs/delete-if-exists part)
                                   (System/exit 1))))
                           (finally (fs/delete-if-exists part)))))}
+  bench {:doc "Upstream OpenLDK's startup benchmarks: build and time Spring Boot or Quarkus on HotSpot and through champaca (bb bench spring-boot [build|bench|all]); see bench/README.md"
+         :task (do (load-file "bench/bench.clj")
+                   ((resolve (symbol "bench" "main")) (jolt-bin) *command-line-args*))}
   examples {:doc "List the examples/*.clj programs that bb example runs"
             :task (doseq [[n what] examples]
                     (println (format "  %-16s %s" n what)))}

@@ -6,3 +6,4 @@ AGENTS.md
 ci/linux/cache/
 /.nrepl-port
 /_site/
+/bench/*/target/
