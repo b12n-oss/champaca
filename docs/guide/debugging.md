@@ -37,18 +37,18 @@ Your own frames carry their line numbers, which come from the class file's `Line
 
 ## Errors on the jolt side
 
-Calls through `champaca.api` raise an `ex-info` of one of two kinds:
+Calls through `champaca.api` mostly raise an `ex-info` of one of two kinds:
 
 | Kind | How to tell | Message |
 |---|---|---|
 | a Java exception | `(:java/exception (ex-data e))` is the exception object | the exception's `toString` |
-| no overload fits, or two fit equally | `(:champaca/error (ex-data e))` is `:lookup` | the method name and every candidate's descriptor |
+| no overload fits, two fit equally, or champaca refuses the call (a final field, a bad class definition) | `(:champaca/error (ex-data e))` is `:lookup` | the method name and every candidate's descriptor, or the reason |
 
-Both are covered in [calling-java](calling-java.md#exceptions). A native champaca lacks is the first kind: it throws `java.lang.UnsatisfiedLinkError` named after the native, as below.
+Both are covered in [calling-java](calling-java.md#exceptions), with the few errors outside them (`proxy`'s and `->clj`'s own, and a receiver that isn't a Java value). A native champaca lacks is the first kind: it throws `java.lang.UnsatisfiedLinkError` named after the native, as below.
 
 ### A missing native
 
-The JDK declares many of its methods `native` and leaves them to the JVM. Champaca writes the ones the tested paths reach in Scheme, in `resources/champaca/natives.ss` (and `reflect.ss` for reflection, `files.ss` for files, `net.ss` for sockets, `spawn.ss` for processes), and adds more as programs need them. Calling one that isn't there throws `UnsatisfiedLinkError`, which is what the JVM throws for a `native` method whose library was never loaded, so a library that wraps an optional feature in a try/catch keeps going. Uncaught, it ends the program like any other exception:
+The JDK declares many of its methods `native` and leaves them to the JVM. Champaca writes the ones the tested paths reach in Scheme, in `resources/champaca/natives.ss` (and `reflect.ss` for reflection, `files.ss` for files, `net.ss` for sockets, `spawn.ss` for processes), and adds more as programs need them. Calling one that isn't there throws `UnsatisfiedLinkError`, which is what the JVM throws for a `native` method whose library was never loaded, so a library that wraps an optional feature in a try/catch keeps going. Uncaught, it ends the program like any other exception. Before champaca had helpful `NullPointerException` messages, printing one ended this way:
 
 ```text
 Exception in thread "main" java.lang.UnsatisfiedLinkError: java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;

@@ -1,0 +1,7 @@
+ofVirtual: ran true v1 true true
+startVirtualThread: true false
+unstarted state: NEW
+per-task executor: 55
+builder names: w0 w1
+handler: boom virtual true
+current is virtual: false

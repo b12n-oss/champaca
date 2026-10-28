@@ -68,20 +68,24 @@ the class path, which the cache keeps.
 
 ## Results
 
-On an Apple M1 Pro (10 CPUs), macOS 26.5.2, JDK 25.0.2, champaca at
-`07eafcc` with the pinned jolt, load average 5 to 10 from other work, on
-2026-10-28. Ten timed runs each, three for a cold variant:
+On an Apple M1 Pro (10 CPUs), macOS 26.5.2, JDK 25.0.2, with the pinned
+jolt, on 2026-10-28, while other work kept the load average at 4 to 10. Ten
+timed runs each, three for a cold variant. Spring Boot ran on champaca at
+`ab48ef6`, load 4 to 6:
 
 | Spring Boot | Median | Min | Max | Peak RSS |
 |---|---|---|---|---|
-| HotSpot, fat jar | 974 ms | 894 ms | 2670 ms | 241 MB |
-| HotSpot, extracted jar | 718 ms | 706 ms | 744 ms | 190 MB |
-| HotSpot + Spring AOT | 599 ms | 586 ms | 609 ms | 197 MB |
-| HotSpot + JDK AOT cache | 360 ms | 343 ms | 391 ms | 145 MB |
-| HotSpot + Spring AOT + AOT cache | 267 ms | 261 ms | 279 ms | 118 MB |
-| champaca, extracted jar, cold | 60.1 s | 49.2 s | 60.3 s | 2098 MB |
-| champaca, extracted jar | 4571 ms | 4251 ms | 4945 ms | 1101 MB |
-| champaca, fat jar | 24.7 s | 22.7 s | 30.5 s | 995 MB |
+| HotSpot, fat jar | 875 ms | 856 ms | 997 ms | 231 MB |
+| HotSpot, extracted jar | 765 ms | 713 ms | 819 ms | 185 MB |
+| HotSpot + Spring AOT | 633 ms | 575 ms | 663 ms | 150 MB |
+| HotSpot + JDK AOT cache | 348 ms | 324 ms | 372 ms | 135 MB |
+| HotSpot + Spring AOT + AOT cache | 266 ms | 257 ms | 294 ms | 111 MB |
+| champaca, extracted jar, cold | 52.8 s | 49.0 s | 53.5 s | 2505 MB |
+| champaca, extracted jar | 4089 ms | 3913 ms | 5740 ms | 1101 MB |
+| champaca + Spring AOT | 3233 ms | 3127 ms | 3289 ms | 1090 MB |
+| champaca, fat jar | 21.0 s | 19.7 s | 24.9 s | 998 MB |
+
+Quarkus ran on champaca at `07eafcc`, load 5 to 10:
 
 | Quarkus | Median | Min | Max | Peak RSS |
 |---|---|---|---|---|
@@ -92,9 +96,10 @@ On an Apple M1 Pro (10 CPUs), macOS 26.5.2, JDK 25.0.2, champaca at
 | champaca, uber-jar | 3056 ms | 3020 ms | 3567 ms | 760 MB |
 | champaca, fast-jar | 11.1 s | 10.3 s | 11.6 s | 809 MB |
 
-Every variant printed what HotSpot prints. A warm champaca start is about
-six times HotSpot's for both frameworks, and needs five to seven times its
-memory. The cold rows include the JDK's own first boot, every method of the
+Every variant printed what HotSpot prints. A warm champaca start takes five
+to six times as long as HotSpot's, for both frameworks, and needs six to seven
+times its memory. Spring AOT saves champaca a little more than it saves HotSpot,
+21% of the start against 17%. The cold rows include the JDK's own first boot, every method of the
 framework translated and compiled once and the cache written. The fat jar
 and the fast-jar sit between the two, because the classes their own loaders
 define compile again on every run (see the variants above). Upstream's
@@ -104,8 +109,9 @@ image at 4.3 s (Spring Boot) and 1.5 s (Quarkus) on a 16-CPU Xeon E5-2670,
 with HotSpot at 2.9 s and 1.3 s on the same machine, so the two projects'
 numbers aren't comparable directly; the HotSpot rows are the yardstick.
 
-Two HotSpot maxima (the fat jar's 2.7 s, the fast-jar's 5.5 s) are single
-slow runs while other work was busy; their medians stand.
+The Quarkus fast-jar's HotSpot maximum, 5.5 s, is a single slow run while
+other work was busy; its median stands, as does the 5.7 s maximum of
+champaca's extracted jar.
 
 ## What it took
 

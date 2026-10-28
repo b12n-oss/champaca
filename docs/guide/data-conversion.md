@@ -6,7 +6,7 @@ Java objects live in the same heap as jolt values, but they're different things:
 
 | jolt value | Java parameter | What Java gets |
 |---|---|---|
-| integer | `int`, `long`, `double`, ... | the number, widened if needed |
+| integer | `int`, `long`, `float`, `double` | the number, widened if needed (never narrowed to `byte` or `short`) |
 | integer | `Object`, `Number`, `Integer` | a boxed `Integer` if it fits in 32 bits, else a `Long` |
 | integer | `Long` | a boxed `Long` |
 | double | `double`, `float`, `Object` | the number, or a boxed `Double` |
@@ -33,7 +33,9 @@ A vector given to an array parameter becomes a fresh array of that type, element
 (ldk/->clj (ldk/invoke-static "java.util.Arrays" "copyOf" [3 1 2] 5))  ;=> [3 1 2 0 0]
 ```
 
-When the parameter is just `Object`, nothing says which array type to build, so the contents decide: all small integers make an `int[]`, any integer beyond 32 bits makes a `long[]`, all doubles a `double[]`, all strings a `String[]`, vectors of one kind a nested array, and anything mixed an `Object[]`.
+That works for `int[]`, `long[]`, `float[]`, `double[]`, `char[]` and `boolean[]`, but not `byte[]` or `short[]`, since an integer never narrows to those. A `byte[]` has to come from Java: `(ldk/invoke (ldk/invoke-static "java.util.HexFormat" "of") "parseHex" "6869")` makes one, and `->clj` reads it back as `[104 105]`.
+
+When the parameter is just `Object`, nothing says which array type to build, so the contents decide: all small integers make an `int[]`, any integer beyond 32 bits makes a `long[]`, all doubles a `double[]`, all strings (keywords count as strings) a `String[]`, vectors of one kind a nested array, and anything else an `Object[]`: characters, booleans, `nil`s, an empty vector, or integers mixed with doubles.
 
 ### Collections
 

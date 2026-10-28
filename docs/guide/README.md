@@ -5,14 +5,14 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 ## Using it
 
 - [getting-started](getting-started.md): what you need installed, the first call, and depending on champaca from your own project.
-- [calling-java](calling-java.md): `construct`, `invoke`, `invoke-static` and the field getters, how an overload gets picked, jolt fns as Java interfaces, and what an exception looks like on the jolt side.
+- [calling-java](calling-java.md): `construct`, `invoke`, `invoke-static` and the field getters and setters, how an overload gets picked, jolt fns as Java interfaces, proxies, real Java classes defined from jolt, threads, and what an exception looks like on the jolt side.
 - [data-conversion](data-conversion.md): what jolt values turn into on the way in (arrays, collections, boxes) and how `->clj` and `->java` copy data across.
 - [jars-and-modules](jars-and-modules.md): a classpath of jars and directories, and classes from JDK modules beyond `java.base`.
 - [running-java-programs](running-java-programs.md): running a compiled Java `main` straight from the command line, and Spring Boot and Quarkus applications in their packagings.
 
 ## When it's slow or broken
 
-- [performance](performance.md): the startup cache, the call-site cache, and the pinned jolt build.
+- [performance](performance.md): the startup cache, the call-site cache, what the generated code costs, and the pinned jolt build.
 - [debugging](debugging.md): the `CHAMPACA_*` switches, Java stack traces, and the error kinds `api.clj` raises.
 
 ## Background

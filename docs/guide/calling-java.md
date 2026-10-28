@@ -61,7 +61,7 @@ Champaca picks the overload from the values you pass, the way `javac` picks one 
 (ldk/invoke-static "java.lang.String" "valueOf" \x)       ;=> "x"          valueOf(char)
 ```
 
-A jolt integer is an `int` when it fits in 32 bits and a `long` otherwise. A jolt double is a `double`, and it never narrows to an `int`. So `(ldk/invoke-static "java.lang.Integer" "valueOf" 2.0)` finds nothing that fits, while `(ldk/invoke-static "java.lang.Double" "valueOf" 2)` widens the 2 and returns `2.0`.
+A jolt integer is an `int` when it fits in 32 bits and a `long` otherwise. A jolt double is a `double`, and it never narrows to an `int`. So `(ldk/invoke-static "java.lang.Integer" "valueOf" 2.0)` finds nothing that fits, while `(ldk/invoke-static "java.lang.Double" "valueOf" 2)` widens the 2 and returns `2.0`. An integer never narrows to a `byte` or a `short` either, so `(ldk/invoke-static "java.lang.Byte" "valueOf" 5)` finds nothing; the descriptor functions below take it as given (`(ldk/call-static "java/lang/Byte" "valueOf" "(B)Ljava/lang/Byte;" 5)`), as `set-field!` does for a field.
 
 When two overloads score the same, the more specific one wins (JLS 15.12.2.5). With `nil` that matters: `String.valueOf(null)` in Java means `valueOf(char[])`, which throws, and so does this:
 
@@ -134,6 +134,7 @@ A fn fits any single-method interface, so a method overloaded on two of them is 
 `proxy` makes one object for several interfaces, or for an interface with more than one method, out of a map from method name to fn. It's a real `java.lang.reflect.Proxy`, built by the JDK's own `ProxyGenerator` (`examples/proxy.clj`):
 
 ```clojure
+(def xs (ldk/construct "java.util.ArrayList" ["ccc" "a" "bb"]))
 (def p (ldk/proxy ["java.lang.Runnable" "java.util.Comparator"]
                   {"run" (fn [] (println "ran"))
                    :compare (fn [a b] (- (count a) (count b)))}))
@@ -250,7 +251,7 @@ A Java thread can run a jolt fn, and it keeps running between your calls into Ja
 (def t (ldk/construct "java.lang.Thread" (fn [] (println "on" (ldk/invoke (ldk/invoke-static "java.lang.Thread" "currentThread") "getName")))))
 (ldk/invoke t "start")
 (ldk/invoke t "join")
-;; on Thread-0
+;; on Thread-0 (the number depends on the threads made before it)
 ```
 
 Only one thread runs Java code at a time ([limitations](limitations.md#threads-take-turns)), but jolt code runs alongside it. A fn that Java calls on its thread runs on that thread too, so treat what it touches the way you would any code shared between threads. A thread jolt started, such as a `future`, can call Java as well, and gets a `java.lang.Thread` named `jolt-<n>` the first time it does. As on a JVM, a non-daemon thread still running keeps the process alive when your program ends, and an executor's threads are non-daemon until you call `shutdown`. `examples/threads.clj` has a pool and a producer thread.
@@ -295,7 +296,7 @@ A fn of yours that Java calls (an interface implementation, a `proxy` method, a 
 ;=> ["java.util.concurrent.ExecutionException: java.lang.RuntimeException: boom" {:a 1}]
 ```
 
-There is one other kind, `:lookup` under `:champaca/error`, for a call nothing fits (above). A JDK native method champaca doesn't provide yet throws `java.lang.UnsatisfiedLinkError`, so it arrives as a Java exception like any other; [debugging](debugging.md) covers it.
+There is one other kind, `:lookup` under `:champaca/error`, for a call nothing fits (above), a setter given a final field, and a `define-class` that refuses a definition, with the reason in the message. `proxy` and `->clj` refuse bad input with an `ex-info` of their own, and a receiver that isn't a Java value at all, such as a vector given to `invoke`, is a plain `RuntimeException` (`champaca: not a Java value [1]`). A JDK native method champaca doesn't provide yet throws `java.lang.UnsatisfiedLinkError`, so it arrives as a Java exception like any other; [debugging](debugging.md) covers it.
 
 ## With descriptors
 
