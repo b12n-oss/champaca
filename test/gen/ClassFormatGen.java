@@ -11,7 +11,7 @@ import static java.lang.constant.ConstantDescs.*;
 // class, and again from each later one. CfCaller reaches them through new,
 // ldc, invokestatic, getstatic, checkcast and instanceof, each in a method
 // of its own, so the others run fine. Run with
-// `java ClassFormatGen.java <dir>`.
+// `java ClassFormatGen.java <dir> [<dir for the whole CfTruncated>]`.
 public class ClassFormatGen {
     public static void main(String[] args) throws Exception {
         Path dir = Path.of(args[0]);
@@ -31,6 +31,8 @@ public class ClassFormatGen {
             });
         });
         Files.write(dir.resolve("CfTruncated.class"), java.util.Arrays.copyOf(whole, whole.length / 2));
+        // a second directory gets the whole CfTruncated (test/libcache/fix)
+        if (args.length > 1) Files.write(Path.of(args[1]).resolve("CfTruncated.class"), whole);
         byte[] bad = ClassFile.of().build(magic, clb -> clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_SUPER));
         bad[0] = 0x12; bad[1] = 0x34; bad[2] = 0x56; bad[3] = 0x78;
         Files.write(dir.resolve("CfBadMagic.class"), bad);
