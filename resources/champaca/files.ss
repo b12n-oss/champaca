@@ -99,6 +99,7 @@
 (deflibc libc-open "open" (__varargs_after 2) (uptr int int) int)
 (deflibc libc-open-string "open" (__varargs_after 2) (utf-8 int int) int)
 (deflibc libc-close "close" #f (int) int)
+(deflibc libc-isatty "isatty" #f (int) int)
 (deflibc libc-read "read" #f (int uptr size_t) ssize_t)
 (deflibc libc-write "write" #f (int uptr size_t) ssize_t)
 (deflibc libc-pread "pread" #f (int uptr size_t integer-64) ssize_t)
@@ -363,6 +364,10 @@
 ;; fd 0 reads through Chez's standard input port.
 
 (define fis "java/io/FileInputStream")
+
+;; as Console_md.c: both stdin and stdout are terminals
+(defnative "java/io/Console.istty()Z" ()
+  (if (and (fx= 1 (libc-isatty 0)) (fx= 1 (libc-isatty 1))) 1 0))
 
 (defnative "java/io/FileInputStream.open0(Ljava/lang/String;)V" (this name)
   (fdo-fd-set! (holder-fdo this fis) (java-io-open (jstring->scheme (nn name)) (fs-const "O_RDONLY"))))

@@ -53,6 +53,10 @@ public class NativesCheck {
         Thread.sleep(200);
         System.out.println("onExit polls: " + !exit.isDone());
         Thread.setDefaultUncaughtExceptionHandler(null);
+        // Console.istty (stdin and stdout both terminals) decides what
+        // System.console() gives; bb test pipes both
+        java.io.Console con = System.console();
+        System.out.println("console: " + (con == null ? "none" : "terminal " + con.isTerminal()));
         // a class whose initializer failed: the second use names the first failure
         for (int i = 0; i < 2; i++) {
             try { System.out.println(BadInit.x); }
