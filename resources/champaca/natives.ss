@@ -329,7 +329,10 @@
           [else #f])))
 (defnative "java/lang/Class.desiredAssertionStatus0(Ljava/lang/Class;)Z" (c)
   (let ([k (mirror-class c)])
-    (if (assertions-enabled? (jclass-cname k) (not (class-loader-of k))) 1 0)))
+    ;; an array or a primitive never has assertions on, as on HotSpot
+    (if (and (not (memq (jclass-kind k) '(array prim)))
+             (assertions-enabled? (jclass-cname k) (not (class-loader-of k))))
+        1 0)))
 ;; ClassLoader's own maps start from these (initializeJavaAssertionMaps):
 ;; classes and packages dotted, in command-line order, so the last one wins
 (defnative "java/lang/ClassLoader.retrieveDirectives()Ljava/lang/AssertionStatusDirectives;" ()

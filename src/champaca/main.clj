@@ -1754,18 +1754,19 @@
 
 (defn- expand-class-path
   "A class path string as a list of entries, a dir/* (or a bare *) standing
-  for the jars in that directory, .jar or .JAR, as the java launcher expands
-  it; none is nothing. Sorted by name: the launcher takes the directory's own
-  order, which its documentation leaves unspecified."
+  for the names ending .jar or .JAR in that directory, as the java launcher
+  expands it. One that finds none, or names no directory, stays as written,
+  as java leaves it (so a directory really named * still works). Sorted by
+  name: the launcher takes the directory's own order, which its
+  documentation leaves unspecified."
   [cp]
   (mapcat (fn [e]
             (if (or (= e "*") (str/ends-with? e "/*"))
-              (let [dir (if (= e "*") "." (subs e 0 (- (count e) 2)))
-                    names (some-> (io/file dir) .list seq sort)]
-                (for [n names
-                      :when (or (str/ends-with? n ".jar") (str/ends-with? n ".JAR"))
-                      :when (.isFile (io/file dir n))]
-                  (if (= e "*") n (str dir "/" n))))
+              (let [dir (case e "*" "." "/*" "/" (subs e 0 (- (count e) 2)))
+                    jars (for [n (some-> (io/file dir) .list seq sort)
+                               :when (or (str/ends-with? n ".jar") (str/ends-with? n ".JAR"))]
+                           (case e "*" n "/*" (str "/" n) (str dir "/" n)))]
+                (or (seq jars) [e]))
               [e]))
           (str/split cp #":")))
 

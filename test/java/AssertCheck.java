@@ -22,8 +22,13 @@ public class AssertCheck {
 
     public static void main(String[] args) throws Exception {
         for (String n : new String[] {"java.lang.String", "java.lang.Integer", "java.sql.Date", "AssertCheck", "AcOff",
-                                      "champaca.lib.Overloads", "champaca.lib.Tag"})
+                                      "champaca.lib.Overloads", "champaca.lib.Tag",
+                                      // no directive names their packages: the system and user defaults
+                                      "sun.nio.cs.UTF_8", "javax.sql.RowSet"})
             System.out.println(status(n));
+        // an array or a primitive is never on
+        System.out.println("arrays and primitives: " + int.class.desiredAssertionStatus() + " " + int[].class.desiredAssertionStatus()
+                           + " " + AssertCheck[].class.desiredAssertionStatus() + " " + String[].class.desiredAssertionStatus());
         System.out.println("assert here: " + fire(1));
         System.out.println("assert in AcOff: " + AcOff.check());
         // the loader's maps take over once one is set, starting from the directives

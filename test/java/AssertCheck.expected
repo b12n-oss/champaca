@@ -5,6 +5,9 @@ AssertCheck=true
 AcOff=false
 champaca.lib.Overloads=true
 champaca.lib.Tag=false
+sun.nio.cs.UTF_8=true
+javax.sql.RowSet=true
+arrays and primitives: false false false false
 assert here: AssertionError: x is 1
 assert in AcOff: skipped
 after setClassAssertionStatus: AcOff=false champaca.lib.Overloads=true champaca.lib.Tag=false AssertCheck=true
