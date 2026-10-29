@@ -3,7 +3,7 @@
 <h1 align="center">Champaca</h1>
 
 > [!WARNING]
-> **Spike.** This checks whether [OpenLDK](https://github.com/atgreen/openldk) can be rebuilt in [jolt](https://github.com/jolt-lang/jolt). It runs real JDK code, but only along the paths the tests exercise.
+> **Experimental.** Champaca began as a spike to see whether [OpenLDK](https://github.com/atgreen/openldk) could be rebuilt in [jolt](https://github.com/jolt-lang/jolt), and it can: it boots the JDK's own `java.base` from `lib/modules`, runs Spring Boot and Quarkus applications and eight common libraries with the same output as HotSpot, and caches what it compiles so a warm start takes seconds. It is not a complete JVM. The JDK's `native` methods are written in Scheme as the tests, the libraries and the benchmarks reach them, so a program can still meet one that's missing (an `UnsatisfiedLinkError`, named on stderr with `CHAMPACA_BT=1`); JNI libraries, IPv6 and a few other corners aren't there ([limitations](docs/guide/limitations.md)); and a warm start takes a few times HotSpot's time and memory ([bench](bench/README.md)). The tests pin what works; a program off their paths may hit a gap, and the debugging guide says how to read one ([debugging](docs/guide/debugging.md)).
 
 OpenLDK is Anthony Green's Java runtime written in Common Lisp. It translates JVM bytecode into Lisp and lets SBCL compile it to machine code. This project does the same thing on jolt. The translator is written in jolt's Clojure and emits Chez Scheme source, which `jolt.scheme/eval-string` compiles natively, one method at a time on first call.
 
