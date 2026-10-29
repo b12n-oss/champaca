@@ -520,8 +520,43 @@
                           (if (and (fx= family 2) (not (= sa 0)) (not (memv (sockaddr-ip sa) acc)))
                               (cons (sockaddr-ip sa) acc)
                               acc))))))))))
+;; The JDK's macOS fallback (Inet4AddressImpl.c lookupIfLocalhost, JDK bug
+;; 8170910): when the resolver fails for this machine's own hostname (a
+;; network whose DNS doesn't know it), the IPv4 addresses of its interfaces
+;; stand in, in getifaddrs order, the loopbacks left out unless they are all
+;; there is. The JDK's Linux code has no such fallback, so neither does this.
+(define (local-host-name? h)
+  (let ([buf (foreign-alloc 256)])
+    (let ([r (libc-gethostname buf 255)])
+      (foreign-set! 'unsigned-8 buf 255 0)
+      (let ([name (and (>= r 0) (c-string-text buf))])
+        (foreign-free buf)
+        (and name (string=? name h))))))
+(define (local-interface-ips)
+  (let ([head (foreign-alloc 8)])
+    (foreign-set! 'uptr head 0 0)
+    (let* ([r (libc-getifaddrs head)] [first (foreign-ref 'uptr head 0)])
+      (foreign-free head)
+      (if (< r 0)
+          '()
+          (let loop ([p first] [acc '()])   ; acc: (ip . loopback?), newest first
+            (if (= p 0)
+                (begin (unless (= first 0) (libc-freeifaddrs first))
+                       (let* ([all (reverse acc)]
+                              [real (filter (lambda (a) (not (cdr a))) all)])
+                         (map car (if (null? real) all real))))
+                (let ([sa (foreign-ref 'uptr p 24)] [next (foreign-ref 'uptr p 0)] [name (foreign-ref 'uptr p 8)])
+                  (loop next
+                        (if (and (not (= sa 0)) (fx= (sockaddr-family sa) 2)
+                                 (not (= name 0)) (not (fx= (foreign-ref 'unsigned-8 name 0) 0)))
+                            (cons (cons (sockaddr-ip sa) (fxlogtest (foreign-ref 'unsigned-32 p 16) 8)) acc)   ; IFF_LOOPBACK
+                            acc)))))))))
 (defnative "java/net/Inet4AddressImpl.lookupAllHostAddr(Ljava/lang/String;)[Ljava/net/InetAddress;" (this host)
-  (let* ([h (jstring->scheme (nn host))] [ips (lookup-ipv4 h)])
+  (let* ([h (jstring->scheme (nn host))]
+         [ips (guard (e [(and (jobj? e) net-macos? (local-host-name? h))
+                         (let ([local (local-interface-ips)])
+                           (if (null? local) (raise e) local))])
+                (lookup-ipv4 h))])
     (when (null? ips) (jthrow "java/net/UnknownHostException" h))
     (make-jarr "Ljava/net/InetAddress;" (list->vector (map (lambda (ip) (inet4 host ip)) ips)))))
 (defnative "java/net/Inet4AddressImpl.getHostByAddr([B)Ljava/lang/String;" (this addr)

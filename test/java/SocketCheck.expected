@@ -1,4 +1,4 @@
-addresses: localhost/127.0.0.1 /127.0.0.1 localhost/127.0.0.1 true 10.1.2.254 true localhost/127.0.0.1:80 true [/127.0.0.1] localhost true
+addresses: localhost/127.0.0.1 /127.0.0.1 localhost/127.0.0.1 true 10.1.2.254 true false localhost/127.0.0.1:80 true [/127.0.0.1] localhost true
 unknown host: java.net.UnknownHostException
 server socket: true true localhost/127.0.0.1 true true true
 accept timeout: java.net.SocketTimeoutException: Accept timed out

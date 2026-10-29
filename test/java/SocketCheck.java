@@ -29,10 +29,12 @@ public class SocketCheck {
     static BufferedReader reader(Socket s) throws IOException { return new BufferedReader(new InputStreamReader(s.getInputStream(), StandardCharsets.UTF_8)); }
 
     public static void main(String[] args) throws Exception {
-        // addresses, parsed and looked up (loopback only)
+        // addresses, parsed and looked up (loopback only; the local host is a real
+        // interface's address, not the loopback, as on a Mac whose hostname the
+        // resolver doesn't know, where the JDK falls back to the interfaces)
         row("addresses", LOOP + " " + InetAddress.getByName("127.0.0.1") + " " + InetAddress.getByName("localhost")
             + " " + LOOP.isLoopbackAddress() + " " + InetAddress.getByAddress(new byte[]{10, 1, 2, (byte) 254}).getHostAddress()
-            + " " + (InetAddress.getLocalHost() != null) + " " + new InetSocketAddress(LOOP, 80) + " " + InetSocketAddress.createUnresolved("x", 1).isUnresolved()
+            + " " + (InetAddress.getLocalHost() != null) + " " + InetAddress.getLocalHost().isLoopbackAddress() + " " + new InetSocketAddress(LOOP, 80) + " " + InetSocketAddress.createUnresolved("x", 1).isUnresolved()
             + " " + Arrays.toString(InetAddress.getAllByName("127.0.0.1")) + " " + InetAddress.getByName("127.0.0.1").getHostName()
             + " " + java.lang.management.ManagementFactory.getRuntimeMXBean().getName().matches("\\d+@.+"));
         row("unknown host", fails(() -> InetAddress.getByName("no.such.host.invalid")).replaceAll(":.*", ""));
