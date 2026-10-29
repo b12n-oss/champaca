@@ -13,6 +13,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
 | `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `bb test` and `bb libs` set it |
 | `CHAMPACA_CACHE=off` | ignores the startup cache ([performance](performance.md)) |
+| `CHAMPACA_LINES=all` | keeps line numbers for the frames of classes from jars and of classes a loader of the program's own defines, not just for classes from a class directory, at about the memory their code takes ([performance](performance.md#memory)); `off` drops them for your directory classes too. Part of the cache key |
 | `CHAMPACA_CALL_CACHE=off` | chooses the overload again on every call ([performance](performance.md#the-call-site-cache)) |
 
 ## Java stack traces
@@ -31,7 +32,7 @@ Exception in thread "main" java.lang.NumberFormatException: For input string: "f
 	at Boom.main(Boom.java:6)
 ```
 
-Your own frames carry their line numbers, which come from the class file's `LineNumberTable` through Chez's record of each frame's pending call ([how-it-works](how-it-works.md#stack-traces)). JDK frames name their file but no line: the startup cache compiles JDK code without that record, because keeping it cost 0.02 to 0.04 s on every warm start ([performance](performance.md#exception-handlers)). Two other differences from the JVM: a native champaca wrote in Scheme has no frame, where the JVM prints `Native Method`, and the stacks of other threads aren't available.
+Your own frames carry their line numbers when their classes come from a directory on the class path, which is how a build you're working on arrives. They come from the class file's `LineNumberTable` through Chez's record of each frame's pending call ([how-it-works](how-it-works.md#stack-traces)). JDK frames name their file but no line: the startup cache compiles JDK code without that record, because keeping it cost 0.02 to 0.04 s on every warm start ([performance](performance.md#exception-handlers)). Frames of classes from jars, and of classes a loader of the program's own defines, name their file but no line too, by default, because the record costs about as much memory as the code itself: a warm Spring Boot held 100 MB of it in a 460 MB heap. `CHAMPACA_LINES=all` keeps it for them as well ([performance](performance.md#memory)). Two other differences from the JVM: a native champaca wrote in Scheme has no frame, where the JVM prints `Native Method`, and the stacks of other threads aren't available.
 
 `CHAMPACA_BT=1` is for errors in champaca itself. It keeps a shadow stack of Java frames, so a Chez error inside a native, which has no Java trace, still prints where in the Java program it happened, and it names each missing native on stderr as it's hit. It changes the generated code, so it gets its own startup cache, and the first run with it on is a cold one.
 

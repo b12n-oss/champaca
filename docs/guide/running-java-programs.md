@@ -50,7 +50,7 @@ $ echo $?
 1
 ```
 
-The frames are the JVM's. Your own carry file names and line numbers as on the JVM, and a JDK frame names its file but no line; [debugging](debugging.md#java-stack-traces) has more.
+The frames are the JVM's. Your own, from a class directory, carry file names and line numbers as on the JVM; a frame of a JDK class, or of a jar's class unless `CHAMPACA_LINES=all` is set, names its file but no line; [debugging](debugging.md#java-stack-traces) has more.
 
 ## Frameworks
 

@@ -1,0 +1,3 @@
+v1 a=1 b=42 direct b=42
+user.jar base-v1.jar lc
+User.java:-1

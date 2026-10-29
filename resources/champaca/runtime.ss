@@ -180,6 +180,14 @@
 ;; method up with eq? rather than hashing a string each time.
 ;; vtable-alist holds the changes to the superclass's vtable: a new or
 ;; overriding entry, or (key . #f) for one this class drops.
+;; The reflection metadata's strings, one copy each: a descriptor or a
+;; name recurs across classes, and each registration's literals are its own
+;; strings (a warm Spring Boot held 180k of them, 20 MB, before this).
+(define meta-strings (make-hashtable string-hash string=?))
+(define (intern-meta x)
+  (cond [(string? x) (or (hashtable-ref meta-strings x #f) (begin (hashtable-set! meta-strings x x) x))]
+        [(pair? x) (cons (intern-meta (car x)) (intern-meta (cdr x)))]
+        [else x]))
 (define (register-class! name super interfaces template vtable-alist field-alist flags meta)
   (hashtable-set! classes name
                   (make-jclass name super interfaces template
@@ -191,7 +199,7 @@
                                  t)
                                (alist->table field-alist) flags
                                (if (fxpositive? (fxlogand flags #x200)) 'interface 'class)
-                               meta 'loaded #f)))
+                               (intern-meta meta) 'loaded #f)))
 
 (define prim-names
   '(("Z" . "boolean") ("B" . "byte") ("C" . "char") ("S" . "short") ("I" . "int")

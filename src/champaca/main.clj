@@ -9,6 +9,7 @@
   That mirrors OpenLDK, which also compiles each method on first call."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.walk :as walk]
             [clojure.string :as str]
             [jolt.scheme :as s]
             [champaca.classfile :as cf]
@@ -67,13 +68,43 @@
 
 (declare ensure-loaded! ancestry-of-unlinked lambda-class link registration-text delete-tree!)
 
+(defn- pack
+  "A class entry's edn text as UTF-8 bytes, the form the caches keep it in
+  and the class table holds it in until thawed: a Chez string takes four
+  bytes a character, and the JDK's entries alone run to 19 million
+  characters, 78 MB as strings against 19 as bytes."
+  [^String text]
+  (.getBytes text "UTF-8"))
+(defn- packed? [x] (or (bytes? x) (string? x)))   ; a string: an entry made this run
+(defn- unpack ^String [x] (if (bytes? x) (String. ^bytes x "UTF-8") x))
+(defn- packed=
+  "Whether two packed entries hold the same text (= on byte arrays is
+  identity)."
+  [a b]
+  (and (some? a) (some? b) (= (unpack a) (unpack b))))
+
+(def ^:private interned-strings (atom {}))
+(defn- intern-string
+  "One copy of each string the thawed entries hold: a method's key recurs in
+  the vtable of every class that inherits it, and a descriptor in every
+  method with that signature; read apart, each is its own string of four
+  bytes a character."
+  [^String s]
+  (or (get @interned-strings s)
+      (do (swap! interned-strings assoc s s) s)))
+(defn- thaw-entry
+  "A packed entry as its class map, strings interned (walk/postwalk over the
+  edn data, which holds maps, vectors, sets, keywords, numbers and strings)."
+  [e]
+  (walk/postwalk #(if (string? %) (intern-string %) %) (edn/read-string (unpack e))))
+
 (defn- parse-entry
-  "edn/read-string for one packed class entry. Damage inside an entry of an
+  "thaw-entry for one packed class entry. Damage inside an entry of an
   otherwise readable state.img surfaces here, mid-run, where booting cold is
   no longer possible (generations are already half loaded). The cache goes,
   so the next run boots cold, and this run fails loudly."
   [cname e]
-  (try (edn/read-string e)
+  (try (thaw-entry e)
        (catch Exception ex
          (binding [*out* *err*]
            (println "champaca: discarding a damaged startup cache (bad entry for"
@@ -88,16 +119,16 @@
 
 (defn- thaw!
   "The class table entry for cname as a map, or nil. A cache hit leaves
-  every entry packed as edn text; the first read parses it and puts the
-  map back, so a run only pays for the classes it touches. The swap keeps
-  a map that is already there, so a racing thaw or a concurrent assoc-in
-  on the same entry is never overwritten."
+  every entry packed as UTF-8 edn bytes; the first read parses it and puts
+  the map back, so a run only pays for the classes it touches. The swap
+  keeps a map that is already there, so a racing thaw or a concurrent
+  assoc-in on the same entry is never overwritten."
   [cname]
   (when-let [r *reads*] (vswap! r conj cname))
   (let [e (get-in @state [:classes cname])]
-    (if (string? e)
+    (if (packed? e)
       (let [u (parse-entry cname e)]
-        (-> (swap! state update-in [:classes cname] #(if (string? %) u %))
+        (-> (swap! state update-in [:classes cname] #(if (packed? %) u %))
             (get-in [:classes cname])))
       e)))
 
@@ -909,7 +940,7 @@
   their fingerprints when its methods are first called: deps-still-hold!),
   which keeps the entry out of the cache."
   [names & [defined?]]
-  (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (string? e) :jdk (:origin e))))]
+  (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))]
     (when (every? origin names)
       (reduce (fn [acc n]
                 (case (origin n)
@@ -926,7 +957,7 @@
   (let [e (fn [n] (get-in @state [:classes n]))]
     (or (first (remove e names))
         (first (filter (fn [n] (let [x (e n)]
-                                 (and (not (string? x))
+                                 (and (not (packed? x))
                                       (case (:origin x)
                                         :jdk false
                                         :user (not (:fp (class-source n)))
@@ -955,7 +986,7 @@
     (when-let [packed (when (:fp src) (get (library-cache (:jar src)) cname))]
       ;; an entry that doesn't read back goes alone, unlike state.img's
       ;; (parse-entry): the class compiles, and the next save rewrites it
-      (let [info (try (edn/read-string packed)
+      (let [info (try (thaw-entry packed)
                       (catch Exception e
                         (binding [*out* *err*]
                           (println (str "champaca: dropping the library cache's unreadable entry for " cname ":") (ex-message e)))
@@ -1164,7 +1195,7 @@
   checked when one is first called (deps-still-hold!)."
   [n bs fp dj]
   (if-let [packed (get (library-cache dj) n)]
-    (let [info (try (edn/read-string packed)
+    (let [info (try (thaw-entry packed)
                     (catch Exception e
                       (binding [*out* *err*]
                         (println (str "champaca: dropping the library cache's unreadable entry for " n ":") (ex-message e)))
@@ -1218,6 +1249,22 @@
         (swap! state assoc-in [:classes cname :parsed] p)
         p)))
 
+(defn- lines?
+  "Whether cname's code compiles with Chez's inspector information, which is
+  what gives its frames line numbers (how-it-works.md). By default a class
+  from a classpath directory, a developer's own build, does; a jar's or a
+  loader-defined class names its file without a line, as a JDK frame does,
+  because the information costs about as much memory as the code itself (a
+  warm Spring Boot: 100 of 460 MB live). CHAMPACA_LINES=all gives every
+  cached class lines, CHAMPACA_LINES=off none. origin is cache-origin's."
+  [cname info origin]
+  (and (= :user origin)
+       (case (env "CHAMPACA_LINES")
+         "all" true
+         "off" false
+         (and (= :user (:origin info))
+              (when-let [src (class-source cname)] (not (jar-entry? (:entry src))))))))
+
 (defn- compile-method! [cname mname desc]
   (let [p (parsed cname)
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
@@ -1265,13 +1312,13 @@
         (compile-to-cache? origin)
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
                                            ;; a classpath class's frames keep their line numbers
-                                           (s/call "compile-unit" text (= origin :user))))]
+                                           (s/call "compile-unit" text (lines? cname info origin))))]
           (record! origin unit {:fasl bv}))
         ;; the text is kept (cheaply) so save-cache! can compile it into a
         ;; generation; without that a jolt program re-jits these every run
         :else
         (do (timed :chez-compile #(scheme! text))
-            (record! origin unit {:text text :inspect (= origin :user)}))))))
+            (record! origin unit {:text text :inspect (lines? cname info origin)}))))))
 
 (defn saves-generation!
   "Tell the JIT this process will save a generation, so JDK methods compile
@@ -1291,7 +1338,7 @@
                   (get-in @state [:classes d])))]
     (cond (nil? e) false
           (= fp :present) true   ; a lambda class in state.img, thawed or not
-          (string? e) false      ; a JDK class has that name now
+          (packed? e) false      ; a JDK class has that name now
           :else (= fp (or (:src-fp e) (:fp (class-source d)))))))
 
 (defn- deps-still-hold!
@@ -1473,26 +1520,28 @@
     (let [modules (io/file (java-home) "lib" "modules")
           release (io/file (java-home) "release")
           ;; CHAMPACA_BT changes the generated code (shadow-stack wrappers that
-          ;; hide frame names from getCallerClass), so it gets its own cache
+          ;; hide frame names from getCallerClass), so it gets its own cache;
+          ;; CHAMPACA_LINES decides which code carries inspector information
           key (hash [(when (.exists release) (slurp release)) (.length modules) (.lastModified modules)
-                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT"))])]
+                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (env "CHAMPACA_LINES")])]
       (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
 
 (defn- packed-entry
-  "A class map as edn text without bytecode: methods keep :code as a flag."
+  "A class map as edn text in UTF-8 bytes (pack), without bytecode: methods
+  keep :code as a flag."
   [info]
-  (pr-str (-> info
-              (dissoc :parsed)
-              (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))))
+  (pack (pr-str (-> info
+                    (dissoc :parsed)
+                    (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms)))))))
 
 (defn- strip-for-cache
-  "The linker's class map as edn text per class, JDK classes only, without
-  bytecode. An entry this run never thawed is already text and is kept as
+  "The linker's class map as packed edn per class, JDK classes only, without
+  bytecode. An entry this run never thawed is packed already and is kept as
   it is."
   [classes]
   (into {}
         (for [[k info] classes
-              :let [s (if (string? info)
+              :let [s (if (packed? info)
                         info
                         ;; not a classpath class, not one a loader defined, not a
                         ;; lambda class over interfaces no later run can check
@@ -1509,7 +1558,7 @@
   (unless they were replaced meanwhile); every class of the jar this run
   loaded is written again, with what it compiled."
   [jar classes]
-  (into (reduce-kv (fn [m k seen] (if (= seen (get m k)) (dissoc m k) m))
+  (into (reduce-kv (fn [m k seen] (if (packed= seen (get m k)) (dissoc m k) m))
                    (read-library-image jar) (get-in @state [:library-dropped jar]))
         (for [[k info] classes
               :when (and (map? info) (= :user (cache-origin info)) (= jar (:src-jar info)))]
@@ -1519,15 +1568,16 @@
   "state.img: each class entry as edn text, plus the set of classes whose
   registration sits in a generation, so a load knows what is lazy without
   parsing anything. A JDK class goes in only when its registration is cached
-  somewhere: boot.so (:boot-classes, the class table as this process read
-  it, or a cold boot's registrations) or a generation (:cached-class). A
+  somewhere: boot.so (:boot-classes, the names of the class table as this
+  process read it, or of a cold boot's registrations) or a generation
+  (:cached-class). A
   later run takes any other entry for registered and fails with \"class
   not registered\": one whose save failed, so that a later save in the
   process found its map and not its code, or one linked and not yet
   recorded. Left out, it loads again in the run that needs it."
   [img]
   (let [{:keys [classes lazy boot-classes]} @state
-        classes (into {} (filter (fn [[k v]] (or (string? v) (contains? boot-classes k) (:cached-class v)))) classes)]
+        classes (into {} (filter (fn [[k v]] (or (packed? v) (contains? boot-classes k) (:cached-class v)))) classes)]
     (img/dump! (str img) {:lazy (into (set lazy)
                                       (for [[k v] classes :when (and (map? v) (= :jdk (:origin v)) (:cached-class v))] k))
                           :classes (strip-for-cache classes)})))
@@ -1602,9 +1652,10 @@
         (let [{:keys [classes lazy]} (timed :cache-read-state #(img/read-image (str img-file)))]
           (when-not (and (map? classes) (set? lazy))
             (throw (ex-info "not a champaca state image" {})))
-          ;; the class table as read: its entries are what boot.so registers,
-          ;; and the lazy ones (dump-classes!)
-          (swap! state assoc :classes classes :lazy lazy :boot-classes classes)
+          ;; the names in the class table as read: its entries are what
+          ;; boot.so registers, and the lazy ones (dump-classes!). The names
+          ;; alone: the map itself would pin every packed entry for the run
+          (swap! state assoc :classes classes :lazy lazy :boot-classes (set (keys classes)))
           (timed :cache-load-code #(s/call "load" (str so)))
           true)
         ;; a damaged cache would fail every run the same way: drop it, boot
@@ -1612,7 +1663,7 @@
         (catch Exception e
           (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
           (delete-tree! dir)
-          (swap! state assoc :classes {} :lazy #{} :boot-classes {})
+          (swap! state assoc :classes {} :lazy #{} :boot-classes #{})
           nil)))))
 
 (defn- prune-library!
