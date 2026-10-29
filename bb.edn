@@ -563,41 +563,66 @@
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
-  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, bb test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then bb libs (bb battery [ref]; BATTERY_MODES=cold,libs runs a subset); logs in target/battery/"
+  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, bb test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then bb libs (bb battery [ref]; BATTERY_MODES=cold,libs runs a subset, cold first since the cache starts empty); logs and a hang's artifacts stay under target/battery/, and the cache until the next run of another ref"
            :task (let [ref (or (first *command-line-args*) "HEAD")
                        tip (str/trim (:out (shell {:out :string} "git" "rev-parse" "--short" ref)))
                        dir (str (fs/absolutize "target/battery"))
                        wt (str dir "/wt-" tip)
                        cache (str dir "/cache-" tip)
-                       modes (if-let [m (System/getenv "BATTERY_MODES")] (str/split m (re-pattern ",")) ["cold" "warm" "cache-off" "bt" "libs"])
                        envs {"cold" {} "warm" {} "cache-off" {"CHAMPACA_CACHE" "off"} "bt" {"CHAMPACA_BT" "1"} "libs" {}}
+                       modes (if-let [m (System/getenv "BATTERY_MODES")] (str/split m (re-pattern ",")) ["cold" "warm" "cache-off" "bt" "libs"])
+                       _ (when (or (empty? modes) (some (fn [m] (not (contains? envs m))) modes))
+                           (println "bb battery: BATTERY_MODES names modes among" (str/join ", " (keys envs)) "; got" (pr-str modes))
+                           (System/exit 2))
+                       ;; the modes' environment: this process's, less the two variables a mode
+                       ;; sets for itself, so an outer CHAMPACA_BT=1 doesn't make every mode bt
+                       base-env (into {} (remove (fn [[k _]] (contains? #{"CHAMPACA_CACHE" "CHAMPACA_BT" "CHAMPACA_CACHE_DIR"} k)) (System/getenv)))
                        _ (fs/create-dirs dir)
-                       _ (fs/delete-tree wt)
-                       _ (fs/delete-tree cache)
-                       _ (shell "git" "worktree" "prune")
+                       ;; earlier refs' caches (a few hundred MB each) and worktrees left by
+                       ;; runs that died go first; this ref's cache goes too, to start cold.
+                       ;; The logs and a hang's artifacts stay: small, and what a failure
+                       ;; is read from
+                       _ (doseq [d (fs/list-dir dir)
+                                 :let [n (fs/file-name d)]]
+                           (when (str/starts-with? n "wt-")
+                             (shell {:continue true :out :string :err :string} "git" "worktree" "remove" "--force" (str d)))
+                           (when (or (str/starts-with? n "wt-") (str/starts-with? n "cache-"))
+                             (fs/delete-tree d)))
                        _ (shell "git" "worktree" "add" "-q" "--detach" wt ref)
                        _ (println "tip:" tip "worktree:" wt)
-                       ;; each mode's whole output goes to its log; the summary is its FAIL
-                       ;; lines, its count and its exit status, so a run that dies before
-                       ;; its count still says so
-                       results (doall
-                                (for [mode modes]
-                                  (let [log (str dir "/" tip "-" mode ".log")
-                                        _ (println (str "== " mode))
-                                        st (with-open [o (io/output-stream log)]
-                                             (:exit (shell {:dir wt :out o :err o :continue true :extra-env (assoc (get envs mode {}) "CHAMPACA_CACHE_DIR" cache)}
-                                                           "bb" (if (= mode "libs") "libs" "test"))))
-                                        lines (str/split-lines (slurp log))
-                                        fails (filter (fn [l] (or (str/starts-with? l "FAIL") (str/starts-with? l "DIFF"))) lines)
-                                        count-line (last (filter (fn [l] (or (str/ends-with? l " passed") (str/includes? l " matched"))) lines))]
-                                    (doseq [l fails] (println l))
-                                    (println (or count-line "   (no count: the run died)"))
-                                    (println (str "   exit " st ", log " log))
-                                    (and (zero? st) (empty? fails) (some? count-line)))))
-                       hangs (let [h (str wt "/target/hangs")] (if (fs/exists? h) (count (fs/list-dir h)) 0))
-                       _ (println "== hangs:" hangs)
+                       ;; each mode's whole output goes to its log (stdout and stderr merged by
+                       ;; the process); the summary is its FAIL lines, its count and its exit
+                       ;; status, so a run that dies before its count still says so
+                       [results hangs]
+                       (try
+                         (let [results (doall
+                                        (for [mode modes]
+                                          (let [log (str dir "/" tip "-" mode ".log")
+                                                _ (println (str "== " mode))
+                                                st (with-open [o (io/output-stream log)]
+                                                     (:exit (shell {:dir wt :out o :err :out :continue true
+                                                                    :env (merge base-env (get envs mode) {"CHAMPACA_CACHE_DIR" cache})}
+                                                                   "bb" (if (= mode "libs") "libs" "test"))))
+                                                lines (str/split-lines (slurp log))
+                                                fails (filter (fn [l] (or (str/starts-with? l "FAIL") (str/starts-with? l "DIFF"))) lines)
+                                                count-line (last (filter (fn [l] (or (str/ends-with? l " passed") (str/includes? l " matched"))) lines))]
+                                            (doseq [l fails] (println l))
+                                            (println (or count-line "   (no count: the run died)"))
+                                            (println (str "   exit " st ", log " log))
+                                            (and (zero? st) (empty? fails) (some? count-line)))))
+                               h (str wt "/target/hangs")
+                               hangs (if (fs/exists? h) (count (fs/list-dir h)) 0)]
+                           ;; a hang's partial output and stack sample outlive the worktree
+                           (when (pos? hangs)
+                             (fs/delete-tree (str dir "/" tip "-hangs"))
+                             (fs/move h (str dir "/" tip "-hangs"))
+                             (println "== hangs:" hangs "kept under" (str dir "/" tip "-hangs")))
+                           [results hangs])
+                         (finally
+                           (let [r (shell {:continue true :out :string :err :string} "git" "worktree" "remove" "--force" wt)]
+                             (when-not (zero? (:exit r)) (println "bb battery: couldn't remove the worktree" wt (str/trim (:err r)))))))
                        ok (and (every? true? results) (zero? hangs))]
-                   (shell "git" "worktree" "remove" "--force" wt)
+                   (println (str "== hangs: " hangs))
                    (println (if ok "battery green" "battery RED"))
                    (System/exit (if ok 0 1)))}
   heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (bb heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
