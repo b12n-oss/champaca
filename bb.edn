@@ -588,6 +588,9 @@
                              (shell {:continue true :out :string :err :string} "git" "worktree" "remove" "--force" (str d)))
                            (when (or (str/starts-with? n "wt-") (str/starts-with? n "cache-"))
                              (fs/delete-tree d)))
+                       ;; a registration whose directory is already gone (a run that died
+                       ;; after something else deleted its worktree) only prune clears
+                       _ (shell "git" "worktree" "prune")
                        _ (shell "git" "worktree" "add" "-q" "--detach" wt ref)
                        _ (println "tip:" tip "worktree:" wt)
                        ;; each mode's whole output goes to its log (stdout and stderr merged by
