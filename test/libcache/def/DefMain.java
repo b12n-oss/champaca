@@ -1,3 +1,4 @@
+import java.lang.invoke.MethodHandles;
 import java.nio.file.*;
 
 // test/libcache/def: classes a loader of the program's own defines, cached by
@@ -11,8 +12,10 @@ import java.nio.file.*;
 // twice, then v2 twice calling other first (other compiled against v1 in run
 // 4 was dropped with run's code in run 5, so this run compiles both anew and
 // prints v2's values; before, compiling other first recorded B's new
-// fingerprint and run's stale code passed the check). The second argument,
-// "all" or "other-first", asks for other.
+// fingerprint and run's stale code passed the check), then v1 and v2 in "gen"
+// mode, where A2 reads a class the application loader defined: it isn't
+// cached, so the second run sees v2's Gen. The second argument is "all",
+// "other-first" or "gen".
 public class DefMain {
     static class DirLoader extends ClassLoader {
         final Path dir;
@@ -27,6 +30,15 @@ public class DefMain {
 
     public static void main(String[] args) throws Exception {
         DirLoader l = new DirLoader(Path.of(args[0]));
+        if (args.length > 1 && args[1].equals("gen")) {
+            // Gen through the application loader (uncacheable), then A2, which
+            // DirLoader defines and which extends Gen and reads its field: A2
+            // must be laid out and compiled every run, since Gen's bytes can't
+            // be checked
+            MethodHandles.lookup().defineClass(Files.readAllBytes(Path.of(args[0], "Gen.class")));
+            System.out.println(l.loadClass("A2").getMethod("run").invoke(null));
+            return;
+        }
         Class<?> a = l.loadClass("d.A");
         // "other-first" calls other before run: an uncached method of a
         // restored class first, then a cached one

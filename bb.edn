@@ -425,15 +425,19 @@
                     ;; cached by their bytes, and a change to B makes A's cached methods,
                     ;; which read B, compile again
                     _ (shell (str "javac -d " lc "/def-main test/libcache/def/DefMain.java"))
-                    _ (shell (str "javac -d " lc "/def-v1 test/libcache/def/v1/d/A.java test/libcache/def/v1/d/B.java test/libcache/def/v1/d/F.java test/libcache/def/v1/d/S.java"))
+                    _ (shell (str "javac -d " lc "/def-v1 test/libcache/def/v1/d/A.java test/libcache/def/v1/d/B.java test/libcache/def/v1/d/F.java test/libcache/def/v1/d/S.java"
+                                  " test/libcache/def/v1/Gen.java test/libcache/def/v1/A2.java"))
                     _ (doseq [v ["v2" "v3"]]
                         (fs/create-dirs (str lc "/def-" v "/d"))
                         (shell (str "javac -d " lc "/def-" v " test/libcache/def/" v "/d/B.java test/libcache/def/" v "/d/F.java test/libcache/def/" v "/d/S.java"))
-                        ;; A as compiled against v1, as a jar built earlier would hold it
-                        (fs/copy (str lc "/def-v1/d/A.class") (str lc "/def-" v "/d/A.class") {:replace-existing true}))
+                        ;; A and A2 as compiled against v1, as a jar built earlier would hold them
+                        (fs/copy (str lc "/def-v1/d/A.class") (str lc "/def-" v "/d/A.class") {:replace-existing true})
+                        (fs/copy (str lc "/def-v1/A2.class") (str lc "/def-" v "/A2.class") {:replace-existing true}))
+                    _ (shell (str "javac -d " lc "/def-v2 test/libcache/def/v2/Gen.java"))
                     def-fails (->> [["def-v1" "v1" 0 nil] ["def-v1" "v1" 6 0] ["def-v2" "v2" 5 10] ["def-v2" "v2all" 6 10 "all"] ["def-v1" "v1" 5 10]
                                     ["def-v3" "v3" 4 30] ["def-v1" "v1" 4 30] ["def-v1" "v1" 6 0]
-                                    ["def-v2" "v2other" 5 10 "other-first"] ["def-v2" "v2other" 6 0 "other-first"]]
+                                    ["def-v2" "v2other" 5 10 "other-first"] ["def-v2" "v2other" 6 0 "other-first"]
+                                    ["def-v1" "v1gen" 0 nil "gen"] ["def-v2" "v2gen" 0 nil "gen"]]
                                    (map-indexed
                                     (fn [i [dir v restores compiles & more]]
                                       (let [{:keys [out err exit]} (apply run-limited 300 {:label (str "libcache-def-" (inc i)) :err :string
@@ -525,7 +529,7 @@
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
-                                  (map (fn [i] (str "libcache-def-" i)) (range 1 11))
+                                  (map (fn [i] (str "libcache-def-" i)) (range 1 13))
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
