@@ -294,7 +294,57 @@
 
 (defnative "java/lang/Class.getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;" (n)
   (jmirror-of (jstring->scheme n)))
-(defnative "java/lang/Class.desiredAssertionStatus0(Ljava/lang/Class;)Z" (c) 0)
+;; Assertions, from champaca.main's -ea, -da, -esa and -dsa options
+;; (set-assertion-directives!, before the boot, as -D properties are): each
+;; directive is "c" (a class), "p" (a package, "" the unnamed one), "u" (the
+;; default for classes the boot loader didn't define) or "s" (for those it
+;; did), then "+" or "-", then the name, slashed. HotSpot's JavaAssertions:
+;; the class's own directive, else its most specific package's, else the
+;; default, the last directive of each winning; a platform loader's class is
+;; a user class here as there.
+(define assertion-directives '())   ; ((kind enabled? name) ...), latest first
+(define (set-assertion-directives! s)
+  (set! assertion-directives
+        (let split ([i 0] [start 0] [acc '()])
+          (cond [(fx= 0 (string-length s)) acc]
+                [(or (fx= i (string-length s)) (char=? (string-ref s i) #\nul))
+                 (let ([d (substring s start i)])
+                   (let ([acc (cons (list (string-ref d 0) (char=? (string-ref d 1) #\+) (substring d 2 (string-length d))) acc)])
+                     (if (fx= i (string-length s)) acc (split (fx+ i 1) (fx+ i 1) acc))))]
+                [else (split (fx+ i 1) start acc)]))))
+(define (assertion-directive kind name)
+  (find (lambda (d) (and (char=? (car d) kind) (string=? (caddr d) name))) assertion-directives))
+(define (assertions-enabled? cname system?)
+  (let ([pkg (package-dir cname)])
+    (cond [(assertion-directive #\c cname) => cadr]
+          ;; the package, then each enclosing one; a class in the unnamed
+          ;; package matches -ea:... alone, one in a package never does
+          [(let loop ([p pkg])
+             (or (assertion-directive #\p p)
+                 (let ([i (let back ([j (fx- (string-length p) 1)])
+                            (cond [(fx< j 0) #f] [(char=? (string-ref p j) #\/) j] [else (back (fx- j 1))]))])
+                   (and i (loop (substring p 0 i))))))
+           => cadr]
+          [(find (lambda (d) (char=? (car d) (if system? #\s #\u))) assertion-directives) => cadr]
+          [else #f])))
+(defnative "java/lang/Class.desiredAssertionStatus0(Ljava/lang/Class;)Z" (c)
+  (let ([k (mirror-class c)])
+    (if (assertions-enabled? (jclass-cname k) (not (class-loader-of k))) 1 0)))
+;; ClassLoader's own maps start from these (initializeJavaAssertionMaps):
+;; classes and packages dotted, in command-line order, so the last one wins
+(defnative "java/lang/ClassLoader.retrieveDirectives()Ljava/lang/AssertionStatusDirectives;" ()
+  (let* ([d (construct "java/lang/AssertionStatusDirectives" "()V")]
+         [in-order (reverse assertion-directives)]
+         [of (lambda (kind) (filter (lambda (x) (char=? (car x) kind)) in-order))]
+         [names (lambda (ds) (make-jarr "Ljava/lang/String;" (list->vector (map (lambda (x) (jstring (slashes->dots (caddr x)))) ds))))]
+         [flags (lambda (ds) (make-jarr "Z" (list->vector (map (lambda (x) (if (cadr x) 1 0)) ds))))]
+         [set (lambda (f v) (jslot-set! d (slot-of "java/lang/AssertionStatusDirectives" f) v))])
+    (set "classes" (names (of #\c)))
+    (set "classEnabled" (flags (of #\c)))
+    (set "packages" (names (of #\p)))
+    (set "packageEnabled" (flags (of #\p)))
+    (set "deflt" (let ([u (find (lambda (x) (char=? (car x) #\u)) assertion-directives)]) (if (and u (cadr u)) 1 0)))
+    d))
 (defnative "java/lang/Class.isArray()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'array) 1 0))
 (defnative "java/lang/Class.isPrimitive()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'prim) 1 0))
 (defnative "java/lang/Class.isInterface()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'interface) 1 0))

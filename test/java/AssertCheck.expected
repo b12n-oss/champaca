@@ -1,0 +1,13 @@
+java.lang.String=false
+java.lang.Integer=true
+java.sql.Date=false
+AssertCheck=true
+AcOff=false
+champaca.lib.Overloads=true
+champaca.lib.Tag=false
+assert here: AssertionError: x is 1
+assert in AcOff: skipped
+after setClassAssertionStatus: AcOff=false champaca.lib.Overloads=true champaca.lib.Tag=false AssertCheck=true
+assert in AcLate: skipped
+after clearAssertionStatus: AssertCheck=false champaca.lib.Overloads=false
+assert in AcLater: skipped

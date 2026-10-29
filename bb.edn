@@ -216,7 +216,8 @@
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
                                 (if ok [] ["-jar"]))
-                    ;; launcher options: -D before -jar, an option java doesn't know, and the ignored ones
+                    ;; launcher options: -D before -jar, an option java doesn't know, the
+                    ;; ignored ones, -cp and its spellings, and the accepted ones
                     opt-fails (let [{:keys [out exit]} (run-limited 300 {:label "jarmain-opts"} (jolt-bin) "-M" "-m" "champaca.main"
                                                                     "-Dchampaca.test.plain=bar" "-jar" "target/app.jar" "a" "b")
                                     jar-ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))
@@ -227,11 +228,38 @@
                                                                     "-Xmx512m" "-XX:+UseG1GC" "target/classes" "Hello")
                                     ignored-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected"))
                                                     (str/includes? err "champaca: ignoring option -Xmx512m; it has no counterpart here\n")
-                                                    (str/includes? err "champaca: ignoring option -XX:+UseG1GC; it has no counterpart here\n"))]
+                                                    (str/includes? err "champaca: ignoring option -XX:+UseG1GC; it has no counterpart here\n"))
+                                    ;; -cp and its spellings take the main class first; a dir/*
+                                    ;; entry is the jars in it; -jar ignores -cp, as java does
+                                    _ (fs/delete-tree "target/wild")
+                                    _ (fs/create-dirs "target/wild")
+                                    _ (doseq [j ["lib.jar" "lib2.jar"]] (fs/copy (str "target/" j) (str "target/wild/" j)))
+                                    _ (spit "target/wild/notes.txt" "not a jar\n")
+                                    jar-check (slurp "test/java/JarCheck.expected")
+                                    cp-ok (every? (fn [args]
+                                                    (let [{:keys [out exit]} (apply run-limited 300 {:label "cp-option"} (jolt-bin) "-M" "-m" "champaca.main" args)]
+                                                      (and (zero? exit) (= out jar-check))))
+                                                  [["-cp" "target/classes:target/lib.jar:target/lib2.jar" "JarCheck"]
+                                                   ["-classpath" "nothere" "--class-path=target/classes:target/wild/*" "JarCheck"]])
+                                    {:keys [err exit]} (run-limited 300 {:label "cp-missing" :err :string} (jolt-bin) "-M" "-m" "champaca.main" "-cp")
+                                    cp-missing-ok (and (= 1 exit) (= err "Error: -cp requires class path specification\n"))
+                                    {:keys [out exit]} (run-limited 300 {:label "cp-jar"} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-cp" "nothere" "-jar" "target/app.jar" "a" "b")
+                                    cp-jar-ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))
+                                    {:keys [out err exit]} (run-limited 300 {:label "accepted-options" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-server" "-client" "-Xshare:auto" "target/classes" "Hello")
+                                    accepted-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected"))
+                                                     (= err "champaca: ignoring option -Xshare:auto; it has no counterpart here\n"))]
                                 (println (if jar-ok "PASS" "FAIL") "-D before -jar target/app.jar")
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
                                 (println (if ignored-ok "PASS" "FAIL") "-Xmx and -XX: ignored with a warning")
-                                (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])))
+                                (println (if cp-ok "PASS" "FAIL") "-cp, -classpath and --class-path= with a dir/* entry (JarCheck)")
+                                (println (if cp-missing-ok "PASS" "FAIL") "-cp without a class path")
+                                (println (if cp-jar-ok "PASS" "FAIL") "-cp before -jar is ignored")
+                                (println (if accepted-ok "PASS" "FAIL") "-server and -client accepted, -Xshare: ignored with a warning")
+                                (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])
+                                        (when-not cp-ok ["-cp"]) (when-not cp-missing-ok ["-cp missing"]) (when-not cp-jar-ok ["-cp -jar"])
+                                        (when-not accepted-ok ["accepted options"])))
                     ;; a warm start whose boot loads classes the cached boot never
                     ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
                     ;; plain runs that use them, on a cache of their own
@@ -452,7 +480,7 @@
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
                     fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails lam-fails edit-fails fix-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
+                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]

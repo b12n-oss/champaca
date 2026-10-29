@@ -1547,6 +1547,8 @@
   (when-let [c (:java-command @state)] (s/call "set-java-command!" c))
   (when-let [ps (seq (:command-line-properties @state))]
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
+  (when-let [ds (seq (:assertion-directives @state))]
+    (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
   (s/call "set-define-class-hook!" define-class!)
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
@@ -1697,42 +1699,92 @@
         status)
       status)))
 
+(defn- launcher-error
+  "The java launcher's refusal of an option: its text on stderr, status 1."
+  [& lines]
+  (binding [*out* *err*] (run! println lines))
+  (System/exit 1))
+
+(defn- assertion-directive
+  "-ea, -da and their long forms as natives.ss set-assertion-directives!
+  reads them: kind (u for the default, c a class, p a package, \"\" the
+  unnamed one), + or -, the name slashed. nil for any other option."
+  [a]
+  (let [[_ flag arg] (or (re-matches #"-(ea|da|enableassertions|disableassertions)(?::(.*))?" a) [])
+        on (if (#{"ea" "enableassertions"} flag) "+" "-")]
+    (when flag
+      (cond (nil? arg) (str "u" on)
+            (str/ends-with? arg "...") (str "p" on (str/replace (subs arg 0 (- (count arg) 3)) "." "/"))
+            :else (str "c" on (str/replace arg "." "/"))))))
+
 (defn- jvm-options
-  "The options before the class path or -jar, as the java launcher reads
-  them: -Dkey=value pairs (-Dkey is an empty value, a bare -D nothing), and
-  the rest of argv. A heap or stack size (-Xmx, -Xms, -Xmn, -Xss) and any
-  -XX: flag are ignored with a warning, since start scripts pass them and
-  most tune the VM only; any other option is the launcher's Unrecognized
-  option."
+  "The options before the main class or -jar, as the java launcher reads
+  them, as {:props [[k v]...] :classpath s-or-nil :assertions [...] :argv rest}:
+  -Dkey=value pairs (-Dkey is an empty value, a bare -D nothing); -cp,
+  -classpath and --class-path (the last one wins); -ea/-da with a class, a
+  package... or nothing, and -esa/-dsa, in order (assertion-directive);
+  -server and -client, which the launcher accepts and ignores. A heap or
+  stack size (-Xmx, -Xms, -Xmn, -Xss), -Xshare: and any -XX: flag are
+  ignored with a warning, since start scripts pass them and they tune only
+  the VM; any other option is the launcher's Unrecognized option."
   [argv]
-  (loop [argv argv props []]
+  (loop [argv argv opts {:props [] :classpath nil :assertions []}]
     (let [a (first argv)]
-      (cond (or (nil? a) (= a "-jar") (not (str/starts-with? a "-"))) [props argv]
+      (cond (or (nil? a) (= a "-jar") (not (str/starts-with? a "-"))) (assoc opts :argv argv)
             (str/starts-with? a "-D")
             (let [kv (subs a 2) i (str/index-of kv "=")
                   k (if i (subs kv 0 i) kv)]
-              (recur (rest argv) (if (= "" k) props (conj props [k (if i (subs kv (inc i)) "")]))))
-            (or (re-matches #"-X(mx|ms|mn|ss)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a))
+              (recur (rest argv) (cond-> opts (not= "" k) (update :props conj [k (if i (subs kv (inc i)) "")]))))
+            (#{"-cp" "-classpath" "--class-path"} a)
+            (if-let [cp (second argv)]
+              (recur (nnext argv) (assoc opts :classpath cp))
+              (launcher-error (str "Error: " a " requires class path specification")))
+            (str/starts-with? a "--class-path=") (recur (rest argv) (assoc opts :classpath (subs a 13)))
+            (assertion-directive a) (recur (rest argv) (update opts :assertions conj (assertion-directive a)))
+            (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
+            (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
+            (#{"-server" "-client"} a) (recur (rest argv) opts)
+            (or (re-matches #"-X(mx|ms|mn|ss)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a))
             (do (binding [*out* *err*] (println (str "champaca: ignoring option " a "; it has no counterpart here")))
-                (recur (rest argv) props))
+                (recur (rest argv) opts))
             :else
-            (binding [*out* *err*]
-              (println (str "Unrecognized option: " a))
-              (println "Error: Could not create the Java Virtual Machine.")
-              (println "Error: A fatal exception has occurred. Program will exit.")
-              (System/exit 1))))))
+            (launcher-error (str "Unrecognized option: " a)
+                            "Error: Could not create the Java Virtual Machine."
+                            "Error: A fatal exception has occurred. Program will exit.")))))
+
+(defn- expand-class-path
+  "A class path string as a list of entries, a dir/* (or a bare *) standing
+  for the jars in that directory, .jar or .JAR, as the java launcher expands
+  it; none is nothing. Sorted by name: the launcher takes the directory's own
+  order, which its documentation leaves unspecified."
+  [cp]
+  (mapcat (fn [e]
+            (if (or (= e "*") (str/ends-with? e "/*"))
+              (let [dir (if (= e "*") "." (subs e 0 (- (count e) 2)))
+                    names (some-> (io/file dir) .list seq sort)]
+                (for [n names
+                      :when (or (str/ends-with? n ".jar") (str/ends-with? n ".JAR"))
+                      :when (.isFile (io/file dir n))]
+                  (if (= e "*") n (str dir "/" n))))
+              [e]))
+          (str/split cp #":")))
 
 (defn -main [& argv]
-  (let [[props argv] (jvm-options argv)
-        _ (swap! state assoc :command-line-properties props)
-        [cp cname & args] argv]
+  (let [{:keys [props classpath assertions argv]} (jvm-options argv)
+        _ (swap! state assoc :command-line-properties props :assertion-directives assertions)
+        ;; with -cp the main class comes first; without, champaca's own
+        ;; form, the class path first (-jar ignores -cp, as java does)
+        [cp cname & args] (if (and classpath (not= "-jar" (first argv))) (cons classpath argv) argv)]
     (when (and (= cp "-jar") (not cname))
       (binding [*out* *err*] (println "Error: -jar requires jar file specification"))
       (System/exit 1))
     (when-not cname
       (binding [*out* *err*]
-        (println "usage: jolt -M -m champaca.main [-Dkey=value...] <classpath[:entry...] (dirs and jars)> <MainClass> [args...]")
-        (println "   or: jolt -M -m champaca.main [-Dkey=value...] -jar <jarfile> [args...]"))
+        (println "usage: jolt -M -m champaca.main [options] <classpath[:entry...] (dirs, jars, dir/*)> <MainClass> [args...]")
+        (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
+        (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
+        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa; -server, -client accepted;")
+        (println "         -Xmx, -Xms, -Xmn, -Xss, -Xshare:, -XX: ignored with a warning"))
       (System/exit 2))
     (if (= cp "-jar")
       ;; as java -jar: the manifest's Main-Class, the jar alone as the class
@@ -1753,4 +1805,4 @@
       (do
         ;; sun.java.command, as the launcher has it: the main class as given, then the arguments
         (swap! state assoc :java-command (str/join " " (cons cname args)))
-        (System/exit (run (str/split cp #":") (str/replace cname "." "/") (vec args)))))))
+        (System/exit (run (vec (expand-class-path cp)) (str/replace cname "." "/") (vec args)))))))
