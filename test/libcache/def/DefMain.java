@@ -3,9 +3,16 @@ import java.nio.file.*;
 // test/libcache/def: classes a loader of the program's own defines, cached by
 // their bytes. DirLoader reads d/A and d/B from the directory given, which
 // is not on the class path, and defines them. bb test runs it over v1, v1
-// again (A and B restored), v2 of B alone (A restored, but its cached
+// again (every class restored), v2 of B alone (A restored, but its cached
 // methods read B, whose bytes changed: they compile again and see v2's
-// field layout and values), then v1 twice.
+// field layout and values), v2 again calling other too (compiled anew, not
+// the cached code from the first run), v1, v3 of S alone (A's superclass: A
+// isn't restored, since its registration lays A's fields out after S's), v1
+// twice, then v2 twice calling other first (other compiled against v1 in run
+// 4 was dropped with run's code in run 5, so this run compiles both anew and
+// prints v2's values; before, compiling other first recorded B's new
+// fingerprint and run's stale code passed the check). The second argument,
+// "all" or "other-first", asks for other.
 public class DefMain {
     static class DirLoader extends ClassLoader {
         final Path dir;
@@ -21,7 +28,11 @@ public class DefMain {
     public static void main(String[] args) throws Exception {
         DirLoader l = new DirLoader(Path.of(args[0]));
         Class<?> a = l.loadClass("d.A");
+        // "other-first" calls other before run: an uncached method of a
+        // restored class first, then a cached one
+        if (args.length > 1 && args[1].equals("other-first")) System.out.println(a.getMethod("other").invoke(null));
         System.out.println(a.getMethod("run").invoke(null));
+        if (args.length > 1 && args[1].equals("all")) System.out.println(a.getMethod("other").invoke(null));
         System.out.println((a.getClassLoader() == l) + " " + (l.loadClass("d.B").getClassLoader() == l));
     }
 }

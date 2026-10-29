@@ -1231,7 +1231,9 @@
           ;; compiled; a method reading one that can't be checked isn't kept
           origin (if reads
                    (if-let [deps (user-deps (conj @reads cname) (= :defined (:origin info)))]
-                     (do (swap! state update-in [:classes cname :deps] merge (dissoc deps cname))
+                     ;; a fingerprint already recorded stays: were a dependency
+                     ;; to differ from it, the next run's check must fail
+                     (do (swap! state update-in [:classes cname :deps] #(merge-with (fn [old _] old) % (dissoc deps cname)))
                          :user)
                      (do (when (trace?)
                            (binding [*out* *err*]
@@ -1322,8 +1324,13 @@
 
 (defn jit! [cname mname desc]
   (let [info (thaw! cname)
-        unit (get (:cached-methods info) (str mname desc))]
-    (when-not (and unit (deps-still-hold! cname info) (load-unit! unit)) ; else compiled by an earlier run
+        unit (get (:cached-methods info) (str mname desc))
+        ;; a restored class's dependencies are checked before any method of
+        ;; it runs, cached or not: compiling an uncached one first would
+        ;; record a changed dependency's new fingerprint, and the cached
+        ;; ones, compiled against the old, would then pass the check
+        held? (or (empty? (:cached-methods info)) (deps-still-hold! cname info))]
+    (when-not (and unit held? (load-unit! unit)) ; else compiled by an earlier run
       (compile-method! cname mname desc))))
 
 (defn- stats []
