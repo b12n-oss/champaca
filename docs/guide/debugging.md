@@ -7,7 +7,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | Variable | What it does |
 |---|---|
 | `CHAMPACA_BT=1` | keeps a shadow stack of Java frames, so an uncaught exception prints where it happened; names each native champaca lacks on stderr as it's hit, and each class or method a translated method names that isn't there; says why an NPE got no message |
-| `CHAMPACA_STATS=1` | prints how many classes were loaded (and how many of them came from the library cache), methods compiled (and how many of classpath classes) and cached units loaded, after boot and at exit |
+| `CHAMPACA_STATS=1` | prints how many classes were loaded (and how many of them came from the library cache), methods compiled (and how many of classpath classes) and cached units loaded, after boot and at exit; when a loader of the program's own defined classes, a second line says how many weren't restored from the cache and why (new, changed, or depending on a class the cache can't check) and how many classes had their cached methods dropped for a changed dependency |
 | `CHAMPACA_PROF=1` | prints how long each phase took, after boot and again when `main` returns |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |

@@ -1957,7 +1957,9 @@
 ;; ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
 ;; (JavaLangAccess.defineClass) and Unsafe.defineClass0 end in one family of
 ;; natives, which hand the bytes to main.clj (define-class-hook) to parse,
-;; link and register as a class of this run, never cached. The bytes cross
+;; link and register as a class of this run, or to restore from the library
+;; cache when a loader of the program's own (not a built-in one) defines a
+;; named, non-hidden class from bytes an earlier run saw. The bytes cross
 ;; as a Latin-1 string, since a byte array doesn't. The defining loader is
 ;; kept (class-loaders, for getClassLoader and findLoadedClass) and a hidden
 ;; class's name marked (hidden-classes).
@@ -1997,7 +1999,9 @@
          ;; the JVM can't define is a LinkageError
          [r (guard (e [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
               (parameterize ([resolving-loader loader])
-                (define-class-hook name (bytes->latin1 v off len) hidden?)))]
+                (define-class-hook name (bytes->latin1 v off len) hidden?
+                                   (and loader (not hidden?)
+                                        (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader"))))))]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])

@@ -113,7 +113,7 @@ bb site:build                                         # build the docs site into
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
 CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit
                         # (and say why an NPE got no message)
-CHAMPACA_STATS=1 ...    # print classes loaded (and how many from the library cache), methods compiled, cached units loaded
+CHAMPACA_STATS=1 ...    # print classes loaded (and how many from the library cache), methods compiled, cached units loaded, loader-defined classes the cache missed
 CHAMPACA_PROF=1 ...     # time spent per phase (parse, register, codegen, compile, cache), after boot and when main returns
 CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
 CHAMPACA_NPE_STRICT=1 ...    # throw when an NPE message can't be built, instead of a null message (bb test sets it)

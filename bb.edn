@@ -421,6 +421,36 @@
                                     doall
                                     (remove nil?)
                                     vec)
+                    ;; classes a loader of the program's own defines (test/libcache/def):
+                    ;; cached by their bytes, and a change to B makes A's cached methods,
+                    ;; which read B, compile again
+                    _ (shell (str "javac -d " lc "/def-main test/libcache/def/DefMain.java"))
+                    _ (shell (str "javac -d " lc "/def-v1 test/libcache/def/v1/d/A.java test/libcache/def/v1/d/B.java test/libcache/def/v1/d/F.java"))
+                    _ (fs/create-dirs (str lc "/def-v2/d"))
+                    _ (shell (str "javac -cp " lc "/def-v1 -d " lc "/def-v2 test/libcache/def/v2/d/B.java test/libcache/def/v2/d/F.java"))
+                    _ (fs/copy (str lc "/def-v1/d/A.class") (str lc "/def-v2/d/A.class") {:replace-existing true})
+                    def-fails (->> [["def-v1" "v1" 0 nil] ["def-v1" "v1" 5 0] ["def-v2" "v2" 4 10] ["def-v1" "v1" 4 10] ["def-v1" "v1" 5 0]]
+                                   (map-indexed
+                                    (fn [i [dir v restores compiles]]
+                                      (let [{:keys [out err exit]} (run-limited 300 {:label (str "libcache-def-" (inc i)) :err :string
+                                                                                     :extra-env {"CHAMPACA_NPE_STRICT" "1" "CHAMPACA_STATS" "1"}}
+                                                                                (jolt-bin) "-M" "-m" "champaca.main" (str lc "/def-main") "DefMain" (str lc "/" dir))
+                                            restored (some-> (re-seq (re-pattern "\\((\\d+) from the library cache\\)") (str err)) last second parse-long)
+                                            ;; a repeat run compiles nothing: A's cached methods hold, the
+                                            ;; lambda over F included; after a change to B they compile again
+                                            compiled (some-> (re-seq (re-pattern "(\\d+) methods compiled") (str err)) last second parse-long)
+                                            ok (and (zero? exit) (= out (slurp (str "test/libcache/def/" v ".expected")))
+                                                    (or (not cache-on) (and (>= (or restored 0) restores)
+                                                                            (or (nil? compiles) (<= (or compiled 999) compiles)))))]
+                                        (println (if ok "PASS" "FAIL") (str "test/libcache/def run " (inc i) " (" dir (when (pos? restores) (str ", at least " restores " from the cache"))
+                                                                              (when compiles (str ", at most " compiles " methods compiled")) ")"))
+                                        (when-not ok
+                                          (println (str "  exit " exit ", out " (pr-str out) ", restored " restored ", compiled " compiled))
+                                          (when-not (zero? exit) (print err) (flush)))
+                                        (when-not ok (str "libcache-def-" (inc i))))))
+                                   doall
+                                   (remove nil?)
+                                   vec)
                     ;; a class file cut short, then whole (test/libcache/fix): the
                     ;; method whose code throws ClassFormatError for it isn't cached,
                     ;; so the run after the file is fixed makes the object
@@ -487,10 +517,11 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails lam-fails edit-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
+                                  (map (fn [i] (str "libcache-def-" i)) (range 1 6))
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}

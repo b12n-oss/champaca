@@ -62,9 +62,9 @@ image.
 
 Classes that a framework's own class loader defines (the fat jar's nested
 jars, under Spring Boot's launcher, and the Quarkus fast-jar's application,
-under its RunnerClassLoader) aren't kept in the startup cache, so their
-code is compiled on every run. The extracted jar and the uber-jar load from
-the class path, which the cache keeps.
+under its RunnerClassLoader) are kept in the startup cache by their bytes,
+as the class path's are, with their dependencies checked through the loader.
+The extracted jar and the uber-jar load from the class path.
 
 ## Results
 
@@ -101,10 +101,12 @@ to six times as long as HotSpot's, for both frameworks, and needs six to seven
 times its memory. Spring AOT saves champaca a little more than it saves HotSpot,
 21% of the start against 17%. The cold rows include the JDK's own first boot, every method of the
 framework translated and compiled once and the cache written. The fat jar
-and the fast-jar sit between the two, because the classes their own loaders
-define compile again on every run (see the variants above). Upstream's
-OpenLDK images can't keep such classes either, which is why they run the
-class path for Spring Boot and the uber-jar for Quarkus. For scale, upstream measured its OpenLDK warm
+and the fast-jar sit between the two: their loaders' classes come from the
+cache too, but the loaders read their nested jars on every run, and a class
+whose cached code depends on one the cache can't check compiles again (see
+the variants above). Upstream's OpenLDK images can't keep loader-defined
+classes at all, which is why they run the class path for Spring Boot and the
+uber-jar for Quarkus. For scale, upstream measured its OpenLDK warm
 image at 4.3 s (Spring Boot) and 1.5 s (Quarkus) on a 16-CPU Xeon E5-2670,
 with HotSpot at 2.9 s and 1.3 s on the same machine, so the two projects'
 numbers aren't comparable directly; the HotSpot rows are the yardstick.

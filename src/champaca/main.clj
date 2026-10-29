@@ -501,7 +501,9 @@
   [info]
   (case (:origin info)
     :jdk :jdk
-    :user (when (:src-fp info) :user)
+    ;; a class a loader of the program's own defined is kept like a jar's
+    ;; (define-class!), under the class path's file
+    (:user :defined) (when (:src-fp info) :user)
     nil))
 
 (defn- record!
@@ -701,8 +703,10 @@
   (let [user (timed :class-bytes #(user-class-bytes cname))
         bytes (or user (timed :class-bytes #(jdk-class-bytes cname))
                   ;; a loader of the program's own may define it, when the
-                  ;; class naming it is that loader's (natives.ss); nil then
-                  (when (boolean (s/call "ask-resolving-loader" cname)) ::defined)
+                  ;; class naming it is that loader's (natives.ss); nil then.
+                  ;; The time is the loader's own code running (reading its
+                  ;; jars) and the define, restored from the cache or not
+                  (when (boolean (timed :loader #(s/call "ask-resolving-loader" cname))) ::defined)
                   (throw (ex-info (str "class not found: " cname) {:class cname})))]
     (when-not (= bytes ::defined)
       ;; a classpath class is cached only through the library cache
@@ -899,18 +903,36 @@
   with its fingerprint (class-source). JDK classes need none, since the
   cache key covers the JDK, but a synthetic one (champaca/, a lambda's)
   has no bytes to make it again from, so it is :present, there when the
-  entry is used. nil when one can't be checked later (one a loader
-  defined, one not in the class table), which keeps the entry out of the
-  cache."
-  [names]
+  entry is used. nil when one can't be checked later (one not in the class
+  table, or one a loader defined, unless defined? says the entry is a
+  loader-defined class's own, whose dependencies on others are checked by
+  their fingerprints when its methods are first called: deps-still-hold!),
+  which keeps the entry out of the cache."
+  [names & [defined?]]
   (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (string? e) :jdk (:origin e))))]
     (when (every? origin names)
       (reduce (fn [acc n]
                 (case (origin n)
                   :jdk (if (str/starts-with? n "champaca/") (assoc acc n :present) acc)
                   :user (if-let [fp (:fp (class-source n))] (assoc acc n fp) (reduced nil))
+                  :defined (if-let [fp (when defined? (get-in @state [:classes n :src-fp]))] (assoc acc n fp) (reduced nil))
                   (reduced nil)))
               {} (distinct (mapcat ancestry names))))))
+
+(defn- uncheckable-dep
+  "The first of names, or of their ancestry, that user-deps can't record a
+  fingerprint for (why an entry isn't cached), or nil."
+  [names defined?]
+  (let [e (fn [n] (get-in @state [:classes n]))]
+    (or (first (remove e names))
+        (first (filter (fn [n] (let [x (e n)]
+                                 (and (not (string? x))
+                                      (case (:origin x)
+                                        :jdk false
+                                        :user (not (:fp (class-source n)))
+                                        :defined (not (and defined? (:src-fp x)))
+                                        true))))
+                       (distinct (mapcat ancestry names)))))))
 
 (defn- library-cache-keys
   "What a classpath class's entry carries for the library cache once
@@ -1014,13 +1036,13 @@
   Slot 0 holds the closure; every SAM key maps to champaca/Lambda.invoke,
   which calls it. Its vtable takes the interfaces' default methods, so its
   name carries the fingerprints of every classpath interface among them
-  and their superinterfaces (user-deps): a classpath interface that
-  changes between runs gets a class of its own instead of an earlier run's
-  cached one. One whose interfaces can't be checked (a defined one) isn't
+  and their superinterfaces (user-deps), a loader-defined interface's too: an
+  interface that changes between runs gets a class of its own instead of an
+  earlier run's cached one. One whose interfaces can't be checked isn't
   cached."
   [ifaces sam-keys]
   (run! ensure-loaded! ifaces)
-  (let [deps (user-deps ifaces)
+  (let [deps (user-deps ifaces true)
         n (str "champaca/Lambda$" (str/replace (first ifaces) "/" "$") "$"
                (Math/abs (hash (if (empty? deps) [ifaces sam-keys] [ifaces sam-keys deps]))))]
     (if (get-in @state [:classes n])
@@ -1061,6 +1083,8 @@
 
 (def ^:private hidden-counter (atom 0x1000))
 
+(declare defined-jar restore-defined-class! dep-matches?)
+
 (defn- define-class!
   "ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
   and Unsafe.defineClass0 (natives.ss define-class!): parse, link and
@@ -1071,31 +1095,107 @@
   class table here, so a second definition of a name is a duplicate whatever
   its loader), and the Scheme side throws the JVM's error for each. A hidden
   class is named <name>/0x<n>, as HotSpot names one, and renamed inside.
-  Defined classes are never cached."
-  [given text hidden?]
+  With cacheable? (a named, non-hidden class from a loader of the program's
+  own), the class is kept in the library cache like a jar's, keyed by its
+  bytes' fingerprint under the class path's file (defined-jar), and an
+  earlier run's entry for the same bytes is restored instead of parsing
+  (restore-defined-class!)."
+  [given text hidden? cacheable?]
   (let [bs (.getBytes ^String text "ISO-8859-1")
-        c (try (cf/parse bs)
-               (catch Exception e
-                 ;; a wrong magic number's text ends with the name the caller
-                 ;; gave, as HotSpot's, or <Unknown>
-                 {:bad (let [m (or (ex-message e) (str (class e)))]
-                         (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))]
-    (cond
-      (:bad c) (str "bad " (:bad c))
-      (and given (not= given (:name c))) (str "wrong " (:name c))
-      (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
-      :else
-      (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
-            n (:name c)
-            info (class-map n c :defined)]
-        ;; bytes class-source held for a classpath class of this name won't be parsed
-        (swap! state update :dir-bytes dissoc n)
-        (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
-        (let [linked (link info)]
-          ;; the defined bytes are kept for NPE messages and frames, once the class is in
-          (swap! state #(-> % (assoc-in [:classes n] linked) (assoc-in [:defined-bytes n] bs)))
-          (scheme! (registration-text linked) :interpret))
-        (str "ok " n)))))
+        fp (when (and cacheable? given) (bytes-fp bs))
+        dj (when fp (defined-jar))]
+    (or (when (and fp (not (get-in @state [:classes given])))
+          (restore-defined-class! given bs fp dj))
+        (let [c (try (cf/parse bs)
+                     (catch Exception e
+                       ;; a wrong magic number's text ends with the name the caller
+                       ;; gave, as HotSpot's, or <Unknown>
+                       {:bad (let [m (or (ex-message e) (str (class e)))]
+                               (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))]
+          (cond
+            (:bad c) (str "bad " (:bad c))
+            (and given (not= given (:name c))) (str "wrong " (:name c))
+            (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
+            :else
+            (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
+                  n (:name c)
+                  info (class-map n c :defined)]
+              ;; bytes class-source held for a classpath class of this name won't be parsed
+              (swap! state update :dir-bytes dissoc n)
+              (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
+              ;; as ensure-loaded! does for a classpath class: the link and the
+              ;; registration record what they read, which the entry depends on
+              (let [reads (when fp (volatile! #{}))
+                    ;; its own fingerprint goes in first: user-deps reads it
+                    ;; for the class itself, and for a class depending on it
+                    linked (cond-> (binding [*reads* reads] (link info)) fp (assoc :src-fp fp :src-jar dj))]
+                ;; the defined bytes are kept for NPE messages and frames, once the class is in
+                (swap! state #(-> % (assoc-in [:classes n] linked) (assoc-in [:defined-bytes n] bs)))
+                (let [text (binding [*reads* reads] (registration-text linked))
+                      deps (when fp (user-deps (conj @reads n) true))
+                      _ (when fp
+                          (when-not deps (swap! state update :defined-uncacheable (fnil inc 0)))
+                          (when (and (not deps) (trace?))
+                            (binding [*out* *err*] (println "define" n "not cached: it depends on" (uncheckable-dep (conj @reads n) true)))))
+                      ;; without checkable dependencies it isn't cached, and
+                      ;; without a fingerprint nothing depending on it is
+                      linked (get-in (swap! state update-in [:classes n]
+                                            #(if deps (assoc % :deps (dissoc deps n)) (dissoc % :src-fp :src-jar)))
+                                     [:classes n])]
+                  (record! (cache-origin linked) [n] {:text text})
+                  (scheme! text :interpret)))
+              (str "ok " n)))))))
+
+(defn- defined-jar
+  "The library cache's key for the classes a program's own loaders define:
+  one file per class path, the bytes having no path of their own."
+  []
+  (or (:defined-jar @state)
+      (let [j (str "defined:" (str/join ":" (map jar-path (:classpath @state))))]
+        (swap! state assoc :defined-jar j)
+        j)))
+
+(defn- restore-defined-class!
+  "Register the class a loader is defining, n from bytes bs with fingerprint
+  fp, from the library cache's file dj: when an earlier run cached a class of
+  that name from the same bytes and the classes it inherits from are what
+  they were, \"ok <name>\"; else nil, the stale entry dropped so the save
+  rewrites it, and the class parses as usual. What its methods read is
+  checked when one is first called (deps-still-hold!)."
+  [n bs fp dj]
+  (if-let [packed (get (library-cache dj) n)]
+    (let [info (try (edn/read-string packed)
+                    (catch Exception e
+                      (binding [*out* *err*]
+                        (println (str "champaca: dropping the library cache's unreadable entry for " n ":") (ex-message e)))
+                      nil))]
+      (if (and info
+               (or (= fp (:src-fp info))
+                   (do (swap! state update :defined-changed (fnil inc 0))
+                       (when (trace?) (binding [*out* *err*] (println "define" n "changed since its entry")))
+                       false))
+               (do (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep)) true)
+               (every? (fn [d] (or (dep-matches? d (get (:deps info) d))
+                                   (do (swap! state update :defined-changed (fnil inc 0))
+                                       (when (trace?) (binding [*out* *err*] (println "define" n "not restored:" d "changed")))
+                                       false)))
+                       (filter (:deps info) (rest (ancestry-of-unlinked info)))))
+        (do (swap! state #(-> %
+                              (assoc-in [:classes n] info)
+                              (assoc-in [:defined-bytes n] bs)
+                              (update :dir-bytes dissoc n)
+                              (update :restored (fnil inc 0))))
+            (or (load-unit! (:cached-class info))
+                (let [text (registration-text info)]
+                  (record! :user [n] {:text text})
+                  (scheme! text :interpret)))
+            (str "ok " n))
+        (do (swap! state #(-> %
+                              (update-in [:user-cache dj] dissoc n)
+                              (assoc-in [:library-dropped dj n] packed)
+                              (update :library-dirty (fnil conj #{}) dj)))
+            nil)))
+    (do (swap! state update :defined-new (fnil inc 0)) nil)))
 
 ;; --- the JIT -----------------------------------------------------------------------
 
@@ -1130,9 +1230,13 @@
           ;; a library cache entry's dependencies grow with each method
           ;; compiled; a method reading one that can't be checked isn't kept
           origin (if reads
-                   (when-let [deps (user-deps (conj @reads cname))]
-                     (swap! state update-in [:classes cname :deps] merge (dissoc deps cname))
-                     :user)
+                   (if-let [deps (user-deps (conj @reads cname) (= :defined (:origin info)))]
+                     (do (swap! state update-in [:classes cname :deps] merge (dissoc deps cname))
+                         :user)
+                     (do (when (trace?)
+                           (binding [*out* *err*]
+                             (println "jit" (str cname "." mname desc) "not cached: it reads" (uncheckable-dep (conj @reads cname) (= :defined (:origin info))))))
+                         nil))
                    (cache-origin info))
           unit [cname (str mname desc)]
           ;; an instruction naming a class that isn't there throws when it
@@ -1173,9 +1277,53 @@
   []
   (swap! state assoc :saves-generation true))
 
+(defn- dep-matches?
+  "Whether a loader-defined class's dependency d is what its entry recorded:
+  fp its fingerprint, or :present for a synthetic class. One not loaded yet
+  is asked of the resolving loader, as translating the method would have
+  (runtime.ss jit! and define-class! bind it); one it doesn't have is a
+  mismatch."
+  [d fp]
+  (let [e (or (get-in @state [:classes d])
+              (do (try (ensure-loaded! d) (catch Exception _ nil))
+                  (get-in @state [:classes d])))]
+    (cond (nil? e) false
+          (= fp :present) true   ; a lambda class in state.img, thawed or not
+          (string? e) false      ; a JDK class has that name now
+          :else (= fp (or (:src-fp e) (:fp (class-source d)))))))
+
+(defn- deps-still-hold!
+  "For a loader-defined class restored with cached methods: whether every
+  class those methods read is what the entry recorded, checked once, at the
+  first call of one of them, which is when translating it would have loaded
+  them. If not, the cached methods are dropped (they compile again, and the
+  save rewrites the entry) and the entry's dependencies start over from the
+  class's ancestry; an ancestry that can't be checked any more makes the
+  class uncacheable and drops its entry."
+  [cname info]
+  (or (not= :defined (:origin info))
+      (contains? (:deps-held @state) cname)
+      (if (every? (fn [[d fp]] (or (dep-matches? d fp)
+                                   (do (when (trace?) (binding [*out* *err*] (println "cached methods of" cname "dropped:" d "changed")))
+                                       false)))
+                  (:deps info))
+        (do (swap! state update :deps-held (fnil conj #{}) cname) true)
+        (let [deps (user-deps [cname] true)
+              dj (:src-jar info)]
+          (swap! state update :cached-methods-dropped (fnil inc 0))
+          (swap! state (fn [st]
+                         (-> st
+                             (update-in [:classes cname] #(if deps
+                                                           (-> % (dissoc :cached-methods) (assoc :deps (dissoc deps cname)))
+                                                           (dissoc % :cached-methods :src-fp :src-jar :deps)))
+                             (update :library-dirty (fnil conj #{}) dj)
+                             (cond-> (not deps) (assoc-in [:library-dropped dj cname] (get-in st [:user-cache dj cname]))))))
+          false))))
+
 (defn jit! [cname mname desc]
-  (let [unit (get (:cached-methods (thaw! cname)) (str mname desc))]
-    (when-not (and unit (load-unit! unit)) ; else compiled by an earlier run
+  (let [info (thaw! cname)
+        unit (get (:cached-methods info) (str mname desc))]
+    (when-not (and unit (deps-still-hold! cname info) (load-unit! unit)) ; else compiled by an earlier run
       (compile-method! cname mname desc))))
 
 (defn- stats []
@@ -1183,7 +1331,14 @@
     (binding [*out* *err*]
       (println (str "champaca: " (- (count classes) (count lazy)) " classes loaded ("
                     (or restored 0) " from the library cache), " jitted " methods compiled ("
-                    (or jitted-user 0) " of classpath classes), " (or units-loaded 0) " cached units loaded")))))
+                    (or jitted-user 0) " of classpath classes), " (or units-loaded 0) " cached units loaded"))
+      ;; classes loaders of the program's own defined, by what the cache did with them
+      (let [{:keys [defined-new defined-changed defined-uncacheable cached-methods-dropped]} @state
+            n (fn [k] (or k 0))]
+        (when (some pos? (map n [defined-new defined-changed defined-uncacheable cached-methods-dropped]))
+          (println (str "champaca: loader-defined classes not from the cache: " (n defined-new) " new, "
+                        (n defined-changed) " changed, " (n defined-uncacheable) " of them uncacheable; "
+                        (n cached-methods-dropped) " classes' cached methods dropped")))))))
 
 ;; --- boot cache ---------------------------------------------------------------------
 ;; Modeled on Clojure's RT.load: one compiled unit per input, used only when
