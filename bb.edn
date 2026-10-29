@@ -563,6 +563,10 @@
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
+  heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (bb heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
+        :task (let [args *command-line-args*]
+                (when (< (count args) 2) (println "usage: bb heap <classpath> <Main> [types|roots|java] [args...]") (System/exit 2))
+                (apply shell (jolt-bin) "-M" "tools/heap.clj" args))}
   libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"
         :task (let [allow-skip (some (fn [a] (= a "--allow-skip")) *command-line-args*)
                     only (set (remove (fn [a] (= a "--allow-skip")) *command-line-args*))
