@@ -1,0 +1,5 @@
+sun.nio.cs.UTF_8=true
+java.util.ArrayList=true
+javax.sql.RowSet=false
+java.sql.Date=false
+AssertDefaultsCheck=false
