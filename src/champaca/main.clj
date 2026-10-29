@@ -9,7 +9,6 @@
   That mirrors OpenLDK, which also compiles each method on first call."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.walk :as walk]
             [clojure.string :as str]
             [jolt.scheme :as s]
             [champaca.classfile :as cf]
@@ -97,11 +96,31 @@
   [^String s]
   (or (get @interned-strings s)
       (do (swap! interned-strings assoc s s) s)))
+(defn- intern-keys
+  "m with its string keys interned (and its string values when values? says)."
+  [m values?]
+  (if (map? m)
+    (persistent! (reduce-kv (fn [acc k v] (assoc! acc (if (string? k) (intern-string k) k) (if (and values? (string? v)) (intern-string v) v)))
+                            (transient {}) m))
+    m))
+(defn- intern-members [ms]
+  (mapv #(cond-> % (string? (:name %)) (update :name intern-string) (string? (:desc %)) (update :desc intern-string)) ms))
 (defn- thaw-entry
-  "A packed entry as its class map, strings interned (walk/postwalk over the
-  edn data, which holds maps, vectors, sets, keywords, numbers and strings)."
+  "A packed entry as its class map, the strings in the slots that hold them
+  interned: the vtable's keys and values, the methods' and fields' names and
+  descriptors, the interfaces, the layout's, dependencies' and cached
+  methods' keys. Those slots, not a walk of the whole map: a postwalk with a
+  lookup per string took 2.7 s over 7,400 entries where this takes 0.4."
   [e]
-  (walk/postwalk #(if (string? %) (intern-string %) %) (edn/read-string (unpack e))))
+  (let [m (edn/read-string (unpack e))]
+    (cond-> m
+      (:vtable m) (update :vtable intern-keys true)
+      (:methods m) (update :methods intern-members)
+      (:fields m) (update :fields intern-members)
+      (:interfaces m) (update :interfaces #(mapv intern-string %))
+      (:layout m) (update :layout intern-keys false)
+      (:deps m) (update :deps intern-keys false)
+      (:cached-methods m) (update :cached-methods intern-keys false))))
 
 (defn- parse-entry
   "thaw-entry for one packed class entry. Damage inside an entry of an
