@@ -553,7 +553,7 @@
                             acc)))))))))
 (defnative "java/net/Inet4AddressImpl.lookupAllHostAddr(Ljava/lang/String;)[Ljava/net/InetAddress;" (this host)
   (let* ([h (jstring->scheme (nn host))]
-         [ips (guard (e [(and (jobj? e) net-macos? (local-host-name? h))
+         [ips (guard (e [(and (jobj? e) (jinstance? e "java/net/UnknownHostException") net-macos? (local-host-name? h))
                          (let ([local (local-interface-ips)])
                            (if (null? local) (raise e) local))])
                 (lookup-ipv4 h))])
