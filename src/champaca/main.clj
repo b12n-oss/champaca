@@ -64,7 +64,12 @@
    (when (trace?) (scheme-trace! text))
    (if (= mode :interpret)
      (s/call "interpret-string" text)
-     (s/eval-string text))))
+     (s/eval-string text)))
+  ;; a method's text, with inspector information only when lines says
+  ;; (runtime.ss eval-method-text; the runtime's global setting is #t)
+  ([text _mode lines]
+   (when (trace?) (scheme-trace! text))
+   (s/call "eval-method-text" text (boolean lines))))
 
 (declare ensure-loaded! ancestry-of-unlinked lambda-class link registration-text delete-tree!)
 
@@ -1256,14 +1261,14 @@
   loader-defined class names its file without a line, as a JDK frame does,
   because the information costs about as much memory as the code itself (a
   warm Spring Boot: 100 of 460 MB live). CHAMPACA_LINES=all gives every
-  cached class lines, CHAMPACA_LINES=off none. origin is cache-origin's."
-  [cname info origin]
-  (and (= :user origin)
-       (case (env "CHAMPACA_LINES")
-         "all" true
-         "off" false
-         (and (= :user (:origin info))
-              (when-let [src (class-source cname)] (not (jar-entry? (:entry src))))))))
+  class but the JDK's lines, CHAMPACA_LINES=off none. Every compile path
+  asks, cached or not, so a frame's line doesn't depend on the cache."
+  [cname info]
+  (case (some-> (env "CHAMPACA_LINES") str/lower-case)
+    "all" (contains? #{:user :defined} (:origin info))
+    "off" false
+    (and (= :user (:origin info))
+         (boolean (when-let [src (class-source cname)] (not (jar-entry? (:entry src))))))))
 
 (defn- compile-method! [cname mname desc]
   (let [p (parsed cname)
@@ -1307,18 +1312,18 @@
           _ (report bad-format "not a class file" "ClassFormatError")
           missing (or missing no-method bad-format)]
       (cond
-        missing (timed :chez-compile #(scheme! text))
+        missing (timed :chez-compile #(scheme! text :compile (lines? cname info)))
         ;; compiled once: the same object code runs now and goes in the cache
         (compile-to-cache? origin)
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
                                            ;; a classpath class's frames keep their line numbers
-                                           (s/call "compile-unit" text (lines? cname info origin))))]
+                                           (s/call "compile-unit" text (lines? cname info))))]
           (record! origin unit {:fasl bv}))
         ;; the text is kept (cheaply) so save-cache! can compile it into a
         ;; generation; without that a jolt program re-jits these every run
         :else
-        (do (timed :chez-compile #(scheme! text))
-            (record! origin unit {:text text :inspect (lines? cname info origin)}))))))
+        (do (timed :chez-compile #(scheme! text :compile (lines? cname info)))
+            (record! origin unit {:text text :inspect (lines? cname info)}))))))
 
 (defn saves-generation!
   "Tell the JIT this process will save a generation, so JDK methods compile
@@ -1523,7 +1528,7 @@
           ;; hide frame names from getCallerClass), so it gets its own cache;
           ;; CHAMPACA_LINES decides which code carries inspector information
           key (hash [(when (.exists release) (slurp release)) (.length modules) (.lastModified modules)
-                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (env "CHAMPACA_LINES")])]
+                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])]
       (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
 
 (defn- packed-entry
@@ -1726,6 +1731,11 @@
   main. Uses the boot cache when it is valid and writes it when it is not.
   Returns 0 on success."
   []
+  ;; CHAMPACA_LINES takes all or off (lines?); anything else is a typo
+  (when-let [v (env "CHAMPACA_LINES")]
+    (when-not (#{"all" "off"} (str/lower-case v))
+      (binding [*out* *err*]
+        (println (str "champaca: CHAMPACA_LINES=" v " isn't all or off; using the default, lines for classes from class directories")))))
   (let [dir (cache-dir)
         so (when dir (io/file dir "runtime.so"))]
     ;; the cache key covers the runtime's source, so a cached runtime.so is

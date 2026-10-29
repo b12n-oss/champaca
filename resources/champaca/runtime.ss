@@ -174,12 +174,6 @@
     (for-each (lambda (p) (hashtable-set! t (car p) (cdr p))) al)
     t))
 
-;; meta is ((methods ...) (fields ...)), each entry (name desc access-flags)
-;; in classfile order; reflection reads it and a member's slot is its index.
-;; A vtable is keyed by symbols, "name(desc)" interned, so a call looks its
-;; method up with eq? rather than hashing a string each time.
-;; vtable-alist holds the changes to the superclass's vtable: a new or
-;; overriding entry, or (key . #f) for one this class drops.
 ;; The reflection metadata's strings, one copy each: a descriptor or a
 ;; name recurs across classes, and each registration's literals are its own
 ;; strings (a warm Spring Boot held 180k of them, 20 MB, before this).
@@ -188,6 +182,12 @@
   (cond [(string? x) (or (hashtable-ref meta-strings x #f) (begin (hashtable-set! meta-strings x x) x))]
         [(pair? x) (cons (intern-meta (car x)) (intern-meta (cdr x)))]
         [else x]))
+;; meta is ((methods ...) (fields ...)), each entry (name desc access-flags)
+;; in classfile order; reflection reads it and a member's slot is its index.
+;; A vtable is keyed by symbols, "name(desc)" interned, so a call looks its
+;; method up with eq? rather than hashing a string each time.
+;; vtable-alist holds the changes to the superclass's vtable: a new or
+;; overriding entry, or (key . #f) for one this class drops.
 (define (register-class! name super interfaces template vtable-alist field-alist flags meta)
   (hashtable-set! classes name
                   (make-jclass name super interfaces template
@@ -1172,6 +1172,15 @@
 
 ;; Registration text is one-shot data plumbing (define a class, its statics,
 ;; a stub per method). Chez's interpreter runs it far cheaper than compile.
+;; A method's text evaluated outside the cache paths (main.clj
+;; compile-method!), with inspector information as lines? decided, where
+;; the global setting above would keep it for every method
+(define (eval-method-text text lines?)
+  (parameterize ([generate-inspector-information lines?])
+    (let ([p (open-string-input-port text)])
+      (let loop ([last (void)])
+        (let ([form (read p)])
+          (if (eof-object? form) last (loop (eval form))))))))
 (define (interpret-string s)
   (let ([p (open-input-string s)])
     (let loop ([r (void)])

@@ -1,0 +1,36 @@
+here: StackCheck.main(StackCheck.java)
+chain: StackCheck.c(StackCheck.java) < StackCheck.b(StackCheck.java) < StackCheck.a(StackCheck.java) < StackCheck.main(StackCheck.java)
+printed:
+java.lang.IllegalStateException: from c
+	at StackCheck.c(StackCheck.java)
+	at StackCheck.b(StackCheck.java)
+	at StackCheck.a(StackCheck.java)
+	at StackCheck.main(StackCheck.java)
+custom: StackCheck.throwsCustom(StackCheck.java) < StackCheck.main(StackCheck.java)
+sync static: StackCheck.syncStatic(StackCheck.java) < StackCheck.main(StackCheck.java)
+sync recursion: StackCheck.syncRec(StackCheck.java) < StackCheck.syncRec(StackCheck.java) < StackCheck.syncRec(StackCheck.java) < StackCheck.main(StackCheck.java)
+div: StackCheck.div(StackCheck.java) < StackCheck.main(StackCheck.java)
+rem: StackCheck.rem(StackCheck.java) < StackCheck.main(StackCheck.java)
+index: StackCheck.idx(StackCheck.java) < StackCheck.main(StackCheck.java)
+cast: StackCheck.cast(StackCheck.java) < StackCheck.main(StackCheck.java)
+size: StackCheck.arr(StackCheck.java) < StackCheck.main(StackCheck.java)
+store: StackCheck.store(StackCheck.java) < StackCheck.main(StackCheck.java)
+null: StackCheck.len(StackCheck.java) < StackCheck.main(StackCheck.java)
+init: StackCheck.main(StackCheck.java) cause StackCheck$BadInit.<clinit>(StackCheck.java) < StackCheck.main(StackCheck.java)
+constructor kept: StackCheck$Wrapper.<init>(StackCheck.java) < StackCheck.main(StackCheck.java)
+jdk: java.lang.NumberFormatException.forInputString < java.lang.Integer.parseInt < java.lang.Integer.parseInt < StackCheck.main(StackCheck.java) / java.base NumberFormatException.java
+lambda: StackCheck.lambda$main$0(StackCheck.java) < StackCheck.main(StackCheck.java)
+in catch: StackCheck.main(StackCheck.java) cause StackCheck.c(StackCheck.java) < StackCheck.main(StackCheck.java)
+in synchronized: StackCheck.c(StackCheck.java) < StackCheck.b(StackCheck.java) < StackCheck.main(StackCheck.java)
+in loop: StackCheck.c(StackCheck.java) < StackCheck.main(StackCheck.java)
+rethrown: StackCheck.c(StackCheck.java) < StackCheck.main(StackCheck.java)
+refilled: StackCheck.main(StackCheck.java)
+set: X.y(X.java) 1
+thread: StackCheck.lambda$main$1(StackCheck.java) / java.lang.Thread.run
+current thread: StackCheck.main(StackCheck.java)
+caller: Other StackCheck
+walked: [walked:52:StackCheck.java, main:115:StackCheck.java]
+logged from: StackCheck.main
+recursion frames: 301
+walked deep: 301
+cap: 1024

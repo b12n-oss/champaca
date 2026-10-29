@@ -381,13 +381,25 @@
                     ;; without CHAMPACA_LINES a jar class's frame has no line number (-1,
                     ;; as a JDK frame's): the first libcache run again, on bb test's own
                     ;; key, against v1's output with the line number -1
+                    ;; the same with the cache off (the methods compile without recording:
+                    ;; the same rule), and StackCheck's directory classes with
+                    ;; CHAMPACA_LINES=off (every frame's line -1)
                     nolines-fails (let [cp (str lc "/main-classes:" lc "/base-v1.jar:" lc "/user.jar")
-                                        {:keys [out exit]} (run-limited 300 {:label "libcache-nolines" :extra-env {"CHAMPACA_NPE_STRICT" "1"}}
-                                                                        (jolt-bin) "-M" "-m" "champaca.main" cp "LibCacheMain")
-                                        ok (and (zero? exit) (= out (slurp "test/libcache/v1nolines.expected")))]
-                                    (println (if ok "PASS" "FAIL") "a jar class's frame has no line number without CHAMPACA_LINES")
-                                    (when-not ok (println (str "  exit " exit ", out " (pr-str out))))
-                                    (if ok [] ["libcache-nolines"]))
+                                        row (fn [label env args expected what]
+                                              (let [{:keys [out exit]} (apply run-limited 300 {:label label :extra-env (merge {"CHAMPACA_NPE_STRICT" "1"} env)}
+                                                                              (jolt-bin) "-M" "-m" "champaca.main" args)
+                                                    ok (and (zero? exit) (= out (slurp expected)))]
+                                                (println (if ok "PASS" "FAIL") what)
+                                                (when-not ok (println (str "  exit " exit ", out " (pr-str out))))
+                                                (when-not ok label)))]
+                                    (->> [(row "libcache-nolines" {} [cp "LibCacheMain"] "test/libcache/v1nolines.expected"
+                                               "a jar class's frame has no line number without CHAMPACA_LINES")
+                                          (row "libcache-nolines-cache-off" {"CHAMPACA_CACHE" "off"} [cp "LibCacheMain"] "test/libcache/v1nolines.expected"
+                                               "the same with CHAMPACA_CACHE=off")
+                                          (row "stackcheck-lines-off" {"CHAMPACA_LINES" "off"} ["target/classes:target/lib.jar:target/lib2.jar" "StackCheck"] "test/libcache/StackCheck-lines-off.expected"
+                                               "StackCheck's own frames have no line numbers with CHAMPACA_LINES=off")]
+                                         (remove nil?)
+                                         vec))
                     ;; a lambda over a jar's interface that gains a default method
                     ;; (test/libcache/lam): the main for v2 calls it, the second v2
                     ;; run with the lambda's class from the cache
@@ -539,7 +551,7 @@
                                     (when-not ok (print out) (flush) n))))
                     fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
-                                  "libcache-nolines" (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
+                                  "libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off" (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
                                   (map (fn [i] (str "libcache-def-" i)) (range 1 13))
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
