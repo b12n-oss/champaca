@@ -1,5 +1,5 @@
 {:tasks
- {:requires ([babashka.fs :as fs] [babashka.process :as process] [clojure.string :as str] [clojure.edn :as edn])
+ {:requires ([babashka.fs :as fs] [babashka.process :as process] [clojure.string :as str] [clojure.edn :as edn] [clojure.java.io :as io])
   :init (do
           ;; deps.edn :champaca/jolt pins an upstream jolt commit; `bb jolt` builds
           ;; it to ~/.cache/champaca/jolt/<sha>/jolt from a jolt checkout
@@ -563,6 +563,43 @@
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
+  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, bb test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then bb libs (bb battery [ref]; BATTERY_MODES=cold,libs runs a subset); logs in target/battery/"
+           :task (let [ref (or (first *command-line-args*) "HEAD")
+                       tip (str/trim (:out (shell {:out :string} "git" "rev-parse" "--short" ref)))
+                       dir (str (fs/absolutize "target/battery"))
+                       wt (str dir "/wt-" tip)
+                       cache (str dir "/cache-" tip)
+                       modes (if-let [m (System/getenv "BATTERY_MODES")] (str/split m (re-pattern ",")) ["cold" "warm" "cache-off" "bt" "libs"])
+                       envs {"cold" {} "warm" {} "cache-off" {"CHAMPACA_CACHE" "off"} "bt" {"CHAMPACA_BT" "1"} "libs" {}}
+                       _ (fs/create-dirs dir)
+                       _ (fs/delete-tree wt)
+                       _ (fs/delete-tree cache)
+                       _ (shell "git" "worktree" "prune")
+                       _ (shell "git" "worktree" "add" "-q" "--detach" wt ref)
+                       _ (println "tip:" tip "worktree:" wt)
+                       ;; each mode's whole output goes to its log; the summary is its FAIL
+                       ;; lines, its count and its exit status, so a run that dies before
+                       ;; its count still says so
+                       results (doall
+                                (for [mode modes]
+                                  (let [log (str dir "/" tip "-" mode ".log")
+                                        _ (println (str "== " mode))
+                                        st (with-open [o (io/output-stream log)]
+                                             (:exit (shell {:dir wt :out o :err o :continue true :extra-env (assoc (get envs mode {}) "CHAMPACA_CACHE_DIR" cache)}
+                                                           "bb" (if (= mode "libs") "libs" "test"))))
+                                        lines (str/split-lines (slurp log))
+                                        fails (filter (fn [l] (or (str/starts-with? l "FAIL") (str/starts-with? l "DIFF"))) lines)
+                                        count-line (last (filter (fn [l] (or (str/ends-with? l " passed") (str/includes? l " matched"))) lines))]
+                                    (doseq [l fails] (println l))
+                                    (println (or count-line "   (no count: the run died)"))
+                                    (println (str "   exit " st ", log " log))
+                                    (and (zero? st) (empty? fails) (some? count-line)))))
+                       hangs (let [h (str wt "/target/hangs")] (if (fs/exists? h) (count (fs/list-dir h)) 0))
+                       _ (println "== hangs:" hangs)
+                       ok (and (every? true? results) (zero? hangs))]
+                   (shell "git" "worktree" "remove" "--force" wt)
+                   (println (if ok "battery green" "battery RED"))
+                   (System/exit (if ok 0 1)))}
   heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (bb heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
         :task (let [args *command-line-args*]
                 (when (< (count args) 2) (println "usage: bb heap <classpath> <Main> [types|roots|java] [args...]") (System/exit 2))

@@ -104,6 +104,7 @@ bb jolt                                               # build the pinned jolt (a
 bb test                                               # every test/java and test/aaa program vs the JVM, plus the examples/*.clj tests
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
+bb battery                                            # before a merge: bb test cold, warm, cache off and CHAMPACA_BT=1, then bb libs, on a worktree of HEAD with its own cache (about 40 min)
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
 bb examples                                           # list the examples/*.clj test files
 bb example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
