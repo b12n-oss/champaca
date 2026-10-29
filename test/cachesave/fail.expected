@@ -1,2 +1,4 @@
 adler 1
+inflater true
+zip true
 choice one
