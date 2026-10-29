@@ -69,51 +69,52 @@ The extracted jar and the uber-jar load from the class path.
 ## Results
 
 On an Apple M1 Pro (10 CPUs), macOS 26.5.2, JDK 25.0.2, with the pinned
-jolt, on 2026-10-28, while other work kept the load average at 4 to 10. Ten
-timed runs each, three for a cold variant. Spring Boot ran on champaca at
-`ab48ef6`, load 4 to 6:
+jolt, on 2026-10-29, with nothing else running (load average 3 as it
+started). Ten timed runs each, three for a cold variant. Both ran on
+champaca at `5fd8048`:
 
 | Spring Boot | Median | Min | Max | Peak RSS |
 |---|---|---|---|---|
-| HotSpot, fat jar | 875 ms | 856 ms | 997 ms | 231 MB |
-| HotSpot, extracted jar | 765 ms | 713 ms | 819 ms | 185 MB |
-| HotSpot + Spring AOT | 633 ms | 575 ms | 663 ms | 150 MB |
-| HotSpot + JDK AOT cache | 348 ms | 324 ms | 372 ms | 135 MB |
-| HotSpot + Spring AOT + AOT cache | 266 ms | 257 ms | 294 ms | 111 MB |
-| champaca, extracted jar, cold | 52.8 s | 49.0 s | 53.5 s | 2505 MB |
-| champaca, extracted jar | 4089 ms | 3913 ms | 5740 ms | 1101 MB |
-| champaca + Spring AOT | 3233 ms | 3127 ms | 3289 ms | 1090 MB |
-| champaca, fat jar | 21.0 s | 19.7 s | 24.9 s | 998 MB |
-
-Quarkus ran on champaca at `07eafcc`, load 5 to 10:
+| HotSpot, fat jar | 905 ms | 876 ms | 1430 ms | 235 MB |
+| HotSpot, extracted jar | 826 ms | 764 ms | 1961 ms | 185 MB |
+| HotSpot + Spring AOT | 602 ms | 578 ms | 639 ms | 157 MB |
+| HotSpot + JDK AOT cache | 344 ms | 337 ms | 357 ms | 145 MB |
+| HotSpot + Spring AOT + AOT cache | 264 ms | 261 ms | 273 ms | 117 MB |
+| champaca, extracted jar, cold | 47.7 s | 47.4 s | 49.9 s | 2647 MB |
+| champaca, extracted jar | 3887 ms | 3685 ms | 4034 ms | 1202 MB |
+| champaca + Spring AOT | 3663 ms | 3434 ms | 4761 ms | 1148 MB |
+| champaca, fat jar | 6918 ms | 6627 ms | 7153 ms | 1105 MB |
 
 | Quarkus | Median | Min | Max | Peak RSS |
 |---|---|---|---|---|
-| HotSpot, fast-jar | 506 ms | 501 ms | 5485 ms | 100 MB |
-| HotSpot, uber-jar | 516 ms | 497 ms | 518 ms | 111 MB |
-| HotSpot + JDK AOT cache | 321 ms | 307 ms | 347 ms | 91 MB |
-| champaca, uber-jar, cold | 40.0 s | 39.4 s | 41.3 s | 1917 MB |
-| champaca, uber-jar | 3056 ms | 3020 ms | 3567 ms | 760 MB |
-| champaca, fast-jar | 11.1 s | 10.3 s | 11.6 s | 809 MB |
+| HotSpot, fast-jar | 430 ms | 406 ms | 5367 ms | 100 MB |
+| HotSpot, uber-jar | 424 ms | 409 ms | 437 ms | 112 MB |
+| HotSpot + JDK AOT cache | 249 ms | 239 ms | 269 ms | 92 MB |
+| champaca, uber-jar, cold | 32.3 s | 32.1 s | 32.5 s | 1989 MB |
+| champaca, uber-jar | 2404 ms | 2320 ms | 2481 ms | 856 MB |
+| champaca, fast-jar | 3002 ms | 2868 ms | 3543 ms | 934 MB |
 
-Every variant printed what HotSpot prints. A warm champaca start takes five
-to six times as long as HotSpot's, for both frameworks, and needs six to seven
-times its memory. Spring AOT saves champaca a little more than it saves HotSpot,
-21% of the start against 17%. The cold rows include the JDK's own first boot, every method of the
-framework translated and compiled once and the cache written. The fat jar
-and the fast-jar sit between the two: their loaders' classes come from the
-cache too, but the loaders read their nested jars on every run, and a class
-whose cached code depends on one the cache can't check compiles again (see
-the variants above). Upstream's OpenLDK images can't keep loader-defined
-classes at all, which is why they run the class path for Spring Boot and the
-uber-jar for Quarkus. For scale, upstream measured its OpenLDK warm
-image at 4.3 s (Spring Boot) and 1.5 s (Quarkus) on a 16-CPU Xeon E5-2670,
-with HotSpot at 2.9 s and 1.3 s on the same machine, so the two projects'
-numbers aren't comparable directly; the HotSpot rows are the yardstick.
+Every variant printed what HotSpot prints. A warm champaca start from the
+class path takes five to six times as long as HotSpot's, for both
+frameworks, and needs six to eight times its memory. Spring AOT saves
+HotSpot 27% of its start and champaca 6%. The cold rows include the JDK's
+own first boot, every method of the framework translated and compiled once
+and the cache written. The fat jar and the fast-jar take longer than the
+class path by what their own loaders do: 3 s for Spring Boot's launcher to
+read its nested jars (80 ms on HotSpot) and 0.6 s for Quarkus's
+RunnerClassLoader, since the classes those loaders define come from the
+cache like the class path's. Until 2026-10-29 they didn't, and the fat jar
+took 21.0 s, the fast-jar 11.1 s. Upstream's OpenLDK images can't keep
+loader-defined classes, which is why they run the class path for Spring
+Boot and the uber-jar for Quarkus. For scale, upstream measured its OpenLDK
+warm image at 4.3 s (Spring Boot) and 1.5 s (Quarkus) on a 16-CPU Xeon
+E5-2670, with HotSpot at 2.9 s and 1.3 s on the same machine, so the two
+projects' numbers aren't comparable directly; the HotSpot rows are the
+yardstick.
 
-The Quarkus fast-jar's HotSpot maximum, 5.5 s, is a single slow run while
-other work was busy; its median stands, as does the 5.7 s maximum of
-champaca's extracted jar.
+The three HotSpot maxima above 1 s (the Quarkus fast-jar's 5.4 s, Spring
+Boot's fat and extracted jars) are single slow runs each; the medians
+stand, as does the 4.8 s maximum of champaca + Spring AOT.
 
 ## What it took
 
@@ -133,3 +134,6 @@ Running these applications turned up these gaps, now fixed:
   its RunnerClassLoader sees (`test/java/LinkCheck.java`).
 - `champaca.main` took no `-D` options, so the Spring AOT variant ran on
   HotSpot only (`test/java/PropsCheck.java`).
+- Classes a framework's own loader defines were compiled on every run; they
+  are cached by their bytes now, with their dependencies checked through the
+  loader (`test/libcache/def`).
