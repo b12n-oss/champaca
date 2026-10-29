@@ -553,7 +553,7 @@
                                     (when-not ok (print out) (flush) n))))
                     fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
-                                  "libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off" (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
+                                  ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
                                   (map (fn [i] (str "libcache-def-" i)) (range 1 13))
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
