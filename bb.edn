@@ -385,12 +385,15 @@
                     ;; the same rule), and StackCheck's directory classes with
                     ;; CHAMPACA_LINES=off: champaca's own output, not the JVM's, since
                     ;; besides every line being -1 an inlined leaf that throws from a
-                    ;; check shows its caller's frame (limitations.md)
+                    ;; check shows its caller's frame (limitations.md); under CHAMPACA_BT=1
+                    ;; the shadow-stack wrappers keep that frame, so the -bt file is the
+                    ;; same output with those five frames in place
                     nolines-fails (let [cp (str lc "/main-classes:" lc "/base-v1.jar:" lc "/user.jar")
                                         row (fn [label env args expected what]
                                               (let [{:keys [out exit]} (apply run-limited 300 {:label label :extra-env (merge {"CHAMPACA_NPE_STRICT" "1"} env)}
                                                                               (jolt-bin) "-M" "-m" "champaca.main" args)
-                                                    ok (and (zero? exit) (= out (slurp expected)))]
+                                                    expected (if (string? expected) [expected] expected)
+                                                    ok (and (zero? exit) (some (fn [f] (= out (slurp f))) expected))]
                                                 (println (if ok "PASS" "FAIL") what)
                                                 (when-not ok (println (str "  exit " exit ", out " (pr-str out))))
                                                 (when-not ok label)))]
@@ -398,7 +401,8 @@
                                                "a jar class's frame has no line number without CHAMPACA_LINES")
                                           (row "libcache-nolines-cache-off" {"CHAMPACA_CACHE" "off"} [cp "LibCacheMain"] "test/libcache/v1nolines.expected"
                                                "the same with CHAMPACA_CACHE=off")
-                                          (row "stackcheck-lines-off" {"CHAMPACA_LINES" "off"} ["target/classes:target/lib.jar:target/lib2.jar" "StackCheck"] "test/libcache/StackCheck-lines-off.expected"
+                                          (row "stackcheck-lines-off" {"CHAMPACA_LINES" "off"} ["target/classes:target/lib.jar:target/lib2.jar" "StackCheck"]
+                                               (if (System/getenv "CHAMPACA_BT") ["test/libcache/StackCheck-lines-off-bt.expected"] ["test/libcache/StackCheck-lines-off.expected"])
                                                "StackCheck's own frames have no line numbers with CHAMPACA_LINES=off")]
                                          (remove nil?)
                                          vec))
