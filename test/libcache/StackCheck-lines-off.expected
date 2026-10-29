@@ -9,11 +9,11 @@ java.lang.IllegalStateException: from c
 custom: StackCheck.throwsCustom(StackCheck.java) < StackCheck.main(StackCheck.java)
 sync static: StackCheck.syncStatic(StackCheck.java) < StackCheck.main(StackCheck.java)
 sync recursion: StackCheck.syncRec(StackCheck.java) < StackCheck.syncRec(StackCheck.java) < StackCheck.syncRec(StackCheck.java) < StackCheck.main(StackCheck.java)
-div: StackCheck.div(StackCheck.java) < StackCheck.main(StackCheck.java)
-rem: StackCheck.rem(StackCheck.java) < StackCheck.main(StackCheck.java)
-index: StackCheck.idx(StackCheck.java) < StackCheck.main(StackCheck.java)
-cast: StackCheck.cast(StackCheck.java) < StackCheck.main(StackCheck.java)
-size: StackCheck.arr(StackCheck.java) < StackCheck.main(StackCheck.java)
+div: StackCheck.main(StackCheck.java)
+rem: StackCheck.main(StackCheck.java)
+index: StackCheck.main(StackCheck.java)
+cast: StackCheck.main(StackCheck.java)
+size: StackCheck.main(StackCheck.java)
 store: StackCheck.store(StackCheck.java) < StackCheck.main(StackCheck.java)
 null: StackCheck.len(StackCheck.java) < StackCheck.main(StackCheck.java)
 init: StackCheck.main(StackCheck.java) cause StackCheck$BadInit.<clinit>(StackCheck.java) < StackCheck.main(StackCheck.java)
@@ -25,11 +25,11 @@ in synchronized: StackCheck.c(StackCheck.java) < StackCheck.b(StackCheck.java) <
 in loop: StackCheck.c(StackCheck.java) < StackCheck.main(StackCheck.java)
 rethrown: StackCheck.c(StackCheck.java) < StackCheck.main(StackCheck.java)
 refilled: StackCheck.main(StackCheck.java)
-set: X.y(X.java) 1
+set: X.y(X.java:7) 1
 thread: StackCheck.lambda$main$1(StackCheck.java) / java.lang.Thread.run
 current thread: StackCheck.main(StackCheck.java)
 caller: Other StackCheck
-walked: [walked:52:StackCheck.java, main:115:StackCheck.java]
+walked: [walked:-1:StackCheck.java, main:-1:StackCheck.java]
 logged from: StackCheck.main
 recursion frames: 301
 walked deep: 301

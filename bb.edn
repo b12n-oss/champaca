@@ -383,7 +383,9 @@
                     ;; key, against v1's output with the line number -1
                     ;; the same with the cache off (the methods compile without recording:
                     ;; the same rule), and StackCheck's directory classes with
-                    ;; CHAMPACA_LINES=off (every frame's line -1)
+                    ;; CHAMPACA_LINES=off: champaca's own output, not the JVM's, since
+                    ;; besides every line being -1 an inlined leaf that throws from a
+                    ;; check shows its caller's frame (limitations.md)
                     nolines-fails (let [cp (str lc "/main-classes:" lc "/base-v1.jar:" lc "/user.jar")
                                         row (fn [label env args expected what]
                                               (let [{:keys [out exit]} (apply run-limited 300 {:label label :extra-env (merge {"CHAMPACA_NPE_STRICT" "1"} env)}
