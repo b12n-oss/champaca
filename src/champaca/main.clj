@@ -1356,9 +1356,16 @@
 (defn- dump-classes!
   "state.img: each class entry as edn text, plus the set of classes whose
   registration sits in a generation, so a load knows what is lazy without
-  parsing anything."
+  parsing anything. A JDK class goes in only when its registration is cached
+  somewhere: boot.so (:boot-classes, the class table as this process read
+  it, or a cold boot's registrations) or a generation (:cached-class). A
+  later run takes any other entry for registered and fails with \"class
+  not registered\": one whose save failed, so that a later save in the
+  process found its map and not its code, or one linked and not yet
+  recorded. Left out, it loads again in the run that needs it."
   [img]
-  (let [{:keys [classes lazy]} @state]
+  (let [{:keys [classes lazy boot-classes]} @state
+        classes (into {} (filter (fn [[k v]] (or (string? v) (contains? boot-classes k) (:cached-class v)))) classes)]
     (img/dump! (str img) {:lazy (into (set lazy)
                                       (for [[k v] classes :when (and (map? v) (= :jdk (:origin v)) (:cached-class v))] k))
                           :classes (strip-for-cache classes)})))
@@ -1401,6 +1408,8 @@
     (.mkdirs tmp)
     ;; registrations compile here; method bodies were compiled when they ran
     (timed :cache-write-boot #(write-units! (str (io/file tmp "boot.so")) forms true))
+    ;; the classes whose registration boot.so now holds (dump-classes!)
+    (swap! state assoc :boot-classes (set (keep (fn [{[c k] :unit}] (when-not k c)) forms)))
     ;; the runtime itself, so a warm start loads it compiled rather than
     ;; compiling its source again (about 130 ms)
     (when-not (.exists (io/file tmp "runtime.so"))
@@ -1431,7 +1440,9 @@
         (let [{:keys [classes lazy]} (timed :cache-read-state #(img/read-image (str img-file)))]
           (when-not (and (map? classes) (set? lazy))
             (throw (ex-info "not a champaca state image" {})))
-          (swap! state assoc :classes classes :lazy lazy)
+          ;; the class table as read: its entries are what boot.so registers,
+          ;; and the lazy ones (dump-classes!)
+          (swap! state assoc :classes classes :lazy lazy :boot-classes classes)
           (timed :cache-load-code #(s/call "load" (str so)))
           true)
         ;; a damaged cache would fail every run the same way: drop it, boot
@@ -1439,7 +1450,7 @@
         (catch Exception e
           (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
           (delete-tree! dir)
-          (swap! state assoc :classes {} :lazy #{})
+          (swap! state assoc :classes {} :lazy #{} :boot-classes {})
           nil)))))
 
 (defn- prune-library!

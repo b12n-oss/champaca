@@ -254,6 +254,21 @@
                                           (finally (fs/delete-tree cache)))]
                                  (println (if ok "PASS" "FAIL") "a warm boot's new classes reach the startup cache (EncoderCheck)")
                                  (if ok [] ["boot generation"]))
+                    ;; a save that fails, then one that succeeds, in one process
+                    ;; (test/cachesave), on a cache of its own: the next run uses
+                    ;; the class whose code the failed save dropped
+                    save-fails (let [cache (str (fs/create-temp-dir {:prefix "champaca-cachesave-"}))
+                                     ch (fn [label script]
+                                          (run-limited 300 {:label label :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_NPE_STRICT" "1"}}
+                                                       (jolt-bin) "-M" (str "test/cachesave/" script ".clj")))
+                                     ok (try
+                                          (every? (fn [script]
+                                                    (let [r (ch (str "cachesave-" script) script)]
+                                                      (and (zero? (:exit r)) (= (slurp (str "test/cachesave/" script ".expected")) (:out r)))))
+                                                  ["fail" "use" "use"])
+                                          (finally (fs/delete-tree cache)))]
+                                 (println (if ok "PASS" "FAIL") "a failed save leaves no class map without its code (test/cachesave)")
+                                 (if ok [] ["cache save"]))
                     ;; the library cache (test/libcache): the same program over
                     ;; changing jars, each run checked against the JVM's output.
                     ;; Base changes between base-v1.jar and base-v2.jar, Sub's bytes
@@ -436,8 +451,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails boot-fails libcache-fails lam-fails edit-fails fix-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "boot generation"] (map (fn [i] (str "libcache-" i)) (range 1 15))
+                    fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails lam-fails edit-fails fix-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]

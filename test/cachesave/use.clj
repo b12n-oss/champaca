@@ -1,0 +1,5 @@
+;; bb test's failed-save row, second process (fail.clj says why)
+(require '[champaca.api :as ldk])
+(ldk/init! {})
+(println "adler" (ldk/invoke (ldk/construct "java.util.zip.Adler32") "getValue"))
+(System/exit 0)
