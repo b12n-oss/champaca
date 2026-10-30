@@ -454,6 +454,13 @@
     (when (and (= (set (keys d)) #{:class :method :desc}) (= "no such method" (ex-message e)))
       [(:class d) (:method d) (:desc d)])))
 
+(defn- wrong-kind
+  "[what class name desc] of a call whose instruction doesn't match the
+  method it resolves to (main.clj check-kind), or nil."
+  [e]
+  (let [d (ex-data e)]
+    (when (:icce d) [(:icce d) (:class d) (:method d) (:desc d)])))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
   linker callbacks), :next-pc, :live (the locals a jump passes), :boxed (the
@@ -683,6 +690,8 @@
                              ;; a method nothing declares is NoSuchMethodError
                              ;; when the call runs, whatever the receiver
                              ((:check-virtual resolve) class name desc)
+                             ;; a static one is IncompatibleClassChangeError, as resolution says
+                             ((:check-kind resolve) (if (= op :invokeinterface) :interface :virtual) class name desc)
                              (if-let [decl ((:direct-target resolve) class name desc)]
                                ;; nothing can override it: call it directly,
                                ;; after the null check dispatch would do. For
@@ -692,12 +701,14 @@
                                       (sx "nn-at" recv (site pc)) argv)
                                (apply sx (at pc (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc))) recv argv))))
                        :invokespecial
-                       (let [decl ((:resolve-method resolve) class name desc)]
+                       (let [decl ((:resolve-method resolve) class name desc)
+                             _ ((:check-kind resolve) :special class name desc)]
                          ;; Object's constructor does nothing
                          (when-not (and (= decl "java/lang/Object") (= name "<init>"))
                            (apply sx (at pc (callee pc decl name desc)) recv argv)))
                        :invokestatic
-                       (let [decl ((:resolve-method resolve) class name desc)]
+                       (let [decl ((:resolve-method resolve) class name desc)
+                             _ ((:check-kind resolve) :static class name desc)]
                          (init decl pc)
                          (apply sx (at pc (callee pc decl name desc)) argv)))]
             (cond (nil? call) nil
@@ -783,9 +794,11 @@
         false
         (catch Exception e
           (let [c (missing-class e)
-                m (missing-method e)
+                k (wrong-kind e)
+                m (or (missing-method e) k)
                 bad (bad-class e)
-                ncdfe (cond m (apply sx "jthrow-no-method" (map str-lit m))
+                ncdfe (cond k (apply sx "jthrow-icce" (map str-lit k))
+                            m (apply sx "jthrow-no-method" (map str-lit m))
                             bad (apply sx "jthrow-class-format" (map str-lit bad))
                             :else (sx "jthrow-missing" (str-lit c)))]
             (when-not (or c m bad) (throw e))

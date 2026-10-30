@@ -284,18 +284,25 @@
 ;; A call to a method its class doesn't have, which a JVM resolves only
 ;; when the call runs (JVMS 5.4.3.3): NoSuchMethodError with HotSpot's text,
 ;; 'ret Class.name(param, param)' in Java's spelling
-(define (jthrow-no-method cname name desc)
+;; 'int Cls.m(java.lang.String, long[])', as HotSpot names a method in its
+;; linkage errors
+(define (method-external cname name desc)
   (define (external d)
     (cond [(char=? (string-ref d 0) #\[) (string-append (external (substring d 1 (string-length d))) "[]")]
           [(assoc d prim-names) => cdr]
           [else (slashes->dots (desc->class-name d))]))
-  (jthrow "java/lang/NoSuchMethodError"
-          (string-append "'" (external (desc-ret desc)) " " (slashes->dots cname) "." name "("
-                         (let loop ([ps (desc-args desc)])
-                           (cond [(null? ps) ""]
-                                 [(null? (cdr ps)) (external (car ps))]
-                                 [else (string-append (external (car ps)) ", " (loop (cdr ps)))]))
-                         ")'")))
+  (string-append "'" (external (desc-ret desc)) " " (slashes->dots cname) "." name "("
+                 (let loop ([ps (desc-args desc)])
+                   (cond [(null? ps) ""]
+                         [(null? (cdr ps)) (external (car ps))]
+                         [else (string-append (external (car ps)) ", " (loop (cdr ps)))]))
+                 ")'"))
+(define (jthrow-no-method cname name desc)
+  (jthrow "java/lang/NoSuchMethodError" (method-external cname name desc)))
+;; a call whose instruction doesn't match the static-ness of the method it
+;; resolves to (main.clj check-kind): what as HotSpot's LinkResolver says it
+(define (jthrow-icce what cname name desc)
+  (jthrow "java/lang/IncompatibleClassChangeError" (string-append what " " (method-external cname name desc))))
 (define (method-proc cname key)
   (top-level-value (string->symbol (string-append cname "." key))))
 

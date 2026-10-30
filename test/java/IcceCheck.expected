@@ -1,0 +1,15 @@
+virtualOfStatic not run: skipped
+virtualOfStatic: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
+virtualOfStatic: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
+virtualOfStaticNull not run: skipped
+virtualOfStaticNull: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
+virtualOfStaticNull: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
+staticOfInstance not run: skipped
+staticOfInstance: java.lang.IncompatibleClassChangeError: Expected static method 'java.lang.String IcTarget.inst()'
+staticOfInstance: java.lang.IncompatibleClassChangeError: Expected static method 'java.lang.String IcTarget.inst()'
+interfaceOfStatic not run: skipped
+interfaceOfStatic: java.lang.IncompatibleClassChangeError: Expected instance not static method 'void IcIface.ist()'
+interfaceOfStatic: java.lang.IncompatibleClassChangeError: Expected instance not static method 'void IcIface.ist()'
+specialOfStatic not run: skipped
+specialOfStatic: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
+specialOfStatic: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'

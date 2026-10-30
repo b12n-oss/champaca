@@ -747,6 +747,29 @@
                   polymorphic?)
       (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
+(defn- check-kind
+  "Throws when the method a call resolves to doesn't match the instruction
+  in static-ness, as a JVM's linking of the call does when it runs (JVMS
+  5.4.3.3, 5.4.3.4, 6.5), with HotSpot's text: an invokevirtual or
+  invokespecial of a static method, an invokeinterface of one, an
+  invokestatic of an instance method. javac never emits these; a class
+  compiled against an older version of a library can. op is :virtual,
+  :interface, :special or :static; the method is found as check-virtual and
+  resolve-method find it."
+  [op cname mname desc]
+  (when-not (or (str/starts-with? cname "[") (= mname "<init>") (= mname "<clinit>"))
+    (let [decl-of (fn [c] (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (class-methods c)))
+          [decl m] (if (#{:special :static} op)
+                     (let [d (try (resolve-method cname mname desc) (catch Exception _ nil))] [d (and d (decl-of d))])
+                     (some (fn [c] (when-let [m (decl-of c)] [c m]))
+                           (concat (take-while some? (iterate #(:super (class-info %)) cname)) (ancestry cname))))
+          static? (and m (cf/static? m))
+          what (cond (and m (= op :static) (not static?)) "Expected static method"
+                     (and static? (= op :interface)) "Expected instance not static method"
+                     (and static? (#{:virtual :special} op)) "Expecting non-static method")]
+      (when what
+        (throw (ex-info "incompatible class change" {:class decl :method mname :desc desc :icce what}))))))
+
 (declare parsed overridden?)
 
 (defn- inline-candidate
@@ -793,6 +816,7 @@
    :field-index field-index
    :resolve-method resolve-method
    :check-virtual check-virtual
+   :check-kind check-kind
    :lambda-class #(lambda-class %1 %2)})
 
 ;; --- loading -----------------------------------------------------------------------
@@ -1374,10 +1398,14 @@
                      (binding [*out* *err*]
                        (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
                                      ", " why "; that code throws " what)))))
+          ;; and for a call of the wrong kind (IncompatibleClassChangeError)
+          icce (seq (map (fn [[_ c n d]] (str c "." n d))
+                         (re-seq (re-pattern "\\(jthrow-icce \"[^\"]+\" \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"") text)))
           _ (report missing "not found" "NoClassDefFoundError")
           _ (report no-method "not found" "NoSuchMethodError")
           _ (report bad-format "not a class file" "ClassFormatError")
-          missing (or missing no-method bad-format)]
+          _ (report icce "of the other kind" "IncompatibleClassChangeError")
+          missing (or missing no-method bad-format icce)]
       (cond
         missing (timed :chez-compile #(scheme! text :compile (lines? cname info)))
         ;; compiled once: the same object code runs now and goes in the cache
