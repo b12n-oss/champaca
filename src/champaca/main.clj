@@ -79,13 +79,16 @@
   characters, 78 MB as strings against 19 as bytes."
   [^String text]
   (.getBytes text "UTF-8"))
-(defn- packed? [x] (or (bytes? x) (string? x)))   ; a string: an entry made this run
-(defn- unpack ^String [x] (if (bytes? x) (String. ^bytes x "UTF-8") x))
+(defn- packed? [x] (or (bytes? x) (string? x) (and (vector? x) (bytes? (first x)))))   ; a string: an entry made this run
+;; An entry's text; a two-part entry (packed-entry) answers its first part
+(defn- unpack ^String [x] (cond (vector? x) (unpack (first x)) (bytes? x) (String. ^bytes x "UTF-8") :else x))
 (defn- packed=
   "Whether two packed entries hold the same text (= on byte arrays is
-  identity)."
+  identity), both parts of a two-part entry."
   [a b]
-  (and (some? a) (some? b) (= (unpack a) (unpack b))))
+  (and (some? a) (some? b)
+       (= (unpack a) (unpack b))
+       (= (when (vector? a) (unpack (second a))) (when (vector? b) (unpack (second b))))))
 
 (def ^:private interned-strings (atom {}))
 (defn- intern-string
@@ -114,6 +117,10 @@
   [e]
   (let [m (edn/read-string (unpack e))]
     (cond-> m
+      ;; a two-part entry keeps its vtable packed until something reads it
+      ;; (class-vtable): half of an entry's text, and a restored class's is
+      ;; read only when a subclass links or its registration is rebuilt
+      (vector? e) (assoc :vtable-packed (second e))
       (:vtable m) (update :vtable intern-keys true)
       (:methods m) (update :methods intern-members)
       (:fields m) (update :fields intern-members)
@@ -159,6 +166,24 @@
 (defn- class-info [cname]
   (or (thaw! cname)
       (do (ensure-loaded! cname) (thaw! cname))))
+
+(defn- class-vtable
+  "cname's vtable, thawed on this first read when its entry kept it packed
+  (thaw-entry) and put back in the table; a map already holding one answers
+  it. The swap keeps a vtable a racing read put there first."
+  [cname]
+  (let [info (class-info cname)]
+    (or (:vtable info)
+        (when-let [p (:vtable-packed info)]
+          (let [vt (intern-keys (edn/read-string (unpack p)) true)]
+            (-> (swap! state update-in [:classes cname]
+                       #(if (:vtable %) % (-> % (assoc :vtable vt) (dissoc :vtable-packed))))
+                (get-in [:classes cname :vtable])))))))
+
+(defn- vtable-of
+  "The vtable of a class map: its own, or thawed through class-vtable."
+  [info]
+  (when info (or (:vtable info) (class-vtable (:name info)))))
 
 ;; --- class bytes -----------------------------------------------------------------
 ;; JDK classes come from $JAVA_HOME/lib/modules, the runtime image every JDK
@@ -821,7 +846,7 @@
         ;; implement a more specific interface
         vtable (into (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
                                                       (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
-                                      (:vtable sup)))
+                                      (vtable-of sup)))
                      (for [m (:methods info)
                            :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
                        [(str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))]))
@@ -865,7 +890,8 @@
         (string? v) (cg/str-lit v)
         :else (str "#vu8" (apply cg/sx (map str v)))))
 
-(defn- registration-text [{:keys [name super interfaces template vtable layout fields methods flags reflection conflicts origin]}]
+(defn- registration-text [{:keys [name super interfaces template layout fields methods flags reflection conflicts origin] :as info}]
+  (let [vtable (vtable-of info)]
   (str/join
    "\n"
    (concat
@@ -878,7 +904,7 @@
             (apply cg/sx "vector" template)
             ;; the vtable as changes to the superclass's: printing every
             ;; inherited entry made it a third of the startup cache's source
-            (str "'" (apply cg/sx (let [sup-vt (when super (:vtable (class-info super)))]
+            (str "'" (apply cg/sx (let [sup-vt (when super (vtable-of (class-info super)))]
                                     (concat
                                      (for [[k g] (sort vtable) :when (not= g (get sup-vt k))]
                                        (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))
@@ -949,7 +975,7 @@
                                         :when (or (:native m) (:code m) (overridden? name m))]
                                     (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m))
                                            (cg/method-global name (:name m) (:desc m))
-                                           (if (:native m) "#t" "#f"))))))])))
+                                           (if (:native m) "#t" "#f"))))))]))))
 
 (defn- user-deps
   "The dependencies of a library cache entry whose link or compile read the
@@ -1552,11 +1578,17 @@
 
 (defn- packed-entry
   "A class map as edn text in UTF-8 bytes (pack), without bytecode: methods
-  keep :code as a flag."
+  keep :code as a flag. Two parts, [map vtable], when the map has a vtable
+  (every linked class's does): a thaw reads the map and keeps the vtable's
+  bytes for class-vtable, so a warm run never parses the vtables of the
+  classes it only restores, half of the entries' text (spike 73). A vtable
+  never thawed is written back as it was."
   [info]
-  (pack (pr-str (-> info
-                    (dissoc :parsed)
-                    (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms)))))))
+  (let [vt (or (:vtable-packed info) (when (:vtable info) (pack (pr-str (:vtable info)))))
+        core (pack (pr-str (-> info
+                               (dissoc :parsed :vtable :vtable-packed)
+                               (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))))]
+    (if vt [core vt] core)))
 
 (defn- strip-for-cache
   "The linker's class map as packed edn per class, JDK classes only, without
