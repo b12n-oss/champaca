@@ -70,48 +70,50 @@ The extracted jar and the uber-jar load from the class path.
 
 On an Apple M1 Pro (10 CPUs), macOS 26.5.2, JDK 25.0.2, with the pinned
 jolt, on 2026-10-30, with the desktop's own applications running (load
-average 3.5 to 5.5). Ten timed runs each, three for a cold variant. Both ran
-on champaca at `62a86ce`:
+average 3.3 to 7.6). Ten timed runs each, three for a cold variant. Both ran
+on champaca at `6579ba1`:
 
 | Spring Boot | Median | Min | Max | Peak RSS |
 |---|---|---|---|---|
-| HotSpot, fat jar | 859 ms | 835 ms | 891 ms | 235 MB |
-| HotSpot, extracted jar | 732 ms | 714 ms | 840 ms | 193 MB |
-| HotSpot + Spring AOT | 601 ms | 581 ms | 622 ms | 156 MB |
-| HotSpot + JDK AOT cache | 347 ms | 335 ms | 367 ms | 146 MB |
-| HotSpot + Spring AOT + AOT cache | 268 ms | 255 ms | 276 ms | 118 MB |
-| champaca, extracted jar, cold | 45.0 s | 44.8 s | 46.0 s | 2742 MB |
-| champaca, extracted jar | 3489 ms | 3325 ms | 3743 ms | 820 MB |
-| champaca + Spring AOT | 3063 ms | 2967 ms | 3340 ms | 784 MB |
-| champaca, fat jar | 5454 ms | 5260 ms | 5918 ms | 847 MB |
+| HotSpot, fat jar | 872 ms | 835 ms | 923 ms | 234 MB |
+| HotSpot, extracted jar | 721 ms | 703 ms | 740 ms | 192 MB |
+| HotSpot + Spring AOT | 603 ms | 584 ms | 666 ms | 157 MB |
+| HotSpot + JDK AOT cache | 343 ms | 336 ms | 357 ms | 147 MB |
+| HotSpot + Spring AOT + AOT cache | 272 ms | 257 ms | 279 ms | 116 MB |
+| champaca, extracted jar, cold | 48.4 s | 48.0 s | 48.6 s | 2690 MB |
+| champaca, extracted jar | 2573 ms | 2554 ms | 2746 ms | 757 MB |
+| champaca + Spring AOT | 2313 ms | 2277 ms | 2471 ms | 743 MB |
+| champaca, fat jar | 4419 ms | 4200 ms | 5968 ms | 775 MB |
 
 | Quarkus | Median | Min | Max | Peak RSS |
 |---|---|---|---|---|
-| HotSpot, fast-jar | 393 ms | 379 ms | 4615 ms | 100 MB |
-| HotSpot, uber-jar | 401 ms | 390 ms | 412 ms | 111 MB |
-| HotSpot + JDK AOT cache | 258 ms | 237 ms | 269 ms | 93 MB |
-| champaca, uber-jar, cold | 32.4 s | 30.9 s | 34.8 s | 2931 MB |
-| champaca, uber-jar | 2205 ms | 2126 ms | 2709 ms | 617 MB |
-| champaca, fast-jar | 2587 ms | 2543 ms | 3286 ms | 695 MB |
+| HotSpot, fast-jar | 401 ms | 367 ms | 5378 ms | 100 MB |
+| HotSpot, uber-jar | 409 ms | 386 ms | 438 ms | 112 MB |
+| HotSpot + JDK AOT cache | 282 ms | 246 ms | 298 ms | 91 MB |
+| champaca, uber-jar, cold | 31.8 s | 30.8 s | 32.1 s | 2076 MB |
+| champaca, uber-jar | 1640 ms | 1550 ms | 2199 ms | 493 MB |
+| champaca, fast-jar | 1945 ms | 1864 ms | 2185 ms | 618 MB |
 
 Every variant printed what HotSpot prints. A warm champaca start from the
-class path takes five times as long as HotSpot's, for both frameworks, and
-needs four to six times its memory; two days earlier it needed six to eight
-times, before the class entries became bytes, the strings were interned and
-the inspector information left the jar classes
-([performance](../docs/guide/performance.md#memory)). Spring AOT saves
-HotSpot 18% of its start and champaca 12%. The cold rows include the JDK's
+class path takes three and a half to four times as long as HotSpot's and
+needs four times its memory. On 2026-10-29 it took five to six times as long
+and six to eight times the memory: since then the class entries became
+bytes with their strings interned, the inspector information left the jar
+classes ([performance](../docs/guide/performance.md#memory)), and an entry's
+vtable and methods stay unparsed until something reads them, while the
+`ByteBuffer` accessors, the copies between arrays and native memory, string
+concatenation and the string intrinsics got faster
+([performance](../docs/guide/performance.md#a-framework-loaders-own-work)).
+Every champaca row is 25 to 40% down on the day before. Spring AOT saves
+HotSpot 16% of its start and champaca 10%. The cold rows include the JDK's
 own first boot, every method of the framework translated and compiled once
 and the cache written. The fat jar and the fast-jar take longer than the
-class path by what their own loaders do: 2.0 s for Spring Boot's launcher to
-read its nested jars (130 ms on HotSpot) and 0.4 s for Quarkus's
+class path by what their own loaders do: 1.8 s for Spring Boot's launcher
+to read its nested jars (150 ms on HotSpot) and 0.3 s for Quarkus's
 RunnerClassLoader (nothing HotSpot's medians show), since the classes those
 loaders define come from the cache like the class path's. Until 2026-10-29
 they didn't, and the fat jar took 21.0 s, the fast-jar 11.1 s; on 2026-10-29
-the launcher's own work still cost 3.3 s and 0.5 s, before the `ByteBuffer`
-accessors, the array copies and string concatenation were sped up
-([performance](../docs/guide/performance.md#a-framework-loaders-own-work)),
-which took every champaca row down by 10 to 25%. Upstream's
+the launcher's own work still cost 3.3 s and 0.5 s. Upstream's
 OpenLDK images can't keep loader-defined classes, which is why they run the
 class path for Spring Boot and the uber-jar for Quarkus. For scale, upstream
 measured its OpenLDK warm image at 4.3 s (Spring Boot) and 1.5 s (Quarkus)
@@ -119,8 +121,8 @@ on a 16-CPU Xeon E5-2670, with HotSpot at 2.9 s and 1.3 s on the same
 machine, so the two projects' numbers aren't comparable directly; the
 HotSpot rows are the yardstick.
 
-The maxima well above their medians (HotSpot's Quarkus fast-jar at 4615 ms,
-champaca's at 3286) are single slow runs each; the medians stand.
+The maxima well above their medians (HotSpot's Quarkus fast-jar at 5378 ms,
+champaca's fat jar at 5968) are single slow runs each; the medians stand.
 
 ## What it took
 
