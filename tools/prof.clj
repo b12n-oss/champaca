@@ -25,12 +25,14 @@
     (binding [*out* *err*] (println "usage: bb prof <classpath> <Main> [args...]"))
     (System/exit 2))
   (ldk/init! {:classpath (vec (.split ^String cp ":"))})
-  (scm/eval-string "(load \"tools/prof.ss\")")
+  (scm/eval-string "(load \"tools/prof.ss\")")   ; bb prof runs from the repo root
   (scm/eval-string (str "(prof-start! " (env "PROF_US" "2000") " " (env "PROF_DEPTH" "4") ")"))
-  (let [t0 (System/nanoTime)]
-    (ldk/invoke-static mc "main" (vec args))
+  (let [t0 (System/nanoTime)
+        ;; the report covers whatever main did, a throw included
+        status (try (ldk/invoke-static mc "main" (vec args)) 0
+                    (catch Throwable t (binding [*out* *err*] (println (str "main threw: " (ex-message t)))) 1))]
     (scm/eval-string "(prof-stop!)")
     (binding [*out* *err*]
-      (println (str "main returned after " (quot (- (System/nanoTime) t0) 1000000) " ms"))
-      (println (scm/eval-string (str "(prof-report " (env "PROF_ROWS" "30") ")")))))
-  (System/exit 0))
+      (println (str "main " (if (zero? status) "returned" "threw") " after " (quot (- (System/nanoTime) t0) 1000000) " ms"))
+      (println (scm/eval-string (str "(prof-report " (env "PROF_ROWS" "30") ")"))))
+    (System/exit status)))

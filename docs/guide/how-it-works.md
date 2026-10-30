@@ -16,8 +16,9 @@ Classes load lazily too: a class is found and parsed the first time something na
 Each local becomes a Scheme variable `l0`, `l1`, ... and each operand-stack slot becomes `s0`, `s1`, .... The translator tracks the stack's types at compile time, so it knows what every slot holds. The method's code splits into basic blocks, each a `letrec`-bound procedure that takes the method's live locals and whatever the stack holds on entry. A jump is a tail call passing the current values, which Chez compiles to a plain jump. Inside a block nothing is assigned: a store or a push binds a fresh variable in a `let`, shadowing the old one. That matters because Chez keeps an assigned variable in a heap box, even when no closure captures it, while a `let`-bound one can live in a register. A `let` closes as soon as its value is dead, so a method reads as a sequence of statements rather than one nest. `Hello.main` is a single block:
 
 ```scheme
-(define |Hello.main([Ljava/lang/String;)V|
-  (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
+(set-top-level-value! '|Hello.main([Ljava/lang/String;)V|
+  (let ((|Hello.main([Ljava/lang/String;)V|
+         (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
     (lambda (l0)
       (let ((npe-tag '|Hello.main([Ljava/lang/String;)V|))
         (letrec ((|Hello.main([Ljava/lang/String;)V#B0|

@@ -828,7 +828,7 @@
                          (cons cp acc)))))))]
     [(vector? x) (units-onto (vector->list x) acc)]
     [(not x) (units-onto "null" acc)]
-    [(jobj? x) (units-onto (jstring-units-of x) acc)]
+    [(or (jobj? x) (jarr? x)) (units-onto (jstring-units-of x) acc)]
     [else (fold-left (lambda (a u) (cons u a)) acc x)]))
 
 ;; makeConcatWithConstants: \x1 takes the next argument, \x2 the next
@@ -855,7 +855,9 @@
 (define (concat-arg x)
   (cond [(not x) "null"]
         [(and (jobj? x) (string=? (jclass-cname (jobj-cls x)) "java/lang/String")) x]
-        [(jobj? x) (or ((jvirt x "toString()Ljava/lang/String;") x) "null")]
+        ;; an array too: javac before 19 passes any reference raw (19+ calls
+        ;; String.valueOf first), and Object's toString answers for arrays
+        [(or (jobj? x) (jarr? x)) (or ((jvirt x "toString()Ljava/lang/String;") x) "null")]
         [else x]))
 ;; a piece's byte length when it is Latin-1, else #f
 (define (concat-latin1-length p)
@@ -872,7 +874,8 @@
 (define (jconcat recipe args consts)
   (if (vector? recipe)
       (jconcat-units recipe args consts)
-      (let* ([pieces (let loop ([ps (concat-parts recipe)] [args args] [consts consts] [acc '()])
+      (let* ([_ (string-slots!)]   ; concat-latin1-length reads the slots
+             [pieces (let loop ([ps (concat-parts recipe)] [args args] [consts consts] [acc '()])
                        (if (null? ps)
                            (reverse acc)
                            (let ([p (car ps)])

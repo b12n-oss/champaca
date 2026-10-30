@@ -72,8 +72,9 @@ A class that isn't there at all, named by an instruction (`new`, a field or meth
 `CHAMPACA_TRACE=1` prints a `jit` line for each method it compiles and writes everything it fed to Chez, the runtime included, to `target/jit/trace.ss`. `Hello.main` comes out as:
 
 ```scheme
-(define |Hello.main([Ljava/lang/String;)V|
-  (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
+(set-top-level-value! '|Hello.main([Ljava/lang/String;)V|
+  (let ((|Hello.main([Ljava/lang/String;)V|
+         (let ((ic0 (cons #f #f)) (ic1 (cons #f #f)))
     (lambda (l0)
       (let ((npe-tag '|Hello.main([Ljava/lang/String;)V|))
         (letrec ((|Hello.main([Ljava/lang/String;)V#B0|

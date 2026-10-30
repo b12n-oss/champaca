@@ -723,11 +723,17 @@
 (for-each
   (lambda (spec)
     (let* ([name (car spec)] [d (cadr spec)] [n (caddr spec)] [signed (cadddr spec)]
+           ;; an object base is a field, instance or static, as the plain accessor
+           ;; takes it (never a ByteBuffer's; kept for Unsafe's generality, the byte
+           ;; order flag meaning nothing for a slot)
            [get (lambda (o off be?)
-                  ;; an object's field (never a ByteBuffer's, kept for Unsafe's generality)
-                  (if (field-offset? o off) (vector-ref (jobj-slots o) off) (signed (unaligned-u o off n be?))))]
+                  (cond [(not (jobj? o)) (signed (unaligned-u o off n be?))]
+                        [(field-offset? o off) (vector-ref (jobj-slots o) off)]
+                        [else (unsafe-get o off d)]))]
            [put! (lambda (o off x be?)
-                   (if (field-offset? o off) (vector-set! (jobj-slots o) off x) (unaligned-put! o off n x be?)))]
+                   (cond [(not (jobj? o)) (unaligned-put! o off n x be?)]
+                         [(field-offset? o off) (vector-set! (jobj-slots o) off x)]
+                         [else (unsafe-set! o off x d)]))]
            [scoped-check! (lambda (session)
                             ;; the wrapper's ScopedAccessError becomes its RuntimeException, as the JDK's catch does
                             (when session
