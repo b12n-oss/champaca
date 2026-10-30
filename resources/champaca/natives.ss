@@ -291,7 +291,7 @@
 ;; a full collection through jolt's own entry (jolt-collect-full!), which
 ;; waits for the other threads at a rendezvous; Chez's (collect) refuses while
 ;; another thread is active, and ended the process with a Scheme error
-(define full-collect
+(define full-collect   ; jolt has had it since before 0.8.13; the pin is newer
   (if (top-level-bound? 'jolt-collect-full!) (top-level-value 'jolt-collect-full!) (lambda () (collect (collect-maximum-generation)))))
 (defnative "java/lang/Runtime.gc()V" (this) (full-collect))
 
@@ -851,7 +851,11 @@
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "get") (string-search "(Ljava/lang/Object;J)" n)))
   (lambda (n) (let ([t (unsafe-type (method-part n))])
                 (lambda (this o off)
-                  (if (field-offset? o off) (vector-ref (jobj-slots o) off) (unsafe-get o off t))))))
+                  (if (field-offset? o off)
+                      ;; a weak reference's referent slot holds a weak pair (references, below)
+                      (let ([v (vector-ref (jobj-slots o) off)])
+                        (if (weak-pair? v) (let ([x (car v)]) (if (bwp-object? x) #f x)) v))
+                      (unsafe-get o off t))))))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "put") (string-search "(Ljava/lang/Object;J" n)))
   (lambda (n) (let ([t (unsafe-type (method-part n))])
@@ -1671,17 +1675,33 @@
   (let ([v (jslot r (referent-index))])
     (if (weak-pair? v) (let ([x (car v)]) (if (bwp-object? x) #f x)) v)))
 (define queued-refs (make-weak-eq-hashtable))
+;; Whether a reference class holds its referent weakly, per class: the class
+;; tests, the queue slot and ReferenceQueue.NULL_QUEUE are looked up once,
+;; since every reference constructed comes here (a lookup each time made a
+;; construction 20 to 30 times slower)
+(define weak-ref-classes (make-weak-eq-hashtable))
 (define (weak-kind? r)
-  (or (jinstance? r "java/lang/ref/WeakReference") (jinstance? r "java/lang/ref/PhantomReference")))
+  (let ([c (jobj-cls r)])
+    (let ([k (eq-hashtable-ref weak-ref-classes c 'unknown)])
+      (if (eq? k 'unknown)
+          (let ([w (or (jinstance? r "java/lang/ref/WeakReference") (jinstance? r "java/lang/ref/PhantomReference"))])
+            (eq-hashtable-set! weak-ref-classes c w)
+            w)
+          k))))
+(define queue-slot #f)
+(define null-queue #f)
 (define-override! "java/lang/ref/Reference.<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V"
   (lambda (this referent queue)
+    (unless null-queue
+      (jinit "java/lang/ref/ReferenceQueue")
+      (set! queue-slot (jfield-index "java/lang/ref/Reference" "queue"))
+      (set! null-queue (top-level-value '|java/lang/ref/ReferenceQueue:NULL_QUEUE|)))
     (let ([weak (and referent (weak-kind? this))])
       (jslot-set! this (referent-index) (if weak (weak-cons referent #f) referent))
-      (jinit "java/lang/ref/ReferenceQueue")
-      (let ([null-queue (top-level-value '|java/lang/ref/ReferenceQueue:NULL_QUEUE|)])
-        (jslot-set! this (jfield-index "java/lang/ref/Reference" "queue") (or queue null-queue))
-        (when (and weak (or (and queue (not (eq? queue null-queue))) (jinstance? this "jdk/internal/ref/Cleaner")))
-          (eq-hashtable-set! queued-refs this #t))))))
+      (jslot-set! this queue-slot (or queue null-queue))
+      ;; a jdk.internal.ref.Cleaner passes a queue of its own, so it's here too
+      (when (and weak queue (not (eq? queue null-queue)))
+        (eq-hashtable-set! queued-refs this #t)))))
 (define-override! "java/lang/ref/Reference.get()Ljava/lang/Object;" (lambda (this) (referent-of this)))
 (defnative "java/lang/ref/Reference.refersTo0(Ljava/lang/Object;)Z" (this o)
   (if (eq? (referent-of this) o) 1 0))
