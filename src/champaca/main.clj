@@ -80,15 +80,14 @@
   [^String text]
   (.getBytes text "UTF-8"))
 (defn- packed? [x] (or (bytes? x) (string? x) (and (vector? x) (bytes? (first x)))))   ; a string: an entry made this run
-;; An entry's text; a two-part entry (packed-entry) answers its first part
-(defn- unpack ^String [x] (cond (vector? x) (unpack (first x)) (bytes? x) (String. ^bytes x "UTF-8") :else x))
+;; An entry's text; a multi-part entry (packed-entry) answers its first part
+(defn- unpack ^String [x] (cond (vector? x) (unpack (first x)) (bytes? x) (String. ^bytes x "UTF-8") (nil? x) nil :else x))
 (defn- packed=
   "Whether two packed entries hold the same text (= on byte arrays is
-  identity), both parts of a two-part entry."
+  identity), every part of a multi-part entry."
   [a b]
   (and (some? a) (some? b)
-       (= (unpack a) (unpack b))
-       (= (when (vector? a) (unpack (second a))) (when (vector? b) (unpack (second b))))))
+       (= (if (vector? a) (mapv unpack a) [(unpack a)]) (if (vector? b) (mapv unpack b) [(unpack b)]))))
 
 (def ^:private interned-strings (atom {}))
 (defn- intern-string
@@ -117,10 +116,13 @@
   [e]
   (let [m (edn/read-string (unpack e))]
     (cond-> m
-      ;; a two-part entry keeps its vtable packed until something reads it
-      ;; (class-vtable): half of an entry's text, and a restored class's is
-      ;; read only when a subclass links or its registration is rebuilt
-      (vector? e) (assoc :vtable-packed (second e))
+      ;; a multi-part entry keeps its vtable and its methods packed until
+      ;; something reads them (class-vtable, class-methods): three quarters
+      ;; of an entry's text, and a restored class's vtable is read only when
+      ;; a subclass links or its registration is rebuilt, its methods when
+      ;; a call to it is compiled, a subclass links or it is reflected on
+      (and (vector? e) (second e)) (assoc :vtable-packed (second e))
+      (and (vector? e) (nth e 2 nil)) (assoc :methods-packed (nth e 2))
       (:vtable m) (update :vtable intern-keys true)
       (:methods m) (update :methods intern-members)
       (:fields m) (update :fields intern-members)
@@ -185,6 +187,23 @@
   "The vtable of a class map: its own, or thawed through class-vtable."
   [info]
   (when info (or (:vtable info) (class-vtable (:name info)))))
+
+(defn- class-methods
+  "cname's methods, thawed on this first read when its entry kept them
+  packed (thaw-entry), as class-vtable thaws a vtable."
+  [cname]
+  (let [info (class-info cname)]
+    (or (:methods info)
+        (when-let [p (:methods-packed info)]
+          (let [ms (intern-members (edn/read-string (unpack p)))]
+            (-> (swap! state update-in [:classes cname]
+                       #(cond (nil? %) % (:methods %) % :else (-> % (assoc :methods ms) (dissoc :methods-packed))))
+                (get-in [:classes cname :methods])))))))
+
+(defn- methods-of
+  "The methods of a class map: its own, or thawed through class-methods."
+  [info]
+  (when info (or (:methods info) (class-methods (:name info)))))
 
 ;; --- class bytes -----------------------------------------------------------------
 ;; JDK classes come from $JAVA_HOME/lib/modules, the runtime image every JDK
@@ -663,7 +682,7 @@
   [ifaces]
   (group-by (fn [[_ m]] (str (:name m) (:desc m)))
             (for [i (distinct ifaces)
-                  m (:methods (class-info i))
+                  m (class-methods i)
                   :when (and (:virtual m) (zero? (bit-and (:flags m) 0x0002)))]
               [i m])))
 
@@ -700,7 +719,7 @@
   [cname mname desc]
   (let [has? (fn [c body?] (some #(and (= mname (:name %)) (= desc (:desc %))
                                        (or (not body?) (:code %) (:native %)))
-                                 (:methods (class-info c))))
+                                 (class-methods c)))
         supers (take-while some? (iterate #(:super (class-info %)) cname))]
     (or (some #(when (has? % false) %) supers)
         ;; a conflict resolves arbitrarily (JVMS 5.4.3.3); dispatch still throws
@@ -717,10 +736,10 @@
   calls resolve to Object's methods too. A signature-polymorphic method of
   MethodHandle or VarHandle (native, varargs) takes any descriptor."
   [cname mname desc]
-  (let [has? (fn [c] (some #(and (= mname (:name %)) (= desc (:desc %))) (:methods (class-info c))))
+  (let [has? (fn [c] (some #(and (= mname (:name %)) (= desc (:desc %))) (class-methods c)))
         polymorphic? (and (#{"java/lang/invoke/MethodHandle" "java/lang/invoke/VarHandle"} cname)
                           (some #(and (= mname (:name %)) (:native %) (pos? (bit-and (:flags %) 0x0080)))
-                                (:methods (class-info cname))))]
+                                (class-methods cname)))]
     (when-not (or (str/starts-with? cname "[")
                   ;; the superclass chain first, lazily: nearly every call hits there
                   (some has? (take-while some? (iterate #(:super (class-info %)) cname)))
@@ -739,7 +758,7 @@
   runtime overrides never qualifies."
   [caller-cname decl mname desc]
   (let [info (class-info decl)
-        im (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods info)))]
+        im (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (methods-of info)))]
     ;; the class map answers most of it without reading the class file again
     (when (and im (:code im) (<= (or (:code-len im) 0) cg/leaf-limit)
                (or (= decl caller-cname) (= :jdk (:origin info)))
@@ -758,7 +777,7 @@
     ;; a method only an interface declares, without a body, doesn't resolve
     ;; here; dispatch handles it
     (when-let [decl (try (resolve-method cname mname desc) (catch Exception _ nil))]
-     (let [m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods (class-info decl))))]
+     (let [m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (class-methods decl)))]
       (when (and m (not (cf/static? m))
                  (or (pos? (bit-and (:flags m) 0x0012))
                      (pos? (bit-and (:flags (class-info cname)) 0x0010))))
@@ -867,7 +886,7 @@
         ;; default, but javac calls them with invokeinterface on the
         ;; receiver, which dispatches through this vtable
         privates (for [i (filter #(cf/interface? (class-info %)) (rest (ancestry-of-unlinked info)))
-                       m (:methods (class-info i))
+                       m (class-methods i)
                        :when (and (:virtual m) (:code m) (pos? (bit-and (:flags m) 0x0002)))]
                    [(str (:name m) (:desc m)) (str i "." (:name m) (:desc m))])
         vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable privates)]
@@ -891,8 +910,8 @@
         (string? v) (cg/str-lit v)
         :else (str "#vu8" (apply cg/sx (map str v)))))
 
-(defn- registration-text [{:keys [name super interfaces template layout fields methods flags reflection conflicts origin] :as info}]
-  (let [vtable (vtable-of info)]
+(defn- registration-text [{:keys [name super interfaces template layout fields flags reflection conflicts origin] :as info}]
+  (let [vtable (vtable-of info) methods (methods-of info)]
   (str/join
    "\n"
    (concat
@@ -1579,17 +1598,19 @@
 
 (defn- packed-entry
   "A class map as edn text in UTF-8 bytes (pack), without bytecode: methods
-  keep :code as a flag. Two parts, [map vtable], when the map has a vtable
-  (every linked class's does): a thaw reads the map and keeps the vtable's
-  bytes for class-vtable, so a warm run never parses the vtables of the
-  classes it only restores, half of the entries' text (spike 73). A vtable
+  keep :code as a flag. Three parts, [map vtable methods], when the map has
+  a vtable or methods (every linked class's): a thaw reads the map and
+  keeps the other parts' bytes for class-vtable and class-methods, so a
+  warm run never parses the vtables and methods of the classes it only
+  restores, three quarters of the entries' text (spikes 73, 74). A part
   never thawed is written back as it was."
   [info]
-  (let [vt (if (:vtable info) (pack (pr-str (:vtable info))) (:vtable-packed info))   ; a live vtable over kept bytes
-        core (pack (pr-str (-> info
-                               (dissoc :parsed :vtable :vtable-packed)
-                               (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))))]
-    (if vt [core vt] core)))
+  (let [vt (if (:vtable info) (pack (pr-str (:vtable info))) (:vtable-packed info))   ; live over kept bytes
+        ms (if (contains? info :methods)
+             (pack (pr-str (mapv #(cond-> % (:code %) (assoc :code true)) (:methods info))))
+             (:methods-packed info))
+        core (pack (pr-str (dissoc info :parsed :vtable :vtable-packed :methods :methods-packed)))]
+    (if (or vt ms) [core vt ms] core)))
 
 (defn- strip-for-cache
   "The linker's class map as packed edn per class, JDK classes only, without
