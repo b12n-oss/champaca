@@ -1,4 +1,7 @@
 import java.lang.foreign.Arena;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.lang.ref.WeakReference;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -77,6 +80,34 @@ public class UnalignedCheck {
         shared.position(7);
         shared.compact();
         dump("compact", shared);
+        // byte-array view VarHandles take Unsafe's getXUnaligned(Object, long, boolean) directly
+        for (ByteOrder o : new ByteOrder[] {ByteOrder.BIG_ENDIAN, ByteOrder.LITTLE_ENDIAN}) {
+            VarHandle ints = MethodHandles.byteArrayViewVarHandle(int[].class, o);
+            VarHandle shorts = MethodHandles.byteArrayViewVarHandle(short[].class, o);
+            VarHandle longs = MethodHandles.byteArrayViewVarHandle(long[].class, o);
+            VarHandle chars = MethodHandles.byteArrayViewVarHandle(char[].class, o);
+            System.out.println("view " + o + " " + (int) ints.get(bytes, 1) + " " + (short) shorts.get(bytes, 3)
+                               + " " + (long) longs.get(bytes, 5) + " " + (int) (char) chars.get(bytes, 2));
+            byte[] w = new byte[16];
+            ints.set(w, 1, 0x80ABCDEF);
+            shorts.set(w, 6, (short) -2);
+            longs.set(w, 8, -0x1122334455667788L);
+            dump("view set " + o, ByteBuffer.wrap(w));
+        }
+        // string concatenation: pieces outside Latin-1 take the code-unit path
+        Object plain = new Object() { public String toString() { return "obj"; } };
+        Object nullToString = new Object() { public String toString() { return null; } };
+        String utf16 = "\u0100x";
+        System.out.println("concat " + 5 + "腜" + 'y' + "\uD83D" + (String) null + nullToString + plain + utf16 + 2.5f + 'é' + (Object) null);
+        int n = args.length + 7;   // not a compile-time constant, so javac concatenates at run time
+        System.out.println("concat latin1 " + n + "abc" + 'z' + "é" + -3L + true);
+        System.out.println("concat cjk " + n + "腜" + 'q' + "Ā" + n);
+        // Reference.refersTo compares the referent itself
+        Object referent = new Object();
+        WeakReference<Object> ref = new WeakReference<>(referent);
+        System.out.println("refersTo " + ref.refersTo(referent) + " " + ref.refersTo(null) + " " + ref.refersTo(new Object()));
+        ref.clear();
+        System.out.println("cleared " + ref.refersTo(null) + " " + ref.refersTo(referent));
         // a closed arena's segment: the scoped check throws as on the JVM
         Arena arena = Arena.ofConfined();
         MemorySegment seg = arena.allocate(16);
