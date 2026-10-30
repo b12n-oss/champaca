@@ -325,20 +325,23 @@
         ;; names the cause (class-exists?, condition-text: natives.ss)
         [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing]
                         [(and (not (jobj? e)) (class-format-of e))
-                         => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))])
+                         => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))]
+                        [(and (not (jobj? e)) (linkage-error-of e))
+                         => (lambda (x) (jthrow (car x) (cdr x)))])
                 (call-unbounded (lambda () (load-hook name))))
               (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
 ;; the class a failed load says isn't there: name itself when its bytes are
 ;; nowhere, else the one a "class not found: X" from the linker names
 (define (missing-class-of e name)
-  (if (not (class-exists? name))
-      name
-      (let* ([t (condition-text e)] [k "class not found: "] [n (string-length t)] [m (string-length k)])
-        (let loop ([i 0])
-          (cond [(fx> (fx+ i m) n) #f]
-                [(string=? (substring t i (fx+ i m)) k) (substring t (fx+ i m) n)]
-                [else (loop (fx+ i 1))])))))
+  (if (not (class-exists? name)) name (class-not-found-in e)))
+;; the X of a linker's "class not found: X" in a failure's text, or #f
+(define (class-not-found-in e)
+  (let* ([t (condition-text e)] [k "class not found: "] [n (string-length t)] [m (string-length k)])
+    (let loop ([i 0])
+      (cond [(fx> (fx+ i m) n) #f]
+            [(string=? (substring t i (fx+ i m)) k) (substring t (fx+ i m) n)]
+            [else (loop (fx+ i 1))]))))
 ;; HotSpot's ClassFormatError text from a load whose class file (the class
 ;; named or one it needs) isn't one: main.clj normalize's "class format
 ;; error in X: <text>", or #f
@@ -354,6 +357,22 @@
             [else (loop (fx+ i 1))]))))
 ;; the same from generated code: an instruction naming such a class (codegen)
 (define (jthrow-class-format name msg) (jthrow "java/lang/ClassFormatError" msg))
+;; a class the JVM refuses to define (main.clj check-definition!): "linkage
+;; error in X: <error class>|<text>" -> (error-class . text), or #f
+(define (linkage-error-of e)
+  (let* ([t (condition-text e)] [k "linkage error in "] [n (string-length t)] [m (string-length k)])
+    (let loop ([i 0])
+      (cond [(fx> (fx+ i m) n) #f]
+            [(string=? (substring t i (fx+ i m)) k)
+             (let skip ([j (fx+ i m)])
+               (cond [(fx>= (fx+ j 1) n) #f]
+                     [(and (char=? (string-ref t j) #\:) (char=? (string-ref t (fx+ j 1)) #\space))
+                      (let* ([rest (substring t (fx+ j 2) n)]
+                             [bar (let find ([k 0]) (cond [(fx= k (string-length rest)) #f] [(char=? (string-ref rest k) #\|) k] [else (find (fx+ k 1))]))])
+                        (and bar (cons (substring rest 0 bar) (substring rest (fx+ bar 1) (string-length rest)))))]
+                     [else (skip (fx+ j 1))]))]
+            [else (loop (fx+ i 1))]))))
+(define (jthrow-linkage name err msg) (jthrow err msg))
 ;; the JVM's error for a class nothing has: the slashed name, caused by a
 ;; ClassNotFoundException with the dotted one; or the error the class's
 ;; loader threw resolving it, every time, as JVMS 5.4.3 has a failed
@@ -1153,6 +1172,26 @@
         (if (user-class? e)
             (app-loader)
             (module-loader (hashtable-ref package-modules (class-package c) #f))))))
+;; HotSpot's place of a class in its linkage messages (Klass::
+;; class_in_module_of_loader): "java.lang.String is in module java.base of
+;; loader 'bootstrap'", "Foo is in unnamed module of loader 'app'"; a loader
+;; of the program's own is "'name' @hash" or its class's name and @hash.
+;; Module versions aren't shown (HotSpot shows a non-JDK module's).
+(define (class-place-text cname)
+  (let* ([c (find-class cname)]
+         [mod (class-module c)]
+         [mname (and mod (jslot mod (jfield-index "java/lang/Module" "name")))]
+         [ld (class-loader-of c)])
+    (string-append (slashes->dots cname) " is in "
+                   (if mname (string-append "module " (jstring->scheme mname)) "unnamed module")
+                   " of loader "
+                   (cond [(not ld) "'bootstrap'"]
+                         [else
+                          (let ([n (jslot ld (jfield-index "java/lang/ClassLoader" "name"))]
+                                [hash (string-append " @" (number->string (identity-hash ld) 16))])
+                            (cond [(jinstance? ld "jdk/internal/loader/BuiltinClassLoader") (string-append "'" (jstring->scheme n) "'")]
+                                  [n (string-append "'" (jstring->scheme n) "'" hash)]
+                                  [else (string-append (slashes->dots (jclass-cname (jobj-cls ld))) hash)]))]))))
 (define (set-mirror-loader! m c)
   (let ([ld (class-loader-of c)])
     (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld))))

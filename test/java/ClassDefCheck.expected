@@ -1,0 +1,26 @@
+CdFinalChild from the class path: java.lang.IncompatibleClassChangeError: class CdFinalChild cannot inherit from final class java.lang.String
+CdFinalChild again: java.lang.IncompatibleClassChangeError: class CdFinalChild cannot inherit from final class java.lang.String
+CdFinalChildB from its bytes: java.lang.IncompatibleClassChangeError: class CdFinalChildB cannot inherit from final class java.lang.String
+CdInterfaceSuper from the class path: java.lang.IncompatibleClassChangeError: class CdInterfaceSuper has interface java.lang.Runnable as super class
+CdInterfaceSuper again: java.lang.IncompatibleClassChangeError: class CdInterfaceSuper has interface java.lang.Runnable as super class
+CdInterfaceSuperB from its bytes: java.lang.IncompatibleClassChangeError: class CdInterfaceSuperB has interface java.lang.Runnable as super class
+CdClassInterface from the class path: java.lang.IncompatibleClassChangeError: class CdClassInterface can not implement java.lang.String, because it is not an interface (java.lang.String is in module java.base of loader 'bootstrap')
+CdClassInterface again: java.lang.IncompatibleClassChangeError: class CdClassInterface can not implement java.lang.String, because it is not an interface (java.lang.String is in module java.base of loader 'bootstrap')
+CdClassInterfaceB from its bytes: java.lang.IncompatibleClassChangeError: class CdClassInterfaceB can not implement java.lang.String, because it is not an interface (java.lang.String is in module java.base of loader 'bootstrap')
+CdFinalOverride from the class path: java.lang.IncompatibleClassChangeError: class CdFinalOverride overrides final method CdParent.done()V
+CdFinalOverride again: java.lang.IncompatibleClassChangeError: class CdFinalOverride overrides final method CdParent.done()V
+CdFinalOverrideB from its bytes: java.lang.IncompatibleClassChangeError: class CdFinalOverrideB overrides final method CdParent.done()V
+CdIfaceWithSuper from the class path: java.lang.ClassFormatError: Interfaces must have java.lang.Object as superclass in class file CdIfaceWithSuper
+CdIfaceWithSuper again: java.lang.ClassFormatError: Interfaces must have java.lang.Object as superclass in class file CdIfaceWithSuper
+CdIfaceWithSuperB from its bytes: java.lang.ClassFormatError: Interfaces must have java.lang.Object as superclass in class file CdIfaceWithSuperB
+CdSelf from the class path: java.lang.ClassCircularityError: CdSelf
+CdSelf again: java.lang.ClassCircularityError: CdSelf
+CdSelfB from its bytes: java.lang.ClassCircularityError: CdSelfB
+CdPrivateFinal from the class path: defined CdPrivateFinal
+CdPrivateFinal again: defined CdPrivateFinal
+CdPrivateFinalB from its bytes: defined CdPrivateFinalB
+CdStaticBeside from the class path: defined CdStaticBeside
+CdStaticBeside again: defined CdStaticBeside
+CdStaticBesideB from its bytes: defined CdStaticBesideB
+new CdFinalChild: java.lang.IncompatibleClassChangeError: class CdFinalChild cannot inherit from final class java.lang.String
+new CdFinalChild: java.lang.IncompatibleClassChangeError: class CdFinalChild cannot inherit from final class java.lang.String

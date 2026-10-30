@@ -2253,7 +2253,13 @@
          ;; what fails past parsing (a superclass that isn't there, a link
          ;; error) is a NoClassDefFoundError naming the cause, as a class
          ;; the JVM can't define is a LinkageError
-         [r (guard (e [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
+         ;; a supertype the loader itself failed on (a class extending itself:
+         ;; its nested definition threw ClassCircularityError) is that error,
+         ;; as the JVM rethrows a failed resolution's error
+         [r (guard (e [(and (not (jobj? e))
+                            (let ([m (class-not-found-in e)]) (and m (hashtable-ref resolution-errors m #f))))
+                       => raise]
+                      [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
               (parameterize ([resolving-loader loader])
                 (define-class-hook* name (bytes->latin1 v off len) hidden?
                                    (and loader (not hidden?)
@@ -2262,6 +2268,10 @@
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])
     (cond [(string=? kind "bad") (jthrow "java/lang/ClassFormatError" arg)]
+          ;; a definition the JVM refuses (main.clj check-definition!): "<error class>|<text>"
+          [(string=? kind "link")
+           (let ([bar (let find ([k 0]) (if (char=? (string-ref arg k) #\|) k (find (fx+ k 1))))])
+             (jthrow (substring arg 0 bar) (substring arg (fx+ bar 1) (string-length arg))))]
           [(string=? kind "wrong")   ; the JVM's message keeps both names slashed
            (jthrow "java/lang/NoClassDefFoundError" (string-append name " (wrong name: " arg ")"))]
           [(string=? kind "dup")

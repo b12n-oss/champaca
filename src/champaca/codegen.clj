@@ -454,6 +454,13 @@
     (when (and (= (set (keys d)) #{:class :method :desc}) (= "no such method" (ex-message e)))
       [(:class d) (:method d) (:desc d)])))
 
+(defn- refused-class
+  "[class error-class text] of a class the JVM refuses to define (main.clj
+  check-definition!, load-supertypes!), or nil."
+  [e]
+  (let [d (ex-data e)]
+    (when (:linkage d) [(:class d) (:linkage d) (:message d)])))
+
 (defn- wrong-kind
   "[what class name desc] of a call whose instruction doesn't match the
   method it resolves to (main.clj check-kind), or nil."
@@ -795,9 +802,11 @@
         (catch Exception e
           (let [c (missing-class e)
                 k (wrong-kind e)
+                r (refused-class e)
                 m (or (missing-method e) k)
-                bad (bad-class e)
+                bad (or (bad-class e) r)
                 ncdfe (cond k (apply sx "jthrow-icce" (map str-lit k))
+                            r (apply sx "jthrow-linkage" (map str-lit r))
                             m (apply sx "jthrow-no-method" (map str-lit m))
                             bad (apply sx "jthrow-class-format" (map str-lit bad))
                             :else (sx "jthrow-missing" (str-lit c)))]

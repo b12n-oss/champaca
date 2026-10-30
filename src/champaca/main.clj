@@ -858,6 +858,10 @@
                            (throw (ex-info (str "class format error in " cname ": " msg)
                                            {:class cname :class-format msg})))
                          (throw e)))))]
+        ;; HotSpot's format check: an interface's superclass is Object
+        (when (and (pos? (bit-and (:flags p) 0x0200)) (not= "java/lang/Object" (:super p)))
+          (let [msg (str "Interfaces must have java.lang.Object as superclass in class file " cname)]
+            (throw (ex-info (str "class format error in " cname ": " msg) {:class cname :class-format msg}))))
         (class-map cname p (if user :user :jdk))))))
 
 (defn- class-map
@@ -1130,6 +1134,61 @@
                                 (update :library-dirty (fnil conj #{}) (:jar src))))
               nil))))))
 
+;; The classes whose superclass and interfaces are being loaded, on this
+;; thread: one among its own supertypes is the JVM's ClassCircularityError,
+;; where loading it again recursed until the heap ran out
+(def ^:private ^:dynamic *loading-supertypes* #{})
+
+(defn- linkage-error
+  "The ex-info for a class the JVM refuses to define, error the JVM class's
+  slashed name: runtime.ss find-class, define-class! and codegen read it."
+  [cname error msg]
+  (ex-info (str "linkage error in " cname ": " error "|" msg) {:class cname :linkage error :message msg}))
+
+(defn- dotted [n] (str/replace n "/" "."))
+
+(defn- check-definition!
+  "HotSpot's checks of a class being defined, once its superclass and
+  interfaces are loaded (JVMS 5.3.5, 5.4.5), with its texts: a final
+  superclass, an interface as the superclass, a class among the interfaces,
+  an instance method overriding a final one it can see. Throws linkage-error."
+  [info]
+  (let [n (:name info) sup (:super info) sup-info (when sup (class-info sup))]
+    (when (and sup-info (not (cf/interface? info)))
+      (when (cf/interface? sup-info)
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " has interface " (dotted sup) " as super class"))))
+      (when (pos? (bit-and (:flags sup-info) 0x0010))
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup))))))
+    (doseq [i (:interfaces info)]
+      (when-not (cf/interface? (class-info i))
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
+                              (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
+                                   (s/call "class-place-text" i) ")")))))
+    (when sup
+      (let [pkg (fn [c] (let [i (str/last-index-of c "/")] (if i (subs c 0 i) "")))]
+        (doseq [m (:methods info)
+                :when (and (not (cf/static? m)) (not= "<init>" (:name m)) (zero? (bit-and (:flags m) 0x0002)))]
+          (doseq [c (take-while some? (iterate #(:super (class-info %)) sup))
+                  :let [sm (some #(when (and (= (:name m) (:name %)) (= (:desc m) (:desc %))) %) (class-methods c))]
+                  :when (and sm (pos? (bit-and (:flags sm) 0x0010)) (not (cf/static? sm))
+                             (zero? (bit-and (:flags sm) 0x0002))
+                             ;; package-private: only from the same package
+                             (or (pos? (bit-and (:flags sm) 0x0005)) (= (pkg c) (pkg n))))]
+            (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
+                                  (str "class " (dotted n) " overrides final method " (dotted c) "." (:name m) (:desc m))))))))))
+
+(defn- load-supertypes!
+  "ensure-loaded! of info's superclass and interfaces, then check-definition!;
+  one already being loaded on this thread is ClassCircularityError."
+  [info]
+  (let [n (:name info)]
+    (when (contains? *loading-supertypes* n)
+      (throw (linkage-error n "java/lang/ClassCircularityError" (dotted n))))
+    (binding [*loading-supertypes* (conj *loading-supertypes* n)]
+      (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+        (ensure-loaded! dep)))
+    (check-definition! info)))
+
 (defn ensure-loaded! [cname]
   (cond
     ;; registered by an earlier run: its class table entry came from the
@@ -1152,8 +1211,7 @@
     (not (get-in @state [:classes cname]))
     (when-not (restore-user-class! cname)
       (when-let [info (timed :parse #(normalize cname))]
-        (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
-          (ensure-loaded! dep))
+        (load-supertypes! info)
         (when-not (get-in @state [:classes cname])
           ;; a classpath class's link and registration record what they read
           (let [reads (when (= :user (:origin info)) (volatile! #{}))
@@ -1251,15 +1309,20 @@
                                (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))]
           (cond
             (:bad c) (str "bad " (:bad c))
+            (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
+            (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
             (and given (not= given (:name c))) (str "wrong " (:name c))
             (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
             :else
+            (try
             (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
                   n (:name c)
                   info (class-map n c :defined)]
               ;; bytes class-source held for a classpath class of this name won't be parsed
               (swap! state update :dir-bytes dissoc n)
-              (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep))
+              ;; HotSpot's checks of the definition (load-supertypes!): its
+              ;; error class and text go back as "link <class>|<text>"
+              (load-supertypes! info)
               ;; as ensure-loaded! does for a classpath class: the link and the
               ;; registration record what they read, which the entry depends on
               (let [reads (when fp (volatile! #{}))
@@ -1281,7 +1344,11 @@
                                      [:classes n])]
                   (record! (cache-origin linked) [n] {:text text})
                   (scheme! text :interpret)))
-              (str "ok " n)))))))
+              (str "ok " n))
+            (catch Exception e
+              (if-let [err (:linkage (ex-data e))]
+                (str "link " err "|" (:message (ex-data e)))
+                (throw e)))))))))
 
 (defn- defined-jar
   "The library cache's key for the classes a program's own loaders define:
@@ -1408,6 +1475,8 @@
                      (binding [*out* *err*]
                        (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
                                      ", " why "; that code throws " what)))))
+          ;; and for a class the JVM refuses to define (check-definition!)
+          refused (seq (map second (re-seq (re-pattern "\\(jthrow-linkage \"([^\"]+)\"") text)))
           ;; and for a call of the wrong kind (IncompatibleClassChangeError)
           icce (seq (map (fn [[_ c n d]] (str c "." n d))
                          (re-seq (re-pattern "\\(jthrow-icce \"[^\"]+\" \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"") text)))
@@ -1415,7 +1484,8 @@
           _ (report no-method "not found" "NoSuchMethodError")
           _ (report bad-format "not a class file" "ClassFormatError")
           _ (report icce "of the other kind" "IncompatibleClassChangeError")
-          missing (or missing no-method bad-format icce)]
+          _ (report refused "refused by its definition's checks" "the JVM's linkage error")
+          missing (or missing no-method bad-format icce refused)]
       (cond
         missing (timed :chez-compile #(scheme! text :compile (lines? cname info)))
         ;; compiled once: the same object code runs now and goes in the cache
