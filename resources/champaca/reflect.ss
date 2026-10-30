@@ -657,7 +657,7 @@
 ;; A class's <clinit> is bound as its method global when it has one (jinit
 ;; calls it the same way). Part of the default serialVersionUID.
 (defnative "java/io/ObjectStreamClass.hasStaticInitializer(Ljava/lang/Class;)Z" (c)
-  (if (top-level-bound? (string->symbol (string-append (jclass-cname (mirror-class c)) ".<clinit>()V"))) 1 0))
+  (if (global-bound? (string->symbol (string-append (jclass-cname (mirror-class c)) ".<clinit>()V"))) 1 0))
 
 ;; The first frame up the stack whose class has a loader other than the boot
 ;; and platform ones, as HotSpot answers it: a class defined at run time has
@@ -889,7 +889,7 @@
 ;; one procedure per element key "name()desc", shared by every annotation type
 (define (annotation-proc-symbol key)
   (let ([sym (string->symbol (string-append "champaca/Annotation." key))])
-    (unless (top-level-bound? sym)
+    (unless (global-bound? sym)
       (let* ([paren (let find ([i 0]) (if (char=? (string-ref key i) #\() i (find (fx+ i 1))))]
              [name (substring key 0 paren)]
              [ret (substring key (fx+ paren 2) (string-length key))])

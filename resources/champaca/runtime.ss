@@ -357,7 +357,7 @@
          (when (jclass-super c) (jinit (jclass-super c)))
          (unless (eq? (jclass-kind c) 'interface) (init-default-interfaces c))
          (let ([sym (string->symbol (string-append name ".<clinit>()V"))])
-           (when (top-level-bound? sym) ((top-level-value sym)))))
+           (when (global-bound? sym) ((top-level-value sym)))))
        (done 'initialized))]
     [(initializing)
      (unless (eq? (eq-hashtable-ref init-owners c #f) (self))
@@ -978,7 +978,7 @@
 ;; (initPhase2), and its unnamed module; #f before
 (define (app-loader)
   (let ([s '|jdk/internal/loader/ClassLoaders:APP_LOADER|])
-    (and (top-level-bound? s) (top-level-value s))))
+    (and (global-bound? s) (top-level-value s))))
 (define (app-unnamed-module)
   (let ([l (app-loader)]) (and l (jslot l (jfield-index "java/lang/ClassLoader" "unnamedModule")))))
 (define package-modules (make-hashtable string-hash string=?))   ; "java/util" -> Module
@@ -1266,17 +1266,56 @@
 ;; A method's text evaluated outside the cache paths (main.clj
 ;; compile-method!), with inspector information as lines? decided, where
 ;; the global setting above would keep it for every method
+;; --- champaca's globals are their own top-level labels ------------------------------
+;; In a mutable environment such as jolt's, Chez gives a top-level variable a
+;; label gensym, #{Name *top*:Name}, on its first definition or reference, and
+;; the variable's value lives in that gensym. Its unique name is a fresh
+;; string, "*top*:" and the whole name, so the 65,000 globals of a warm Spring
+;; Boot start (one per method, static field and conflict stub) held 20 MB of
+;; them (spike 76). A symbol whose *top* property is the symbol itself is its
+;; own label, as every symbol of Chez's scheme environment is, and its value
+;; sits in its own slot: no gensym. Every form champaca generates is walked
+;; before it is expanded, so a global is labelled before anything compiled
+;; refers to it, in every process alike (a cached unit refers to the label it
+;; was compiled against); a symbol that already has a label keeps it, and one
+;; bound at the top level already (a Scheme or jolt procedure: its value in its
+;; own slot) is left alone. A global's name holds "(" (a method) or ":" (a
+;; field, a conflict stub); a local of the same shape (a block's name) gets a
+;; property nothing reads.
+(define (champaca-global-name? s)
+  (and (symbol? s) (not (gensym? s))
+       (let ([n (symbol->string s)])
+         (let loop ([i 0])
+           (and (fx< i (string-length n))
+                (or (memv (string-ref n i) '(#\( #\:)) (loop (fx+ i 1))))))))
+(define (self-label! s)
+  (unless (or (#%$sgetprop s '*top* #f) (#%$top-level-bound? s))
+    (#%$sputprop s '*top* s)))
+(define (self-label-form! x)
+  (cond [(pair? x) (self-label-form! (car x)) (self-label-form! (cdr x))]
+        [(vector? x) (vector-for-each self-label-form! x)]
+        [(champaca-global-name? x) (self-label! x)]
+        [else (void)]))
+(define (define-global! sym v)
+  (when (champaca-global-name? sym) (self-label! sym))
+  (set-top-level-value! sym v))
+;; top-level-bound? for a global that may not be defined yet (a class with no
+;; <clinit>): Chez's own makes it a label gensym on the way
+(define (global-bound? s)
+  (when (champaca-global-name? s) (self-label! s))
+  (top-level-bound? s))
+
 (define (eval-method-text text lines?)
   (parameterize ([generate-inspector-information lines?])
     (let ([p (open-string-input-port text)])
       (let loop ([last (void)])
         (let ([form (read p)])
-          (if (eof-object? form) last (loop (eval form))))))))
+          (if (eof-object? form) last (begin (self-label-form! form) (loop (eval form)))))))))
 (define (interpret-string s)
   (let ([p (open-input-string s)])
     (let loop ([r (void)])
       (let ([x (read p)])
-        (if (eof-object? x) r (loop (interpret x)))))))
+        (if (eof-object? x) r (begin (self-label-form! x) (loop (interpret x))))))))
 
 ;; compile-file announces itself on stdout, which belongs to the Java program.
 ;; The cache's code carries no inspector information (free-variable names,
@@ -1300,11 +1339,11 @@
 (define (begin-units! path)
   (set! unit-out (open-file-output-port path (file-options no-fail))))
 
-(define (read-all text)
+(define (read-all text)   ; generated forms, their globals labelled (self-label-form!)
   (let ([in (open-input-string text)])
     (let loop ([forms '()])
       (let ([x (read in)])
-        (if (eof-object? x) (reverse forms) (loop (cons x forms)))))))
+        (if (eof-object? x) (reverse forms) (begin (self-label-form! x) (loop (cons x forms))))))))
 
 ;; inspect: keep inspector information, as a classpath class's method bodies
 ;; do, since stack traces read their line numbers from it (JDK code goes
@@ -1374,7 +1413,7 @@
 (define (define-methods! cname ms)
   (for-each (lambda (m)
               (let ([mname (car m)] [desc (cadr m)] [sym (caddr m)])
-                (define-top-level-value sym
+                (define-global! sym
                   (if (cadddr m)
                       (native-ref (string-append cname "." mname desc))
                       (method-stub cname mname desc sym)))))

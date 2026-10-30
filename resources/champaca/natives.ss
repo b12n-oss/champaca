@@ -1808,7 +1808,7 @@
 ;; as streams, so a loader isolated under it doesn't see the application's
 (define (platform-loader? l)
   (let ([s '|jdk/internal/loader/ClassLoaders:PLATFORM_LOADER|])
-    (and l (top-level-bound? s) (eq? l (top-level-value s)))))
+    (and l (global-bound? s) (eq? l (top-level-value s)))))
 (define jdk-resource-hook (lambda (path) #f))
 (define (set-jdk-resource-hook! f) (set! jdk-resource-hook f))
 (define (bytes-stream found)
@@ -1985,7 +1985,7 @@
 (define (jdk-module-package pn)
   (let* ([m (hashtable-ref package-modules (slashes pn) #f)]
          [boot '|jdk/internal/loader/ClassLoaders:BOOT_LOADER|]
-         [ld (and m (or (module-loader m) (and (top-level-bound? boot) (top-level-value boot))))])
+         [ld (and m (or (module-loader m) (and (global-bound? boot) (top-level-value boot))))])
     (and ld ((method-proc "java/lang/ClassLoader" "definePackage(Ljava/lang/String;Ljava/lang/Module;)Ljava/lang/Package;")
              ld (jstring pn) m))))
 

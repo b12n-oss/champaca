@@ -982,11 +982,11 @@
     ;; in declaration order, dotted, without descriptors
     (for [[k is] (sort conflicts)
           :let [mname (subs k 0 (str/index-of k "("))]]
-      (cg/sx "define" (cg/sym (str "icce:" name "." k))
+      (cg/sx "define-global!" (str "'" (cg/sym (str "icce:" name "." k)))
              (cg/sx "icce-stub" (cg/str-lit (str "Conflicting default methods: "
                                                  (str/join " " (map #(str (str/replace % "/" ".") "." mname) is)))))))
     (for [f fields :when (:static f)]
-      (cg/sx "define" (cg/static-global name (:name f))
+      (cg/sx "define-global!" (str "'" (cg/static-global name (:name f)))
              (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))
     ;; every method's definition from one form: a native's from natives.ss,
     ;; any other's from method-stub, which returns a runtime override when
