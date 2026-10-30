@@ -110,6 +110,7 @@ bb linux                                              # bb test and bb libs on L
 bb examples                                           # list the examples/*.clj test files
 bb example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
 bb heap target/classes Hello                          # where the memory goes: the live heap by type after Hello (roots or java for the other views)
+bb prof target/classes Streams                        # where the time goes: the hottest Java frames of a run, sampled (PROF_US=500 for a finer interval)
 bb nrepl                                              # an nREPL server for your editor, on a free port written to .nrepl-port
 bb site:serve                                         # build the docs site and serve it on the first free port from 3000 (bb site:serve 4000 refuses a busy port); needs a docs-engine checkout
 bb site:build                                         # build the docs site into _site/ (bb site:clean deletes it)

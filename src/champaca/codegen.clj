@@ -729,7 +729,8 @@
                                   ;; one code unit, which may be half a surrogate pair
                                   "C" (sx "list" v)
                                   "Z" (sx "jbool->string" v)
-                                  (sx "jstring-units-of" v)))
+                                  ;; the reference itself: jconcat takes its String or toString
+                                  v))
                               args argv)]
                 (push! (sx "jconcat" (lit recipe) (apply sx "list" conv) (apply sx "list" consts)) "A"))
               "bootstrap" ; java.lang.runtime.ObjectMethods: record toString/equals/hashCode
@@ -873,7 +874,7 @@
                  (decode code)))))
 
 (defn compile-method
-  "Scheme source for `(define |Cls.name(desc)| (lambda ...))`. A small leaf
+  "Scheme source for `(set-top-level-value! '|Cls.name(desc)| (lambda ...))`. A small leaf
   method it calls directly (invokestatic, invokespecial, or invokevirtual
   that nothing can override) is compiled into it as a let-bound procedure,
   which Chez calls directly or inlines."
@@ -919,10 +920,17 @@
                           lbl)))))
         f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
         f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
-    (sx "define" (method-global (:name cls) (:name method) (:desc method))
-        (cond (empty? @ics) f
-              vector-ics? (sx "let" (sx (sx "ics" (apply sx "vector" @ics))) f)
-              :else (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f)))))
+    ;; set-top-level-value!, not define: a top-level define compiled to a
+    ;; cached unit carries the expander's record of the binding ($sc-put-cte,
+    ;; a syntax object with its ribcage), 15% of a unit's bytes and a fifth
+    ;; of its load time (spike 72); the value cell is the same. The let names
+    ;; the procedure as define did (a code name is what stack traces and
+    ;; getCallerClass read; a bare lambda has none).
+    (let [g (method-global (:name cls) (:name method) (:desc method))
+          body (cond (empty? @ics) f
+                     vector-ics? (sx "let" (sx (sx "ics" (apply sx "vector" @ics))) f)
+                     :else (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f))]
+      (sx "set-top-level-value!" (str "'" g) (sx "let" (sx (sx g body)) g)))))
 
 (defn- compile-method*
   "The method as a lambda. ic! names a fresh inline-cache cell, inline! the

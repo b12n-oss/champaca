@@ -628,6 +628,10 @@
                    (println (str "== hangs: " hangs))
                    (println (if ok "battery green" "battery RED"))
                    (System/exit (if ok 0 1)))}
+  prof {:doc "Where a process's time goes: boot, run <Main> with a sampling profiler on its thread, print the hot Java frames (bb prof <classpath> <Main> [args...]; PROF_US=2000; tools/prof.clj)"
+        :task (let [args *command-line-args*]
+                (when (< (count args) 2) (println "usage: bb prof <classpath> <Main> [args...]") (System/exit 2))
+                (apply shell (jolt-bin) "-M" "tools/prof.clj" args))}
   heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (bb heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
         :task (let [args *command-line-args*]
                 (when (< (count args) 2) (println "usage: bb heap <classpath> <Main> [types|roots|java] [args...]") (System/exit 2))

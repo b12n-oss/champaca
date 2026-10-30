@@ -1157,7 +1157,7 @@
   (restore-defined-class!)."
   [given text hidden? cacheable?]
   (let [bs (.getBytes ^String text "ISO-8859-1")
-        fp (when (and cacheable? given) (bytes-fp bs))
+        fp (when (and cacheable? given) (timed :fingerprint #(bytes-fp bs)))
         dj (when fp (defined-jar))]
     (or (when (and fp (not (get-in @state [:classes given])))
           (restore-defined-class! given bs fp dj))
@@ -1219,7 +1219,7 @@
   checked when one is first called (deps-still-hold!)."
   [n bs fp dj]
   (if-let [packed (get (library-cache dj) n)]
-    (let [info (try (thaw-entry packed)
+    (let [info (try (timed :thaw #(thaw-entry packed))
                     (catch Exception e
                       (binding [*out* *err*]
                         (println (str "champaca: dropping the library cache's unreadable entry for " n ":") (ex-message e)))
@@ -1791,7 +1791,7 @@
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (when-let [ds (seq (:assertion-directives @state))]
     (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
-  (s/call "set-define-class-hook!" define-class!)
+  (s/call "set-define-class-hook!" (fn [& args] (timed :define #(apply define-class! args))))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
   (s/call "set-annotation-class-hook!" (fn [iface keys]

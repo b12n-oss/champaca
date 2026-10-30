@@ -603,7 +603,8 @@
 ;; Objects keep slot-index offsets from objectFieldOffset.
 
 (define array-base 16)
-(define (type-size t) (case t [("Z" "B") 1] [("C" "S") 2] [("I" "F") 4] [("J" "D") 8] [else 4]))
+(define (type-size t) (case (string-ref t 0) [(#\Z #\B) 1] [(#\C #\S) 2] [(#\I #\F) 4] [(#\J #\D) 8] [else 4]))
+(define (same-type? t u) (char=? (string-ref t 0) (string-ref u 0)))
 (define (elem-type a) (let ([e (jarr-elem a)]) (if (memv (string-ref e 0) '(#\L #\[)) "L" e)))
 
 (define (byte-of a bpos)
@@ -619,9 +620,9 @@
     (vector-set! (jarr-vec a) i (signed-as t new))))
 
 (define (signed-as t u)
-  (case t
-    [("B") (i2b u)] [("S") (i2s u)] [("C") (logand u #xffff)] [("Z") (logand u 1)]
-    [("I") (i32 u)] [("J") (i64 u)] [else u]))
+  (case (string-ref t 0)
+    [(#\B) (i2b u)] [(#\S) (i2s u)] [(#\C) (logand u #xffff)] [(#\Z) (logand u 1)]
+    [(#\I) (i32 u)] [(#\J) (i64 u)] [else u]))
 
 ;; Static fields: like HotSpot, the base is the class mirror. The offset is
 ;; static-offset-tag plus the field's index in the class meta list, so it
@@ -642,7 +643,7 @@
     [(jobj? o) (vector-ref (jobj-slots o) off)]
     [else
      (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
-       (if (and (= se st) (zero? (remainder b se)) (or (string=? t et) (string=? et "L") (string=? t "L")))
+       (if (and (= se st) (zero? (remainder b se)) (or (same-type? t et) (char=? (string-ref et 0) #\L) (char=? (string-ref t 0) #\L)))
            (vector-ref (jarr-vec o) (quotient b se))
            (let loop ([k (- st 1)] [acc 0])
              (if (< k 0) (signed-as t acc) (loop (- k 1) (logior (ash acc 8) (byte-of o (+ b k))))))))]))
@@ -654,10 +655,100 @@
     [(jobj? o) (vector-set! (jobj-slots o) off v)]
     [else
      (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
-       (if (and (= se st) (zero? (remainder b se)) (or (string=? t et) (string=? et "L") (string=? t "L")))
+       (if (and (= se st) (zero? (remainder b se)) (or (same-type? t et) (char=? (string-ref et 0) #\L) (char=? (string-ref t 0) #\L)))
            (vector-set! (jarr-vec o) (quotient b se) v)
            (do ([k 0 (+ k 1)]) ((= k st))
              (set-byte! o (+ b k) (logand (ash v (* -8 k)) #xff)))))]))
+
+;; --- the Unaligned accessors ------------------------------------------------------
+;; Unsafe.get<T>Unaligned(Object, long[, boolean]) and put<T>Unaligned, and
+;; ScopedMemoryAccess's wrappers over them, which every ByteBuffer read and
+;; write on a byte[] goes through (HeapByteBuffer.getShort and the rest).
+;; HotSpot intrinsifies them; here the JDK's Java took a native call per
+;; byte plus the assembly, and the scoped wrapper a try/finally per access
+;; (a quarter of a warm Spring Boot fat-jar start was its launcher reading
+;; zip headers this way). Overridden: a byte[]'s bytes are read from its
+;; vector directly, in either byte order; native memory (a direct buffer)
+;; through one foreign-ref; any other array byte by byte as before.
+;; an instance field of an object, the case atomics and locks hit: its offset is the slot index
+(define-syntax field-offset?
+  (syntax-rules () [(_ o off) (and (jobj? o) (fx< off static-offset-tag))]))
+(define-syntax byte-array?
+  (syntax-rules () [(_ o) (and (jarr? o) (let ([e (jarr-elem o)]) (and (fx= (string-length e) 1) (char=? (string-ref e 0) #\B))))]))
+;; the unsigned value of n bytes (n up to 4) at index i of byte vector v
+(define (vec-bytes->fx v i n be?)
+  (let loop ([k 0] [acc 0])
+    (if (fx= k n)
+        acc
+        (loop (fx+ k 1)
+              (fxlogor acc (fxsll (fxlogand (vector-ref v (fx+ i k)) #xff) (fx* 8 (if be? (fx- (fx- n 1) k) k))))))))
+;; the unsigned n-byte value at off in o: a byte[], native memory, or any
+;; other array (mem-byte); n is 1, 2, 4 or 8
+(define (unaligned-u o off n be?)
+  (cond
+    [(byte-array? o)
+     (let ([v (jarr-vec o)] [i (fx- off array-base)])
+       (if (fx= n 8)
+           (logior (vec-bytes->fx v (if be? (fx+ i 4) i) 4 be?) (ash (vec-bytes->fx v (if be? i (fx+ i 4)) 4 be?) 32))
+           (vec-bytes->fx v i n be?)))]
+    [(not o)
+     (let ([u (case n [(1) (#3%foreign-ref 'unsigned-8 off 0)] [(2) (#3%foreign-ref 'unsigned-16 off 0)] [(4) (#3%foreign-ref 'unsigned-32 off 0)] [else (#3%foreign-ref 'unsigned-64 off 0)])])
+       (if be? (bswap u n) u))]
+    [else
+     (let loop ([k 0] [acc 0])
+       (if (fx= k n)
+           acc
+           (loop (fx+ k 1) (logior acc (ash (mem-byte o (+ off k)) (fx* 8 (if be? (fx- (fx- n 1) k) k)))))))]))
+;; the n low bytes of x (any sign) written at off in o, in either order
+(define (unaligned-put! o off n x be?)
+  (cond
+    [(byte-array? o)
+     (let ([v (jarr-vec o)] [i (fx- off array-base)])
+       (do ([k 0 (fx+ k 1)]) ((fx= k n))
+         (vector-set! v (fx+ i (if be? (fx- (fx- n 1) k) k)) (i2b (logand (ash x (fx* -8 k)) #xff)))))]
+    [(not o)
+     (let ([u (let ([u (logand x (- (ash 1 (fx* 8 n)) 1))]) (if be? (bswap u n) u))])
+       (case n
+         [(1) (#3%foreign-set! 'unsigned-8 off 0 u)] [(2) (#3%foreign-set! 'unsigned-16 off 0 u)]
+         [(4) (#3%foreign-set! 'unsigned-32 off 0 u)] [else (#3%foreign-set! 'unsigned-64 off 0 u)]))]
+    [else
+     (do ([k 0 (fx+ k 1)]) ((fx= k n))
+       (mem-byte-set! o (+ off (if be? (fx- (fx- n 1) k) k)) (logand (ash x (fx* -8 k)) #xff)))]))
+(define (bswap u n)
+  (let loop ([k 0] [acc 0])
+    (if (fx= k n) acc (loop (fx+ k 1) (logior (ash acc 8) (logand (ash u (fx* -8 k)) #xff))))))
+;; (java type letter, descriptor, size, the signed value of the unsigned bits)
+(define unaligned-types
+  (list (list "Short" "S" 2 i2s) (list "Char" "C" 2 (lambda (u) u)) (list "Int" "I" 4 i32) (list "Long" "J" 8 i64)))
+(for-each
+  (lambda (spec)
+    (let* ([name (car spec)] [d (cadr spec)] [n (caddr spec)] [signed (cadddr spec)]
+           [get (lambda (o off be?)
+                  ;; an object's field (never a ByteBuffer's, kept for Unsafe's generality)
+                  (if (field-offset? o off) (vector-ref (jobj-slots o) off) (signed (unaligned-u o off n be?))))]
+           [put! (lambda (o off x be?)
+                   (if (field-offset? o off) (vector-set! (jobj-slots o) off x) (unaligned-put! o off n x be?)))]
+           [scoped-check! (lambda (session)
+                            ;; the wrapper's ScopedAccessError becomes its RuntimeException, as the JDK's catch does
+                            (when session
+                              (guard (e [(and (jobj? e) (jinstance? e "jdk/internal/misc/ScopedMemoryAccess$ScopedAccessError"))
+                                         (raise ((jvirt e "newRuntimeException()Ljava/lang/RuntimeException;") e))])
+                                ((jvirt session "checkValidStateRaw()V") session))))])
+      (define-override! (string-append unsafe-prefix "get" name "Unaligned(Ljava/lang/Object;J)" d)
+        (lambda (this o off) (get o off #f)))
+      (define-override! (string-append unsafe-prefix "get" name "Unaligned(Ljava/lang/Object;JZ)" d)
+        (lambda (this o off be) (get o off (eqv? be 1))))
+      (define-override! (string-append unsafe-prefix "put" name "Unaligned(Ljava/lang/Object;J" d ")V")
+        (lambda (this o off x) (put! o off x #f)))
+      (define-override! (string-append unsafe-prefix "put" name "Unaligned(Ljava/lang/Object;J" d "Z)V")
+        (lambda (this o off x be) (put! o off x (eqv? be 1))))
+      (define-override! (string-append "jdk/internal/misc/ScopedMemoryAccess.get" name
+                                       "Unaligned(Ljdk/internal/foreign/MemorySessionImpl;Ljava/lang/Object;JZ)" d)
+        (lambda (this session o off be) (scoped-check! session) (get o off (eqv? be 1))))
+      (define-override! (string-append "jdk/internal/misc/ScopedMemoryAccess.put" name
+                                       "Unaligned(Ljdk/internal/foreign/MemorySessionImpl;Ljava/lang/Object;J" d "Z)V")
+        (lambda (this session o off x be) (scoped-check! session) (put! o off x (eqv? be 1))))))
+  unaligned-types)
 
 ;; the value type an Unsafe accessor works in, from its name
 (define (unsafe-type n)
@@ -695,20 +786,18 @@
 ;; elements when two arrays' types and alignment allow, else bytes. The source
 ;; is read in full before writing, so overlap is safe.
 (define (mem-byte o off)
-  (if o (byte-of o (- off array-base)) (foreign-ref 'unsigned-8 off 0)))
+  (if o (byte-of o (- off array-base)) (#3%foreign-ref 'unsigned-8 off 0)))
 (define (mem-byte-set! o off b)
-  (if o (set-byte! o (- off array-base) b) (foreign-set! 'unsigned-8 off 0 b)))
+  (if o (set-byte! o (- off array-base) b) (#3%foreign-set! 'unsigned-8 off 0 b)))
 (defnative "jdk/internal/misc/Unsafe.copyMemory0(Ljava/lang/Object;JLjava/lang/Object;JJ)V" (this src soff dst doff n)
   (cond
     [(and (jarr? src) (jarr? dst)) (copy-array-memory src soff dst doff n)]
     ;; native memory and a byte[], the shape every file and channel read and
     ;; write takes: one element per byte, no intermediate list
     [(and (not src) (jarr? dst) (string=? (elem-type dst) "B"))
-     (let ([v (jarr-vec dst)] [d (- doff array-base)])
-       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ d i) (foreign-ref 'integer-8 soff i))))]
+     (native->vector! soff 0 (jarr-vec dst) (- doff array-base) n)]
     [(and (jarr? src) (not dst) (string=? (elem-type src) "B"))
-     (let ([v (jarr-vec src)] [s (- soff array-base)])
-       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (foreign-set! 'integer-8 doff i (vector-ref v (fx+ s i)))))]
+     (vector->native! (jarr-vec src) (- soff array-base) doff 0 n)]
     [else
      (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])
        (let loop ([i 0] [bs bytes])
@@ -728,11 +817,13 @@
 (define (copy-array-memory src soff dst doff n)
   (let* ([sb (- soff array-base)] [db (- doff array-base)]
          [et (elem-type src)] [se (type-size et)])
-    (if (and (string=? et (elem-type dst)) (zero? (remainder sb se)) (zero? (remainder db se)) (zero? (remainder n se)))
-        (let* ([k (quotient n se)] [si (quotient sb se)] [di (quotient db se)]
-               [tmp (let ([v (make-vector k)]) (do ([i 0 (fx+ i 1)]) ((fx= i k) v) (vector-set! v i (vector-ref (jarr-vec src) (fx+ si i)))))])
-          (do ([i 0 (fx+ i 1)]) ((fx= i k))
-            (vector-set! (jarr-vec dst) (fx+ di i) (vector-ref tmp i))))
+    (if (and (same-type? et (elem-type dst)) (zero? (remainder sb se)) (zero? (remainder db se)) (zero? (remainder n se)))
+        ;; one pass, backwards when the same vector's ranges overlap with
+        ;; the destination past the source (memmove)
+        (let ([k (quotient n se)] [si (quotient sb se)] [di (quotient db se)] [sv (jarr-vec src)] [dv (jarr-vec dst)])
+          (if (or (not (eq? sv dv)) (fx<= di si))
+              (do ([i 0 (fx+ i 1)]) ((fx= i k)) (vector-set! dv (fx+ di i) (vector-ref sv (fx+ si i))))
+              (do ([i (fx- k 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ di i) (vector-ref sv (fx+ si i))))))
         (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (byte-of src (+ sb i)) acc))))])
           (let loop ([i 0] [bs bytes])
             (unless (null? bs) (set-byte! dst (+ db i) (car bs)) (loop (+ i 1) (cdr bs))))))))
@@ -745,8 +836,6 @@
 ;; get<T>[Volatile](Object, long) / put<T>[Volatile](Object, long, T)
 ;; An instance field of an object, the case atomics and locks hit, skips
 ;; unsafe-get's dispatch: its offset is the slot index.
-(define-syntax field-offset?
-  (syntax-rules () [(_ o off) (and (jobj? o) (fx< off static-offset-tag))]))
 (define-native-rule!
   (lambda (n) (and (starts? n unsafe-prefix) (starts? (method-part n) "get") (string-search "(Ljava/lang/Object;J)" n)))
   (lambda (n) (let ([t (unsafe-type (method-part n))])
@@ -1549,14 +1638,19 @@
 
 ;; --- references: no finalization, no reference-processing thread ----------------
 (defnative "java/lang/ref/Finalizer.isFinalizationEnabled()Z" () 0)
+;; the referent's slot, looked up once: refersTo runs on every soft-reference
+;; cache hit (a warm Spring Boot start spent 0.1 s in the lookup)
+(define referent-slot #f)
+(define (referent-index)
+  (or referent-slot (begin (set! referent-slot (jfield-index "java/lang/ref/Reference" "referent")) referent-slot)))
 (defnative "java/lang/ref/Reference.refersTo0(Ljava/lang/Object;)Z" (this o)
-  (if (eq? (jslot this (jfield-index "java/lang/ref/Reference" "referent")) o) 1 0))
+  (if (eq? (jslot this (referent-index)) o) 1 0))
 (defnative "java/lang/ref/Reference.clear0()V" (this)
-  (jslot-set! this (jfield-index "java/lang/ref/Reference" "referent") #f))
+  (jslot-set! this (referent-index) #f))
 (defnative "java/lang/ref/PhantomReference.refersTo0(Ljava/lang/Object;)Z" (this o)
-  (if (eq? (jslot this (jfield-index "java/lang/ref/Reference" "referent")) o) 1 0))
+  (if (eq? (jslot this (referent-index)) o) 1 0))
 (defnative "java/lang/ref/PhantomReference.clear0()V" (this)
-  (jslot-set! this (jfield-index "java/lang/ref/Reference" "referent") #f))
+  (jslot-set! this (referent-index) #f))
 ;; Nothing is ever pending (references are never cleared by GC here), so the
 ;; Reference Handler thread waits here for good rather than spinning.
 (defnative "java/lang/ref/Reference.waitForReferencePendingList()V" () (gil-block! (lambda () #f) #f))

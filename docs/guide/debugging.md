@@ -122,3 +122,30 @@ champaca prof (run, cache hit): wall 228.66 ms
 The second report covers the whole run up to `main`'s return, boot included. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars-and-directories)).
 
 On a cache miss the phases are parsing, registering classes, code generation, Chez compilation and writing the cache.
+
+## Sampling a run
+
+`CHAMPACA_PROF` says how long champaca's own phases took. For where a program's time goes, `bb prof` runs a main class with a sampling profiler on its thread and prints the hot Java frames:
+
+```console
+$ PROF_ROWS=4 bb prof target/classes Streams
+...
+main returned after 109 ms
+31 samples (2 with no Java frame)
+-- self: the innermost Java frame
+       2   6.5% java/lang/Class$Atomic.<clinit>
+       2   6.5% Streams.main
+       1   3.2% java/util/AbstractCollection.toString
+       1   3.2% java/util/EnumMap.getKeyUniverse
+-- inclusive: every Java frame on the stack
+      29  93.5% Streams.main
+      11  35.5% java/util/stream/IntStream.rangeClosed
+      10  32.3% java/util/stream/StreamSupport.intStream
+       9  29.0% java/util/stream/StreamOpFlag.set
+-- innermost code: what ran under it, outermost last
+       5  16.1% enable-interrupts < dynamic-wind < call-with-bytevector-and-offset < go2
+```
+
+Every 2 ms of wall time (`PROF_US` sets the interval) a thread of the profiler's sends `SIGPROF` to the thread running `main`, whose handler walks the stack as `fillInStackTrace` does and counts the innermost Java frame (self), every frame on the stack once (inclusive), and the innermost Scheme code names under the handler (`PROF_DEPTH` of them), which say what a native or the runtime was doing under the Java frame on top. A native has no frame of its own, so its time counts for the Java method that called it. `PROF_ROWS` is the rows per table. The main method is entered through champaca's jolt API, where the samples arrive (champaca.main's own run path doesn't deliver them), so for a jar give the class path and the `Main-Class` by hand, and profile a warm cache, or the compiler's work is most of what you see. Spike 72 wrote it to find where a Spring Boot fat jar's start went ([performance](performance.md#a-framework-loaders-own-work)).
+
+The signal goes to one thread with `pthread_kill` rather than from an interval timer: a process-directed signal can land on jolt's shutdown watcher, whose `sigwait` on macOS then answered as if a signal of its own had come and ended the process with status 128 ([jolt #1461](https://github.com/jolt-lang/jolt/issues/1461), fixed by jolt PR #1462).

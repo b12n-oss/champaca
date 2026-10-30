@@ -98,6 +98,17 @@
 (define (lcmp a b) (cond [(< a b) -1] [(> a b) 1] [else 0]))
 (define (i2b x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80))
 (define (i2s x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000))
+;; copies between a Java byte[]'s vector and native memory, a byte at a
+;; time through Chez's unchecked foreign-ref and foreign-set! (#3%): the
+;; checked ones are procedure calls, measured 17 times slower, and every
+;; byte a file, socket or zlib stream moves crosses here (spike 72). The
+;; vector accesses stay checked.
+(define (native->vector! p poff v voff n)
+  (do ([i 0 (fx+ i 1)]) ((fx= i n))
+    (vector-set! v (fx+ voff i) (i2b (#3%foreign-ref 'unsigned-8 p (fx+ poff i))))))
+(define (vector->native! v voff p poff n)
+  (do ([i 0 (fx+ i 1)]) ((fx= i n))
+    (#3%foreign-set! 'unsigned-8 p (fx+ poff i) (fxlogand (vector-ref v (fx+ voff i)) #xff))))
 
 (define (jfcmp a b nan-result)
   (cond [(or (nan? a) (nan? b)) nan-result] [(fl< a b) -1] [(fl> a b) 1] [else 0]))
@@ -816,12 +827,89 @@
                            (cons (fx+ #xdc00 (fxlogand v #x3ff)) (cons (fx+ #xd800 (fxsrl v 10)) acc)))
                          (cons cp acc)))))))]
     [(vector? x) (units-onto (vector->list x) acc)]
+    [(not x) (units-onto "null" acc)]
+    [(jobj? x) (units-onto (jstring-units-of x) acc)]
     [else (fold-left (lambda (a u) (cons u a)) acc x)]))
 
-;; makeConcatWithConstants: \x1 takes the next argument (a Scheme string or a
-;; list of code units), \x2 the next bootstrap constant. Built as code units, so
-;; a lone surrogate in any part survives.
+;; makeConcatWithConstants: \x1 takes the next argument, \x2 the next
+;; bootstrap constant. An argument arrives as a Scheme string (a number), a
+;; list of code units (a char), or the Java reference itself. When every
+;; piece is Latin-1 (a String with coder 0, a literal below U+0100) the
+;; result's bytes are copied straight from the pieces; else it is built as
+;; code units, so a lone surrogate in any part survives (jconcat-units).
+;; The recipe is parsed once per recipe object (a call site's literal).
+(define concat-recipes (make-weak-eq-hashtable))
+(define (concat-parts recipe)
+  (or (eq-hashtable-ref concat-recipes recipe #f)
+      (let ([parts (let ([n (string-length recipe)])
+                     (let loop ([i 0] [start 0] [acc '()])
+                       (let ([lit (lambda () (if (fx> i start) (cons (substring recipe start i) acc) acc))])
+                         (cond [(fx= i n) (reverse (lit))]
+                               [(char=? (string-ref recipe i) #\x1) (loop (fx+ i 1) (fx+ i 1) (cons 1 (lit)))]
+                               [(char=? (string-ref recipe i) #\x2) (loop (fx+ i 1) (fx+ i 1) (cons 2 (lit)))]
+                               [else (loop (fx+ i 1) start acc)]))))])
+        (eq-hashtable-set! concat-recipes recipe parts)
+        parts)))
+;; a reference argument as the piece it contributes: the String, its
+;; toString, or "null" (jstring-units-of does the same for the slow path)
+(define (concat-arg x)
+  (cond [(not x) "null"]
+        [(and (jobj? x) (string=? (jclass-cname (jobj-cls x)) "java/lang/String")) x]
+        [(jobj? x) (or ((jvirt x "toString()Ljava/lang/String;") x) "null")]
+        [else x]))
+;; a piece's byte length when it is Latin-1, else #f
+(define (concat-latin1-length p)
+  (cond [(string? p) (let ([n (string-length p)])
+                       (let loop ([i 0])
+                         (cond [(fx= i n) n]
+                               [(fx< (char->integer (string-ref p i)) 256) (loop (fx+ i 1))]
+                               [else #f])))]
+        [(jobj? p) (and (eqv? 0 (vector-ref (jobj-slots p) string-coder-slot))
+                        (vector-length (jarr-vec (vector-ref (jobj-slots p) string-value-slot))))]
+        [(pair? p) (let loop ([l p] [n 0]) (cond [(null? l) n] [(fx< (car l) 256) (loop (cdr l) (fx+ n 1))] [else #f]))]
+        [(null? p) 0]
+        [else #f]))
 (define (jconcat recipe args consts)
+  (if (vector? recipe)
+      (jconcat-units recipe args consts)
+      (let* ([pieces (let loop ([ps (concat-parts recipe)] [args args] [consts consts] [acc '()])
+                       (if (null? ps)
+                           (reverse acc)
+                           (let ([p (car ps)])
+                             (cond [(eqv? p 1) (loop (cdr ps) (cdr args) consts (cons (concat-arg (car args)) acc))]
+                                   [(eqv? p 2) (loop (cdr ps) args (cdr consts) (cons (car consts) acc))]
+                                   [else (loop (cdr ps) args consts (cons p acc))]))))]
+             [total (let loop ([ps pieces] [n 0])
+                      (cond [(null? ps) n]
+                            [(concat-latin1-length (car ps)) => (lambda (k) (loop (cdr ps) (fx+ n k)))]
+                            [else #f]))])
+        (if total
+            (let ([v (make-vector total)])
+              (string-slots!)
+              (let loop ([ps pieces] [at 0])
+                (unless (null? ps)
+                  (let ([p (car ps)])
+                    (cond
+                      [(string? p)
+                       (let ([n (string-length p)])
+                         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (i2b (char->integer (string-ref p i)))))
+                         (loop (cdr ps) (fx+ at n)))]
+                      [(jobj? p)
+                       (let* ([sv (jarr-vec (vector-ref (jobj-slots p) string-value-slot))] [n (vector-length sv)])
+                         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (vector-ref sv i)))
+                         (loop (cdr ps) (fx+ at n)))]
+                      [else
+                       (let inner ([l p] [at at])
+                         (if (null? l)
+                             (loop (cdr ps) at)
+                             (begin (vector-set! v at (i2b (car l))) (inner (cdr l) (fx+ at 1)))))]))))
+              (let ([o (jnew "java/lang/String")])
+                (vector-set! (jobj-slots o) string-value-slot (make-jarr "B" v))
+                (vector-set! (jobj-slots o) string-coder-slot 0)
+                o))
+            (units->jstring (reverse (fold-left (lambda (acc p) (units-onto p acc)) '() pieces)))))))
+;; the slow path, for a code-unit recipe (a constant holding a lone surrogate)
+(define (jconcat-units recipe args consts)
   (let loop ([rs (code-units recipe)] [args args] [consts consts] [acc '()])
     (if (null? rs)
         (units->jstring (reverse acc))

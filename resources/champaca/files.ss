@@ -301,9 +301,8 @@
   (let ([want (fxmin n 4096)]
         [copy (lambda (buf r)
                 (when (< r 0) (io-error "Read error"))
-                (let ([v (jarr-vec arr)])
-                  (do ([i 0 (fx+ i 1)]) ((fx= i r) r)
-                    (vector-set! v (fx+ off i) (i2b (foreign-ref 'unsigned-8 buf i))))))])
+                (native->vector! buf 0 (jarr-vec arr) off r)
+                r)])
     (if (fd-may-wait? fd)
         (released-read fd want copy)
         (copy fs-scratch (restartable (lambda () (libc-read fd fs-scratch want)))))))
@@ -316,8 +315,7 @@
       (let loop ([done 0])
         (when (fx< done n)
           (let ([k (fxmin (fx- n done) 4096)])
-            (do ([i 0 (fx+ i 1)]) ((fx= i k))
-              (foreign-set! 'unsigned-8 buf i (fxlogand (vector-ref v (fx+ off done i)) #xff)))
+            (vector->native! v (fx+ off done) buf 0 k)
             (let ([w (if wait?
                          (released-call (lambda () (libc-write-blocking fd buf k)))
                          (restartable (lambda () (libc-write fd buf k))))])
@@ -344,7 +342,7 @@
   (or (not fs-stat-layout?) (fifo-mode? (libc-stat cpath fs-stat-buf))))
 (define (string->c-string s)
   (let* ([bv (string->utf8 s)] [n (bytevector-length bv)] [p (foreign-alloc (fx+ n 1))])
-    (do ([i 0 (fx+ i 1)]) ((fx= i n)) (foreign-set! 'unsigned-8 p i (bytevector-u8-ref bv i)))
+    (do ([i 0 (fx+ i 1)]) ((fx= i n)) (#3%foreign-set! 'unsigned-8 p i (bytevector-u8-ref bv i)))
     (foreign-set! 'unsigned-8 p n 0)
     p))
 (define (java-io-open path flags)
@@ -509,7 +507,7 @@
                 (fold-dots (string-append (if (string=? head "/") "" head) "/" tail))))))))
 (define (bytevector-copy-from-c p)
   (let* ([n (cstring-length p)] [bv (make-bytevector n)])
-    (do ([i 0 (fx+ i 1)]) ((fx= i n) bv) (bytevector-u8-set! bv i (foreign-ref 'unsigned-8 p i)))))
+    (do ([i 0 (fx+ i 1)]) ((fx= i n) bv) (bytevector-u8-set! bv i (#3%foreign-ref 'unsigned-8 p i)))))
 (define (fold-dots p)
   (let loop ([parts (split-slashes p)] [acc '()])
     (cond [(null? parts) (string-append "/" (join-slashes (reverse acc)))]
@@ -983,11 +981,11 @@
 
 ;; a byte[] slice copied into fresh native memory, and the copy back
 (define (bytes->native arr off len)
-  (let ([p (foreign-alloc (fxmax len 1))] [v (jarr-vec arr)])
-    (do ([i 0 (fx+ i 1)]) ((fx= i len) p) (foreign-set! 'unsigned-8 p i (fxlogand (vector-ref v (fx+ off i)) #xff)))))
+  (let ([p (foreign-alloc (fxmax len 1))])
+    (vector->native! (jarr-vec arr) off p 0 len)
+    p))
 (define (native->bytes! p arr off n)
-  (let ([v (jarr-vec arr)])
-    (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ off i) (i2b (foreign-ref 'unsigned-8 p i))))))
+  (native->vector! p 0 (jarr-vec arr) off n))
 
 (define (z-result read written finished flag)
   (i64 (+ read (ash written 31) (if finished (ash 1 62) 0) (if flag (ash 1 63) 0))))
