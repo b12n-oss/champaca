@@ -3,7 +3,10 @@ locals: java.lang.StackOverflowError message null deep true trace true cause nul
 as Error: StackOverflowError
 as Throwable: StackOverflowError
 as VirtualMachineError: StackOverflowError
-finally: java.lang.StackOverflowError message null deep true trace true cause null finallies ran true
 again 3
 thread: java.lang.StackOverflowError message null deep true trace true cause null
 after: 100
+probe 0 deep true
+probe 1 deep true
+probe 2 deep true
+after probes: java.lang.StackOverflowError message null deep true trace true cause null

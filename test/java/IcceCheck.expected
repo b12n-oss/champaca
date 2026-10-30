@@ -13,3 +13,12 @@ interfaceOfStatic: java.lang.IncompatibleClassChangeError: Expected instance not
 specialOfStatic not run: skipped
 specialOfStatic: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
 specialOfStatic: java.lang.IncompatibleClassChangeError: Expecting non-static method 'int IcTarget.st(int)'
+virtualOfInheritedStatic not run: skipped
+virtualOfInheritedStatic: java.lang.NoSuchMethodError: 'int IcImpl.bst()'
+virtualOfInheritedStatic: java.lang.NoSuchMethodError: 'int IcImpl.bst()'
+interfaceOfInheritedStatic not run: skipped
+interfaceOfInheritedStatic: java.lang.NoSuchMethodError: 'int IcSub.bst()'
+interfaceOfInheritedStatic: java.lang.NoSuchMethodError: 'int IcSub.bst()'
+virtualOfInheritedPrivate not run: skipped
+virtualOfInheritedPrivate: java.lang.NoSuchMethodError: 'int IcImpl.bp()'
+virtualOfInheritedPrivate: java.lang.NoSuchMethodError: 'int IcImpl.bp()'

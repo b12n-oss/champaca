@@ -728,6 +728,20 @@
         (some #(when (has? % true) %) (ancestry cname))
         (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
+(defn- resolve-virtual
+  "[declaring-class method] that an invokevirtual or invokeinterface of
+  cname.mname(desc) resolves to (JVMS 5.4.3.3, 5.4.3.4), or nil: cname and
+  its superclasses first, any method (for an interface, the interface itself
+  and then Object); then the superinterfaces, where only a method neither
+  static nor private counts."
+  [cname mname desc]
+  (let [decl-of (fn [c] (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (class-methods c)))
+        supers (take-while some? (iterate #(:super (class-info %)) cname))]
+    (or (some (fn [c] (when-let [m (decl-of c)] [c m])) supers)
+        (some (fn [c] (when-let [m (decl-of c)]
+                        (when (and (not (cf/static? m)) (zero? (bit-and (:flags m) 0x0002))) [c m])))
+              (remove (set supers) (ancestry cname))))))
+
 (defn- check-virtual
   "Throws resolve-method's \"no such method\" when nothing in cname's
   ancestry declares mname(desc), as a JVM's resolution of an invokevirtual
@@ -736,14 +750,11 @@
   calls resolve to Object's methods too. A signature-polymorphic method of
   MethodHandle or VarHandle (native, varargs) takes any descriptor."
   [cname mname desc]
-  (let [has? (fn [c] (some #(and (= mname (:name %)) (= desc (:desc %))) (class-methods c)))
-        polymorphic? (and (#{"java/lang/invoke/MethodHandle" "java/lang/invoke/VarHandle"} cname)
+  (let [polymorphic? (and (#{"java/lang/invoke/MethodHandle" "java/lang/invoke/VarHandle"} cname)
                           (some #(and (= mname (:name %)) (:native %) (pos? (bit-and (:flags %) 0x0080)))
                                 (class-methods cname)))]
     (when-not (or (str/starts-with? cname "[")
-                  ;; the superclass chain first, lazily: nearly every call hits there
-                  (some has? (take-while some? (iterate #(:super (class-info %)) cname)))
-                  (some has? (ancestry cname))
+                  (resolve-virtual cname mname desc)
                   polymorphic?)
       (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
@@ -761,8 +772,7 @@
     (let [decl-of (fn [c] (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (class-methods c)))
           [decl m] (if (#{:special :static} op)
                      (let [d (try (resolve-method cname mname desc) (catch Exception _ nil))] [d (and d (decl-of d))])
-                     (some (fn [c] (when-let [m (decl-of c)] [c m]))
-                           (concat (take-while some? (iterate #(:super (class-info %)) cname)) (ancestry cname))))
+                     (resolve-virtual cname mname desc))
           static? (and m (cf/static? m))
           what (cond (and m (= op :static) (not static?)) "Expected static method"
                      (and static? (= op :interface)) "Expected instance not static method"
@@ -2077,7 +2087,16 @@
             (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
             (#{"-server" "-client"} a) (recur (rest argv) opts)
-            (re-matches #"-Xss[0-9]+[kKmMgGtT]?" a) (recur (rest argv) (assoc opts :stack (size-bytes (subs a 4))))
+            (str/starts-with? a "-Xss")
+            (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
+                                                                          "Error: A fatal exception has occurred. Program will exit."])))
+                  n (when (re-matches #"[0-9]+[kKmMgGtT]?" (subs a 4)) (size-bytes (subs a 4)))]
+              ;; HotSpot's checks: 0 is the default, 208k the least, 1g the most
+              (cond (nil? n) (fail (str "Invalid thread stack size: " a))
+                    (> n 1073741824) (fail (str "Invalid thread stack size: " a) "The specified size exceeds the maximum representable size.")
+                    (zero? n) (recur (rest argv) (dissoc opts :stack))
+                    (< n (* 208 1024)) (fail "" "The Java thread stack size specified is too small. Specify at least 208k")
+                    :else (recur (rest argv) (assoc opts :stack n))))
             (or (re-matches #"-X(mx|ms|mn)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a))
             (do (binding [*out* *err*] (println (str "champaca: ignoring option " a "; it has no counterpart here")))
                 (recur (rest argv) opts))
@@ -2126,6 +2145,8 @@
 
 (defn -main [& argv]
   (let [{:keys [props classpath assertions argv stack]} (jvm-options argv)
+        _ (when (and stack (System/getenv "JOLT_STACK_LIMIT"))
+            (binding [*out* *err*] (println "champaca: ignoring -Xss; JOLT_STACK_LIMIT sets the stack bound")))
         _ (bound-stack! (or stack default-stack-limit))
         _ (swap! state assoc :command-line-properties props :assertion-directives assertions)
         ;; with -cp the main class comes first; without, champaca's own

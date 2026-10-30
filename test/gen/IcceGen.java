@@ -17,6 +17,11 @@ public class IcceGen {
     static final ClassDesc TARGET = ClassDesc.of("IcTarget");
     static final ClassDesc IFACE = ClassDesc.of("IcIface");
     static final ClassDesc CALLER = ClassDesc.of("IcCaller");
+    // a static and a private method in a superinterface, which resolution
+    // through a class or a subinterface doesn't see: NoSuchMethodError
+    static final ClassDesc BASE = ClassDesc.of("IcBase");
+    static final ClassDesc SUB = ClassDesc.of("IcSub");
+    static final ClassDesc IMPL = ClassDesc.of("IcImpl");
 
     // static String <name>(boolean go) { if (!go) return "skipped"; <call>; return "called"; }
     static void guarded(ClassBuilder clb, String name, java.util.function.Consumer<CodeBuilder> call) {
@@ -51,6 +56,22 @@ public class IcceGen {
             clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_INTERFACE | ClassFile.ACC_ABSTRACT);
             clb.withMethodBody("ist", MTD_void, ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> cb.return_());
         }));
+        Files.write(dir.resolve("IcBase.class"), ClassFile.of().build(BASE, clb -> {
+            clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_INTERFACE | ClassFile.ACC_ABSTRACT);
+            clb.withMethodBody("bst", MethodTypeDesc.of(CD_int), ClassFile.ACC_PUBLIC | ClassFile.ACC_STATIC, cb -> { cb.iconst_1(); cb.ireturn(); });
+            clb.withMethodBody("bp", MethodTypeDesc.of(CD_int), ClassFile.ACC_PRIVATE, cb -> { cb.iconst_2(); cb.ireturn(); });
+        }));
+        Files.write(dir.resolve("IcSub.class"), ClassFile.of().build(SUB, clb -> {
+            clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_INTERFACE | ClassFile.ACC_ABSTRACT);
+            clb.withInterfaceSymbols(BASE);
+        }));
+        Files.write(dir.resolve("IcImpl.class"), ClassFile.of().build(IMPL, clb -> {
+            clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_SUPER);
+            clb.withInterfaceSymbols(SUB);
+            clb.withMethodBody(INIT_NAME, MTD_void, ClassFile.ACC_PUBLIC, cb -> {
+                cb.aload(0); cb.invokespecial(CD_Object, INIT_NAME, MTD_void); cb.return_();
+            });
+        }));
         // IcCaller extends IcTarget, so its invokespecial of a superclass method verifies
         Files.write(dir.resolve("IcCaller.class"), ClassFile.of().build(CALLER, clb -> {
             clb.withFlags(ClassFile.ACC_PUBLIC | ClassFile.ACC_SUPER);
@@ -81,6 +102,23 @@ public class IcceGen {
             guarded(clb, "interfaceOfStatic", cb -> {
                 cb.aconst_null(); cb.checkcast(IFACE);
                 cb.invokeinterface(IFACE, "ist", MTD_void);
+            });
+            // a superinterface's static method through the class and through a subinterface
+            guarded(clb, "virtualOfInheritedStatic", cb -> {
+                cb.new_(IMPL); cb.dup(); cb.invokespecial(IMPL, INIT_NAME, MTD_void);
+                cb.invokevirtual(IMPL, "bst", MethodTypeDesc.of(CD_int));
+                cb.pop();
+            });
+            guarded(clb, "interfaceOfInheritedStatic", cb -> {
+                cb.new_(IMPL); cb.dup(); cb.invokespecial(IMPL, INIT_NAME, MTD_void);
+                cb.invokeinterface(SUB, "bst", MethodTypeDesc.of(CD_int));
+                cb.pop();
+            });
+            // and its private method through the class
+            guarded(clb, "virtualOfInheritedPrivate", cb -> {
+                cb.new_(IMPL); cb.dup(); cb.invokespecial(IMPL, INIT_NAME, MTD_void);
+                cb.invokevirtual(IMPL, "bp", MethodTypeDesc.of(CD_int));
+                cb.pop();
             });
             // invokespecial of a static method of the superclass's
             guarded(clb, "specialOfStatic", cb -> {

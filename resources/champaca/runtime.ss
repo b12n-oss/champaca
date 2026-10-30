@@ -22,7 +22,7 @@
 ;; defined, since compiling one method can compile another (a loader's
 ;; findClass runs Java code)
 (define (jit! c m d)
-  (parameterize ([resolving-loader (hashtable-ref class-loaders c #f)]) (jit-hook c m d)))
+  (parameterize ([resolving-loader (hashtable-ref class-loaders c #f)]) (call-unbounded (lambda () (jit-hook c m d)))))
 
 ;; --- numbers ---------------------------------------------------------------
 
@@ -74,26 +74,50 @@
 ;; are gone, and jolt's check, run after every collection, would raise a new
 ;; StackOverflowError from each one on the way, building a trace over the
 ;; whole stack each time (a recursion through try/finally took minutes). Its
-;; overflow flag stays set from the conversion until a catch is reached with
-;; the stack back under the limit (overflow-caught!), as HotSpot's guard
-;; zones stay off while it unwinds.
+;; overflow flag stays set from the conversion while the thread's stack only
+;; shrinks: champaca's procedure runs after each collection ahead of jolt's
+;; check (install-overflow-recovery!), on every thread, and clears it when the
+;; stack is back under the limit or has grown since the last collection (a new
+;; recursion, which may have started from deep, before any collection saw the
+;; stack shallow), so jolt's check right after it finds that one. HotSpot's
+;; guard zones stay off while it unwinds the same way. A catch can't decide
+;; it: the one that stops an overflow may still be deep.
 (define (overflow-flag) (and jolt-overflow-names (caddr jolt-overflow-names)))
-;; measuring the stack walks it, so while the flag is up a catch measures the
-;; first time after an overflow (the catch that ends it, when nothing in
-;; between catches) and then one time in 1024: an unwinding through a
-;; try/finally per frame catches once a frame, and measuring at each made it
-;; quadratic. Until it measures under the limit, jolt finds no new overflow.
-(define overflow-catches (make-thread-parameter 0))
-(define (overflow-caught!)
+;; champaca's own work on a Java thread (compiling a method, registering a
+;; class, defining one) runs with jolt's check held off: Chez's compiler
+;; recurses as deep as a method is large (a 7,000-element array literal
+;; passed a 1 MB bound), and an overflow from it would surface as the Java
+;; program's StackOverflowError
+(define champaca-work (make-thread-parameter #f))
+(define (call-unbounded thunk)
   (let ([flag (overflow-flag)])
-    (when (and flag (flag))
-      (let ([n (overflow-catches)])
-        (overflow-catches (if (fx= n 1023) 0 (fx+ n 1)))
-        (when (fx= n 0)
-          (let ([limit ((list-ref jolt-overflow-names 3))]
-                [bytes ((list-ref jolt-overflow-names 4))])
-            (when (or (not limit) (not bytes) (< bytes limit))
-              (flag #f))))))))
+    (if flag (parameterize ([flag #t] [champaca-work #t]) (thunk)) (thunk))))
+(define overflow-mark (make-thread-parameter #f))   ; the stack's size at the last look
+(define (overflow-recovered!)
+  (let ([flag (overflow-flag)])
+    (when (and flag (flag) (not (champaca-work)))
+      (let ([limit ((list-ref jolt-overflow-names 3))]
+            [bytes ((list-ref jolt-overflow-names 4))]
+            [mark (overflow-mark)])
+        ;; grown by a quarter of the limit at least: while it unwinds, the
+        ;; frames of a raise and its handler sit on the deep stack, and its
+        ;; size wavers by them from one collection to the next
+        (if (or (not limit) (not bytes) (< bytes limit) (and mark (> bytes (+ mark (max 65536 (quotient limit 4))))))
+            (begin (flag #f) (overflow-mark #f))
+            (overflow-mark bytes))))))
+;; jolt keeps one procedure to run after each collection (its stack check,
+;; sa-gc-install-after-rendezvous!); champaca's runs ahead of it. Once per
+;; process; a jolt that sets a new stack limit later (jolt-stack-limit-set!)
+;; puts its own back alone.
+(define overflow-recovery-installed #f)
+(define (install-overflow-recovery!)
+  (when (and jolt-overflow-names (not overflow-recovery-installed)
+             (top-level-bound? 'sa-after-rendezvous) (top-level-bound? 'sa-gc-install-after-rendezvous!))
+    (let ([orig (top-level-value 'sa-after-rendezvous)])
+      (when (procedure? orig)
+        ((top-level-value 'sa-gc-install-after-rendezvous!) (lambda () (overflow-recovered!) (orig)))
+        (set! overflow-recovery-installed #t)))))
+(install-overflow-recovery!)
 (define overflows-seen (make-weak-eq-hashtable))
 (define (jolt-stack-overflow? e)
   (and jolt-overflow-names (condition? e) ((car jolt-overflow-names) e)
@@ -106,7 +130,7 @@
         [(jolt-stack-overflow? e)
          (or (eq-hashtable-ref overflows-seen e #f)
              (let* ([flag (overflow-flag)]
-                    [_ (when flag (flag #t) (overflow-catches 0))]   ; cleared by overflow-caught!
+                    [_ (when flag (flag #t) (overflow-mark ((list-ref jolt-overflow-names 4))))]   ; cleared by overflow-recovered!
                     [o (begin
                          (jinit "java/lang/StackOverflowError")
                          (let ([o (jnew "java/lang/StackOverflowError")])
@@ -123,7 +147,7 @@
         (let* ([old (#%$current-handler-stack)]
                [new (cons (lambda (raised)
                             (let ([e (java-raise-of raised)])
-                              (cond [test (k (lambda () (overflow-caught!) next))] ...
+                              (cond [test (k (lambda () next))] ...
                                     [else (raise-continuable raised)])))
                           old)])
           (dynamic-wind
@@ -302,7 +326,7 @@
         [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing]
                         [(and (not (jobj? e)) (class-format-of e))
                          => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))])
-                (load-hook name))
+                (call-unbounded (lambda () (load-hook name))))
               (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
 ;; the class a failed load says isn't there: name itself when its bytes are

@@ -2131,6 +2131,7 @@
 ;; class's name marked (hidden-classes).
 (define define-class-hook #f)
 (define (set-define-class-hook! f) (set! define-class-hook f))
+(define (define-class-hook* . args) (call-unbounded (lambda () (apply define-class-hook args))))   ; champaca's work, not the program's
 (define (bytes->latin1 v off len)
   (let ([s (make-string len)])
     (do ([i 0 (fx+ i 1)]) ((fx= i len) s)
@@ -2165,7 +2166,7 @@
          ;; the JVM can't define is a LinkageError
          [r (guard (e [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
               (parameterize ([resolving-loader loader])
-                (define-class-hook name (bytes->latin1 v off len) hidden?
+                (define-class-hook* name (bytes->latin1 v off len) hidden?
                                    (and loader (not hidden?)
                                         (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader"))))))]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]

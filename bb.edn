@@ -260,9 +260,23 @@
                                     {:keys [out err exit]} (run-limited 300 {:label "accepted-options" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
                                                                     "-server" "-client" "-Xshare:auto" "target/classes" "Hello")
                                     accepted-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected"))
-                                                     (= err "champaca: ignoring option -Xshare:auto; it has no counterpart here\n"))]
+                                                     (= err "champaca: ignoring option -Xshare:auto; it has no counterpart here\n"))
+                                    ;; -Xss bounds the stack, with HotSpot's checks: 0 is the default,
+                                    ;; under 208k too small, over 1g too large, a bad size invalid
+                                    xss (fn [o] (run-limited 300 {:label "xss" :err :string} (jolt-bin) "-M" "-m" "champaca.main" o "target/classes" "Hello"))
+                                    xss-ok (and (let [{:keys [out exit]} (xss "-Xss0")] (and (zero? exit) (= out (slurp "test/java/Hello.expected"))))
+                                                (let [{:keys [out exit]} (xss "-Xss512k")] (and (zero? exit) (= out (slurp "test/java/Hello.expected"))))
+                                                (let [{:keys [err exit]} (xss "-Xss1k")]
+                                                  (and (= 1 exit) (= err (str "\nThe Java thread stack size specified is too small. Specify at least 208k\n"
+                                                                              "Error: Could not create the Java Virtual Machine.\n"
+                                                                              "Error: A fatal exception has occurred. Program will exit.\n"))))
+                                                (let [{:keys [err exit]} (xss "-Xss2g")]
+                                                  (and (= 1 exit) (str/starts-with? err "Invalid thread stack size: -Xss2g\nThe specified size exceeds the maximum representable size.\n")))
+                                                (let [{:keys [err exit]} (xss "-Xss1x")]
+                                                  (and (= 1 exit) (str/starts-with? err "Invalid thread stack size: -Xss1x\nError: Could not create the Java Virtual Machine.\n"))))]
                                 (println (if jar-ok "PASS" "FAIL") "-D before -jar target/app.jar")
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
+                                (println (if xss-ok "PASS" "FAIL") "-Xss: 0 the default, 512k runs, 1k too small, 2g too large, 1x invalid, with HotSpot's texts")
                                 (println (if ignored-ok "PASS" "FAIL") "-Xmx and -XX: ignored with a warning")
                                 (println (if cp-ok "PASS" "FAIL") "-cp, --class-path= and -classpath, the last winning, with a dir/* entry (JarCheck)")
                                 (println (if star-ok "PASS" "FAIL") "a dir/* with no jars stays as written (a directory named *)")
