@@ -757,16 +757,18 @@
   The JDK can't change under a cache, which is keyed by it. A method the
   runtime overrides never qualifies."
   [caller-cname decl mname desc]
-  (let [info (class-info decl)
-        im (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (methods-of info)))]
-    ;; the class map answers most of it without reading the class file again
-    (when (and im (:code im) (<= (or (:code-len im) 0) cg/leaf-limit)
-               (or (= decl caller-cname) (= :jdk (:origin info)))
-               (not (overridden? decl im)))
-      ;; only a class already parsed in this run: reading one again from
-      ;; the image costs a warm start more than the inlining saves
-      (when-let [p (if (= decl caller-cname) (parsed decl) (:parsed info))]
-        {:cls p :method (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))}))))
+  (let [info (class-info decl)]
+    ;; only a class already parsed in this run: reading one again from the
+    ;; image costs a warm start more than the inlining saves; decided first,
+    ;; so a restored class's methods aren't thawed for an inlining that
+    ;; can't happen
+    (when (or (= decl caller-cname) (and (= :jdk (:origin info)) (:parsed info)))
+      (let [im (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (methods-of info)))]
+        ;; the class map answers most of it without reading the class file again
+        (when (and im (:code im) (<= (or (:code-len im) 0) cg/leaf-limit)
+                   (not (overridden? decl im)))
+          (when-let [p (if (= decl caller-cname) (parsed decl) (:parsed info))]
+            {:cls p :method (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))}))))))
 
 (defn- direct-target
   "The class whose cname.mname(desc) an invokevirtual or invokeinterface
