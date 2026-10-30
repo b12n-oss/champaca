@@ -1263,9 +1263,6 @@
 
 ;; Registration text is one-shot data plumbing (define a class, its statics,
 ;; a stub per method). Chez's interpreter runs it far cheaper than compile.
-;; A method's text evaluated outside the cache paths (main.clj
-;; compile-method!), with inspector information as lines? decided, where
-;; the global setting above would keep it for every method
 ;; --- champaca's globals are their own top-level labels ------------------------------
 ;; In a mutable environment such as jolt's, Chez gives a top-level variable a
 ;; label gensym, #{Name *top*:Name}, on its first definition or reference, and
@@ -1288,6 +1285,8 @@
          (let loop ([i 0])
            (and (fx< i (string-length n))
                 (or (memv (string-ref n i) '(#\( #\:)) (loop (fx+ i 1))))))))
+;; $sputprop is a plain read-modify-write of the property list, where Chez's
+;; own label updates hold the tc-mutex; champaca's callers hold the GIL
 (define (self-label! s)
   (unless (or (#%$sgetprop s '*top* #f) (#%$top-level-bound? s))
     (#%$sputprop s '*top* s)))
@@ -1305,6 +1304,9 @@
   (when (champaca-global-name? s) (self-label! s))
   (top-level-bound? s))
 
+;; A method's text evaluated outside the cache paths (main.clj
+;; compile-method!), with inspector information as lines? decided, where
+;; the global setting above would keep it for every method
 (define (eval-method-text text lines?)
   (parameterize ([generate-inspector-information lines?])
     (let ([p (open-string-input-port text)])

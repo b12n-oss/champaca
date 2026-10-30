@@ -911,7 +911,7 @@
       (for-each (lambda (k) (eq-hashtable-set! (jclass-vtable c) (string->symbol k) (annotation-proc-symbol k))) keys)
       (for-each (lambda (key proc)
                   (let ([sym (string->symbol (string-append "champaca/Annotation." key))])
-                    (set-top-level-value! sym proc)
+                    (define-global! sym proc)
                     (eq-hashtable-set! (jclass-vtable c) (string->symbol key) sym)))
                 '("annotationType()Ljava/lang/Class;" "toString()Ljava/lang/String;"
                   "hashCode()I" "equals(Ljava/lang/Object;)Z")
