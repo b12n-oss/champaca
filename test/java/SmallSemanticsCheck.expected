@@ -24,6 +24,8 @@ multianewarray [2][0][-1]: -1
 dimensions 255: 256
 dimensions 256: java.lang.IllegalArgumentException: null
 no dimensions: java.lang.IllegalArgumentException: null
+void array: java.lang.IllegalArgumentException: null
+void arrays: java.lang.IllegalArgumentException: null
 cas float other NaN: false same NaN: true now 3.0
 cas float 0 vs -0: false true now 2.0
 cas double other NaN: false exchange 7ff8000000001234 now 7ff8000000001234

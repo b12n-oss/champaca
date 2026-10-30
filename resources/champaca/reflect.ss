@@ -802,6 +802,7 @@
   (jarraylength (reflect-array a)))
 
 (defnative "java/lang/reflect/Array.newArray(Ljava/lang/Class;I)Ljava/lang/Object;" (cls n)
+  (when (string=? (jclass-cname (mirror-class (nn cls))) "void") (jthrow "java/lang/IllegalArgumentException" #f))   ; HotSpot's
   (let ([elem (class-name->desc (jclass-cname (mirror-class (nn cls))))])
     (jnewarray elem n (elem-default elem))))
 
@@ -809,7 +810,7 @@
   ;; HotSpot's limits: no dimensions, or more than 255 counting the element
   ;; type's own, is IllegalArgumentException without a message
   (let ([n (jarraylength (nn dims))] [c (jclass-cname (mirror-class (nn cls)))])
-    (when (or (fx= n 0) (fx> (fx+ n (let loop ([i 0]) (if (and (fx< i (string-length c)) (char=? (string-ref c i) #\[)) (loop (fx+ i 1)) i))) 255))
+    (when (or (fx= n 0) (string=? c "void") (fx> (fx+ n (let loop ([i 0]) (if (and (fx< i (string-length c)) (char=? (string-ref c i) #\[)) (loop (fx+ i 1)) i))) 255))
       (jthrow "java/lang/IllegalArgumentException" #f)))
   (jmultiarray (string-append (make-string (jarraylength dims) #\[)
                               (class-name->desc (jclass-cname (mirror-class (nn cls)))))

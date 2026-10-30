@@ -49,6 +49,8 @@ public class SmallSemanticsCheck {
             catch (Throwable e) { System.out.println("dimensions " + n + ": " + e.getClass().getName() + ": " + e.getMessage()); }
         }
         try { Array.newInstance(int.class, new int[0]); } catch (Throwable e) { System.out.println("no dimensions: " + e.getClass().getName() + ": " + e.getMessage()); }
+        try { Array.newInstance(void.class, 1); System.out.println("void array made"); } catch (Throwable e) { System.out.println("void array: " + e.getClass().getName() + ": " + e.getMessage()); }
+        try { Array.newInstance(void.class, new int[] {1, 2}); System.out.println("void arrays made"); } catch (Throwable e) { System.out.println("void arrays: " + e.getClass().getName() + ": " + e.getMessage()); }
 
         VarHandle F_ = MethodHandles.lookup().findStaticVarHandle(SmallSemanticsCheck.class, "fv", float.class);
         VarHandle D_ = MethodHandles.lookup().findStaticVarHandle(SmallSemanticsCheck.class, "dv", double.class);
