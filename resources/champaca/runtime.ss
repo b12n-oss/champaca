@@ -55,15 +55,76 @@
 ;; where it was raised, so nothing between is unwound and wound again. The
 ;; stack walk behind stack traces (reflect.ss raw-frames) crosses this
 ;; one-shot continuation because it splits each frame off first.
+;; jolt enforces its stack limit at collections and throws
+;; java.lang.StackOverflowError as an ex-info record of its own (rt.ss
+;; jolt-stack-overflow!), which a Java handler, testing for a Java object,
+;; let through and which ended the process. java-raise-of answers the Java
+;; StackOverflowError for it, made once per raise (a handler that doesn't
+;; match and the next one see the same object) with jolt's overflow flag
+;; set, since the stack is still over the limit while it's built; anything
+;; else as it is. The names are looked up once and are absent from a jolt
+;; without them.
+(define jolt-overflow-names
+  (and (top-level-bound? 'jolt-throw-condition?) (top-level-bound? 'jolt-throw-condition-value)
+       (list (top-level-value 'jolt-throw-condition?) (top-level-value 'jolt-throw-condition-value)
+             (and (top-level-bound? 'jolt-stack-overflowing) (top-level-value 'jolt-stack-overflowing))
+             (and (top-level-bound? 'jolt-stack-limit) (top-level-value 'jolt-stack-limit))
+             (and (top-level-bound? 'sa-current-stack-bytes) (top-level-value 'sa-current-stack-bytes)))))
+;; While an overflow unwinds, the stack is over the limit until enough frames
+;; are gone, and jolt's check, run after every collection, would raise a new
+;; StackOverflowError from each one on the way, building a trace over the
+;; whole stack each time (a recursion through try/finally took minutes). Its
+;; overflow flag stays set from the conversion until a catch is reached with
+;; the stack back under the limit (overflow-caught!), as HotSpot's guard
+;; zones stay off while it unwinds.
+(define (overflow-flag) (and jolt-overflow-names (caddr jolt-overflow-names)))
+;; measuring the stack walks it, so while the flag is up a catch measures the
+;; first time after an overflow (the catch that ends it, when nothing in
+;; between catches) and then one time in 1024: an unwinding through a
+;; try/finally per frame catches once a frame, and measuring at each made it
+;; quadratic. Until it measures under the limit, jolt finds no new overflow.
+(define overflow-catches (make-thread-parameter 0))
+(define (overflow-caught!)
+  (let ([flag (overflow-flag)])
+    (when (and flag (flag))
+      (let ([n (overflow-catches)])
+        (overflow-catches (if (fx= n 1023) 0 (fx+ n 1)))
+        (when (fx= n 0)
+          (let ([limit ((list-ref jolt-overflow-names 3))]
+                [bytes ((list-ref jolt-overflow-names 4))])
+            (when (or (not limit) (not bytes) (< bytes limit))
+              (flag #f))))))))
+(define overflows-seen (make-weak-eq-hashtable))
+(define (jolt-stack-overflow? e)
+  (and jolt-overflow-names (condition? e) ((car jolt-overflow-names) e)
+       (let ([v ((cadr jolt-overflow-names) e)])
+         (and (record? v)
+              (eq? (record-type-uid (record-rtd v)) 'jolt-ex-info-record-v2)
+              (equal? ((record-accessor (record-rtd v) 0) v) "java.lang.StackOverflowError")))))
+(define (java-raise-of e)
+  (cond [(jobj? e) e]
+        [(jolt-stack-overflow? e)
+         (or (eq-hashtable-ref overflows-seen e #f)
+             (let* ([flag (overflow-flag)]
+                    [_ (when flag (flag #t) (overflow-catches 0))]   ; cleared by overflow-caught!
+                    [o (begin
+                         (jinit "java/lang/StackOverflowError")
+                         (let ([o (jnew "java/lang/StackOverflowError")])
+                           ((method-proc "java/lang/StackOverflowError" "<init>()V") o)
+                           o))])
+               (eq-hashtable-set! overflows-seen e o)
+               o))]
+        [else e]))
 (define-syntax jtry
   (syntax-rules ()
     [(_ e ([test next] ...) body)
      (call/1cc
       (lambda (k)
         (let* ([old (#%$current-handler-stack)]
-               [new (cons (lambda (e)
-                            (cond [test (k (lambda () next))] ...
-                                  [else (raise-continuable e)]))
+               [new (cons (lambda (raised)
+                            (let ([e (java-raise-of raised)])
+                              (cond [test (k (lambda () (overflow-caught!) next))] ...
+                                    [else (raise-continuable raised)])))
                           old)])
           (dynamic-wind
            (lambda () (#%$current-handler-stack new))
@@ -1132,9 +1193,9 @@
 
 ;; --- entry --------------------------------------------------------------------
 
-(define (report-uncaught e)
+(define (report-uncaught raised)
   (flush-output-port (current-output-port))
-  (let ([err (current-error-port)])
+  (let ([err (current-error-port)] [e (java-raise-of raised)])
     (cond
       [(jobj? e)
        ;; through the thread's own uncaught handler, as HotSpot does for main

@@ -1463,13 +1463,14 @@
   (call/cc
    (lambda (k)
      (with-exception-handler
-      (lambda (e)
-        (k (cond
+      (lambda (raised)
+        (k (let ([e (java-raise-of raised)])
+            (cond
              [(java-halt? e) (exit-process (java-halt-status e))]
              [(jobj? e)
               (guard (e2 [#t (report-uncaught e2)])
                 ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") t e))]
-             [else (report-uncaught e)])))
+             [else (report-uncaught e)]))))
       (lambda () ((jvirt t "run()V") t)))))
   (guard (e [#t (void)]) ((method-proc "java/lang/Thread" "exit()V") t))
   (jmonitor-enter t)

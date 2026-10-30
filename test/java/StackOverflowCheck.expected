@@ -1,0 +1,9 @@
+nontail: java.lang.StackOverflowError message null deep true trace true cause null
+locals: java.lang.StackOverflowError message null deep true trace true cause null
+as Error: StackOverflowError
+as Throwable: StackOverflowError
+as VirtualMachineError: StackOverflowError
+finally: java.lang.StackOverflowError message null deep true trace true cause null finallies ran true
+again 3
+thread: java.lang.StackOverflowError message null deep true trace true cause null
+after: 100

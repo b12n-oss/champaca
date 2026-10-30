@@ -2043,16 +2043,23 @@
             (str/ends-with? arg "...") (str "p" on (str/replace (subs arg 0 (- (count arg) 3)) "." "/"))
             :else (str "c" on (str/replace arg "." "/"))))))
 
+(defn- size-bytes
+  "-Xss's size as bytes: digits with an optional k, m, g or t suffix."
+  [s]
+  (let [[_ n unit] (re-matches #"([0-9]+)([kKmMgGtT]?)" s)]
+    (* (parse-long n) (case (str/lower-case unit) "k" 1024 "m" 1048576 "g" 1073741824 "t" 1099511627776 1))))
+
 (defn- jvm-options
   "The options before the main class or -jar, as the java launcher reads
   them, as {:props [[k v]...] :classpath s-or-nil :assertions [...] :argv rest}:
   -Dkey=value pairs (-Dkey is an empty value, a bare -D nothing); -cp,
   -classpath and --class-path (the last one wins); -ea/-da with a class, a
   package... or nothing, and -esa/-dsa, in order (assertion-directive);
-  -server and -client, which the launcher accepts and ignores. A heap or
-  stack size (-Xmx, -Xms, -Xmn, -Xss), -Xshare: and any -XX: flag are
-  ignored with a warning, since start scripts pass them and they tune only
-  the VM; any other option is the launcher's Unrecognized option."
+  -server and -client, which the launcher accepts and ignores; -Xss, the
+  thread stack size, as :stack in bytes (bound-stack!). A heap size (-Xmx,
+  -Xms, -Xmn), -Xshare: and any -XX: flag are ignored with a warning, since
+  start scripts pass them and they tune only the VM; any other option is the
+  launcher's Unrecognized option."
   [argv]
   (loop [argv argv opts {:props [] :classpath nil :assertions []}]
     (let [a (first argv)]
@@ -2070,7 +2077,8 @@
             (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
             (#{"-server" "-client"} a) (recur (rest argv) opts)
-            (or (re-matches #"-X(mx|ms|mn|ss)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a))
+            (re-matches #"-Xss[0-9]+[kKmMgGtT]?" a) (recur (rest argv) (assoc opts :stack (size-bytes (subs a 4))))
+            (or (re-matches #"-X(mx|ms|mn)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a))
             (do (binding [*out* *err*] (println (str "champaca: ignoring option " a "; it has no counterpart here")))
                 (recur (rest argv) opts))
             :else
@@ -2096,8 +2104,29 @@
               [e]))
           (str/split cp #":")))
 
+;; jolt bounds a thread's stack at 80% of the heap ceiling by default (gigabytes)
+;; and throws StackOverflowError past it, found at a collection; a Java program
+;; recursing without end reached it after 13 s and 7.6 GB, where the JVM's ends
+;; at a megabyte. The launcher bounds it as java does: 1 MB, the JVM's default
+;; thread stack, or -Xss's size. A recursion of one-argument calls ends near
+;; the JVM's depth (52,000 frames to its 42,000 through a try/finally a frame),
+;; and a cold boot's own recursions fit (Chez compiling SystemModules nests
+;; 12,000 deep; a cold Spring Boot start passed). A deeper limit costs more than
+;; memory: unwinding through a try region per frame is quadratic in the depth
+;; (Chez's $do-wind measures both winder lists on each escape). The bound is
+;; checked at collections, so a stack of small frames passes it by up to a
+;; nursery's worth before it's found. JOLT_STACK_LIMIT, when set, decides
+;; instead; the jolt API leaves the process alone, the program around it being
+;; jolt's.
+(def ^:private default-stack-limit (* 1024 1024))
+(defn- bound-stack! [bytes]
+  (s/eval-string (str "(when (and (top-level-bound? 'jolt-stack-limit-defaulted?) (top-level-bound? 'jolt-stack-limit-set!)"
+                      "           (top-level-value 'jolt-stack-limit-defaulted?))"
+                      "  ((top-level-value 'jolt-stack-limit-set!) " bytes "))")))
+
 (defn -main [& argv]
-  (let [{:keys [props classpath assertions argv]} (jvm-options argv)
+  (let [{:keys [props classpath assertions argv stack]} (jvm-options argv)
+        _ (bound-stack! (or stack default-stack-limit))
         _ (swap! state assoc :command-line-properties props :assertion-directives assertions)
         ;; with -cp the main class comes first; without, champaca's own
         ;; form, the class path first (-jar ignores -cp, as java does)
@@ -2111,7 +2140,7 @@
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
         (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa; -server, -client accepted;")
-        (println "         -Xmx, -Xms, -Xmn, -Xss, -Xshare:, -XX: ignored with a warning"))
+        (println "         -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX: ignored with a warning"))
       (System/exit 2))
     (if (= cp "-jar")
       ;; as java -jar: the manifest's Main-Class, the jar alone as the class
