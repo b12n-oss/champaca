@@ -806,6 +806,11 @@
     (jnewarray elem n (elem-default elem))))
 
 (defnative "java/lang/reflect/Array.multiNewArray(Ljava/lang/Class;[I)Ljava/lang/Object;" (cls dims)
+  ;; HotSpot's limits: no dimensions, or more than 255 counting the element
+  ;; type's own, is IllegalArgumentException without a message
+  (let ([n (jarraylength (nn dims))] [c (jclass-cname (mirror-class (nn cls)))])
+    (when (or (fx= n 0) (fx> (fx+ n (let loop ([i 0]) (if (and (fx< i (string-length c)) (char=? (string-ref c i) #\[)) (loop (fx+ i 1)) i))) 255))
+      (jthrow "java/lang/IllegalArgumentException" #f)))
   (jmultiarray (string-append (make-string (jarraylength dims) #\[)
                               (class-name->desc (jclass-cname (mirror-class (nn cls)))))
                (vector->list (jarr-vec dims))))

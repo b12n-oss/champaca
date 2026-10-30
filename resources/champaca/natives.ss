@@ -20,8 +20,11 @@
 (defnative "java/lang/Object.getClass()Ljava/lang/Class;" (this) (jmirror (class-of this)))
 (defnative "java/lang/Object.hashCode()I" (this) (identity-hash this))
 (defnative "java/lang/Object.clone()Ljava/lang/Object;" (this)
-  (if (jarr? this) (array-clone this)
-      (make-jobj (jobj-cls this) (vector-copy (jobj-slots this)))))
+  (cond [(jarr? this) (array-clone this)]
+        ;; HotSpot's check, its message the class's name
+        [(not (jinstance? this "java/lang/Cloneable"))
+         (jthrow "java/lang/CloneNotSupportedException" (slashes->dots (jclass-cname (jobj-cls this))))]
+        [else (make-jobj (jobj-cls this) (vector-copy (jobj-slots this)))]))
 
 ;; --- java.lang.System ------------------------------------------------------------
 
@@ -429,6 +432,11 @@
 (define (float->bits f) (let ([v (make-bytevector 4)]) (bytevector-ieee-single-native-set! v 0 f) (i32 (bytevector-u32-native-ref v 0))))
 (define (bits->double b) (let ([v (make-bytevector 8)]) (bytevector-u64-native-set! v 0 (logand b #xffffffffffffffff)) (bytevector-ieee-double-native-ref v 0)))
 (define (double->bits d) (let ([v (make-bytevector 8)]) (bytevector-ieee-double-native-set! v 0 d) (i64 (bytevector-u64-native-ref v 0))))
+;; the JVM's compare-and-set compares a float or double by its bits, so a NaN
+;; with another payload doesn't match and -0.0 isn't 0.0; eqv? called every
+;; NaN the same
+(define (same-bits? a b)
+  (if (and (flonum? a) (flonum? b)) (= (double->bits a) (double->bits b)) (eqv? a b)))
 (defnative "java/lang/Float.floatToRawIntBits(F)I" (f) (float->bits f))
 (defnative "java/lang/Float.intBitsToFloat(I)F" (b) (bits->float b))
 (defnative "java/lang/Double.doubleToRawLongBits(D)J" (d) (double->bits d))
@@ -1666,6 +1674,8 @@
 ;; as the JVM hands them over: the JDK's own Java enqueues it, or runs the
 ;; Cleaner (a direct buffer's memory is freed that way).
 (defnative "java/lang/ref/Finalizer.isFinalizationEnabled()Z" () 0)
+;; ScopedValue rethrows a scope's failure through it
+(defnative "jdk/internal/misc/Unsafe.throwException(Ljava/lang/Throwable;)V" (this t) (raise (nn t)))
 ;; the referent's slot, looked up once: refersTo runs on every soft-reference
 ;; cache hit (a warm Spring Boot start spent 0.1 s in the lookup)
 (define referent-slot #f)
@@ -2563,8 +2573,8 @@
     (case op
       [(get) (get)]
       [(set) (set (car vals))]
-      [(cas) (if (eqv? (get) (car vals)) (begin (set (cadr vals)) 1) 0)]
-      [(cax) (let ([old (get)]) (when (eqv? old (car vals)) (set (cadr vals))) old)]
+      [(cas) (if (same-bits? (get) (car vals)) (begin (set (cadr vals)) 1) 0)]
+      [(cax) (let ([old (get)]) (when (same-bits? old (car vals)) (set (cadr vals))) old)]
       [(gas) (let ([old (get)]) (set (car vals)) old)]
       [(add) (update (lambda (old) (+ old (car vals))))]
       [(or) (update (lambda (old) (logior old (car vals))))]

@@ -1,0 +1,33 @@
+record F(0) 0
+record F(80000000) -2147483648
+record F(3fa00000) 1067450368
+record F(7fc00000) 2143289344
+record F(7fc01234) 2143289344
+record F(7f800000) 2139095040
+record F(1) 1
+record D(0) 0
+record D(8000000000000000) -2147483648
+record D(3ff4000000000000) 1072955392
+record D(7ff8000000000000) 2146959360
+record D(7ff8000000001234) 2146959360
+record D(fff0000000000000) -1048576
+record D(7e37e43c8800759c) -164130400
+record Mixed -2140583086 1245185237
+scoped value: from the scope x
+scoped value call: y
+newInstance [0, -1]: java.lang.NegativeArraySizeException: -1
+newInstance [-1, 0]: java.lang.NegativeArraySizeException: -1
+newInstance [2, -3]: java.lang.NegativeArraySizeException: -3
+newInstance [0, 0, -2]: java.lang.NegativeArraySizeException: -2
+multianewarray [0][-1]: -1
+multianewarray [2][0][-1]: -1
+dimensions 255: 256
+dimensions 256: java.lang.IllegalArgumentException: null
+no dimensions: java.lang.IllegalArgumentException: null
+cas float other NaN: false same NaN: true now 3.0
+cas float 0 vs -0: false true now 2.0
+cas double other NaN: false exchange 7ff8000000001234 now 7ff8000000001234
+cas float[] other NaN: false weak same: true
+clone Cloneable: 7
+clone non-Cloneable: SmallSemanticsCheck$NotCloneable
+clone array: 2

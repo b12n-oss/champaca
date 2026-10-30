@@ -671,13 +671,17 @@
   (case (string-ref d 0) [(#\L #\[) #f] [(#\F #\D) 0.0] [else 0]))
 
 (define (jmultiarray desc dims)
-  ;; desc is the full array type, e.g. "[[I"
+  ;; desc is the full array type, e.g. "[[I"; every dimension is checked
+  ;; first, as multianewarray does, so new int[0][-1] throws too
+  (for-each (lambda (n) (when (fx< n 0) (jthrow "java/lang/NegativeArraySizeException" (number->string n)))) dims)
+  (jmultiarray* desc dims))
+(define (jmultiarray* desc dims)
   (let ([elem (substring desc 1 (string-length desc))])
     (if (null? (cdr dims))
         (jnewarray elem (car dims) (elem-default elem))
         (let ([a (jnewarray elem (car dims) #f)])
           (do ([i 0 (fx+ i 1)]) ((fx= i (car dims)) a)
-            (vector-set! (jarr-vec a) i (jmultiarray elem (cdr dims))))))))
+            (vector-set! (jarr-vec a) i (jmultiarray* elem (cdr dims))))))))
 
 (define (bounds-error i v . site)   ; site: codegen's tag and pc, for the trace
   (jthrow "java/lang/ArrayIndexOutOfBoundsException"
@@ -1326,7 +1330,11 @@
     [(#\L #\[) (if v ((jvirt v "hashCode()I") v) 0)]
     [(#\Z) (if (eqv? v 0) 1237 1231)]
     [(#\J) (i32 (logxor v (ash (logand v #xffffffffffffffff) -32)))]
-    [(#\F #\D) (i32 (double->bits v))]
+    ;; Float.hashCode and Double.hashCode: the bits with NaN made canonical,
+    ;; a double's two halves xored (it took the double's low 32 bits)
+    [(#\F) (if (nan? v) #x7fc00000 (float->bits v))]
+    [(#\D) (let ([b (if (nan? v) #x7ff8000000000000 (logand (double->bits v) #xffffffffffffffff))])
+              (i32 (logxor b (ash b -32))))]
     [else v]))
 (define (jrecord-op op simple fields this . rest)
   (let ([get (lambda (o f) (vector-ref (jobj-slots o) (cadr f)))])
