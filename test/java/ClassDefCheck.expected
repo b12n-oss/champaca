@@ -22,5 +22,8 @@ CdPrivateFinalB from its bytes: defined CdPrivateFinalB
 CdStaticBeside from the class path: defined CdStaticBeside
 CdStaticBeside again: defined CdStaticBeside
 CdStaticBesideB from its bytes: defined CdStaticBesideB
+hidden override: java.lang.IncompatibleClassChangeError: class CdHiddenOverride/0xN overrides final method CdParent.pkgFinal()V
+missing super, failing loader: java.lang.IllegalStateException: this loader fails on CdNowhere
+missing super, plain loader: java.lang.NoClassDefFoundError: CdNowhere
 new CdFinalChild: java.lang.IncompatibleClassChangeError: class CdFinalChild cannot inherit from final class java.lang.String
 new CdFinalChild: java.lang.IncompatibleClassChangeError: class CdFinalChild cannot inherit from final class java.lang.String

@@ -2242,14 +2242,22 @@
            ;; resolution's, as on the JVM: it is kept for the name, and the
            ;; instruction that names the class throws it (jthrow-missing)
            (guard (e [(and (jobj? e) (jinstance? e "java/lang/ClassNotFoundException")) #f]
-                     [(jobj? e) (hashtable-set! resolution-errors name e) #f])
+                     [(jobj? e) (hashtable-set! resolution-errors name e)
+                                (set! resolution-error-count (fx+ resolution-error-count 1))
+                                (hashtable-set! resolution-error-stamps name resolution-error-count)
+                                #f])
              ((jvirt l "loadClass(Ljava/lang/String;)Ljava/lang/Class;") l (jstring (slashes->dots name)))
              (and (hashtable-ref classes name #f) #t))))))
+;; when each name's resolution error was recorded: defineClass rethrows one
+;; for a missing supertype only if this definition's own lookup recorded it
+(define resolution-error-count 0)
+(define resolution-error-stamps (make-hashtable string-hash string=?))
 (define (define-class! loader given v off len hidden? classdata pd)
   (unless (and (fx>= off 0) (fx>= len 0) (fx<= (fx+ off len) (vector-length v)))
     (jthrow "java/lang/ArrayIndexOutOfBoundsException"
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
-  (let* ([name (and given (slashes (jstring->scheme given)))]
+  (let* ([stamp resolution-error-count]
+         [name (and given (slashes (jstring->scheme given)))]
          ;; what fails past parsing (a superclass that isn't there, a link
          ;; error) is a NoClassDefFoundError naming the cause, as a class
          ;; the JVM can't define is a LinkageError
@@ -2257,8 +2265,12 @@
          ;; its nested definition threw ClassCircularityError) is that error,
          ;; as the JVM rethrows a failed resolution's error
          [r (guard (e [(and (not (jobj? e))
-                            (let ([m (class-not-found-in e)]) (and m (hashtable-ref resolution-errors m #f))))
+                            (let ([m (class-not-found-in e)])
+                              (and m (fx> (hashtable-ref resolution-error-stamps m 0) stamp)
+                                   (hashtable-ref resolution-errors m #f))))
                        => raise]
+                      ;; a supertype that's nowhere: the JVM's message is its slashed name
+                      [(and (not (jobj? e)) (class-not-found-in e)) => (lambda (m) (jthrow "java/lang/NoClassDefFoundError" m))]
                       [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
               (parameterize ([resolving-loader loader])
                 (define-class-hook* name (bytes->latin1 v off len) hidden?

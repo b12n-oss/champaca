@@ -31,6 +31,21 @@ public class ClassDefCheck {
             System.out.println(n + " again: " + outcome(() -> Class.forName(n)));
             System.out.println(n + "B from its bytes: " + outcome(() -> new Loader().define(n + "B")));
         }
+        // a hidden class in the parent's package overriding its package-private final method
+        try (InputStream in = ClassDefCheck.class.getResourceAsStream("/cdbytes/CdHiddenOverride.bin")) {
+            byte[] b = in.readAllBytes();
+            try { java.lang.invoke.MethodHandles.lookup().defineHiddenClass(b, true); System.out.println("hidden override: defined"); }
+            catch (Throwable e) { System.out.println("hidden override: " + e.getClass().getName() + ": " + e.getMessage().replaceAll("0x[0-9a-f]+", "0xN")); }
+        }
+        // a missing superclass: the error a loader threw for it belongs to that definition only
+        ClassLoader failing = new Loader() {
+            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+                if (name.equals("CdNowhere")) throw new IllegalStateException("this loader fails on " + name);
+                return super.loadClass(name, resolve);
+            }
+        };
+        System.out.println("missing super, failing loader: " + outcome(() -> ((Loader) failing).define("CdMissingSuper1")));
+        System.out.println("missing super, plain loader: " + outcome(() -> new Loader().define("CdMissingSuper2")));
         // an instruction naming a refused class throws its error there, each time
         Class<?> user = Class.forName("CdUser");
         for (int i = 0; i < 2; i++) {

@@ -1145,7 +1145,12 @@
   [cname error msg]
   (ex-info (str "linkage error in " cname ": " error "|" msg) {:class cname :linkage error :message msg}))
 
-(defn- dotted [n] (str/replace n "/" "."))
+(defn- dotted
+  "A class's name as Java prints it; a hidden class keeps the slash before
+  its /0x<n> suffix, as Class.getName does."
+  [n]
+  (let [[_ base sfx] (re-matches #"(.*?)(/0x[0-9a-f]+)?" n)]
+    (str (str/replace base "/" ".") sfx)))
 
 (defn- check-definition!
   "HotSpot's checks of a class being defined, once its superclass and
@@ -1165,7 +1170,7 @@
                               (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
                                    (s/call "class-place-text" i) ")")))))
     (when sup
-      (let [pkg (fn [c] (let [i (str/last-index-of c "/")] (if i (subs c 0 i) "")))]
+      (let [pkg package-dir]   ; a hidden class's /0x<n> suffix isn't its package
         (doseq [m (:methods info)
                 :when (and (not (cf/static? m)) (not= "<init>" (:name m)) (zero? (bit-and (:flags m) 0x0002)))]
           (doseq [c (take-while some? (iterate #(:super (class-info %)) sup))

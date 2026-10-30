@@ -34,7 +34,18 @@ public class ClassDefGen {
             init(b, CD_Object);
             b.withMethodBody("done", MTD_void, ACC_PUBLIC | ACC_FINAL, c -> c.return_());
             b.withMethodBody("secret", MTD_void, ACC_PRIVATE | ACC_FINAL, c -> c.return_());
+            b.withMethodBody("pkgFinal", MTD_void, ACC_FINAL, c -> c.return_());
         }));
+        // for a hidden class (its name gains /0x<n>): overrides the package-private final pkgFinal
+        Files.write(dir.resolve("cdbytes").resolve("CdHiddenOverride.bin"), ClassFile.of().build(ClassDesc.of("CdHiddenOverride"), b -> {
+            b.withFlags(ACC_PUBLIC | ACC_SUPER); b.withSuperclass(PARENT); init(b, PARENT);
+            b.withMethodBody("pkgFinal", MTD_void, ACC_PUBLIC, c -> c.return_());
+        }));
+        // two classes extending a class that's nowhere, for two loaders
+        for (String n : new String[] {"CdMissingSuper1", "CdMissingSuper2"})
+            Files.write(dir.resolve("cdbytes").resolve(n + ".bin"), ClassFile.of().build(ClassDesc.of(n), b -> {
+                b.withFlags(ACC_PUBLIC | ACC_SUPER); b.withSuperclass(ClassDesc.of("CdNowhere"));
+            }));
         both(dir, "CdFinalChild", (n, b) -> { b.withFlags(ACC_PUBLIC | ACC_SUPER); b.withSuperclass(CD_String); });
         both(dir, "CdInterfaceSuper", (n, b) -> { b.withFlags(ACC_PUBLIC | ACC_SUPER); b.withSuperclass(ClassDesc.of("java.lang.Runnable")); });
         both(dir, "CdClassInterface", (n, b) -> { b.withFlags(ACC_PUBLIC | ACC_SUPER); b.withInterfaceSymbols(CD_String); });

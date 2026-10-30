@@ -1188,7 +1188,7 @@
                    (cond [(not ld) "'bootstrap'"]
                          [else
                           (let ([n (jslot ld (jfield-index "java/lang/ClassLoader" "name"))]
-                                [hash (string-append " @" (number->string (identity-hash ld) 16))])
+                                [hash (string-append " @" (string-downcase (number->string (identity-hash ld) 16)))])
                             (cond [(jinstance? ld "jdk/internal/loader/BuiltinClassLoader") (string-append "'" (jstring->scheme n) "'")]
                                   [n (string-append "'" (jstring->scheme n) "'" hash)]
                                   [else (string-append (slashes->dots (jclass-cname (jobj-cls ld))) hash)]))]))))
