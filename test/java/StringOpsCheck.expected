@@ -1,0 +1,19 @@
+hash 0 0
+hash 1 97
+hash 5 99162322
+hash 46 -1992909234
+hash 3 227742
+hash 2 8056
+hash 3 54959902
+hash 7 -1609740576
+equals true false false false true false
+indexOf from -5: 10 16 0 -1 -1
+indexOf from 0: 10 16 0 -1 -1
+indexOf from 3: 10 16 -1 -1 -1
+indexOf from 16: -1 16 -1 -1 -1
+indexOf from 17: -1 -1 -1 -1 -1
+indexOf from 40: -1 -1 -1 -1 -1
+indexOf 4 12 -1 1 10 true
+arrays 898500 1011839 2154849 -2147453881 1 0
+boolean-ish 40359 8897 4681
+big -2071830186 true 207 197773930

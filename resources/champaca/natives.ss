@@ -1667,6 +1667,58 @@
 
 ;; (none yet: Class.getEnumConstantsShared used to be one, before reflect.ss)
 
+;; --- what HotSpot intrinsifies: hashing and Latin-1 string scans -------------------
+;; ArraysSupport.vectorizedHashCode is behind every String.hashCode and
+;; Arrays.hashCode, StringLatin1.equals behind String.equals and
+;; indexOfChar behind String.indexOf(int); HotSpot replaces all three with
+;; vector code, and the Java loops they are here cost a warm Spring Boot
+;; start 0.2 s (spike 75). The same loops in Scheme, over the arrays'
+;; vectors: no per-element bounds check (the callers check their ranges,
+;; as the JDK's do before the intrinsic) and no wrap per step beyond the
+;; int one. A basic type the JDK doesn't hash here is its exception.
+(define-syntax hash-step   ; 31 * h + e, as a Java int
+  (syntax-rules ()
+    [(_ h e) (let ([y (fxlogand (fx+ (fx* 31 h) e) #xffffffff)])
+               (if (fx>= y #x80000000) (fx- y #x100000000) y))]))
+(define (vector-hash v from len init mask)   ; mask #f for the element itself
+  (let ([end (fx+ from len)])
+    (let loop ([i from] [h init])
+      (if (fx>= i end)
+          h
+          (loop (fx+ i 1) (hash-step h (if mask (fxlogand (vector-ref v i) mask) (vector-ref v i))))))))
+(define-override! "jdk/internal/util/ArraysSupport.vectorizedHashCode(Ljava/lang/Object;IIII)I"
+  (lambda (a from len init basic)
+    (let ([v (jarr-vec (nn a))] [et (string-ref (jarr-elem a) 0)])
+      (case basic
+        [(4) (vector-hash v from len init #xff)]            ; T_BOOLEAN: unsigned bytes (Latin-1 strings)
+        [(5) (if (char=? et #\B)                            ; T_CHAR: UTF-16 units of a byte[], or a char[]
+                 (let ([end (fx+ from len)])
+                   (let loop ([i from] [h init])
+                     (if (fx>= i end)
+                         h
+                         (loop (fx+ i 1)
+                               (hash-step h (fxlogor (fxlogand (vector-ref v (fx* 2 i)) #xff)
+                                                     (fxsll (fxlogand (vector-ref v (fx+ (fx* 2 i) 1)) #xff) 8)))))))
+                 (vector-hash v from len init #f))]
+        [(8 9 10) (vector-hash v from len init #f)]         ; T_BYTE, T_SHORT, T_INT: signed, as stored
+        [else (jthrow "java/lang/IllegalArgumentException" (string-append "unrecognized basic type: " (number->string basic)))]))))
+(define-override! "java/lang/StringLatin1.equals([B[B)Z"
+  (lambda (value other)
+    (let* ([v (jarr-vec (nn value))] [o (jarr-vec (nn other))] [n (vector-length v)])
+      (if (fx= n (vector-length o))
+          (let loop ([i 0])
+            (cond [(fx= i n) 1]
+                  [(fx= (vector-ref v i) (vector-ref o i)) (loop (fx+ i 1))]
+                  [else 0]))
+          0))))
+(define-override! "java/lang/StringLatin1.indexOfChar([BIII)I"
+  (lambda (value ch from max)
+    (let ([v (jarr-vec (nn value))] [c (i2b ch)])   ; (byte) ch, as the JDK compares
+      (let loop ([i from])
+        (cond [(fx>= i max) -1]
+              [(fx= (vector-ref v i) c) i]
+              [else (loop (fx+ i 1))])))))
+
 ;; --- java.io.UnixFileSystem: the read-only queries --------------------------------
 ;; Answered with Chez's own file procedures. Changes, access checks and
 ;; canonical paths go through libc in files.ss.
