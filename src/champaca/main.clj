@@ -177,7 +177,8 @@
         (when-let [p (:vtable-packed info)]
           (let [vt (intern-keys (edn/read-string (unpack p)) true)]
             (-> (swap! state update-in [:classes cname]
-                       #(if (:vtable %) % (-> % (assoc :vtable vt) (dissoc :vtable-packed))))
+                       ;; the entry is there (class-info thawed it); a vtable a racing read stored stays
+                       #(cond (nil? %) % (:vtable %) % :else (-> % (assoc :vtable vt) (dissoc :vtable-packed))))
                 (get-in [:classes cname :vtable])))))))
 
 (defn- vtable-of
@@ -1584,7 +1585,7 @@
   classes it only restores, half of the entries' text (spike 73). A vtable
   never thawed is written back as it was."
   [info]
-  (let [vt (or (:vtable-packed info) (when (:vtable info) (pack (pr-str (:vtable info)))))
+  (let [vt (if (:vtable info) (pack (pr-str (:vtable info))) (:vtable-packed info))   ; a live vtable over kept bytes
         core (pack (pr-str (-> info
                                (dissoc :parsed :vtable :vtable-packed)
                                (update :methods (fn [ms] (mapv #(cond-> % (:code %) (assoc :code true)) ms))))))]
