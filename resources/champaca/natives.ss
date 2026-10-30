@@ -288,7 +288,12 @@
 (defnative "java/lang/Runtime.maxMemory()J" (this) (max 4294967296 (current-memory-bytes)))
 (defnative "java/lang/Runtime.totalMemory()J" (this) (current-memory-bytes))
 (defnative "java/lang/Runtime.freeMemory()J" (this) (max 0 (- (current-memory-bytes) (bytes-allocated))))
-(defnative "java/lang/Runtime.gc()V" (this) (collect))
+;; a full collection through jolt's own entry (jolt-collect-full!), which
+;; waits for the other threads at a rendezvous; Chez's (collect) refuses while
+;; another thread is active, and ended the process with a Scheme error
+(define full-collect
+  (if (top-level-bound? 'jolt-collect-full!) (top-level-value 'jolt-collect-full!) (lambda () (collect (collect-maximum-generation)))))
+(defnative "java/lang/Runtime.gc()V" (this) (full-collect))
 
 ;; --- java.lang.Class --------------------------------------------------------------
 
@@ -1643,26 +1648,80 @@
     (note-native-thread! main-thread)
     (thread-alive! main-thread #t)))
 
-;; --- references: no finalization, no reference-processing thread ----------------
+;; --- references -------------------------------------------------------------------
+;; A WeakReference's or PhantomReference's referent (and a subclass's: a
+;; WeakHashMap or ThreadLocal entry, a Cleaner's) sits in the referent slot
+;; inside a Chez weak pair, so the collector clears it as the JVM's does, and
+;; Reference.get, refersTo0 and clear0 are the only readers of that slot for
+;; those kinds (the JDK's FinalReference accessors touch FinalReferences
+;; only). A SoftReference keeps its referent strongly, which the JVM may do
+;; until memory runs short; FinalReference too (no finalization here). One
+;; with a queue, or a jdk.internal.ref.Cleaner, is kept in `queued-refs` (weak
+;; keys), and once a collection has cleared its referent the Reference
+;; Handler thread gets it from the pending list, linked through `discovered`,
+;; as the JVM hands them over: the JDK's own Java enqueues it, or runs the
+;; Cleaner (a direct buffer's memory is freed that way).
 (defnative "java/lang/ref/Finalizer.isFinalizationEnabled()Z" () 0)
 ;; the referent's slot, looked up once: refersTo runs on every soft-reference
 ;; cache hit (a warm Spring Boot start spent 0.1 s in the lookup)
 (define referent-slot #f)
 (define (referent-index)
   (or referent-slot (begin (set! referent-slot (jfield-index "java/lang/ref/Reference" "referent")) referent-slot)))
+(define (referent-of r)   ; the referent, #f once cleared
+  (let ([v (jslot r (referent-index))])
+    (if (weak-pair? v) (let ([x (car v)]) (if (bwp-object? x) #f x)) v)))
+(define queued-refs (make-weak-eq-hashtable))
+(define (weak-kind? r)
+  (or (jinstance? r "java/lang/ref/WeakReference") (jinstance? r "java/lang/ref/PhantomReference")))
+(define-override! "java/lang/ref/Reference.<init>(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V"
+  (lambda (this referent queue)
+    (let ([weak (and referent (weak-kind? this))])
+      (jslot-set! this (referent-index) (if weak (weak-cons referent #f) referent))
+      (jinit "java/lang/ref/ReferenceQueue")
+      (let ([null-queue (top-level-value '|java/lang/ref/ReferenceQueue:NULL_QUEUE|)])
+        (jslot-set! this (jfield-index "java/lang/ref/Reference" "queue") (or queue null-queue))
+        (when (and weak (or (and queue (not (eq? queue null-queue))) (jinstance? this "jdk/internal/ref/Cleaner")))
+          (eq-hashtable-set! queued-refs this #t))))))
+(define-override! "java/lang/ref/Reference.get()Ljava/lang/Object;" (lambda (this) (referent-of this)))
 (defnative "java/lang/ref/Reference.refersTo0(Ljava/lang/Object;)Z" (this o)
-  (if (eq? (jslot this (referent-index)) o) 1 0))
+  (if (eq? (referent-of this) o) 1 0))
 (defnative "java/lang/ref/Reference.clear0()V" (this)
+  (eq-hashtable-delete! queued-refs this)
   (jslot-set! this (referent-index) #f))
 (defnative "java/lang/ref/PhantomReference.refersTo0(Ljava/lang/Object;)Z" (this o)
-  (if (eq? (jslot this (referent-index)) o) 1 0))
+  (if (eq? (referent-of this) o) 1 0))
 (defnative "java/lang/ref/PhantomReference.clear0()V" (this)
+  (eq-hashtable-delete! queued-refs this)
   (jslot-set! this (referent-index) #f))
-;; Nothing is ever pending (references are never cleared by GC here), so the
-;; Reference Handler thread waits here for good rather than spinning.
-(defnative "java/lang/ref/Reference.waitForReferencePendingList()V" () (gil-block! (lambda () #f) #f))
-(defnative "java/lang/ref/Reference.getAndClearReferencePendingList()Ljava/lang/ref/Reference;" () #f)
-(defnative "java/lang/ref/Reference.hasReferencePendingList()Z" () 0)
+;; The pending list: references whose referent a collection cleared, taken out
+;; of queued-refs (each is handed over once), linked through `discovered`.
+;; Looked for when the collection count has moved since the last look.
+(define pending-refs #f)
+(define refs-looked-at -1)
+(define (find-pending-refs!)
+  (let ([n (collections)])
+    (unless (= n refs-looked-at)
+      (set! refs-looked-at n)
+      (let ([discovered (jfield-index "java/lang/ref/Reference" "discovered")]
+            [cleared (filter (lambda (r) (let ([v (jslot r (referent-index))]) (and (weak-pair? v) (bwp-object? (car v)))))
+                             (vector->list (hashtable-keys queued-refs)))])
+        (for-each (lambda (r)
+                    (eq-hashtable-delete! queued-refs r)
+                    (jslot-set! r (referent-index) #f)
+                    (jslot-set! r discovered pending-refs)
+                    (set! pending-refs r))
+                  cleared))))
+  pending-refs)
+;; The Reference Handler thread waits here: until a collection has cleared
+;; something, looking again every 100 ms with the GIL given up
+(defnative "java/lang/ref/Reference.waitForReferencePendingList()V" ()
+  (let loop ()
+    (unless (find-pending-refs!)
+      (gil-block! (lambda () #f) (deadline-after-nanos 100000000))
+      (loop))))
+(defnative "java/lang/ref/Reference.getAndClearReferencePendingList()Ljava/lang/ref/Reference;" ()
+  (let ([r (find-pending-refs!)]) (set! pending-refs #f) r))
+(defnative "java/lang/ref/Reference.hasReferencePendingList()Z" () (if (find-pending-refs!) 1 0))
 
 ;; --- overrides of Java-coded methods ----------------------------------------------
 

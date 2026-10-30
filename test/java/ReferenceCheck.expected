@@ -1,0 +1,10 @@
+gc with a sleeping thread: ok
+phantom get: null
+weak cleared: true, held kept: true
+enqueued: weak true, phantom true, held false
+cleared by hand: get null, enqueue true, again false, polled true
+weak map shrank: true, holds kept
+cleaner ran: true
+thread local after gc: set
+direct buffers: ok
+live still reachable: true
