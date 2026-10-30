@@ -1673,15 +1673,25 @@
 ;; indexOfChar behind String.indexOf(int); HotSpot replaces all three with
 ;; vector code, and the Java loops they are here cost a warm Spring Boot
 ;; start 0.2 s (spike 75). The same loops in Scheme, over the arrays'
-;; vectors: no per-element bounds check (the callers check their ranges,
-;; as the JDK's do before the intrinsic) and no wrap per step beyond the
-;; int one. A basic type the JDK doesn't hash here is its exception.
+;; vectors: the range checked once (the JDK's callers check theirs before
+;; the intrinsic; a bad one throws as the interpreter would) and no wrap
+;; per step beyond the int one. A basic type the JDK doesn't hash here is
+;; its exception.
 (define-syntax hash-step   ; 31 * h + e, as a Java int
   (syntax-rules ()
     [(_ h e) (let ([y (fxlogand (fx+ (fx* 31 h) e) #xffffffff)])
                (if (fx>= y #x80000000) (fx- y #x100000000) y))]))
+;; A range past the vector: the exception the JVM's interpreter throws from
+;; the loop, naming the first index it would have read (the intrinsic's
+;; behaviour is undefined there; no JDK caller passes one, but a Scheme
+;; error would escape every catch)
+(define (check-hash-range! from end length)
+  (when (or (fx< from 0) (fx> end length))
+    (jthrow "java/lang/ArrayIndexOutOfBoundsException"
+            (format "Index ~a out of bounds for length ~a" (if (fx< from 0) from (fxmax from length)) length))))
 (define (vector-hash v from len init mask)   ; mask #f for the element itself
   (let ([end (fx+ from len)])
+    (check-hash-range! from end (vector-length v))
     (let loop ([i from] [h init])
       (if (fx>= i end)
           h
@@ -1693,6 +1703,8 @@
         [(4) (vector-hash v from len init #xff)]            ; T_BOOLEAN: unsigned bytes (Latin-1 strings)
         [(5) (if (char=? et #\B)                            ; T_CHAR: UTF-16 units of a byte[], or a char[]
                  (let ([end (fx+ from len)])
+                   ;; in chars; the index named is the byte the JDK's getChar reads first
+                   (check-hash-range! (fx* 2 from) (fx* 2 end) (vector-length v))
                    (let loop ([i from] [h init])
                      (if (fx>= i end)
                          h
@@ -1714,6 +1726,7 @@
 (define-override! "java/lang/StringLatin1.indexOfChar([BIII)I"
   (lambda (value ch from max)
     (let ([v (jarr-vec (nn value))] [c (i2b ch)])   ; (byte) ch, as the JDK compares
+      (when (fx< from max) (check-hash-range! from max (vector-length v)))
       (let loop ([i from])
         (cond [(fx>= i max) -1]
               [(fx= (vector-ref v i) c) i]
