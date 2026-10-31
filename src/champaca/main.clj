@@ -1175,6 +1175,16 @@
     (when-let [msg (s/call "sealed-refusal" (:name info) (pos? (bit-and (:flags info) 0x0001)) (= :defined (:origin info)) sup)]
       (throw (linkage-error (:name info) "java/lang/IncompatibleClassChangeError" msg)))))
 
+(defn- sealed-refused?
+  "Whether a sealed supertype of info refuses it (check-sealed!), for a class
+  restored from the library cache: the bytes are the same, but the loaders
+  they're defined in may not be."
+  [info]
+  (try (doseq [s (remove nil? (cons (:super info) (:interfaces info)))] (check-sealed! info s))
+       false
+       (catch Exception e
+         (if (:linkage (ex-data e)) true (throw e)))))
+
 (defn- check-definition!
   "HotSpot's checks of a class being defined, once its superclass and
   interfaces are loaded (JVMS 5.3.5, 5.4.5), with its texts: a final
@@ -1187,14 +1197,15 @@
       (when (cf/interface? sup-info)
         (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " has interface " (dotted sup) " as super class"))))
       (when (pos? (bit-and (:flags sup-info) 0x0010))
-        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup)))))
-      (check-sealed! info sup))
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup))))))
     (doseq [i (:interfaces info)]
       (when-not (cf/interface? (class-info i))
         (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
                               (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
                                    (s/call "class-place-text" i) ")")))))
-    (doseq [i (:interfaces info)] (check-sealed! info i))
+    ;; after the interfaces are checked for being interfaces, as HotSpot
+    ;; does that while parsing
+    (doseq [s (remove nil? (cons sup (:interfaces info)))] (check-sealed! info s))
     (when sup
       (let [pkg package-dir]   ; a hidden class's /0x<n> suffix isn't its package
         (doseq [m (:methods info)
@@ -1340,10 +1351,11 @@
                                (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))]
           (cond
             (:bad c) (str "bad " (:bad c))
+            ;; HotSpot checks the name as it reads it, before these two
+            (and given (not= given (:name c))) (str "wrong " (:name c))
             (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
             (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
             (final-sealed? c) (str "bad PermittedSubclasses attribute in final class file " (or given (:name c)))
-            (and given (not= given (:name c))) (str "wrong " (:name c))
             (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
             :else
             (try
@@ -1397,10 +1409,13 @@
   that name from the same bytes and the classes it inherits from are what
   they were, \"ok <name>\"; else nil, the stale entry dropped so the save
   rewrites it, and the class parses as usual. What its methods read is
-  checked when one is first called (deps-still-hold!)."
+  checked when one is first called (deps-still-hold!). A class a sealed
+  supertype refuses where it's defined now isn't restored, and its entry
+  stays: the definition then parses and fails as the JVM's."
   [n bs fp dj]
   (if-let [packed (get (library-cache dj) n)]
-    (let [info (try (timed :thaw #(thaw-entry packed))
+    (let [refused (volatile! false)
+          info (try (timed :thaw #(thaw-entry packed))
                     (catch Exception e
                       (binding [*out* *err*]
                         (println (str "champaca: dropping the library cache's unreadable entry for " n ":") (ex-message e)))
@@ -1411,6 +1426,7 @@
                        (when (trace?) (binding [*out* *err*] (println "define" n "changed since its entry")))
                        false))
                (do (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded! dep)) true)
+               (not (and (sealed-refused? info) (vreset! refused true)))
                (every? (fn [d] (or (dep-matches? d (get (:deps info) d))
                                    (do (swap! state update :defined-changed (fnil inc 0))
                                        (when (trace?) (binding [*out* *err*] (println "define" n "not restored:" d "changed")))
@@ -1426,11 +1442,12 @@
                   (record! :user [n] {:text text})
                   (scheme! text :interpret)))
             (str "ok " n))
-        (do (swap! state #(-> %
-                              (update-in [:user-cache dj] dissoc n)
-                              (assoc-in [:library-dropped dj n] packed)
-                              (update :library-dirty (fnil conj #{}) dj)))
-            nil)))
+        (when-not @refused
+          (swap! state #(-> %
+                            (update-in [:user-cache dj] dissoc n)
+                            (assoc-in [:library-dropped dj n] packed)
+                            (update :library-dirty (fnil conj #{}) dj)))
+          nil)))
     (do (swap! state update :defined-new (fnil inc 0)) nil)))
 
 ;; --- the JIT -----------------------------------------------------------------------

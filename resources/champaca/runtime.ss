@@ -1212,7 +1212,7 @@
                 [mod (cond [(not defined?) (or (app-unnamed-module) unnamed-module)]
                            [(hashtable-ref package-modules (package-dir name) #f)]
                            [ld ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld)]
-                           [else unnamed-module])]
+                           [else unnamed-module])]   ; a null loader (Unsafe.defineClass0): the boot loader's
                 [smod (class-module s)]
                 [sld (class-loader-of s)]
                 ;; a hidden class keeps the slash before /0x<n> (it isn't

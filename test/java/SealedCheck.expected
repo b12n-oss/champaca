@@ -34,6 +34,8 @@ sgp.q.SgPkgOther: java.lang.IncompatibleClassChangeError: Failed same package ch
 sgp.q.SgPkgOther again: java.lang.IncompatibleClassChangeError: Failed same package check: non-public subclass sgp.q.SgPkgOther is in package 'sgp/q' with classloader 'app', and sealed class SgSealed4 is in package 'unnamed' with classloader 'app'
 SgPkgSame: defined SgPkgSame
 SgPkgSame again: defined SgPkgSame
+SgOrder: java.lang.IncompatibleClassChangeError: class SgOrder can not implement java.lang.String, because it is not an interface (java.lang.String is in module java.base of loader 'bootstrap')
+SgOrder again: java.lang.IncompatibleClassChangeError: class SgOrder can not implement java.lang.String, because it is not an interface (java.lang.String is in module java.base of loader 'bootstrap')
 SgJdk: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgJdk is in module 'unnamed module' with loader 'app', and sealed class java.lang.constant.ConstantDesc is in module 'java.base' with loader 'bootstrap'
 SgJdk again: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgJdk is in module 'unnamed module' with loader 'app', and sealed class java.lang.constant.ConstantDesc is in module 'java.base' with loader 'bootstrap'
 SgFinalSealed: java.lang.ClassFormatError: PermittedSubclasses attribute in final class file SgFinalSealed
@@ -44,6 +46,7 @@ SgNotListedJB from its bytes: java.lang.IncompatibleClassChangeError: Failed sam
 SgFromEmptyB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgFromEmptyB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgEmpty is in module 'unnamed module' with loader 'app'
 SgFinalSealedB from its bytes: java.lang.ClassFormatError: PermittedSubclasses attribute in final class file SgFinalSealedB
 SgOkB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgOkB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgSealed2 is in module 'unnamed module' with loader 'app'
+wrong name: java.lang.NoClassDefFoundError: SgWrongName (wrong name: SgFinalSealedB)
 hidden: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgHidden/0xN is not a permitted subclass of SgSealed3
 loader null, other package: java.lang.IncompatibleClassChangeError: Failed same package check: non-public subclass sgr.s.SgSub5B is in package 'sgr/s' with classloader SealedCheck$Loader @N, and sealed class SgSealed5B is in package 'unnamed' with classloader SealedCheck$Loader @N
 loader null, listed: defined SgOk5B

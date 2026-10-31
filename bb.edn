@@ -486,10 +486,14 @@
                         (fs/copy (str lc "/def-v1/d/A.class") (str lc "/def-" v "/d/A.class") {:replace-existing true})
                         (fs/copy (str lc "/def-v1/A2.class") (str lc "/def-" v "/A2.class") {:replace-existing true}))
                     _ (shell (str "javac -d " lc "/def-v2 test/libcache/def/v2/Gen.java"))
+                    _ (shell (str "javac -d " lc "/def-sealed test/libcache/def/sealed/d2/CS.java test/libcache/def/sealed/d2/CQ.java"))
                     def-fails (->> [["def-v1" "v1" 0 nil] ["def-v1" "v1" 6 0] ["def-v2" "v2" 5 10] ["def-v2" "v2all" 6 10 "all"] ["def-v1" "v1" 5 10]
                                     ["def-v3" "v3" 4 30] ["def-v1" "v1" 4 30] ["def-v1" "v1" 6 0]
                                     ["def-v2" "v2other" 5 10 "other-first"] ["def-v2" "v2other" 6 0 "other-first"]
-                                    ["def-v1" "v1gen" 0 nil "gen"] ["def-v2" "v2gen" 0 nil "gen"]]
+                                    ["def-v1" "v1gen" 0 nil "gen"] ["def-v2" "v2gen" 0 nil "gen"]
+                                    ;; a sealed class's subclass restored from the cache is still checked
+                                    ["def-sealed" "sealed" 0 nil "sealed"] ["def-sealed" "sealed" 2 nil "sealed"]
+                                    ["def-sealed" "sealed-split" 0 nil "sealed-split"]]
                                    (map-indexed
                                     (fn [i [dir v restores compiles & more]]
                                       (let [{:keys [out err exit]} (apply run-limited 300 {:label (str "libcache-def-" (inc i)) :err :string

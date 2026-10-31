@@ -14,13 +14,20 @@ import java.nio.file.*;
 // prints v2's values; before, compiling other first recorded B's new
 // fingerprint and run's stale code passed the check), then v1 and v2 in "gen"
 // mode, where A2 reads a class the application loader defined: it isn't
-// cached, so the second run sees v2's Gen. The second argument is "all",
-// "other-first" or "gen".
+// cached, so the second run sees v2's Gen. Then "sealed" twice, where one
+// loader defines the sealed d2.CS and its subclass d2.CQ (CQ restored the
+// second time), and "sealed-split", where CS's loader refuses CQ and a child
+// loader defines it from the same bytes: another unnamed module, so the JVM
+// refuses CQ, and a CQ restored from the cache must be refused too. The
+// second argument is "all", "other-first", "gen", "sealed" or "sealed-split".
 public class DefMain {
     static class DirLoader extends ClassLoader {
         final Path dir;
-        DirLoader(Path dir) { super(DefMain.class.getClassLoader()); this.dir = dir; }
+        final String refuse;
+        DirLoader(Path dir) { this(dir, DefMain.class.getClassLoader(), null); }
+        DirLoader(Path dir, ClassLoader parent, String refuse) { super(parent); this.dir = dir; this.refuse = refuse; }
         @Override protected Class<?> findClass(String name) throws ClassNotFoundException {
+            if (name.equals(refuse)) throw new ClassNotFoundException(name);
             try {
                 byte[] b = Files.readAllBytes(dir.resolve(name.replace('.', '/') + ".class"));
                 return defineClass(name, b, 0, b.length);
@@ -37,6 +44,12 @@ public class DefMain {
             // be checked
             MethodHandles.lookup().defineClass(Files.readAllBytes(Path.of(args[0], "Gen.class")));
             System.out.println(l.loadClass("A2").getMethod("run").invoke(null));
+            return;
+        }
+        if (args.length > 1 && args[1].startsWith("sealed")) {
+            ClassLoader cq = args[1].equals("sealed") ? l : new DirLoader(Path.of(args[0]), new DirLoader(Path.of(args[0]), DefMain.class.getClassLoader(), "d2.CQ"), null);
+            try { System.out.println(cq.loadClass("d2.CQ").getMethod("run").invoke(null)); }
+            catch (Throwable e) { System.out.println(e.getClass().getName() + ": " + e.getMessage().replaceAll("@[0-9a-f]+", "@N")); }
             return;
         }
         Class<?> a = l.loadClass("d.A");

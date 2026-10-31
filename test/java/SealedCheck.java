@@ -27,6 +27,13 @@ public class SealedCheck {
     // a loader of the program's own, defining sgbytes/<name>.bin
     static class Loader extends ClassLoader {
         Loader(String name) { super(name, SealedCheck.class.getClassLoader()); }
+        // the bytes of sgbytes/<file>.bin defined under another name
+        Class<?> defineAs(String name, String file) throws Exception {
+            try (InputStream in = SealedCheck.class.getResourceAsStream("/sgbytes/" + file + ".bin")) {
+                byte[] b = in.readAllBytes();
+                return defineClass(name, b, 0, b.length);
+            }
+        }
         protected Class<?> findClass(String name) throws ClassNotFoundException {
             try (InputStream in = SealedCheck.class.getResourceAsStream("/sgbytes/" + name + ".bin")) {
                 if (in == null) throw new ClassNotFoundException(name);
@@ -53,12 +60,14 @@ public class SealedCheck {
         for (String n : new String[] {"SgSealed", "SgSealedI", "SgEmpty", "SgA", "SgSubI", "SgSealed4"})
             System.out.println(perm(Class.forName(n)));
         for (String n : new String[] {"SgNotListed", "SgNotListedI", "SgNotListedJ", "SgFromEmpty", "sgp.SgOther",
-                                      "sgp.q.SgPkgOther", "SgPkgSame", "SgJdk", "SgFinalSealed"}) {
+                                      "sgp.q.SgPkgOther", "SgPkgSame", "SgOrder", "SgJdk", "SgFinalSealed"}) {
             System.out.println(n + ": " + outcome(() -> Class.forName(n)));
             System.out.println(n + " again: " + outcome(() -> Class.forName(n)));
         }
         for (String n : new String[] {"SgNotListedB", "SgNotListedIB", "SgNotListedJB", "SgFromEmptyB", "SgFinalSealedB", "SgOkB"})
             System.out.println(n + " from its bytes: " + outcome(() -> Class.forName(n, true, new Loader(null))));
+        // a wrong name is found before the final class's attribute
+        System.out.println("wrong name: " + outcome(() -> new Loader(null).defineAs("SgWrongName", "SgFinalSealedB")));
         try (InputStream in = SealedCheck.class.getResourceAsStream("/sgbytes/SgHidden.bin")) {
             byte[] b = in.readAllBytes();
             System.out.println("hidden: " + outcome(() -> java.lang.invoke.MethodHandles.lookup().defineHiddenClass(b, true).lookupClass()));

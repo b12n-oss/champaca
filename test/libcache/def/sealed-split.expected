@@ -1,0 +1,1 @@
+java.lang.IncompatibleClassChangeError: Failed same module check: subclass d2.CQ is in module 'unnamed module' with loader DefMain$DirLoader @N, and sealed class d2.CS is in module 'unnamed module' with loader DefMain$DirLoader @N

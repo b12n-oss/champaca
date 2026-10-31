@@ -13,7 +13,8 @@ import static java.lang.constant.ConstantDescs.*;
 // subclass a sealed class or interface doesn't list, one of a sealed class
 // listing none, a listed non-public one in another package, a class path
 // class implementing java.base's sealed ConstantDesc, a final class with a
-// PermittedSubclasses attribute; and the classes a loader of the program's
+// PermittedSubclasses attribute, a class both unlisted and naming String as
+// an interface; and the classes a loader of the program's
 // own defines from sgbytes/<name>.bin (each in an unnamed module of its
 // own). Run with `java SealedGen.java <dir>`.
 public class SealedGen {
@@ -61,6 +62,8 @@ public class SealedGen {
         write(dir, "SgSealed4", sealed("sgp.q.SgPkgOther", "SgPkgSame"));
         write(dir, "sgp.q.SgPkgOther", sub(0, "SgSealed4"));
         write(dir, "SgPkgSame", sub(0, "SgSealed4"));
+        // refused twice: by SgEmpty, and for naming a class as an interface, which HotSpot finds first
+        write(dir, "SgOrder", b -> { sub(ACC_PUBLIC, "SgEmpty").accept(b); b.withInterfaceSymbols(CD_String); });
         write(dir, "SgJdk", b -> { b.withFlags(ACC_PUBLIC | ACC_SUPER); b.withInterfaceSymbols(ClassDesc.of("java.lang.constant.ConstantDesc")); init(b, CD_Object); });
         both(dir, "SgFinalSealed", (n, b) -> { b.withFlags(ACC_PUBLIC | ACC_SUPER | ACC_FINAL); init(b, CD_Object); b.with(permits("SgA")); });
         // listed, but defined from bytes: another loader, so another module
