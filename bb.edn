@@ -195,6 +195,8 @@
                     _ (shell "java test/gen/IcceGen.java target/classes")
                     ;; ClassDefCheck's classes the JVM refuses to define (a final superclass...)
                     _ (shell "java test/gen/ClassDefGen.java target/classes")
+                    ;; SealedCheck's sealed classes and the subclasses the JVM refuses
+                    _ (shell "java test/gen/SealedGen.java target/classes")
                     ;; run as -jar: target/app.jar's manifest names JarMain and a
                     ;; Class-Path of lib.jar beside it
                     _ (shell "mkdir -p target/jarmain-classes")

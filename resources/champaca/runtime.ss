@@ -1175,23 +1175,68 @@
 ;; HotSpot's place of a class in its linkage messages (Klass::
 ;; class_in_module_of_loader): "java.lang.String is in module java.base of
 ;; loader 'bootstrap'", "Foo is in unnamed module of loader 'app'"; a loader
-;; of the program's own is "'name' @hash" or its class's name and @hash.
-;; Module versions aren't shown (HotSpot shows a non-JDK module's).
+;; of the program's own is "'name' @hash" or its class's name and @hash
+;; (loader-text, HotSpot's loader_name_and_id). Module versions aren't shown
+;; (HotSpot shows a non-JDK module's).
+(define (loader-text ld)
+  (if (not ld)
+      "'bootstrap'"
+      (let ([n (jslot ld (jfield-index "java/lang/ClassLoader" "name"))]
+            [hash (string-append " @" (string-downcase (number->string (identity-hash ld) 16)))])
+        (cond [(jinstance? ld "jdk/internal/loader/BuiltinClassLoader") (string-append "'" (jstring->scheme n) "'")]
+              [n (string-append "'" (jstring->scheme n) "'" hash)]
+              [else (string-append (slashes->dots (jclass-cname (jobj-cls ld))) hash)]))))
+(define (module-name-of mod)
+  (let ([mname (and mod (jslot mod (jfield-index "java/lang/Module" "name")))])
+    (and mname (jstring->scheme mname))))
 (define (class-place-text cname)
   (let* ([c (find-class cname)]
-         [mod (class-module c)]
-         [mname (and mod (jslot mod (jfield-index "java/lang/Module" "name")))]
-         [ld (class-loader-of c)])
+         [mname (module-name-of (class-module c))])
     (string-append (slashes->dots cname) " is in "
-                   (if mname (string-append "module " (jstring->scheme mname)) "unnamed module")
-                   " of loader "
-                   (cond [(not ld) "'bootstrap'"]
-                         [else
-                          (let ([n (jslot ld (jfield-index "java/lang/ClassLoader" "name"))]
-                                [hash (string-append " @" (string-downcase (number->string (identity-hash ld) 16)))])
-                            (cond [(jinstance? ld "jdk/internal/loader/BuiltinClassLoader") (string-append "'" (jstring->scheme n) "'")]
-                                  [n (string-append "'" (jstring->scheme n) "'" hash)]
-                                  [else (string-append (slashes->dots (jclass-cname (jobj-cls ld))) hash)]))]))))
+                   (if mname (string-append "module " mname) "unnamed module")
+                   " of loader " (loader-text (class-loader-of c)))))
+;; Why a sealed class or interface sup (JVMS 5.3.5) refuses the class name
+;; being defined, in HotSpot's texts (InstanceKlass::has_as_permitted_subclass),
+;; or #f when it permits it or isn't sealed: the two must share a module, a
+;; non-public one must share sup's package, and sup's PermittedSubclasses
+;; must list it (a hidden class's /0x<n> name never matches). name isn't in
+;; the class table yet: a classpath class is the application loader's, in its
+;; unnamed module, a defined one its definer's (resolving-loader, bound by
+;; natives.ss define-class!), in a module owning its package or else in the
+;; definer's unnamed module, as class-module puts them.
+(define (sealed-refusal name public? defined? sup)
+  (let* ([s (find-class sup)]
+         [permitted (class-permitted-subclasses s)])
+    (and permitted
+         (let* ([ld (if defined? (resolving-loader) (app-loader))]
+                [mod (cond [(not defined?) (or (app-unnamed-module) unnamed-module)]
+                           [(hashtable-ref package-modules (package-dir name) #f)]
+                           [ld ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld)]
+                           [else unnamed-module])]
+                [smod (class-module s)]
+                [sld (class-loader-of s)]
+                ;; a hidden class keeps the slash before /0x<n> (it isn't
+                ;; marked hidden until its definition ends)
+                [dotted (lambda (n)
+                          (let ([i (let loop ([i (fx- (string-length n) 1)])
+                                     (cond [(fx< i 0) #f] [(char=? (string-ref n i) #\/) i] [else (loop (fx- i 1))]))])
+                            (if (and i (fx< (fx+ i 2) (string-length n))
+                                     (char=? (string-ref n (fx+ i 1)) #\0) (char=? (string-ref n (fx+ i 2)) #\x))
+                                (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
+                                (slashes->dots n))))]
+                [pkg (lambda (n) (let ([d (package-dir n)]) (if (string=? d "") "unnamed" d)))])
+           (cond [(not (eq? mod smod))
+                  (string-append "Failed same module check: subclass " (dotted name) " is in module '"
+                                 (or (module-name-of mod) "unnamed module") "' with loader " (loader-text (module-loader mod))
+                                 ", and sealed class " (dotted sup) " is in module '"
+                                 (or (module-name-of smod) "unnamed module") "' with loader " (loader-text (module-loader smod)))]
+                 [(and (not public?) (not (string=? (package-dir name) (package-dir sup))))
+                  (string-append "Failed same package check: non-public subclass " (dotted name) " is in package '"
+                                 (pkg name) "' with classloader " (loader-text ld) ", and sealed class " (dotted sup)
+                                 " is in package '" (pkg sup) "' with classloader " (loader-text sld))]
+                 [(member name permitted) #f]
+                 [else (string-append "Failed listed permitted subclass check: class " (dotted name)
+                                      " is not a permitted subclass of " (dotted sup))])))))
 (define (set-mirror-loader! m c)
   (let ([ld (class-loader-of c)])
     (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld))))

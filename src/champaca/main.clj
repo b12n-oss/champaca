@@ -833,6 +833,12 @@
 
 (declare class-map)
 
+(defn- final-sealed?
+  "A parsed class that's final and has a PermittedSubclasses attribute,
+  HotSpot's ClassFormatError."
+  [c]
+  (and (pos? (bit-and (:flags c) 0x0010)) (some? (:permitted-subclasses (:reflection c)))))
+
 (defn- normalize
   "Parse cname's classfile into the linker's class map."
   [cname]
@@ -861,6 +867,10 @@
         ;; HotSpot's format check: an interface's superclass is Object
         (when (and (pos? (bit-and (:flags p) 0x0200)) (not= "java/lang/Object" (:super p)))
           (let [msg (str "Interfaces must have java.lang.Object as superclass in class file " cname)]
+            (throw (ex-info (str "class format error in " cname ": " msg) {:class cname :class-format msg}))))
+        ;; and a final class isn't sealed
+        (when (final-sealed? p)
+          (let [msg (str "PermittedSubclasses attribute in final class file " cname)]
             (throw (ex-info (str "class format error in " cname ": " msg) {:class cname :class-format msg}))))
         (class-map cname p (if user :user :jdk))))))
 
@@ -978,7 +988,7 @@
             ;; fields (name desc flags signature annotations type-annotations),
             ;; then the class's own (signature annotations inner
             ;; enclosing-method record-components type-annotations nest-host
-            ;; nest-members)
+            ;; nest-members permitted-subclasses)
             (str "'" (cg/sx (apply cg/sx (for [m methods]
                                            (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m))
                                                   (refl-lit (:signature m)) (refl-lit (:annotations m))
@@ -994,7 +1004,7 @@
                                            (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))
                                                   (refl-lit (:signature f)) (refl-lit (:annotations f))
                                                   (refl-lit (:type-annotations f)))))
-                            (let [{:keys [inner enclosing-method record nest-members]} reflection]
+                            (let [{:keys [inner enclosing-method record nest-members permitted-subclasses]} reflection]
                               (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
                                      ;; (outer simple-name flags): InnerClasses' entry for this class
                                      (if inner
@@ -1015,7 +1025,9 @@
                                      (refl-lit (:type-annotations reflection))
                                      ;; NestHost: the host's name; NestMembers: their names
                                      (refl-lit (:nest-host reflection))
-                                     (if nest-members (apply cg/sx (map cg/str-lit nest-members)) "#f"))))))]
+                                     (if nest-members (apply cg/sx (map cg/str-lit nest-members)) "#f")
+                                     ;; PermittedSubclasses: their names, () for a sealed class listing none
+                                     (if permitted-subclasses (apply cg/sx (map cg/str-lit permitted-subclasses)) "#f"))))))]
     ;; a conflicting default's stub, with the JVM's message: the interfaces
     ;; in declaration order, dotted, without descriptors
     (for [[k is] (sort conflicts)
@@ -1152,23 +1164,37 @@
   (let [[_ base sfx] (re-matches #"(.*?)(/0x[0-9a-f]+)?" n)]
     (str (str/replace base "/" ".") sfx)))
 
+(defn- check-sealed!
+  "A sealed supertype must permit the class being defined: the same module,
+  the same package unless the class is public, and listed in its
+  PermittedSubclasses (JVMS 5.3.5), with HotSpot's texts (runtime.ss
+  sealed-refusal answers one, or #f). A JDK class isn't checked: the image's
+  classes were checked when it was built."
+  [info sup]
+  (when-not (= :jdk (:origin info))
+    (when-let [msg (s/call "sealed-refusal" (:name info) (pos? (bit-and (:flags info) 0x0001)) (= :defined (:origin info)) sup)]
+      (throw (linkage-error (:name info) "java/lang/IncompatibleClassChangeError" msg)))))
+
 (defn- check-definition!
   "HotSpot's checks of a class being defined, once its superclass and
   interfaces are loaded (JVMS 5.3.5, 5.4.5), with its texts: a final
   superclass, an interface as the superclass, a class among the interfaces,
-  an instance method overriding a final one it can see. Throws linkage-error."
+  a sealed supertype that doesn't permit it, an instance method overriding a
+  final one it can see. Throws linkage-error."
   [info]
   (let [n (:name info) sup (:super info) sup-info (when sup (class-info sup))]
     (when (and sup-info (not (cf/interface? info)))
       (when (cf/interface? sup-info)
         (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " has interface " (dotted sup) " as super class"))))
       (when (pos? (bit-and (:flags sup-info) 0x0010))
-        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup))))))
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup)))))
+      (check-sealed! info sup))
     (doseq [i (:interfaces info)]
       (when-not (cf/interface? (class-info i))
         (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
                               (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
                                    (s/call "class-place-text" i) ")")))))
+    (doseq [i (:interfaces info)] (check-sealed! info i))
     (when sup
       (let [pkg package-dir]   ; a hidden class's /0x<n> suffix isn't its package
         (doseq [m (:methods info)
@@ -1316,6 +1342,7 @@
             (:bad c) (str "bad " (:bad c))
             (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
             (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
+            (final-sealed? c) (str "bad PermittedSubclasses attribute in final class file " (or given (:name c)))
             (and given (not= given (:name c))) (str "wrong " (:name c))
             (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
             :else

@@ -197,6 +197,9 @@
 ;; Reflection.areNestMates (below) and Class.isNestmateOf compare hosts.
 (define (class-nest-host-name c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 6) (list-ref r 6))))
 (define (class-nest-members c) (let ([r (meta-class-refl c)]) (or (and (fx> (length r) 7) (list-ref r 7)) '())))
+;; a sealed class's PermittedSubclasses names, '() when it lists none, #f
+;; for a class that isn't sealed
+(define (class-permitted-subclasses c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 8) (list-ref r 8))))
 (define dynamic-nest-hosts (make-hashtable string-hash string=?))   ; hidden class name -> host jclass
 (define (same-runtime-package? a b)
   (and (string=? (package-dir (jclass-cname a)) (package-dir (jclass-cname b)))
@@ -223,7 +226,23 @@
                                     (let ([m (guard (e [#t #f]) (find-class n))])
                                       (if (and m (eq? (nest-host m) h)) (cons (jmirror m) acc) acc)))
                                   '() (class-nest-members h)))))))
-(defnative "java/lang/Class.getPermittedSubclasses0()[Ljava/lang/Class;" (this) #f)
+;; Sealed classes: each name in PermittedSubclasses that resolves through the
+;; class's own loader, in order, as HotSpot's JVM_GetPermittedSubclasses,
+;; which leaves out a name that fails to load; Class.getPermittedSubclasses
+;; then keeps the direct subtypes. null for a class that isn't sealed.
+(defnative "java/lang/Class.getPermittedSubclasses0()[Ljava/lang/Class;" (this)
+  (let* ([c (mirror-class this)]
+         [names (and (memq (jclass-kind c) '(class interface)) (class-permitted-subclasses c))])
+    (and names
+         (make-jarr "Ljava/lang/Class;"
+                    (list->vector
+                     (parameterize ([resolving-loader (hashtable-ref class-loaders (jclass-cname c) #f)])
+                       (fold-right (lambda (n acc)
+                                     (let ([m (guard (e [(and (jobj? e) (jinstance? e "java/lang/VirtualMachineError")) (raise e)]
+                                                        [#t #f])
+                                                (jmirror-of n))])
+                                       (if m (cons m acc) acc)))
+                                   '() names)))))))
 (defnative "java/lang/Class.isRecord0()Z" (this)
   (if (class-record (mirror-class this)) 1 0))
 (defnative "java/lang/Class.getClassAccessFlagsRaw0()I" (this) (fxlogand (jclass-flags (mirror-class this)) #xffff))

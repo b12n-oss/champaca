@@ -1,0 +1,54 @@
+circle 1.5
+square 2.0
+poly Poly
+poly Tri
+SealedCheck$Shape sealed=true permits=[class SealedCheck$Circle, class SealedCheck$Square, class SealedCheck$Poly]
+SealedCheck$Circle sealed=false permits=null
+SealedCheck$Poly sealed=false permits=null
+SealedCheck$Tri sealed=false permits=null
+SealedCheck$Node sealed=true permits=[class SealedCheck$Leaf, class SealedCheck$Pair]
+SealedCheck$Leaf sealed=false permits=null
+java.lang.Object sealed=false permits=null
+[I sealed=false permits=null
+int sealed=false permits=null
+[LSealedCheck$Shape; sealed=false permits=null
+java.lang.constant.ConstantDesc sealed=true permits=[interface java.lang.constant.ClassDesc, interface java.lang.constant.MethodHandleDesc, interface java.lang.constant.MethodTypeDesc, class java.lang.Double, class java.lang.constant.DynamicConstantDesc, class java.lang.Float, class java.lang.Integer, class java.lang.Long, class java.lang.String]
+java.lang.constant.ClassDesc sealed=true permits=[class jdk.internal.constant.PrimitiveClassDescImpl, class jdk.internal.constant.ClassOrInterfaceDescImpl, class jdk.internal.constant.ArrayClassDescImpl]
+SgSealed sealed=true permits=[class SgA, class sgp.SgOther]
+SgSealedI sealed=true permits=[class SgA, interface SgSubI]
+SgEmpty sealed=true permits=[]
+SgA sealed=false permits=null
+SgSubI sealed=false permits=null
+SgSealed4 sealed=true permits=[class SgPkgSame]
+SgNotListed: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgNotListed is not a permitted subclass of SgSealed
+SgNotListed again: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgNotListed is not a permitted subclass of SgSealed
+SgNotListedI: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgNotListedI is not a permitted subclass of SgSealedI
+SgNotListedI again: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgNotListedI is not a permitted subclass of SgSealedI
+SgNotListedJ: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgNotListedJ is not a permitted subclass of SgSealedI
+SgNotListedJ again: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgNotListedJ is not a permitted subclass of SgSealedI
+SgFromEmpty: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgFromEmpty is not a permitted subclass of SgEmpty
+SgFromEmpty again: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgFromEmpty is not a permitted subclass of SgEmpty
+sgp.SgOther: defined sgp.SgOther
+sgp.SgOther again: defined sgp.SgOther
+sgp.q.SgPkgOther: java.lang.IncompatibleClassChangeError: Failed same package check: non-public subclass sgp.q.SgPkgOther is in package 'sgp/q' with classloader 'app', and sealed class SgSealed4 is in package 'unnamed' with classloader 'app'
+sgp.q.SgPkgOther again: java.lang.IncompatibleClassChangeError: Failed same package check: non-public subclass sgp.q.SgPkgOther is in package 'sgp/q' with classloader 'app', and sealed class SgSealed4 is in package 'unnamed' with classloader 'app'
+SgPkgSame: defined SgPkgSame
+SgPkgSame again: defined SgPkgSame
+SgJdk: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgJdk is in module 'unnamed module' with loader 'app', and sealed class java.lang.constant.ConstantDesc is in module 'java.base' with loader 'bootstrap'
+SgJdk again: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgJdk is in module 'unnamed module' with loader 'app', and sealed class java.lang.constant.ConstantDesc is in module 'java.base' with loader 'bootstrap'
+SgFinalSealed: java.lang.ClassFormatError: PermittedSubclasses attribute in final class file SgFinalSealed
+SgFinalSealed again: java.lang.ClassFormatError: PermittedSubclasses attribute in final class file SgFinalSealed
+SgNotListedB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgNotListedB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgSealed is in module 'unnamed module' with loader 'app'
+SgNotListedIB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgNotListedIB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgSealedI is in module 'unnamed module' with loader 'app'
+SgNotListedJB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgNotListedJB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgSealedI is in module 'unnamed module' with loader 'app'
+SgFromEmptyB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgFromEmptyB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgEmpty is in module 'unnamed module' with loader 'app'
+SgFinalSealedB from its bytes: java.lang.ClassFormatError: PermittedSubclasses attribute in final class file SgFinalSealedB
+SgOkB from its bytes: java.lang.IncompatibleClassChangeError: Failed same module check: subclass SgOkB is in module 'unnamed module' with loader SealedCheck$Loader @N, and sealed class SgSealed2 is in module 'unnamed module' with loader 'app'
+hidden: java.lang.IncompatibleClassChangeError: Failed listed permitted subclass check: class SgHidden/0xN is not a permitted subclass of SgSealed3
+loader null, other package: java.lang.IncompatibleClassChangeError: Failed same package check: non-public subclass sgr.s.SgSub5B is in package 'sgr/s' with classloader SealedCheck$Loader @N, and sealed class SgSealed5B is in package 'unnamed' with classloader SealedCheck$Loader @N
+loader null, listed: defined SgOk5B
+loader null: SgSealed5B sealed=true permits=[class SgOk5B]
+loader mine first: SgSealed7B sealed=true permits=[class SgOk7B]
+loader mine, other package: java.lang.IncompatibleClassChangeError: Failed same package check: non-public subclass sgr.s.SgSub7B is in package 'sgr/s' with classloader 'mine' @N, and sealed class SgSealed7B is in package 'unnamed' with classloader 'mine' @N
+loader mine, listed: defined SgOk7B
+loader mine: SgSealed7B sealed=true permits=[class SgOk7B]
