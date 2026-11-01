@@ -2,7 +2,8 @@
 
 How the launcher picks `main` (JEP 512, final in Java 25), case by case. bb
 test compiles these into target/mainsel and runs each class that has a
-`<Class>.expected` with the arguments `a b`. The file holds what HotSpot's
+`<Class>.expected` with the arguments `a b`. PrivStatic and PrivInstance
+come from test/gen/MainSelGen.java, since javac won't compile them. The file holds what HotSpot's
 `java` gives: a line `exit <status>`, then stdout, then a line
 `--- stderr`, then stderr. To record one:
 

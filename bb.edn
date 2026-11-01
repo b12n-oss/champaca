@@ -296,6 +296,7 @@
                     ;; with a .expected run with a b, its status, stdout and stderr HotSpot's
                     _ (fs/delete-tree "target/mainsel")
                     _ (apply shell "javac" "-d" "target/mainsel" (map str (fs/glob "test/mainsel" "*.java")))
+                    _ (shell "java test/gen/MainSelGen.java target/mainsel")
                     mainsel-fails (vec (for [f (sort (map str (fs/glob "test/mainsel" "*.expected")))
                                              :let [c (str/replace (fs/file-name f) ".expected" "")
                                                    {:keys [out err exit]} (run-limited 300 {:label (str "mainsel-" c) :err :string}

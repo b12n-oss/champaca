@@ -1353,7 +1353,9 @@
 ;; MethodFinder and refuses with the launcher's texts and status 1 (System.exit
 ;; from abort); it notes whether main is static and whether it takes the
 ;; arguments. A static main is called as JNI's GetStaticMethodID finds it, the
-;; class (or interface) first, then its superclasses, the class initialized;
+;; class (or interface) first, then its superclasses, whatever its access (a
+;; private static main hiding the public one MethodFinder found runs, as on
+;; HotSpot), the class initialized;
 ;; an instance main on an object its no-argument constructor makes, through
 ;; the vtable, so an inherited or default main runs.
 (define (launch-main cname args)
@@ -1370,7 +1372,7 @@
     (if static?
         (let up ([k c])
           (let ([m (find (lambda (m) (and (string=? (car m) "main") (string=? (cadr m) desc)
-                                          (fxpositive? (fxlogand (caddr m) 8)) (fxzero? (fxlogand (caddr m) 2))))
+                                          (fxpositive? (fxlogand (caddr m) 8))))
                          (meta-methods k))])
             (cond [m (jinit name) (apply (method-proc (jclass-cname k) (string-append "main" desc)) jargs)]
                   [(jclass-super k) (up (find-class (jclass-super k)))]
