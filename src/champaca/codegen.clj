@@ -530,6 +530,10 @@
         cmp2 {:if_icmpeq "fx=" :if_icmpne "fx<>" :if_icmplt "fx<" :if_icmpge "fx>="
               :if_icmpgt "fx>" :if_icmple "fx<="}
         terminal (volatile! nil)
+        ;; set when an instruction also translated the one after it
+        fused (volatile! false)
+        lcmp-branch {:ifeq #(sx "=" %1 %2) :ifne #(sx "not" (sx "=" %1 %2)) :iflt #(sx "<" %1 %2)
+                     :ifge #(sx ">=" %1 %2) :ifgt #(sx ">" %1 %2) :ifle #(sx "<=" %1 %2)}
         branch (fn [test target fall] (vreset! terminal (sx "if" test (goto target) (goto fall))))]
     ;; a class an instruction names is resolved when it is translated, but on
     ;; the JVM only when it runs: one that isn't there makes the instruction a
@@ -611,19 +615,20 @@
           :iand (bin #(sx "fxlogand" %1 %2) "I")
           :ior (bin #(sx "fxlogor" %1 %2) "I")
           :ixor (bin #(sx "fxlogxor" %1 %2) "I")
-          :ladd (bin #(sx "wrap-long" (sx "+" %1 %2)) "J")
-          :lsub (bin #(sx "wrap-long" (sx "-" %1 %2)) "J")
-          :lmul (bin #(sx "wrap-long" (sx "*" %1 %2)) "J")
+          ;; runtime.ss's long macros: fixnums inline, bignums on 32-bit halves
+          (:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr)
+          (bin #(sx (name op) %1 %2) "J")
           :ldiv (bin #(sx (at pc "ldiv") %1 %2) "J")
           :lrem (bin #(sx (at pc "lrem") %1 %2) "J")
-          :lneg (un #(sx "wrap-long" (sx "-" %)) "J")
-          :lshl (bin #(sx "lshl" %1 %2) "J")
-          :lshr (bin #(sx "lshr" %1 %2) "J")
-          :lushr (bin #(sx "lushr" %1 %2) "J")
-          :land (bin #(sx "logand" %1 %2) "J")
-          :lor (bin #(sx "logor" %1 %2) "J")
-          :lxor (bin #(sx "logxor" %1 %2) "J")
-          :lcmp (bin #(sx "lcmp" %1 %2) "I")
+          :lneg (un #(sx "lneg" %) "J")
+          ;; lcmp then a branch on its result, the usual shape, is one
+          ;; comparison: the branch ends the block, so it's the last instruction
+          :lcmp (let [{nop :op nargs :args npc :pc nlen :len} (second insns)]
+                  (if-let [test (lcmp-branch nop)]
+                    (let [b (pop!) a (pop!)]
+                      (branch (test a b) (first nargs) (+ npc nlen))
+                      (vreset! fused true))
+                    (bin #(sx "lcmp" %1 %2) "I")))
           (:dadd :dsub :dmul :ddiv)
           (bin #(sx ({:dadd "fl+" :dsub "fl-" :dmul "fl*" :ddiv "fl/"} op) %1 %2) "D")
           (:fadd :fsub :fmul :fdiv)
@@ -635,7 +640,7 @@
           (:fcmpl :dcmpl) (bin #(sx "jfcmp" %1 %2 "-1") "I")
           (:fcmpg :dcmpg) (bin #(sx "jfcmp" %1 %2 "1") "I")
           :i2l (un identity "J")
-          :l2i (un #(sx "wrap-int" %) "I")
+          :l2i (un #(sx "l2i" %) "I")
           :i2d (un #(sx "fixnum->flonum" %) "D")
           :l2d (un #(sx "inexact" %) "D")
           :i2f (un #(sx "f32" (sx "fixnum->flonum" %)) "F")
@@ -825,7 +830,7 @@
                               (conj! stmts [:depth (count @st)])
                               false)
               (do (vreset! terminal ncdfe) true)))))
-       (recur (rest insns)))))
+       (recur (if @fused (drop 2 insns) (rest insns))))))
     (let [term (or @terminal (goto next-pc))]
       {:code (render-steps (persistent! stmts) term)
        :succ @succ})))

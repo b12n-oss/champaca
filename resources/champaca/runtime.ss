@@ -31,8 +31,10 @@
     (if (fx>= y #x80000000) (fx- y #x100000000) y)))
 
 (define (i64 x)
-  (let ([y (logand x #xffffffffffffffff)])
-    (if (>= y #x8000000000000000) (- y #x10000000000000000) y)))
+  (if (or (fixnum? x) (and (<= #x-8000000000000000 x) (<= x #x7fffffffffffffff)))
+      x
+      (let ([y (logand x #xffffffffffffffff)])
+        (if (>= y #x8000000000000000) (- y #x10000000000000000) y))))
 
 ;; Generated code wraps int and long results with these macros rather than
 ;; i32 and i64: a call to a top-level procedure can't be inlined, and i64's
@@ -47,6 +49,128 @@
 (define-syntax wrap-long
   (syntax-rules ()
     [(_ e) (let ([y e]) (if (fixnum? y) y (i64 y)))]))
+
+;; Java long arithmetic. A long is an exact integer, a fixnum up to 60 bits
+;; and a bignum past them, so generic + and * on longs made a bignum of up to
+;; 128 bits and i64 cut it back with more bignum operations, three or four
+;; allocations an operation. Generated code calls these macros instead: two
+;; fixnums inline (a sum of two fixnums is always a long), anything else a
+;; procedure that does the 64-bit operation on 32-bit halves in fixnum
+;; arithmetic and makes at most one bignum, for the result. The halves go
+;; through long-buf: #3%bytevector-s64-native-set! reads a long's 64 bits
+;; inline (the bignum case an assembly routine), and
+;; #3%bytevector-s64-native-ref gives back the fixnum or a new bignum. Its
+;; unchecked set reads the top two bigits of a longer bignum without
+;; complaint, so only longs go in. One buffer serves every thread: only the
+;; thread holding the GIL runs Java code, and nothing between a store and
+;; its loads can give the GIL up (no call, no safepoint). The unchecked fx
+;; operations act on halves, fixnums by construction. Little-endian only, as
+;; are the machines champaca runs on.
+(unless (eq? (native-endianness) 'little) (error 'champaca "long arithmetic assumes a little-endian machine"))
+(define long-buf (make-bytevector 16 0))
+(define-syntax long-put! (syntax-rules () [(_ off v) (#3%bytevector-s64-native-set! long-buf off v)]))
+(define-syntax long-lo (syntax-rules () [(_ off) (#3%bytevector-u32-native-ref long-buf off)]))
+(define-syntax long-hi (syntax-rules () [(_ off) (#3%bytevector-s32-native-ref long-buf (#3%fx+ off 4))]))
+(define-syntax long-uhi (syntax-rules () [(_ off) (#3%bytevector-u32-native-ref long-buf (#3%fx+ off 4))]))
+;; the long whose halves are hi and lo, each cut to its low 32 bits
+(define-syntax make-long
+  (syntax-rules ()
+    [(_ hi lo) (begin (#3%bytevector-u32-native-set! long-buf 0 lo)
+                      (#3%bytevector-s32-native-set! long-buf 4 hi)
+                      (#3%bytevector-s64-native-ref long-buf 0))]))
+(define (ladd/big x y)
+  (long-put! 0 x) (long-put! 8 y)
+  (let ([lo (#3%fx+ (long-lo 0) (long-lo 8))])
+    (make-long (#3%fx+ (#3%fx+ (long-hi 0) (long-hi 8)) (#3%fxsrl lo 32)) lo)))
+(define (lsub/big x y)
+  (long-put! 0 x) (long-put! 8 y)
+  (let ([lo (#3%fx- (long-lo 0) (long-lo 8))])
+    (make-long (#3%fx+ (#3%fx- (long-hi 0) (long-hi 8)) (#3%fxsra lo 32)) lo)))
+;; al*bl is 64 bits, so it is taken as al times bl's two 16-bit halves; the
+;; cross products only need their low 32 bits, which wrapping at the
+;; fixnum's 61 keeps
+(define (lmul/big x y)
+  (long-put! 0 x) (long-put! 8 y)
+  (let* ([al (long-lo 0)] [ah (long-hi 0)] [bl (long-lo 8)] [bh (long-hi 8)]
+         [s (#3%fx* al (#3%fxlogand bl #xffff))]
+         [u (#3%fx* al (#3%fxsrl bl 16))]
+         [w (#3%fx+ s (#3%fxsll (#3%fxlogand u #xffff) 16))])
+    (make-long (#3%fx+/wraparound (#3%fx+ (#3%fxsrl u 16) (#3%fxsrl w 32))
+                                  (#3%fx+/wraparound (#3%fx*/wraparound al bh) (#3%fx*/wraparound ah bl)))
+               w)))
+(define (lneg/big x) (if (= x #x-8000000000000000) x (- x)))
+(define (land/big x y)
+  (long-put! 0 x) (long-put! 8 y)
+  (make-long (#3%fxlogand (long-hi 0) (long-hi 8)) (#3%fxlogand (long-lo 0) (long-lo 8))))
+(define (lor/big x y)
+  (long-put! 0 x) (long-put! 8 y)
+  (make-long (#3%fxlogor (long-hi 0) (long-hi 8)) (#3%fxlogor (long-lo 0) (long-lo 8))))
+(define (lxor/big x y)
+  (long-put! 0 x) (long-put! 8 y)
+  (make-long (#3%fxlogxor (long-hi 0) (long-hi 8)) (#3%fxlogxor (long-lo 0) (long-lo 8))))
+;; the shifts take n in 0..63
+(define (lshl/big x n)
+  (long-put! 0 x)
+  (let ([lo (long-lo 0)] [hi (long-uhi 0)])
+    (cond [(#3%fx= n 0) x]
+          [(#3%fx< n 32) (make-long (#3%fxlogor (#3%fxsll hi n) (#3%fxsrl lo (#3%fx- 32 n))) (#3%fxsll lo n))]
+          [else (make-long (#3%fxsll lo (#3%fx- n 32)) 0)])))
+(define (lushr/big x n)
+  (long-put! 0 x)
+  (let ([lo (long-lo 0)] [hi (long-uhi 0)])
+    (cond [(#3%fx= n 0) x]
+          [(#3%fx< n 32) (make-long (#3%fxsrl hi n) (#3%fxlogor (#3%fxsrl lo n) (#3%fxsll hi (#3%fx- 32 n))))]
+          [else (make-long 0 (#3%fxsrl hi (#3%fx- n 32)))])))
+(define (lshr/big x n)
+  (long-put! 0 x)
+  (let ([lo (long-lo 0)] [hi (long-hi 0)])
+    (cond [(#3%fx= n 0) x]
+          [(#3%fx< n 32) (make-long (#3%fxsra hi n) (#3%fxlogor (#3%fxsrl lo n) (#3%fxsll hi (#3%fx- 32 n))))]
+          [else (make-long (#3%fxsra hi 31) (#3%fxsra hi (#3%fx- n 32)))])))
+(define (l2i/big x) (long-put! 0 x) (#3%bytevector-s32-native-ref long-buf 0))
+(define (lcmp/big x y) (cond [(< x y) -1] [(> x y) 1] [else 0]))
+(define-syntax ladd
+  (syntax-rules () [(_ a b) (let ([x a] [y b]) (if (and (fixnum? x) (fixnum? y)) (+ x y) (ladd/big x y)))]))
+(define-syntax lsub
+  (syntax-rules () [(_ a b) (let ([x a] [y b]) (if (and (fixnum? x) (fixnum? y)) (- x y) (lsub/big x y)))]))
+;; both under 2^30 in magnitude: the product is a fixnum
+(define-syntax lmul
+  (syntax-rules ()
+    [(_ a b) (let ([x a] [y b])
+               (if (and (fixnum? x) (fixnum? y) (#3%fx<= #x-3fffffff x #x3fffffff) (#3%fx<= #x-3fffffff y #x3fffffff))
+                   (#3%fx* x y)
+                   (lmul/big x y)))]))
+(define-syntax lneg (syntax-rules () [(_ a) (let ([x a]) (if (fixnum? x) (- x) (lneg/big x)))]))
+(define-syntax land
+  (syntax-rules () [(_ a b) (let ([x a] [y b]) (if (and (fixnum? x) (fixnum? y)) (#3%fxlogand x y) (land/big x y)))]))
+(define-syntax lor
+  (syntax-rules () [(_ a b) (let ([x a] [y b]) (if (and (fixnum? x) (fixnum? y)) (#3%fxlogor x y) (lor/big x y)))]))
+(define-syntax lxor
+  (syntax-rules () [(_ a b) (let ([x a] [y b]) (if (and (fixnum? x) (fixnum? y)) (#3%fxlogxor x y) (lxor/big x y)))]))
+;; a fixnum shifted left stays one when shifting back gives it again
+(define-syntax lshl
+  (syntax-rules ()
+    [(_ a s) (let ([x a] [n (fxlogand s 63)])
+               (if (and (fixnum? x) (#3%fx< n 61))
+                   (let ([r (#3%fxsll/wraparound x n)]) (if (#3%fx= (#3%fxsra r n) x) r (lshl/big x n)))
+                   (lshl/big x n)))]))
+;; a fixnum has at most 60 bits besides its sign, so 60 shifts them all out
+(define-syntax lshr
+  (syntax-rules ()
+    [(_ a s) (let ([x a] [n (fxlogand s 63)])
+               (if (fixnum? x) (#3%fxsra x (#3%fxmin n 60)) (lshr/big x n)))]))
+(define-syntax lushr
+  (syntax-rules ()
+    [(_ a s) (let ([x a] [n (fxlogand s 63)])
+               (if (and (fixnum? x) (#3%fx>= x 0)) (#3%fxsrl x (#3%fxmin n 60)) (lushr/big x n)))]))
+(define-syntax l2i
+  (syntax-rules ()
+    [(_ a) (let ([x a])
+             (if (fixnum? x) (#3%fx- (#3%fxlogxor (#3%fxlogand x #xffffffff) #x80000000) #x80000000) (l2i/big x)))]))
+(define-syntax lcmp
+  (syntax-rules ()
+    [(_ a b) (let ([x a] [y b])
+               (if (and (fixnum? x) (fixnum? y)) (if (#3%fx< x y) -1 (if (#3%fx= x y) 0 1)) (lcmp/big x y)))]))
 ;; A guarded region of a Java method. The handler goes straight onto Chez's
 ;; (per-thread) handler stack, under a one-shot continuation: guard takes a full
 ;; call/cc and reads the continuation marks, about twice the cost. A clause whose
@@ -171,16 +295,12 @@
 
 (define (idiv a b) (if (fx= b 0) (jthrow "java/lang/ArithmeticException" "/ by zero") (i32 (quotient a b))))
 (define (irem a b) (if (fx= b 0) (jthrow "java/lang/ArithmeticException" "/ by zero") (remainder a b)))
-(define (ldiv a b) (if (= b 0) (jthrow "java/lang/ArithmeticException" "/ by zero") (i64 (quotient a b))))
-(define (lrem a b) (if (= b 0) (jthrow "java/lang/ArithmeticException" "/ by zero") (remainder a b)))
+(define (ldiv a b) (if (eqv? b 0) (jthrow "java/lang/ArithmeticException" "/ by zero") (let ([q (quotient a b)]) (if (fixnum? q) q (i64 q)))))
+(define (lrem a b) (if (eqv? b 0) (jthrow "java/lang/ArithmeticException" "/ by zero") (remainder a b)))
 (define (ishl a s) (i32 (ash a (fxlogand s 31))))
 (define (ishr a s) (ash a (fx- 0 (fxlogand s 31))))
 (define (iushr a s) (i32 (ash (logand a #xffffffff) (fx- 0 (fxlogand s 31)))))
-(define (lshl a s) (i64 (ash a (fxlogand s 63))))
-(define (lshr a s) (ash a (fx- 0 (fxlogand s 63))))
-(define (lushr a s) (i64 (ash (logand a #xffffffffffffffff) (fx- 0 (fxlogand s 63)))))
 (define (fx<> a b) (not (fx= a b)))
-(define (lcmp a b) (cond [(< a b) -1] [(> a b) 1] [else 0]))
 (define (i2b x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80))
 (define (i2s x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000))
 ;; copies between a Java byte[]'s vector and native memory, a byte at a

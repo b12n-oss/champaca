@@ -199,6 +199,8 @@
                     _ (shell "java test/gen/SealedGen.java target/classes")
                     ;; CondyCheck's CondyUser: entries ldc'd from several methods, bootstraps that fail
                     _ (shell "java test/gen/CondyGen.java target/classes")
+                    ;; LongOpsCheck's LongCmp: lcmp returned, kept in a local, branched on in another block
+                    _ (shell "java test/gen/LongCmpGen.java target/classes")
                     ;; run as -jar: target/app.jar's manifest names JarMain and a
                     ;; Class-Path of lib.jar beside it
                     _ (shell "mkdir -p target/jarmain-classes")
