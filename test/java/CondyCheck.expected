@@ -1,0 +1,22 @@
+one object across methods: true, in one method: true, as an argument: true, bootstrap runs 1
+null: null null, bootstrap runs 1
+method handle same: true, method type same: true
+fail1: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: first
+fail1: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: first, same object false, same cause false
+fail2: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: first, same object false, same cause false
+failing bootstrap runs 1
+err1: java.lang.AssertionError: first
+err1: after error
+erroring bootstrap runs 2
+lerr1: java.lang.NoClassDefFoundError: first
+lerr1: java.lang.NoClassDefFoundError: first, same object false, same cause true
+linkage bootstrap runs 1
+missm: java.lang.NoSuchMethodError: 'void CondyCheck$Boot.nowhere()'
+missm: java.lang.NoSuchMethodError: 'void CondyCheck$Boot.nowhere()', same object false, same cause true
+missv: java.lang.NoSuchMethodError: 'java.lang.String CondyCheck$Boot.novirt(int[])'
+missf: java.lang.NoSuchFieldError: Class CondyCheck$Boot does not have member field 'java.lang.String[] nofield'
+missc: java.lang.NoClassDefFoundError: CondyNowhere, cause java.lang.ClassNotFoundException: CondyNowhere
+missc: java.lang.NoClassDefFoundError: CondyNowhere, cause java.lang.ClassNotFoundException: CondyNowhere, same object false, same cause false
+indy: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: indy first
+indy: java.lang.BootstrapMethodError: bootstrap method initialization exception, same object false, same cause false
+indy bootstrap runs 1

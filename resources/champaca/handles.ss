@@ -745,6 +745,8 @@
 ;; (int n) (long n) (float x) (double x) (string "s") (class "C")
 ;; (methodtype "desc") (mh kind "C" "name" "desc")
 ;; (condy "name" "desc" bootstrap-mh (static-args ...))
+;; and the last three wrapped as (entry |Class#index| datum), resolved once
+;; per constant-pool entry (resolve-once)
 
 (define (const-mh kind cname name desc)
   (let ([c (find-class cname)])
@@ -759,6 +761,52 @@
       [(8) (constructor-mh c desc)]
       [else (jthrow "java/lang/IllegalArgumentException" (string-append "method handle kind " (number->string kind)))])))
 
+;; a method handle constant whose member isn't there is the JVM's linkage
+;; error with LinkResolver's text, where a Lookup throws NoSuchMethodException
+;; and NoSuchFieldException (MethodHandleNatives.linkMethodHandleConstant)
+(define (const-mh-linked kind cname name desc)
+  (guard (e [(and (jobj? e) (jinstance? e "java/lang/NoSuchMethodException"))
+             (jthrow "java/lang/NoSuchMethodError" (method-external cname name desc))]
+            [(and (jobj? e) (jinstance? e "java/lang/NoSuchFieldException"))
+             (jthrow "java/lang/NoSuchFieldError"
+                     (string-append "Class " (slashes->dots cname) " does not have member field '"
+                                    (type-external desc) " " name "'"))])
+    (const-mh kind cname name desc)))
+
+;; JVMS 5.4.3: a resolution that fails with a LinkageError fails the same way
+;; every later time, without running anything again. HotSpot keeps the error's
+;; class and message (and its cause's, for a constant) and throws new ones:
+;; renew. Anything else that isn't a LinkageError (an Error a bootstrap
+;; throws) isn't kept, so the next use resolves again. The first result kept
+;; wins, as when two threads resolve at once.
+(define failed-tag (list 'failed))
+(define absent (list 'absent))
+(define (renew e keep-cause?)
+  ;; a class without a (String) constructor: the error itself
+  (let ([fresh (guard (x [#t e])
+                 (construct (jclass-cname (jobj-cls e)) "(Ljava/lang/String;)V"
+                            ((jvirt e "getMessage()Ljava/lang/String;") e)))]
+        [cause ((jvirt e "getCause()Ljava/lang/Throwable;") e)])
+    (when (and keep-cause? cause (not (eq? fresh e)))
+      ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
+       fresh (renew cause #f)))
+    fresh))
+(define (resolve-once table key thunk keep-cause?)
+  (let ([v (eq-hashtable-ref table key absent)])
+    (cond [(and (pair? v) (eq? (car v) failed-tag)) (raise (renew (cdr v) keep-cause?))]
+          [(not (eq? v absent)) v]
+          [else
+           (let ([v (guard (e [(and (jobj? e) (jinstance? e "java/lang/LinkageError"))
+                               (when (eq? (eq-hashtable-ref table key absent) absent)
+                                 (eq-hashtable-set! table key (cons failed-tag e)))
+                               (raise e)])
+                      (thunk))])
+             (let ([kept (eq-hashtable-ref table key absent)])
+               (cond [(and (pair? kept) (eq? (car kept) failed-tag)) (raise (renew (cdr kept) keep-cause?))]
+                     [(not (eq? kept absent)) kept]
+                     [else (eq-hashtable-set! table key v) v])))])))
+(define entries (make-eq-hashtable))
+
 (define (caller-lookup cname)
   (construct mh-lookup-class "(Ljava/lang/Class;)V" (jmirror-of cname)))
 
@@ -771,8 +819,9 @@
     [(string) (jstring-lit (cadr d))]
     [(class) (jmirror-of (cadr d))]
     [(methodtype) (desc->method-type (cadr d))]
-    [(mh) (apply const-mh (cdr d))]
+    [(mh) (apply const-mh-linked (cdr d))]
     [(condy) (resolve-condy caller d)]
+    [(entry) (resolve-once entries (cadr d) (lambda () (const->java caller (caddr d))) #t)]
     [else (error 'champaca "bad bootstrap constant" d)]))
 
 ;; run bootstrap handle bsm-d with the leading arguments, then the static ones
@@ -795,15 +844,11 @@
 (define (bootstrap-guarded name thunk)
   (guard (e [(and (jobj? e) (not (jinstance? e "java/lang/Error")))
              (raise (construct "java/lang/BootstrapMethodError" "(Ljava/lang/String;Ljava/lang/Throwable;)V"
-                               (jstring-lit (string-append "bootstrap for " name " failed")) e))])
+                               (jstring-lit "bootstrap method initialization exception") e))])
     (thunk)))
 
-(define const-sites (make-eq-hashtable))
-(define (jconst-at key caller d desc)
-  (let ([v (if (eq-hashtable-contains? const-sites key)
-               (eq-hashtable-ref const-sites key #f)
-               (let ([v (const->java caller d)]) (eq-hashtable-set! const-sites key v) v))])
-    (adapt obj-desc desc v)))
+;; an ldc of a method type, method handle or dynamic constant: d is an entry
+(define (jconst caller d desc) (adapt obj-desc desc (const->java caller d)))
 
 (define indy-sites (make-eq-hashtable))
 (define constant-call-site "java/lang/invoke/ConstantCallSite")
@@ -829,8 +874,8 @@
 (define (call-site-target cs) ((jvirt cs "getTarget()Ljava/lang/invoke/MethodHandle;") cs))
 
 (define (indy-call key caller spec name desc . args)
-  (let ([site (or (eq-hashtable-ref indy-sites key #f)
-                  (let ([s (indy-link caller spec name desc)]) (eq-hashtable-set! indy-sites key s) s))])
+  ;; a link that failed fails again, a new error without its cause, as HotSpot's
+  (let ([site (resolve-once indy-sites key (lambda () (indy-link caller spec name desc)) #f)])
     (apply mh-call (if (eq? (car site) 'constant) (cdr site) (call-site-target (cdr site))) desc args)))
 
 ;; a CallSite made from a MethodType has a target that throws until it is set

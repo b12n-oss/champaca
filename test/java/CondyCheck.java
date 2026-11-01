@@ -1,0 +1,76 @@
+import java.lang.invoke.*;
+import java.lang.reflect.InvocationTargetException;
+
+// Constant-pool entries resolve once (JVMS 5.4.3): every ldc of a dynamic
+// constant, method handle or method type entry, and a bootstrap argument
+// naming it, gives the same object from one bootstrap run, null included; a
+// resolution failing with a LinkageError (a bootstrap's exception wrapped in
+// BootstrapMethodError, a member that isn't there) fails again without
+// rerunning anything, as a new error of the same class, message and cause; an
+// Error that isn't a LinkageError isn't kept; an invokedynamic whose bootstrap
+// failed fails again too, without the cause. HotSpot's texts. CondyUser comes
+// from test/gen/CondyGen.java.
+public class CondyCheck {
+    public static class Boot {
+        public static int made, nothings, failed, erred, linked, indied;
+        public static Object make(MethodHandles.Lookup l, String n, Class<?> t) {
+            made++;
+            return new Object() { public String toString() { return "made"; } };
+        }
+        public static Object wrap(MethodHandles.Lookup l, String n, Class<?> t, Object inner) { return new Object[] {inner}; }
+        public static Object nothing(MethodHandles.Lookup l, String n, Class<?> t) { nothings++; return null; }
+        public static Object failOnce(MethodHandles.Lookup l, String n, Class<?> t) {
+            if (failed++ == 0) throw new IllegalStateException("first");
+            return "second";
+        }
+        public static Object errorOnce(MethodHandles.Lookup l, String n, Class<?> t) {
+            if (erred++ == 0) throw new AssertionError("first");
+            return "after error";
+        }
+        public static Object linkageOnce(MethodHandles.Lookup l, String n, Class<?> t) {
+            if (linked++ == 0) throw new NoClassDefFoundError("first");
+            return "after linkage";
+        }
+        public static CallSite indyFailOnce(MethodHandles.Lookup l, String n, MethodType t) {
+            if (indied++ == 0) throw new IllegalStateException("indy first");
+            return new ConstantCallSite(MethodHandles.constant(Object.class, "indy second"));
+        }
+    }
+    static Throwable last;
+    static Object get(String m) throws Exception { return Class.forName("CondyUser").getMethod(m).invoke(null); }
+    static String call(String m) {
+        try {
+            Object r = get(m);
+            return r instanceof MethodHandle ? "a MethodHandle" : String.valueOf(r);
+        } catch (InvocationTargetException e) {
+            Throwable t = e.getCause();
+            String s = t.getClass().getName() + ": " + t.getMessage() + (t.getCause() == null ? "" : ", cause " + t.getCause());
+            if (last != null) s += ", same object " + (t == last) + ", same cause " + (t.getCause() == last.getCause());
+            last = t;
+            return s;
+        } catch (Exception e) { return "unexpected " + e; }
+    }
+    static void calls(String... ms) {
+        last = null;
+        for (String m : ms) System.out.println(m + ": " + call(m));
+    }
+    public static void main(String[] args) throws Exception {
+        Object ok = get("ok1");
+        System.out.println("one object across methods: " + (ok == get("ok2")) + ", in one method: " + get("pair")
+                           + ", as an argument: " + (((Object[]) get("outer"))[0] == ok) + ", bootstrap runs " + Boot.made);
+        System.out.println("null: " + get("nul1") + " " + get("nul2") + ", bootstrap runs " + Boot.nothings);
+        System.out.println("method handle same: " + (get("mh1") == get("mh2")) + ", method type same: " + (get("mt1") == get("mt2")));
+        calls("fail1", "fail1", "fail2");
+        System.out.println("failing bootstrap runs " + Boot.failed);
+        calls("err1", "err1");
+        System.out.println("erroring bootstrap runs " + Boot.erred);
+        calls("lerr1", "lerr1");
+        System.out.println("linkage bootstrap runs " + Boot.linked);
+        calls("missm", "missm");
+        calls("missv");
+        calls("missf");
+        calls("missc", "missc");
+        calls("indy", "indy");
+        System.out.println("indy bootstrap runs " + Boot.indied);
+    }
+}

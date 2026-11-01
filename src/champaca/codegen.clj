@@ -331,11 +331,15 @@
 ;; --- bootstrap constants -------------------------------------------------------------
 ;; A constant-pool entry as a datum the runtime (handles.ss) turns into a Java
 ;; object: the static arguments of a bootstrap method, and the method handle,
-;; method type and dynamic constants an ldc can load.
+;; method type and dynamic constants an ldc can load. Those three resolve once
+;; per constant-pool entry, however many instructions and bootstrap arguments
+;; name it (JVMS 5.4.3), so they come wrapped as (entry |Class#index| datum),
+;; keyed by an interned symbol.
 
 (defn- const-datum [cls i]
   (let [cp (:cp cls)
-        e (cp i)]
+        e (cp i)
+        entry (fn [d] (sx "entry" (sym (str (:name cls) "#" i)) d))]
     (case (:tag e)
       :int (sx "int" (num-lit (:value e)))
       :long (sx "long" (num-lit (:value e)))
@@ -343,13 +347,13 @@
       :double (sx "double" (num-lit (:value e)))
       :string (sx "string" (str-lit (:value e)))
       :class (sx "class" (str-lit (:name e)))
-      :methodtype (sx "methodtype" (str-lit (:desc e)))
+      :methodtype (entry (sx "methodtype" (str-lit (:desc e))))
       :methodhandle (let [{:keys [class name desc]} (cp (:ref-idx e))]
-                      (sx "mh" (str (:kind e)) (str-lit class) (str-lit name) (str-lit desc)))
+                      (entry (sx "mh" (str (:kind e)) (str-lit class) (str-lit name) (str-lit desc))))
       :dynamic (let [bsm (nth (:bootstrap-methods cls) (:bsm-idx e))]
-                 (sx "condy" (str-lit (:name e)) (str-lit (:desc e))
-                     (const-datum cls (:ref-idx bsm))
-                     (apply sx (map #(const-datum cls %) (:args bsm)))))
+                 (entry (sx "condy" (str-lit (:name e)) (str-lit (:desc e))
+                            (const-datum cls (:ref-idx bsm))
+                            (apply sx (map #(const-datum cls %) (:args bsm))))))
       (throw (ex-info "bootstrap constant not in spike" {:entry e :class (:name cls)})))))
 
 ;; --- pattern switches -----------------------------------------------------------------
@@ -559,9 +563,8 @@
               :class (push! (sx "jldc-class" (str-lit (:name e)) (str-lit this-class)) "A")
               (:methodtype :methodhandle :dynamic)
               (let [d (if (= :dynamic (:tag e)) (:desc e) "Ljava/lang/Object;")]
-                ;; resolved once per site, keyed by an interned symbol
-                (push! (sx "jconst-at" (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
-                           (str "'" (const-datum cls a0)) (str-lit d))
+                ;; resolved once per constant-pool entry (const-datum's entry)
+                (push! (sx "jconst" (str-lit this-class) (str "'" (const-datum cls a0)) (str-lit d))
                        (desc->t d)))
               (throw (ex-info "ldc constant not in spike" {:entry e}))))
           :iload (push! (str "l" a0) "I")

@@ -390,11 +390,13 @@
 ;; 'ret Class.name(param, param)' in Java's spelling
 ;; 'int Cls.m(java.lang.String, long[])', as HotSpot names a method in its
 ;; linkage errors
+;; a type descriptor in Java's spelling: "int", "java.lang.String[]"
+(define (type-external d)
+  (cond [(char=? (string-ref d 0) #\[) (string-append (type-external (substring d 1 (string-length d))) "[]")]
+        [(assoc d prim-names) => cdr]
+        [else (slashes->dots (desc->class-name d))]))
 (define (method-external cname name desc)
-  (define (external d)
-    (cond [(char=? (string-ref d 0) #\[) (string-append (external (substring d 1 (string-length d))) "[]")]
-          [(assoc d prim-names) => cdr]
-          [else (slashes->dots (desc->class-name d))]))
+  (define external type-external)
   (string-append "'" (external (desc-ret desc)) " " (slashes->dots cname) "." name "("
                  (let loop ([ps (desc-args desc)])
                    (cond [(null? ps) ""]
