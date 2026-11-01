@@ -61,14 +61,24 @@
 ;; inline (the bignum case an assembly routine), and
 ;; #3%bytevector-s64-native-ref gives back the fixnum or a new bignum. Its
 ;; unchecked set reads the top two bigits of a longer bignum without
-;; complaint, so only longs go in. One buffer serves every thread: only the
+;; complaint, so only longs go in (checked under CHAMPACA_BT). One buffer serves every thread: only the
 ;; thread holding the GIL runs Java code, and nothing between a store and
 ;; its loads can give the GIL up (no call, no safepoint). The unchecked fx
 ;; operations act on halves, fixnums by construction. Little-endian only, as
 ;; are the machines champaca runs on.
 (unless (eq? (native-endianness) 'little) (error 'champaca "long arithmetic assumes a little-endian machine"))
 (define long-buf (make-bytevector 16 0))
-(define-syntax long-put! (syntax-rules () [(_ off v) (#3%bytevector-s64-native-set! long-buf off v)]))
+;; Under CHAMPACA_BT (in the cache key) a value outside long's range is an
+;; error here instead of garbage, so the battery's bt mode checks that no
+;; producer of a long hands on an unwrapped one.
+(define-syntax long-put!
+  (if (getenv "CHAMPACA_BT")
+      (syntax-rules ()
+        [(_ off v) (let ([x v])
+                     (unless (and (exact? x) (integer? x) (<= #x-8000000000000000 x #x7fffffffffffffff))
+                       (errorf 'long-put! "~s is not a long" x))
+                     (#3%bytevector-s64-native-set! long-buf off x))])
+      (syntax-rules () [(_ off v) (#3%bytevector-s64-native-set! long-buf off v)])))
 (define-syntax long-lo (syntax-rules () [(_ off) (#3%bytevector-u32-native-ref long-buf off)]))
 (define-syntax long-hi (syntax-rules () [(_ off) (#3%bytevector-s32-native-ref long-buf (#3%fx+ off 4))]))
 (define-syntax long-uhi (syntax-rules () [(_ off) (#3%bytevector-u32-native-ref long-buf (#3%fx+ off 4))]))
