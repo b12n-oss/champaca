@@ -1,4 +1,5 @@
 one object across methods: true, in one method: true, as an argument: true, bootstrap runs 1
+two threads at once: same object true, bootstrap runs 2, and after: true
 null: null null, bootstrap runs 1
 method handle same: true, method type same: true
 fail1: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: first

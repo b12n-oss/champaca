@@ -8,7 +8,7 @@ import static java.lang.constant.ConstantDescs.*;
 // that each ldc one constant-pool entry (dynamic constants, a method handle,
 // a method type, method handles to members that aren't there), one method
 // that ldcs the same entry twice, a dynamic constant whose static argument
-// is another one's entry, and an invokedynamic whose bootstrap fails once.
+// is another one's entry, one two threads resolve at once, and an invokedynamic whose bootstrap fails once.
 // javac shares an entry only within what it compiles, and never emits
 // these. Run with `java CondyGen.java <dir>`.
 public class CondyGen {
@@ -27,6 +27,7 @@ public class CondyGen {
             MethodTypeDesc.of(ClassDesc.of("java.lang.invoke.CallSite"), CD_MethodHandles_Lookup, CD_String, CD_MethodType));
         Object[][] ldcs = {
             {"ok1", ok}, {"ok2", ok}, {"outer", outer},
+            {"race", condy.apply("race")},
             {"nul1", condy.apply("nothing")}, {"nul2", condy.apply("nothing")},
             {"fail1", condy.apply("failOnce")}, {"fail2", condy.apply("failOnce")},
             {"err1", condy.apply("errorOnce")}, {"lerr1", condy.apply("linkageOnce")},

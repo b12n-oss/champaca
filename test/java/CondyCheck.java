@@ -8,7 +8,8 @@ import java.lang.reflect.InvocationTargetException;
 // BootstrapMethodError, a member that isn't there) fails again without
 // rerunning anything, as a new error of the same class, message and cause; an
 // Error that isn't a LinkageError isn't kept; an invokedynamic whose bootstrap
-// failed fails again too, without the cause. HotSpot's texts. CondyUser comes
+// failed fails again too, without the cause. Two threads resolving one entry
+// at once both run its bootstrap and both get the same object. HotSpot's texts. CondyUser comes
 // from test/gen/CondyGen.java.
 public class CondyCheck {
     public static class Boot {
@@ -18,6 +19,15 @@ public class CondyCheck {
             return new Object() { public String toString() { return "made"; } };
         }
         public static Object wrap(MethodHandles.Lookup l, String n, Class<?> t, Object inner) { return new Object[] {inner}; }
+        // both threads' bootstraps run, each waiting for the other, and both get the first result kept
+        public static final java.util.concurrent.CountDownLatch both = new java.util.concurrent.CountDownLatch(2);
+        public static final java.util.concurrent.atomic.AtomicInteger raced = new java.util.concurrent.atomic.AtomicInteger();
+        public static Object race(MethodHandles.Lookup l, String n, Class<?> t) throws Exception {
+            raced.incrementAndGet();
+            both.countDown();
+            both.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            return new Object();
+        }
         public static Object nothing(MethodHandles.Lookup l, String n, Class<?> t) { nothings++; return null; }
         public static Object failOnce(MethodHandles.Lookup l, String n, Class<?> t) {
             if (failed++ == 0) throw new IllegalStateException("first");
@@ -58,6 +68,16 @@ public class CondyCheck {
         Object ok = get("ok1");
         System.out.println("one object across methods: " + (ok == get("ok2")) + ", in one method: " + get("pair")
                            + ", as an argument: " + (((Object[]) get("outer"))[0] == ok) + ", bootstrap runs " + Boot.made);
+        Object[] seen = new Object[2];
+        Thread[] ts = new Thread[2];
+        for (int i = 0; i < 2; i++) {
+            int k = i;
+            ts[i] = new Thread(() -> { try { seen[k] = get("race"); } catch (Exception e) { seen[k] = e; } });
+            ts[i].start();
+        }
+        for (Thread t : ts) t.join();
+        System.out.println("two threads at once: same object " + (seen[0] == seen[1]) + ", bootstrap runs " + Boot.raced.get()
+                           + ", and after: " + (get("race") == seen[0]));
         System.out.println("null: " + get("nul1") + " " + get("nul2") + ", bootstrap runs " + Boot.nothings);
         System.out.println("method handle same: " + (get("mh1") == get("mh2")) + ", method type same: " + (get("mt1") == get("mt2")));
         calls("fail1", "fail1", "fail2");
