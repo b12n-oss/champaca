@@ -357,6 +357,10 @@
     (set "deflt" (let ([u (find (lambda (x) (char=? (car x) #\u)) assertion-directives)]) (if (and u (cadr u)) 1 0)))
     d))
 (defnative "java/lang/Class.isArray()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'array) 1 0))
+;; the JDK's own jimage reader (the launcher's resource bundles, jrt:) asks
+;; for the VM's map of lib/modules first; null is "no map", so it reads the
+;; file through a channel, as on a VM that didn't open it
+(defnative "jdk/internal/jimage/NativeImageBuffer.getNativeMap(Ljava/lang/String;)Ljava/nio/ByteBuffer;" (path) #f)
 (defnative "java/lang/Class.isPrimitive()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'prim) 1 0))
 (defnative "java/lang/Class.isInterface()Z" (this) (if (eq? (jclass-kind (mirror-class this)) 'interface) 1 0))
 (defnative "java/lang/Class.isHidden()Z" (this) (if (hidden-class? (jclass-cname (mirror-class this))) 1 0))
