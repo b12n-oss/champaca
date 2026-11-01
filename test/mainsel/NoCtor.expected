@@ -1,0 +1,5 @@
+exit 1
+--- stderr
+Error: no non-private zero argument constructor found in class NoCtor
+remove private from existing constructor or define as:
+   public NoCtor()

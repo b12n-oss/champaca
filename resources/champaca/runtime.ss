@@ -1348,13 +1348,38 @@
             (begin (report-uncaught e) (k 1))))
       (lambda () (thunk) (flush-output-port (current-output-port)) 0)))))
 
+;; The java launcher's way to main (JEP 512): the JDK's own
+;; LauncherHelper.checkAndLoadMain loads the class, finds its main with
+;; MethodFinder and refuses with the launcher's texts and status 1 (System.exit
+;; from abort); it notes whether main is static and whether it takes the
+;; arguments. A static main is called as JNI's GetStaticMethodID finds it, the
+;; class (or interface) first, then its superclasses, the class initialized;
+;; an instance main on an object its no-argument constructor makes, through
+;; the vtable, so an inherited or default main runs.
+(define (launch-main cname args)
+  (let* ([helper "sun/launcher/LauncherHelper"]
+         [_ (jinit helper)]
+         [mirror ((method-proc helper "checkAndLoadMain(ZILjava/lang/String;)Ljava/lang/Class;")
+                  1 1 (jstring (slashes->dots cname)))]
+         [c (mirror-class mirror)]
+         [name (jclass-cname c)]
+         [static? (eqv? 1 (top-level-value (string->symbol (string-append helper ":isStaticMain"))))]
+         [no-args? (eqv? 1 (top-level-value (string->symbol (string-append helper ":noArgMain"))))]
+         [desc (if no-args? "()V" "([Ljava/lang/String;)V")]
+         [jargs (if no-args? '() (list (scheme-list->jarray "Ljava/lang/String;" (map jstring args))))])
+    (if static?
+        (let up ([k c])
+          (let ([m (find (lambda (m) (and (string=? (car m) "main") (string=? (cadr m) desc)
+                                          (fxpositive? (fxlogand (caddr m) 8)) (fxzero? (fxlogand (caddr m) 2))))
+                         (meta-methods k))])
+            (cond [m (jinit name) (apply (method-proc (jclass-cname k) (string-append "main" desc)) jargs)]
+                  [(jclass-super k) (up (find-class (jclass-super k)))]
+                  [else (error 'champaca "main not found after the launcher found it" name)])))
+        (let ([o (construct name "()V")])
+          (apply (jvirt o (string-append "main" desc)) o jargs)))))
 (define (run-main cname . args)
   (set! halted #f)
-  (let ([status (run-guarded
-                 (lambda ()
-                   (jinit cname)
-                   ((method-proc cname "main([Ljava/lang/String;)V")
-                    (scheme-list->jarray "Ljava/lang/String;" (map jstring args)))))])
+  (let ([status (run-guarded (lambda () (launch-main cname args)))])
     ;; as the java launcher: unless System.exit ended it, wait for the other
     ;; non-daemon threads and run the shutdown hooks, keeping main's status
     (if halted

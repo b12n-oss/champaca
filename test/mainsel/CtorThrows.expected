@@ -1,0 +1,4 @@
+exit 1
+--- stderr
+Exception in thread "main" java.lang.IllegalStateException: ctor fails
+	at CtorThrows.<init>(CtorThrows.java:1)

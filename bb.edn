@@ -292,6 +292,19 @@
                                 (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])
                                         (when-not cp-ok ["-cp"]) (when-not star-ok ["-cp star dir"]) (when-not cp-missing-ok ["-cp missing"]) (when-not cp-jar-ok ["-cp -jar"])
                                         (when-not accepted-ok ["accepted options"])))
+                    ;; how the launcher picks main (test/mainsel, JEP 512): each class
+                    ;; with a .expected run with a b, its status, stdout and stderr HotSpot's
+                    _ (fs/delete-tree "target/mainsel")
+                    _ (apply shell "javac" "-d" "target/mainsel" (map str (fs/glob "test/mainsel" "*.java")))
+                    mainsel-fails (vec (for [f (sort (map str (fs/glob "test/mainsel" "*.expected")))
+                                             :let [c (str/replace (fs/file-name f) ".expected" "")
+                                                   {:keys [out err exit]} (run-limited 300 {:label (str "mainsel-" c) :err :string}
+                                                                                       (jolt-bin) "-M" "-m" "champaca.main" "target/mainsel" c "a" "b")
+                                                   ok (= (slurp f) (str "exit " exit "\n" out "--- stderr\n" err))]
+                                             :when (do (println (if ok "PASS" "FAIL") (str "launcher main selection: " c))
+                                                       (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
+                                                       (not ok))]
+                                         (str "mainsel-" c)))
                     ;; a warm start whose boot loads classes the cached boot never
                     ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
                     ;; plain runs that use them, on a cache of their own
@@ -583,7 +596,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

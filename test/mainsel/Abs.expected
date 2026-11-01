@@ -1,0 +1,4 @@
+exit 1
+--- stderr
+Error: abstract class Abs can not be instantiated
+please use a concrete class

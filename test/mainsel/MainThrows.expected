@@ -1,0 +1,4 @@
+exit 1
+--- stderr
+Exception in thread "main" java.lang.IllegalStateException: main fails
+	at MainThrows.main(MainThrows.java:1)

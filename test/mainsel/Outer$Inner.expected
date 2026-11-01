@@ -1,0 +1,4 @@
+exit 1
+--- stderr
+Error: non-static inner class Outer$Inner constructor can not be invoked 
+make inner class static or move inner class out to separate source file
