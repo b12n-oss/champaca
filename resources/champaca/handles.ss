@@ -781,30 +781,49 @@
 ;; wins, as when two threads resolve at once.
 (define failed-tag (list 'failed))
 (define absent (list 'absent))
-(define (renew e keep-cause?)
-  ;; a class without a (String) constructor: the error itself
-  (let ([fresh (guard (x [#t e])
-                 (construct (jclass-cname (jobj-cls e)) "(Ljava/lang/String;)V"
-                            ((jvirt e "getMessage()Ljava/lang/String;") e)))]
-        [cause ((jvirt e "getCause()Ljava/lang/Throwable;") e)])
+;; A null message is the entry's own text (null-msg), as HotSpot's
+;; ConstantPool::exception_message gives one: a dynamic constant's or method
+;; handle's name, a method type's descriptor; a call site's stays null. An
+;; error class without a (String) constructor is thrown again as itself.
+(define (renew e keep-cause? null-msg)
+  (let* ([cname (jclass-cname (jobj-cls e))]
+         [msg (or ((jvirt e "getMessage()Ljava/lang/String;") e) (and null-msg (jstring null-msg)))]
+         [fresh (if (global-bound? (string->symbol (string-append cname ".<init>(Ljava/lang/String;)V")))
+                    (construct cname "(Ljava/lang/String;)V" msg)
+                    e)]
+         [cause ((jvirt e "getCause()Ljava/lang/Throwable;") e)])
     (when (and keep-cause? cause (not (eq? fresh e)))
       ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
-       fresh (renew cause #f)))
+       fresh (renew cause #f #f)))
     fresh))
-(define (resolve-once table key thunk keep-cause?)
+(define (failed? v) (and (pair? v) (eq? (car v) failed-tag)))
+(define (resolve-once table key thunk keep-cause? null-msg)
   (let ([v (eq-hashtable-ref table key absent)])
-    (cond [(and (pair? v) (eq? (car v) failed-tag)) (raise (renew (cdr v) keep-cause?))]
+    (cond [(failed? v) (raise (renew (cdr v) keep-cause? null-msg))]
           [(not (eq? v absent)) v]
           [else
            (let ([v (guard (e [(and (jobj? e) (jinstance? e "java/lang/LinkageError"))
-                               (when (eq? (eq-hashtable-ref table key absent) absent)
-                                 (eq-hashtable-set! table key (cons failed-tag e)))
-                               (raise e)])
+                               ;; as HotSpot's save_and_throw_exception: kept when
+                               ;; nothing is yet; another thread's failure kept first
+                               ;; is thrown instead; after another thread's success,
+                               ;; this thread still throws its own (only a class entry
+                               ;; takes the success there)
+                               (let ([kept (eq-hashtable-ref table key absent)])
+                                 (cond [(eq? kept absent) (eq-hashtable-set! table key (cons failed-tag e)) (raise e)]
+                                       [(failed? kept) (raise (renew (cdr kept) keep-cause? null-msg))]
+                                       [else (raise e)]))])
                       (thunk))])
              (let ([kept (eq-hashtable-ref table key absent)])
-               (cond [(and (pair? kept) (eq? (car kept) failed-tag)) (raise (renew (cdr kept) keep-cause?))]
+               (cond [(failed? kept) (raise (renew (cdr kept) keep-cause? null-msg))]
                      [(not (eq? kept absent)) kept]
                      [else (eq-hashtable-set! table key v) v])))])))
+;; the text a kept failure of entry datum d gets when its error had no message
+(define (entry-null-msg d)
+  (case (car d)
+    [(condy) (cadr d)]
+    [(mh) (list-ref d 3)]
+    [(methodtype) (cadr d)]
+    [else #f]))
 (define entries (make-eq-hashtable))
 
 (define (caller-lookup cname)
@@ -821,7 +840,7 @@
     [(methodtype) (desc->method-type (cadr d))]
     [(mh) (apply const-mh-linked (cdr d))]
     [(condy) (resolve-condy caller d)]
-    [(entry) (resolve-once entries (cadr d) (lambda () (const->java caller (caddr d))) #t)]
+    [(entry) (resolve-once entries (cadr d) (lambda () (const->java caller (caddr d))) #t (entry-null-msg (caddr d)))]
     [else (error 'champaca "bad bootstrap constant" d)]))
 
 ;; run bootstrap handle bsm-d with the leading arguments, then the static ones
@@ -841,11 +860,13 @@
 
 ;; a bootstrap that throws anything but an Error throws BootstrapMethodError
 ;; with it as the cause, as the JVM's linkage does
-(define (bootstrap-guarded name thunk)
+(define (bme-guarded text thunk)
   (guard (e [(and (jobj? e) (not (jinstance? e "java/lang/Error")))
              (raise (construct "java/lang/BootstrapMethodError" "(Ljava/lang/String;Ljava/lang/Throwable;)V"
-                               (jstring-lit "bootstrap method initialization exception") e))])
+                               (jstring-lit text) e))])
     (thunk)))
+(define (bootstrap-guarded name thunk) (bme-guarded "bootstrap method initialization exception" thunk))
+(define (call-site-guarded thunk) (bme-guarded "CallSite bootstrap method initialization exception" thunk))
 
 ;; an ldc of a method type, method handle or dynamic constant: d is an entry
 (define (jconst caller d desc) (adapt obj-desc desc (const->java caller d)))
@@ -853,20 +874,31 @@
 (define indy-sites (make-eq-hashtable))
 (define constant-call-site "java/lang/invoke/ConstantCallSite")
 
+;; as CallSite.makeSite: what the bootstrap throws, and BootstrapMethodInvoker's
+;; cast of what it returns, are "bootstrap method initialization exception";
+;; no CallSite at all (null), or one whose target's type isn't exactly the
+;; call's, is "CallSite bootstrap method initialization exception", with the
+;; JDK's texts for the causes
 (define (indy-link caller spec name desc)
   (let ([cs (bootstrap-guarded name
               (lambda ()
                 (let ([cs (run-bootstrap caller (car spec)
                                          (list (caller-lookup caller) (jstring-lit name) (desc->method-type desc))
                                          (cadr spec))])
-                  (unless (jinstance? cs "java/lang/invoke/CallSite")
-                    (jthrow "java/lang/ClassCastException" (string-append "bootstrap for " name " returned no CallSite")))
-                  ;; the JVM wants the target's type to be exactly the call's
-                  (let ([t (mt-desc ((jvirt cs "type()Ljava/lang/invoke/MethodType;") cs))])
-                    (unless (string=? t desc)
-                      (jthrow "java/lang/invoke/WrongMethodTypeException"
-                              (string-append "call site for " name " has type " t ", call is " desc))))
+                  (when (and cs (not (jinstance? cs "java/lang/invoke/CallSite")))
+                    (jthrow "java/lang/ClassCastException"
+                            (string-append "Cannot cast " (slashes->dots (jclass-cname (jobj-cls cs))) " to java.lang.invoke.CallSite")))
                   cs)))])
+    (call-site-guarded
+     (lambda ()
+       (unless cs
+         (jthrow "java/lang/ClassCastException" "CallSite bootstrap method failed to produce an instance of CallSite"))
+       (let* ([target (call-site-target cs)]
+              [t (mt-desc ((jvirt target "type()Ljava/lang/invoke/MethodType;") target))])
+         (unless (string=? t desc)
+           (let ([str (lambda (o) (jstring->scheme ((jvirt o "toString()Ljava/lang/String;") o)))])
+             (jthrow "java/lang/invoke/WrongMethodTypeException"
+                     (string-append (str target) " should be of type " (str (desc->method-type desc)))))))))
     (if (jinstance? cs constant-call-site)
         (cons 'constant (call-site-target cs))
         (cons 'mutable cs))))
@@ -875,7 +907,7 @@
 
 (define (indy-call key caller spec name desc . args)
   ;; a link that failed fails again, a new error without its cause, as HotSpot's
-  (let ([site (resolve-once indy-sites key (lambda () (indy-link caller spec name desc)) #f)])
+  (let ([site (resolve-once indy-sites key (lambda () (indy-link caller spec name desc)) #f #f)])
     (apply mh-call (if (eq? (car site) 'constant) (cdr site) (call-site-target (cdr site))) desc args)))
 
 ;; a CallSite made from a MethodType has a target that throws until it is set

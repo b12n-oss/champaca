@@ -1,5 +1,6 @@
 one object across methods: true, in one method: true, as an argument: true, bootstrap runs 1
 two threads at once: same object true, bootstrap runs 2, and after: true
+a bootstrap failing after another thread's succeeded: java.lang.NoClassDefFoundError: too late, second thread's, runs 2
 null: null null, bootstrap runs 1
 method handle same: true, method type same: true
 fail1: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: first
@@ -18,6 +19,15 @@ missv: java.lang.NoSuchMethodError: 'java.lang.String CondyCheck$Boot.novirt(int
 missf: java.lang.NoSuchFieldError: Class CondyCheck$Boot does not have member field 'java.lang.String[] nofield'
 missc: java.lang.NoClassDefFoundError: CondyNowhere, cause java.lang.ClassNotFoundException: CondyNowhere
 missc: java.lang.NoClassDefFoundError: CondyNowhere, cause java.lang.ClassNotFoundException: CondyNowhere, same object false, same cause false
+nullMessage: java.lang.LinkageError: null
+nullMessage: java.lang.LinkageError: nullMessage, same object false, same cause true
+null message bootstrap runs 1
 indy: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: indy first
 indy: java.lang.BootstrapMethodError: bootstrap method initialization exception, same object false, same cause false
+notCallSite: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.ClassCastException: Cannot cast java.lang.String to java.lang.invoke.CallSite
+notCallSite: java.lang.BootstrapMethodError: bootstrap method initialization exception, same object false, same cause false
+nullCallSite: java.lang.BootstrapMethodError: CallSite bootstrap method initialization exception, cause java.lang.ClassCastException: CallSite bootstrap method failed to produce an instance of CallSite
+nullCallSite: java.lang.BootstrapMethodError: CallSite bootstrap method initialization exception, same object false, same cause false
+wrongType: java.lang.BootstrapMethodError: CallSite bootstrap method initialization exception, cause java.lang.invoke.WrongMethodTypeException: MethodHandle()String should be of type ()Object
+wrongType: java.lang.BootstrapMethodError: CallSite bootstrap method initialization exception, same object false, same cause false
 indy bootstrap runs 1

@@ -8,8 +8,9 @@ import static java.lang.constant.ConstantDescs.*;
 // that each ldc one constant-pool entry (dynamic constants, a method handle,
 // a method type, method handles to members that aren't there), one method
 // that ldcs the same entry twice, a dynamic constant whose static argument
-// is another one's entry, one two threads resolve at once, and an invokedynamic whose bootstrap fails once.
-// javac shares an entry only within what it compiles, and never emits
+// is another one's entry, ones two threads resolve at once, one failing
+// with no message, and invokedynamics whose bootstraps fail once, return no
+// CallSite, null, or a target of the wrong type. javac shares an entry only within what it compiles, and never emits
 // these. Run with `java CondyGen.java <dir>`.
 public class CondyGen {
     public static void main(String[] args) throws Exception {
@@ -23,11 +24,14 @@ public class CondyGen {
             MethodHandleDesc.ofMethod(DirectMethodHandleDesc.Kind.STATIC, boot, "wrap",
                                       MethodTypeDesc.of(CD_Object, CD_MethodHandles_Lookup, CD_String, CD_Class, CD_Object)),
             "outer", CD_Object, ok);
-        DirectMethodHandleDesc ibsm = MethodHandleDesc.ofMethod(DirectMethodHandleDesc.Kind.STATIC, boot, "indyFailOnce",
-            MethodTypeDesc.of(ClassDesc.of("java.lang.invoke.CallSite"), CD_MethodHandles_Lookup, CD_String, CD_MethodType));
+        ClassDesc callSite = ClassDesc.of("java.lang.invoke.CallSite");
+        java.util.function.BiFunction<String, ClassDesc, DynamicCallSiteDesc> indy = (m, ret) -> DynamicCallSiteDesc.of(
+            MethodHandleDesc.ofMethod(DirectMethodHandleDesc.Kind.STATIC, boot, m, MethodTypeDesc.of(ret, CD_MethodHandles_Lookup, CD_String, CD_MethodType)),
+            "go", MethodTypeDesc.of(CD_Object));
         Object[][] ldcs = {
             {"ok1", ok}, {"ok2", ok}, {"outer", outer},
             {"race", condy.apply("race")},
+            {"raceFail", condy.apply("raceFail")}, {"nullMessage", condy.apply("nullMessage")},
             {"nul1", condy.apply("nothing")}, {"nul2", condy.apply("nothing")},
             {"fail1", condy.apply("failOnce")}, {"fail2", condy.apply("failOnce")},
             {"err1", condy.apply("errorOnce")}, {"lerr1", condy.apply("linkageOnce")},
@@ -47,8 +51,12 @@ public class CondyGen {
             b.withMethodBody("pair", MethodTypeDesc.of(CD_boolean), ACC_PUBLIC | ACC_STATIC, cb -> {
                 Label no = cb.newLabel();
                 cb.ldc(ok); cb.ldc(ok); cb.if_acmpne(no); cb.iconst_1(); cb.ireturn(); cb.labelBinding(no); cb.iconst_0(); cb.ireturn(); });
-            b.withMethodBody("indy", MethodTypeDesc.of(CD_Object), ACC_PUBLIC | ACC_STATIC, cb -> {
-                cb.invokedynamic(DynamicCallSiteDesc.of(ibsm, "go", MethodTypeDesc.of(CD_Object))); cb.areturn(); });
+            // indy bootstraps: failing once, returning a String (declared Object), null, a target of another type
+            Object[][] indys = {{"indy", "indyFailOnce", callSite}, {"notCallSite", "notCallSite", CD_Object},
+                                {"nullCallSite", "nullCallSite", callSite}, {"wrongType", "wrongType", callSite}};
+            for (Object[] m : indys)
+                b.withMethodBody((String) m[0], MethodTypeDesc.of(CD_Object), ACC_PUBLIC | ACC_STATIC, cb -> {
+                    cb.invokedynamic(indy.apply((String) m[1], (ClassDesc) m[2])); cb.areturn(); });
         }));
     }
 }
