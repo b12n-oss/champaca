@@ -65,11 +65,13 @@ public class LongOpsCheck {
         MethodHandle cmpMh = MethodHandles.lookup().findStatic(lc, "cmp", jji);
         MethodHandle storedMh = MethodHandles.lookup().findStatic(lc, "stored", jji);
         MethodHandle joinedMh = MethodHandles.lookup().findStatic(lc, "joined", jji);
+        MethodHandle halvesMh = MethodHandles.lookup().findStatic(lc, "halves", jji);
         long gen = 0;
         for (long a : vals) for (long b : vals) {
             gen = h(gen, (int) cmpMh.invokeExact(a, b));
             gen = h(gen, (int) storedMh.invokeExact(a, b));
             gen = h(gen, (int) joinedMh.invokeExact(a, b));
+            gen = h(gen, (int) halvesMh.invokeExact(a, b));
         }
         System.out.println("lcmp shapes " + gen);
         Random r = new Random(42);

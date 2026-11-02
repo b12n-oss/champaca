@@ -47,7 +47,7 @@ Some instructions get special treatment. `invokedynamic` with `LambdaMetafactory
 
 ## Values
 
-The comment at the top of `resources/champaca/runtime.ss` has the full mapping. In short: `int`, `short`, `byte`, `char` and `boolean` are fixnums (booleans are 0 and 1, as in bytecode), a `long` is an exact integer wrapped to 64 bits, `float` and `double` are flonums (a float rounds through IEEE single precision), `null` is `#f`, an object is a record holding its class, a slot vector and its monitor once something locks it, and an array is a record holding its element descriptor and a Scheme vector. A `java.lang.String` is an ordinary object with the JDK's own fields, a `byte[]` and a coder.
+The comment at the top of `resources/champaca/runtime.ss` has the full mapping. In short: `int`, `short`, `byte`, `char` and `boolean` are fixnums (booleans are 0 and 1, as in bytecode), a `long` is an exact integer wrapped to 64 bits (inside a method, one that long operations pass between them is two fixnums, its 32-bit halves, see [performance](performance.md#long-arithmetic)), `float` and `double` are flonums (a float rounds through IEEE single precision), `null` is `#f`, an object is a record holding its class, a slot vector and its monitor once something locks it, and an array is a record holding its element descriptor and a Scheme vector. A `java.lang.String` is an ordinary object with the JDK's own fields, a `byte[]` and a coder.
 
 ## Natives
 

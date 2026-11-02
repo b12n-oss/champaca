@@ -8,7 +8,8 @@ import static java.lang.constant.ConstantDescs.*;
 // the shapes javac never emits, since javac always branches on lcmp's result
 // with the next instruction. cmp returns it, stored keeps it in a local
 // before the branch, and joined branches on it in a block of its own (a
-// jump target, with the int on the stack). Run with
+// jump target, with the int on the stack). halves returns it for operands
+// a long operation made (a ^ 0), which champaca keeps as 32-bit halves. Run with
 // `java LongCmpGen.java <dir>`.
 public class LongCmpGen {
     public static void main(String[] args) throws Exception {
@@ -28,6 +29,8 @@ public class LongCmpGen {
                 c.labelBinding(join); c.iflt(lt);
                 c.iconst_0(); c.ireturn();
                 c.labelBinding(lt); c.iconst_1(); c.ireturn(); });
+            b.withMethodBody("halves", jji, ACC_PUBLIC | ACC_STATIC, c -> {
+                c.lload(0); c.lconst_0(); c.lxor(); c.lload(2); c.lconst_0(); c.lxor(); c.lcmp(); c.ireturn(); });
         }));
     }
 }

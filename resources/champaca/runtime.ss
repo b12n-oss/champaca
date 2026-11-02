@@ -183,12 +183,19 @@
                (if (and (fixnum? x) (fixnum? y)) (if (#3%fx< x y) -1 (if (#3%fx= x y) 0 1)) (lcmp/big x y)))]))
 ;; Longs kept as halves. Inside a method, codegen carries a long that long
 ;; operations make and use as two fixnums, its high and low 32 bits, both
-;; unsigned, and makes the long (make-long) only where it leaves them: a
+;; unsigned, and makes the long (lh-box) only where it leaves them: a
 ;; call, a store, a return, a jump with it on the stack. These give one half
 ;; of a result each from the operands' halves, which are variables or
 ;; literals, so repeating one costs nothing. A product's partial sums are
 ;; lh-mul-u and lh-mul-w, which codegen binds first.
 (define-syntax lh-u32 (syntax-rules () [(_ x) (#3%fxlogand x #xffffffff)]))
+;; the long of two unsigned halves: both stores in their range, unlike
+;; make-long's signed high half
+(define-syntax lh-box
+  (syntax-rules ()
+    [(_ h l) (begin (#3%bytevector-u32-native-set! long-buf 0 l)
+                    (#3%bytevector-u32-native-set! long-buf 4 h)
+                    (#3%bytevector-s64-native-ref long-buf 0))]))
 ;; a boxed long's halves: lh-split-l right after lh-split-h, on the same
 ;; long, which put a bignum's bits in long-buf
 (define-syntax lh-split-h

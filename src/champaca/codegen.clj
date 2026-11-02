@@ -528,7 +528,7 @@
   stack at block entry: a vector of types (I J F D A), one per operand-stack
   value; inside the block a long kept as halves is j, in two variables sNh
   and sNl, both unsigned 32-bit (runtime.ss lh-*), and is boxed with
-  make-long wherever something other than a long operation takes it.
+  lh-box wherever something other than a long operation takes it.
   Returns {:code text :succ {pc entry-stack}}."
   [ctx blk entry]
   (let [{:keys [cls resolve next-pc live boxed split jump]} ctx
@@ -564,7 +564,7 @@
         ;; the popped value as an expression: a long kept as halves is boxed
         pop! (fn [] (let [i (dec (count @st)) t (peek @st)]
                       (vswap! st pop) (vswap! consts dissoc i)
-                      (if (= t "j") (sx "make-long" (h i) (l i)) (s i))))
+                      (if (= t "j") (sx "lh-box" (h i) (l i)) (s i))))
         ;; a long's halves, split here if it was boxed (lh-split-l reads what
         ;; lh-split-h put in long-buf, so nothing comes between them)
         pop-halves! (fn [] (let [i (dec (count @st)) t (peek @st) c (@consts i)]
@@ -586,7 +586,7 @@
                (vswap! succ assoc pc (mapv #(if (= % "j") "J" %) @st))
                ;; a jump passes the live locals and the stack as arguments
                (let [j (jump pc (concat (mapcat #(local-names split %) live)
-                                        (map-indexed (fn [i t] (if (= t "j") (sx "make-long" (h i) (l i)) (s i))) @st)))]
+                                        (map-indexed (fn [i t] (if (= t "j") (sx "lh-box" (h i) (l i)) (s i))) @st)))]
                  (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
         init (fn [c pc] (when (not= c this-class) (stmt! (sx "jinit-ic" ((:ic! ctx)) (str "'" (sym c)) (site pc)))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
