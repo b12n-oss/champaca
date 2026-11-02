@@ -181,6 +181,74 @@
   (syntax-rules ()
     [(_ a b) (let ([x a] [y b])
                (if (and (fixnum? x) (fixnum? y)) (if (#3%fx< x y) -1 (if (#3%fx= x y) 0 1)) (lcmp/big x y)))]))
+;; Longs kept as halves. Inside a method, codegen carries a long that long
+;; operations make and use as two fixnums, its high and low 32 bits, both
+;; unsigned, and makes the long (make-long) only where it leaves them: a
+;; call, a store, a return, a jump with it on the stack. These give one half
+;; of a result each from the operands' halves, which are variables or
+;; literals, so repeating one costs nothing. A product's partial sums are
+;; lh-mul-u and lh-mul-w, which codegen binds first.
+(define-syntax lh-u32 (syntax-rules () [(_ x) (#3%fxlogand x #xffffffff)]))
+;; a boxed long's halves: lh-split-l right after lh-split-h, on the same
+;; long, which put a bignum's bits in long-buf
+(define-syntax lh-split-h
+  (syntax-rules ()
+    [(_ v) (if (fixnum? v) (lh-u32 (#3%fxsra v 32)) (begin (long-put! 0 v) (long-uhi 0)))]))
+(define-syntax lh-split-l
+  (syntax-rules () [(_ v) (if (fixnum? v) (lh-u32 v) (long-lo 0))]))
+;; a sum's or difference's low halves first, as c: bit 32 of a sum is the
+;; carry, a negative difference the borrow
+(define-syntax lh-add-c (syntax-rules () [(_ al bl) (#3%fx+ al bl)]))
+(define-syntax lh-add-h (syntax-rules () [(_ ah bh c) (lh-u32 (#3%fx+ (#3%fx+ ah bh) (#3%fxsrl c 32)))]))
+(define-syntax lh-sub-c (syntax-rules () [(_ al bl) (#3%fx- al bl)]))
+(define-syntax lh-sub-h (syntax-rules () [(_ ah bh c) (lh-u32 (#3%fx+ (#3%fx- ah bh) (#3%fxsra c 32)))]))
+(define-syntax lh-and (syntax-rules () [(_ a b) (#3%fxlogand a b)]))
+(define-syntax lh-or (syntax-rules () [(_ a b) (#3%fxlogor a b)]))
+(define-syntax lh-xor (syntax-rules () [(_ a b) (#3%fxlogxor a b)]))
+;; an int's high half: 0 or all ones
+(define-syntax lh-i2l-h (syntax-rules () [(_ i) (lh-u32 (#3%fxsra i 32))]))
+;; al*bl is s + u*2^16 with s = al*(bl's low 16 bits), u = al*(its high 16);
+;; w is the low 32 bits of that sum plus s's carry, under 2^49
+(define-syntax lh-mul-u (syntax-rules () [(_ al bl) (#3%fx* al (#3%fxsrl bl 16))]))
+(define-syntax lh-mul-w
+  (syntax-rules () [(_ al bl u) (#3%fx+ (#3%fx* al (#3%fxlogand bl #xffff)) (#3%fxsll (#3%fxlogand u #xffff) 16))]))
+(define-syntax lh-mul-h
+  (syntax-rules ()
+    [(_ ah al bh bl u w)
+     (lh-u32 (#3%fx+/wraparound (#3%fx+ (#3%fxsrl u 16) (#3%fxsrl w 32))
+                                (#3%fx+/wraparound (#3%fx*/wraparound al bh) (#3%fx*/wraparound ah bl))))]))
+;; the high half as a signed 32-bit value
+(define-syntax lh-s32 (syntax-rules () [(_ h) (#3%fx- (#3%fxlogxor h #x80000000) #x80000000)]))
+;; shifts by n in 0..63; at n = 0 the shifts by 32 give 0
+(define-syntax lh-shl-h
+  (syntax-rules ()
+    [(_ ah al n) (if (#3%fx< n 32)
+                     (lh-u32 (#3%fxlogor (#3%fxsll/wraparound ah n) (#3%fxsrl al (#3%fx- 32 n))))
+                     (lh-u32 (#3%fxsll/wraparound al (#3%fx- n 32))))]))
+(define-syntax lh-shl-l
+  (syntax-rules () [(_ al n) (if (#3%fx< n 32) (lh-u32 (#3%fxsll/wraparound al n)) 0)]))
+(define-syntax lh-shr-l
+  (syntax-rules ()
+    [(_ ah al n s) (if (#3%fx< n 32)
+                       (lh-u32 (#3%fxlogor (#3%fxsrl al n) (#3%fxsll/wraparound ah (#3%fx- 32 n))))
+                       (lh-u32 (#3%fxsra s (#3%fx- n 32))))]))
+(define-syntax lh-shr-h
+  (syntax-rules () [(_ s n) (lh-u32 (#3%fxsra s (#3%fxmin n 31)))]))
+(define-syntax lh-ushr-l
+  (syntax-rules ()
+    [(_ ah al n) (if (#3%fx< n 32)
+                     (lh-u32 (#3%fxlogor (#3%fxsrl al n) (#3%fxsll/wraparound ah (#3%fx- 32 n))))
+                     (#3%fxsrl ah (#3%fx- n 32)))]))
+(define-syntax lh-ushr-h
+  (syntax-rules () [(_ ah n) (if (#3%fx< n 32) (#3%fxsrl ah n) 0)]))
+(define-syntax lh=
+  (syntax-rules () [(_ ah al bh bl) (and (#3%fx= ah bh) (#3%fx= al bl))]))
+(define-syntax lh<
+  (syntax-rules ()
+    [(_ ah al bh bl) (or (#3%fx< (#3%fxlogxor ah #x80000000) (#3%fxlogxor bh #x80000000))
+                         (and (#3%fx= ah bh) (#3%fx< al bl)))]))
+(define-syntax lh-cmp
+  (syntax-rules () [(_ ah al bh bl) (cond [(lh< ah al bh bl) -1] [(lh= ah al bh bl) 0] [else 1])]))
 ;; A guarded region of a Java method. The handler goes straight onto Chez's
 ;; (per-thread) handler stack, under a one-shot continuation: guard takes a full
 ;; call/cc and reads the continuation marks, about twice the cost. A clause whose

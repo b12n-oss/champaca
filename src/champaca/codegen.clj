@@ -245,7 +245,7 @@
   [d]
   (case (first d) (\B \C \S \Z \I) "I" \J "J" \F "F" \D "D" "A"))
 
-(defn- cat2? [t] (contains? #{"J" "D"} t))
+(defn- cat2? [t] (contains? #{"J" "D" "j"} t))
 
 (def ^:private newarray-elem {4 "Z" 5 "C" 6 "F" 7 "D" 8 "B" 9 "S" 10 "I" 11 "J"})
 
@@ -409,7 +409,7 @@
   straight-line method of thousands of pushes quadratic to compile:
   SystemModules' 21 KB module-descriptor builder took 4.6 s as one nest."
   [steps term]
-  (let [slot (fn [v] (if (str/starts-with? v "s") (parse-long (subs v 1)) -1))
+  (let [slot (fn [v] (if (str/starts-with? v "s") (parse-long (re-find #"\d+" v)) -1))
         seq-form (fn [xs] (if (= 1 (count xs)) (first xs) (apply sx "begin" xs)))
         ;; a scope: [slot binding-text children], the root [-1 nil children]
         close (fn [[_ head children]] (sx "let" head (seq-form (if (seq children) children ["(void)"]))))
@@ -472,15 +472,66 @@
   (let [d (ex-data e)]
     (when (:icce d) [(:icce d) (:class d) (:method d) (:desc d)])))
 
+(defn- local-names
+  "The variables a local is passed in: a long kept as halves (split) takes two."
+  [split i]
+  (if (split i) [(str "l" i "h") (str "l" i "l")] [(str "l" i)]))
+
+(def ^:private long-ops #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lcmp :l2i})
+
+(defn- stack-effect
+  "[values popped, values pushed] of an instruction, or nil for one
+  halves-use? doesn't follow."
+  [cp {:keys [op args]}]
+  (case op
+    (:aconst_null :iconst_m1 :iconst_0 :iconst_1 :iconst_2 :iconst_3 :iconst_4 :iconst_5
+     :lconst_0 :lconst_1 :fconst_0 :fconst_1 :fconst_2 :dconst_0 :dconst_1 :bipush :sipush
+     :ldc :ldc_w :ldc2_w :iload :lload :fload :dload :aload :getstatic :new) [0 1]
+    (:nop :iinc) [0 0]
+    (:istore :lstore :fstore :dstore :astore :pop :putstatic) [1 0]
+    :putfield [2 0]
+    (:iastore :lastore :fastore :dastore :aastore :bastore :castore :sastore) [3 0]
+    (:getfield :i2l :l2i :i2d :l2d :i2f :l2f :f2d :d2f :f2i :d2i :f2l :d2l :i2b :i2c :i2s
+     :ineg :lneg :fneg :dneg :arraylength :checkcast :instanceof :newarray :anewarray) [1 1]
+    (:iadd :isub :imul :idiv :irem :ishl :ishr :iushr :iand :ior :ixor
+     :ladd :lsub :lmul :ldiv :lrem :lshl :lshr :lushr :land :lor :lxor
+     :fadd :fsub :fmul :fdiv :frem :dadd :dsub :dmul :ddiv :drem
+     :lcmp :fcmpl :fcmpg :dcmpl :dcmpg
+     :iaload :laload :faload :daload :aaload :baload :caload :saload) [2 1]
+    (:invokevirtual :invokeinterface :invokespecial :invokestatic)
+    (let [{as :args ret :ret} (parse-desc (:desc (cp (first args))))]
+      [(+ (count as) (if (= op :invokestatic) 0 1)) (if (= ret "V") 0 1)])
+    nil))
+
+(defn- halves-use?
+  "Whether the value an instruction leaves on top of the stack goes next to
+  something that takes a long as halves: a long operation (as the value a
+  shift shifts, not its count), or a store to a local kept as halves. insns
+  are the block's instructions after it."
+  [cp split insns]
+  (loop [insns (take 32 insns) pos 0]
+    (if-let [i (first insns)]
+      (if-let [[pops pushes] (stack-effect cp i)]
+        (if (> pops pos)
+          (let [{:keys [op args]} i]
+            (boolean (or (and (long-ops op) (not (and (#{:lshl :lshr :lushr} op) (= pos 0))))
+                         (and (= op :lstore) (split (first args))))))
+          (recur (rest insns) (+ (- pos pops) pushes)))
+        false)
+      false)))
+
 (defn- emit-block
   "Emit one basic block. ctx carries :cls (the classfile map), :resolve (the
   linker callbacks), :next-pc, :live (the locals a jump passes), :boxed (the
-  method-wide locals) and :jump (target pc and argument list -> the jump's
-  code). entry is the compile-time stack at
-  block entry: a vector of types (I J F D A), one per operand-stack value.
+  method-wide locals), :split (the long locals kept as halves) and :jump
+  (target pc and argument list -> the jump's code). entry is the compile-time
+  stack at block entry: a vector of types (I J F D A), one per operand-stack
+  value; inside the block a long kept as halves is j, in two variables sNh
+  and sNl, both unsigned 32-bit (runtime.ss lh-*), and is boxed with
+  make-long wherever something other than a long operation takes it.
   Returns {:code text :succ {pc entry-stack}}."
   [ctx blk entry]
-  (let [{:keys [cls resolve next-pc live boxed jump]} ctx
+  (let [{:keys [cls resolve next-pc live boxed split jump]} ctx
         ;; what a direct call names: the callee inlined into this method when
         ;; it is a small leaf (compile-method), else its top-level definition
         callee (fn [pc decl name desc]
@@ -495,10 +546,35 @@
         stmts (transient [])
         succ (volatile! {})
         s (fn [i] (str "s" i))
+        h (fn [i] (str "s" i "h"))
+        l (fn [i] (str "s" i "l"))
+        ;; literal values on the stack by index: a shift's count, a long's
+        ;; halves
+        consts (volatile! {})
         bind! (fn [v expr] (conj! stmts [:bind v expr]))
         store! (fn [i expr] (conj! stmts [(if (boxed i) :set :bind) (str "l" i) expr]))
-        push! (fn [expr t] (bind! (s (count @st)) expr) (vswap! st conj t))
-        pop! (fn [] (let [i (dec (count @st))] (vswap! st pop) (s i)))
+        push! (fn [expr t] (vswap! consts dissoc (count @st)) (bind! (s (count @st)) expr) (vswap! st conj t))
+        push-const! (fn [v t] (let [i (count @st)] (push! (num-lit v) t) (vswap! consts assoc i v)))
+        ;; a long as halves, both computed from what was there before
+        push-halves! (fn [hx lx]
+                       (let [i (count @st)]
+                         (vswap! consts dissoc i)
+                         (conj! stmts [:pbind [[(h i) hx] [(l i) lx]]])
+                         (vswap! st conj "j")))
+        ;; the popped value as an expression: a long kept as halves is boxed
+        pop! (fn [] (let [i (dec (count @st)) t (peek @st)]
+                      (vswap! st pop) (vswap! consts dissoc i)
+                      (if (= t "j") (sx "make-long" (h i) (l i)) (s i))))
+        ;; a long's halves, split here if it was boxed (lh-split-l reads what
+        ;; lh-split-h put in long-buf, so nothing comes between them)
+        pop-halves! (fn [] (let [i (dec (count @st)) t (peek @st) c (@consts i)]
+                             (vswap! st pop) (vswap! consts dissoc i)
+                             (cond (= t "j") [(h i) (l i)]
+                                   c [(str (bit-and (bit-shift-right c 32) 0xffffffff)) (str (bit-and c 0xffffffff))]
+                                   :else (do (bind! (h i) (sx "lh-split-h" (s i)))
+                                             (bind! (l i) (sx "lh-split-l" (s i)))
+                                             [(h i) (l i)]))))
+        halves? (fn [n insns] (or (some #{"j"} (take-last n @st)) (halves-use? cp split (rest insns))))
         top-t (fn [] (peek @st))
         popn! (fn [n] (vec (reverse (repeatedly n pop!))))
         stmt! (fn [x] (conj! stmts [:do x]))
@@ -506,9 +582,11 @@
         ;; a backward jump is where a loop can spin, so it is where a thread
         ;; lets another one run (jsafepoint, natives.ss)
         goto (fn [pc]
-               (vswap! succ assoc pc @st)
+               ;; a block takes its stack boxed
+               (vswap! succ assoc pc (mapv #(if (= % "j") "J" %) @st))
                ;; a jump passes the live locals and the stack as arguments
-               (let [j (jump pc (concat (map #(str "l" %) live) (map s (range (count @st)))))]
+               (let [j (jump pc (concat (mapcat #(local-names split %) live)
+                                        (map-indexed (fn [i t] (if (= t "j") (sx "make-long" (h i) (l i)) (s i))) @st)))]
                  (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
         init (fn [c pc] (when (not= c this-class) (stmt! (sx "jinit-ic" ((:ic! ctx)) (str "'" (sym c)) (site pc)))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
@@ -519,11 +597,17 @@
                          base (- n k m)
                          items (subvec @st base)
                          order (concat (range (- (count items) k) (count items)) (range (count items)))
-                         slots (map #(s (+ base %)) (range (count items)))
                          ;; a slot that keeps its own value (dup's original) isn't
                          ;; rebound, so its let can close while the copy lives
                          moves (remove (fn [[v e]] (= v e))
-                                       (map-indexed (fn [j src] [(s (+ base j)) (nth slots src)]) order))]
+                                       (apply concat
+                                              (map-indexed (fn [j src]
+                                                             (let [to (+ base j) from (+ base src)]
+                                                               (if (= "j" (nth items src))
+                                                                 [[(h to) (h from)] [(l to) (l from)]]
+                                                                 [[(s to) (s from)]])))
+                                                           order)))]
+                     (vswap! consts #(into {} (remove (fn [[k _]] (>= k base))) %))
                      (when (seq moves) (conj! stmts [:pbind moves]))
                      (vreset! st (into (subvec @st 0 base) (map items order)))))
         cmp0 {:ifeq "fx=" :ifne "fx<>" :iflt "fx<" :ifge "fx>=" :ifgt "fx>" :ifle "fx<="}
@@ -548,17 +632,17 @@
           :nop nil
           :aconst_null (push! "#f" "A")
           (:iconst_m1 :iconst_0 :iconst_1 :iconst_2 :iconst_3 :iconst_4 :iconst_5)
-          (push! (str ({:iconst_m1 -1 :iconst_0 0 :iconst_1 1 :iconst_2 2 :iconst_3 3
-                        :iconst_4 4 :iconst_5 5} op)) "I")
-          (:lconst_0 :lconst_1) (push! (if (= op :lconst_0) "0" "1") "J")
+          (push-const! ({:iconst_m1 -1 :iconst_0 0 :iconst_1 1 :iconst_2 2 :iconst_3 3
+                         :iconst_4 4 :iconst_5 5} op) "I")
+          (:lconst_0 :lconst_1) (push-const! (if (= op :lconst_0) 0 1) "J")
           (:fconst_0 :fconst_1 :fconst_2) (push! ({:fconst_0 "0.0" :fconst_1 "1.0" :fconst_2 "2.0"} op) "F")
           (:dconst_0 :dconst_1) (push! (if (= op :dconst_0) "0.0" "1.0") "D")
-          (:bipush :sipush) (push! (str a0) "I")
+          (:bipush :sipush) (push-const! a0 "I")
           (:ldc :ldc_w :ldc2_w)
           (let [e (cp a0)]
             (case (:tag e)
-              :int (push! (num-lit (:value e)) "I")
-              :long (push! (num-lit (:value e)) "J")
+              :int (push-const! (:value e) "I")
+              :long (push-const! (:value e) "J")
               :float (push! (num-lit (:value e)) "F")
               :double (push! (num-lit (:value e)) "D")
               :string (push! (jstring-lit-form (:value e)) "A")
@@ -572,11 +656,15 @@
                        (desc->t d)))
               (throw (ex-info "ldc constant not in spike" {:entry e}))))
           :iload (push! (str "l" a0) "I")
-          :lload (push! (str "l" a0) "J")
+          :lload (if (split a0) (push-halves! (str "l" a0 "h") (str "l" a0 "l")) (push! (str "l" a0) "J"))
           :fload (push! (str "l" a0) "F")
           :dload (push! (str "l" a0) "D")
           :aload (push! (str "l" a0) "A")
-          (:istore :lstore :fstore :dstore :astore) (store! a0 (pop!))
+          (:istore :lstore :fstore :dstore :astore)
+          (if (and (= op :lstore) (split a0))
+            (let [[vh vl] (pop-halves!)]
+              (conj! stmts [:pbind [[(str "l" a0 "h") vh] [(str "l" a0 "l") vl]]]))
+            (store! a0 (pop!)))
           :iinc (store! a0 (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
           (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i (site pc))) "I")
           :laload (bin (fn [a i] (sx "array-ref" a i (site pc))) "J")
@@ -615,20 +703,69 @@
           :iand (bin #(sx "fxlogand" %1 %2) "I")
           :ior (bin #(sx "fxlogor" %1 %2) "I")
           :ixor (bin #(sx "fxlogxor" %1 %2) "I")
-          ;; runtime.ss's long macros: fixnums inline, bignums on 32-bit halves
-          (:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr)
-          (bin #(sx (name op) %1 %2) "J")
+          ;; on halves when an operand is in halves or the result goes on
+          ;; to a long operation; else runtime.ss's long macros, fixnums
+          ;; inline and anything else on 32-bit halves, boxed
+          (:ladd :lsub :lmul :land :lor :lxor)
+          (if (halves? 2 insns)
+            (let [[bh bl] (pop-halves!) [ah al] (pop-halves!) r (count @st)]
+              (case op
+                ;; the low halves' sum, whose bit 32 is the carry
+                :ladd (let [c (str "s" r "c")]
+                        (bind! c (sx "lh-add-c" al bl))
+                        (push-halves! (sx "lh-add-h" ah bh c) (sx "lh-u32" c)))
+                ;; the low halves' difference, negative for a borrow
+                :lsub (let [c (str "s" r "c")]
+                        (bind! c (sx "lh-sub-c" al bl))
+                        (push-halves! (sx "lh-sub-h" ah bh c) (sx "lh-u32" c)))
+                :lmul (let [u (str "s" r "u") w (str "s" r "w")]
+                        (bind! u (sx "lh-mul-u" al bl))
+                        (bind! w (sx "lh-mul-w" al bl u))
+                        (push-halves! (sx "lh-mul-h" ah al bh bl u w) (sx "lh-u32" w)))
+                :land (push-halves! (sx "lh-and" ah bh) (sx "lh-and" al bl))
+                :lor (push-halves! (sx "lh-or" ah bh) (sx "lh-or" al bl))
+                :lxor (push-halves! (sx "lh-xor" ah bh) (sx "lh-xor" al bl))))
+            (bin #(sx (name op) %1 %2) "J"))
+          ;; a literal count folds the shift's tests away
+          (:lshl :lshr :lushr)
+          (if (or (= "j" (nth @st (- (count @st) 2))) (halves-use? cp split (rest insns)))
+            (let [c (@consts (dec (count @st)))
+                  cnt (pop!)
+                  [ah al] (pop-halves!)
+                  r (count @st)
+                  n (if c
+                      (str (bit-and c 63))
+                      (let [v (str "s" r "n")] (bind! v (sx "fxlogand" cnt "63")) v))]
+              (case op
+                :lshl (push-halves! (sx "lh-shl-h" ah al n) (sx "lh-shl-l" al n))
+                :lushr (push-halves! (sx "lh-ushr-h" ah n) (sx "lh-ushr-l" ah al n))
+                :lshr (let [sg (str "s" r "s")]
+                        (bind! sg (sx "lh-s32" ah))
+                        (push-halves! (sx "lh-shr-h" sg n) (sx "lh-shr-l" ah al n sg)))))
+            (bin #(sx (name op) %1 %2) "J"))
           :ldiv (bin #(sx (at pc "ldiv") %1 %2) "J")
           :lrem (bin #(sx (at pc "lrem") %1 %2) "J")
-          :lneg (un #(sx "lneg" %) "J")
+          :lneg (if (halves? 1 insns)
+                  (let [[ah al] (pop-halves!) c (str "s" (count @st) "c")]
+                    (bind! c (sx "lh-sub-c" "0" al))
+                    (push-halves! (sx "lh-sub-h" "0" ah c) (sx "lh-u32" c)))
+                  (un #(sx "lneg" %) "J"))
           ;; lcmp then a branch on its result, the usual shape, is one
           ;; comparison: the branch ends the block, so it's the last instruction
           :lcmp (let [{nop :op nargs :args npc :pc nlen :len} (second insns)]
-                  (if-let [test (lcmp-branch nop)]
-                    (let [b (pop!) a (pop!)]
-                      (branch (test a b) (first nargs) (+ npc nlen))
-                      (vreset! fused true))
-                    (bin #(sx "lcmp" %1 %2) "I")))
+                  (if (some #{"j"} (take-last 2 @st))
+                    (let [[bh bl] (pop-halves!) [ah al] (pop-halves!)
+                          eq (sx "lh=" ah al bh bl) lt (sx "lh<" ah al bh bl) gt (sx "lh<" bh bl ah al)]
+                      (if-let [test ({:ifeq eq :ifne (sx "not" eq) :iflt lt :ifge (sx "not" lt)
+                                      :ifgt gt :ifle (sx "not" gt)} nop)]
+                        (do (branch test (first nargs) (+ npc nlen))
+                            (vreset! fused true))
+                        (push! (sx "lh-cmp" ah al bh bl) "I")))
+                    (if-let [test (lcmp-branch nop)]
+                      (let [b (pop!) a (pop!)]
+                        (branch (test a b) (first nargs) (+ npc nlen))
+                        (vreset! fused true))
+                      (bin #(sx "lcmp" %1 %2) "I"))))
           (:dadd :dsub :dmul :ddiv)
           (bin #(sx ({:dadd "fl+" :dsub "fl-" :dmul "fl*" :ddiv "fl/"} op) %1 %2) "D")
           (:fadd :fsub :fmul :fdiv)
@@ -639,8 +776,13 @@
           :fneg (un #(sx "fl*" "-1.0" %) "F")
           (:fcmpl :dcmpl) (bin #(sx "jfcmp" %1 %2 "-1") "I")
           (:fcmpg :dcmpg) (bin #(sx "jfcmp" %1 %2 "1") "I")
-          :i2l (un identity "J")
-          :l2i (un #(sx "l2i" %) "I")
+          :i2l (if (halves-use? cp split (rest insns))
+                 (let [v (pop!)] (push-halves! (sx "lh-i2l-h" v) (sx "lh-u32" v)))
+                 (un identity "J"))
+          ;; the low half as a signed int
+          :l2i (if (= "j" (top-t))
+                 (let [[_ vl] (pop-halves!)] (push! (sx "lh-s32" vl) "I"))
+                 (un #(sx "l2i" %) "I"))
           :i2d (un #(sx "fixnum->flonum" %) "D")
           :l2d (un #(sx "inexact" %) "D")
           :i2f (un #(sx "f32" (sx "fixnum->flonum" %)) "F")
@@ -979,6 +1121,20 @@
         param-set (set params)
         cover (into {} (map (fn [pc] [pc (covering handlers pc)]) (keys blks)))
         boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})
+        ;; the long locals kept as halves (emit-block): loaded and stored as
+        ;; longs only, not method-wide, and given a long operation's result
+        ;; somewhere, which is what would otherwise box
+        param-types (into {} (map vector params arg-types))
+        made-by #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lconst_0 :lconst_1 :ldc2_w :i2l}
+        split (let [uses (group-by #(first (:args %)) (filter #(or (load-ops (:op %)) (store-ops (:op %))) insns))
+                    made (set (for [[p i] (map vector insns (rest insns))
+                                    :when (and (= :lstore (:op i)) (made-by (:op p)))]
+                                (first (:args i))))]
+                (set (for [[i us] uses
+                           :when (and (made i) (not (boxed i))
+                                      (every? #(#{:lload :lstore} (:op %)) us)
+                                      (or (not (param-set i)) (= "J" (param-types i))))]
+                       i)))
         ;; the locals a jump has to carry: the parameters and every slot the
         ;; method loads or stores, less the boxed ones, which stay method-wide
         live (vec (sort (remove boxed
@@ -1009,16 +1165,27 @@
                     (if (contains? done pc)
                       (recur (rest work) done)
                       (let [{:keys [code succ]} (emit-block {:cls cls :resolve resolve :next-pc (next-pc pc)
-                                                             :live live :boxed boxed :jump (jump pc) :ic! ic! :inline! inline!}
+                                                             :live live :boxed boxed :split split :jump (jump pc) :ic! ic! :inline! inline!}
                                                             (blks pc) dep)]
                         (recur (concat (rest work) succ) (assoc done pc [dep code]))))
                     done))
-        args-of (fn [dep] (concat (map #(str "l" %) live) (map #(str "s" %) (range (count dep)))))
+        args-of (fn [dep] (concat (mapcat #(local-names split %) live) (map #(str "s" %) (range (count dep)))))
         ;; each block takes the live locals and its entry stack
         block-defs (for [[pc [dep code]] (sort-by key emitted)]
                      (sx (label pc) (sx "lambda" (apply sx (args-of dep)) code)))
-        ;; the first block, called with the parameters
-        start (apply sx (enter 0) (map #(if (param-set %) (str "l" %) "0") live))
+        ;; the first block, called with the parameters, a long one kept as
+        ;; halves split first
+        start (let [split-params (filter #(and (param-set %) (split %)) live)
+                    call (apply sx (enter 0) (mapcat #(cond (split %) (if (param-set %) (local-names split %) ["0" "0"])
+                                                            (param-set %) [(str "l" %)]
+                                                            :else ["0"])
+                                                     live))]
+                (if (seq split-params)
+                  (sx "let*" (apply sx (mapcat (fn [i] [(sx (str "l" i "h") (sx "lh-split-h" (str "l" i)))
+                                                        (sx (str "l" i "l") (sx "lh-split-l" (str "l" i)))])
+                                               split-params))
+                      call)
+                  call))
         ;; a guarded entry: one handler for the region (jtry), whose clauses
         ;; follow the exception table order and pass the handler the exception
         ;; and the locals as the region got them. Building one can enter a
@@ -1030,7 +1197,7 @@
                                       (for [i (cover pc)
                                             :let [{:keys [type handler]} (nth handlers i)]]
                                         (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
-                                            (apply sx (enter handler) (concat (map #(str "l" %) live) ["e"])))))]
+                                            (apply sx (enter handler) (concat (mapcat #(local-names split %) live) ["e"])))))]
                          (recur (conj out (sx (entry-label pc)
                                               (sx "lambda" (apply sx as)
                                                   (sx "jtry" "e" (apply sx clauses)
