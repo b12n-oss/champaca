@@ -831,7 +831,7 @@
 
 ;; --- loading -----------------------------------------------------------------------
 
-(declare class-map)
+(declare class-map linkage-error)
 
 (defn- final-sealed?
   "A parsed class that's final and has a PermittedSubclasses attribute,
@@ -858,12 +858,15 @@
       ;; message ends with HotSpot's text, which find-class reads off
       (let [p (try (timed :cf-parse #(cf/parse bytes))
                    (catch Exception e
-                     (let [{:keys [class-format named]} (ex-data e)]
-                       (if class-format
-                         (let [msg (if named (str class-format " " cname) class-format)]
-                           (throw (ex-info (str "class format error in " cname ": " msg)
-                                           {:class cname :class-format msg})))
-                         (throw e)))))]
+                     (let [{:keys [class-format named class-version]} (ex-data e)]
+                       (cond class-format
+                             (let [msg (if named (str class-format " " cname) class-format)]
+                               (throw (ex-info (str "class format error in " cname ": " msg)
+                                               {:class cname :class-format msg})))
+                             ;; a version this release refuses names the class asked for
+                             class-version
+                             (throw (linkage-error cname "java/lang/UnsupportedClassVersionError" (class-version cname)))
+                             :else (throw e)))))]
         ;; HotSpot's format check: an interface's superclass is Object
         (when (and (pos? (bit-and (:flags p) 0x0200)) (not= "java/lang/Object" (:super p)))
           (let [msg (str "Interfaces must have java.lang.Object as superclass in class file " cname)]
@@ -879,6 +882,7 @@
   :jdk, :user (the classpath) or :defined (bytes a class loader handed over
   at run time, define-class!)."
   [cname c origin]
+  (cond->
   {:name cname :super (:super c) :interfaces (:interfaces c) :parsed c :flags (:flags c)
    :origin origin
    :reflection (:reflection c)
@@ -892,7 +896,10 @@
                                  ;; the bytecode: inlining checks it first
                                  :code-len (some-> (:code m) :code count)
                                  :virtual (not (or (cf/static? m) (str/starts-with? (:name m) "<")))))
-                  (:methods c))})
+                  (:methods c))}
+    ;; a preview class file is never cached: a restore skips the parse, so a
+    ;; run without --enable-preview would take it
+    (:preview c) (assoc :preview true)))
 
 (defn- overridden?
   "Whether the runtime overrides cname's method m. An abstract method with an
@@ -1260,7 +1267,7 @@
                 linked (binding [*reads* reads] (timed :link #(link info)))]
             (swap! state assoc-in [:classes cname] linked)
             (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
-                  linked (if-let [ks (when reads (library-cache-keys cname @reads))]
+                  linked (if-let [ks (when (and reads (not (:preview linked))) (library-cache-keys cname @reads))]
                            (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
                            linked)]
               (record! (cache-origin linked) [cname] {:text text})
@@ -1347,10 +1354,14 @@
                      (catch Exception e
                        ;; a wrong magic number's text ends with the name the caller
                        ;; gave, as HotSpot's, or <Unknown>
-                       {:bad (let [m (or (ex-message e) (str (class e)))]
-                               (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))]
+                       (if-let [f (:class-version (ex-data e))]
+                         {:version (f (or given "<Unknown>"))}
+                         {:bad (let [m (or (ex-message e) (str (class e)))]
+                                 (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))})))
+              fp (when-not (:preview c) fp)]
           (cond
             (:bad c) (str "bad " (:bad c))
+            (:version c) (str "link java/lang/UnsupportedClassVersionError|" (:version c))
             ;; HotSpot checks the name as it reads it, before these two
             (and given (not= given (:name c))) (str "wrong " (:name c))
             (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
@@ -2004,6 +2015,7 @@
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (when-let [ds (seq (:assertion-directives @state))]
     (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
+  (when @cf/preview-enabled (s/call "set-preview!" true))
   (s/call "set-define-class-hook!" (fn [& args] (timed :define #(apply define-class! args))))
   ;; annotation instances: a synthetic class implementing the annotation
   ;; interface, its element keys "name()desc" joined by |
@@ -2184,7 +2196,9 @@
   -Dkey=value pairs (-Dkey is an empty value, a bare -D nothing); -cp,
   -classpath and --class-path (the last one wins); -ea/-da with a class, a
   package... or nothing, and -esa/-dsa, in order (assertion-directive);
-  -server and -client, which the launcher accepts and ignores; -Xss, the
+  -server and -client, which the launcher accepts and ignores;
+  --enable-preview, as :preview (this release's preview class files load,
+  PreviewFeatures says so); -Xss, the
   thread stack size, as :stack in bytes (bound-stack!). A heap size (-Xmx,
   -Xms, -Xmn), -Xshare: and any -XX: flag are ignored with a warning, since
   start scripts pass them and they tune only the VM; any other option is the
@@ -2206,6 +2220,7 @@
             (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
             (#{"-server" "-client"} a) (recur (rest argv) opts)
+            (= "--enable-preview" a) (recur (rest argv) (assoc opts :preview true))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
                                                                           "Error: A fatal exception has occurred. Program will exit."])))
@@ -2263,11 +2278,12 @@
                       "  ((top-level-value 'jolt-stack-limit-set!) " bytes "))")))
 
 (defn -main [& argv]
-  (let [{:keys [props classpath assertions argv stack]} (jvm-options argv)
+  (let [{:keys [props classpath assertions argv stack preview]} (jvm-options argv)
         _ (when (and stack (System/getenv "JOLT_STACK_LIMIT"))
             (binding [*out* *err*] (println "champaca: ignoring -Xss; JOLT_STACK_LIMIT sets the stack bound")))
         _ (bound-stack! (or stack default-stack-limit))
         _ (swap! state assoc :command-line-properties props :assertion-directives assertions)
+        _ (when preview (reset! cf/preview-enabled true))
         ;; with -cp the main class comes first; without, champaca's own
         ;; form, the class path first (-jar ignores -cp, as java does)
         [cp cname & args] (if (and classpath (not= "-jar" (first argv))) (cons classpath argv) argv)]
@@ -2279,7 +2295,7 @@
         (println "usage: jolt -M -m champaca.main [options] <classpath[:entry...] (dirs, jars, dir/*)> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
-        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa; -server, -client accepted;")
+        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview; -server, -client accepted;")
         (println "         -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX: ignored with a warning"))
       (System/exit 2))
     (if (= cp "-jar")

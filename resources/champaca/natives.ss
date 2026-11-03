@@ -302,6 +302,13 @@
 
 (defnative "java/lang/Class.getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;" (n)
   (jmirror-of (jstring->scheme n)))
+;; --enable-preview, from champaca.main (set-preview!, before the boot);
+;; main.clj's parser lets this release's preview class files load by the
+;; same flag
+(define preview-enabled #f)
+(define (set-preview! on) (set! preview-enabled on))
+(defnative "jdk/internal/misc/PreviewFeatures.isPreviewEnabled()Z" () (if preview-enabled 1 0))
+
 ;; Assertions, from champaca.main's -ea, -da, -esa and -dsa options
 ;; (set-assertion-directives!, before the boot, as -D properties are): each
 ;; directive is "c" (a class), "p" (a package, "" the unnamed one), "u" (the

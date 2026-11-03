@@ -370,7 +370,12 @@
         bsm (nth (:bootstrap-methods cls) (:bsm-idx e))]
     [(:name (cp (:ref-idx (cp (:ref-idx bsm))))) (:args bsm)]))
 
-(defn- switch-labels [cls enum? arg-idxs]
+(defn- switch-labels
+  "The case labels of a typeSwitch or enumSwitch as handles.ss's quoted list,
+  or nil when one is a primitive pattern's (JEP 507, a preview in JDK 25: a
+  primitive class, a long, float, double or boolean constant), whose match
+  depends on the selector's type; the JDK's bootstrap runs for those."
+  [cls enum? arg-idxs]
   (let [cp (:cp cls)
         label (fn [i]
                 (let [e (cp i)]
@@ -378,19 +383,24 @@
                     :class (sx "class" (str-lit (:name e)))
                     :string (sx (if enum? "name" "string") (str-lit (:value e)))
                     :int (sx "int" (str (:value e)))
+                    (:long :float :double) nil
                     :dynamic (let [[bsm-name [mh & args]] (condy cls e)]
                                (cond
-                                 (= bsm-name "primitiveClass") (sx "prim" (str-lit (:name e)))
+                                 (= bsm-name "primitiveClass") nil
                                  ;; a qualified enum constant: EnumDesc.of(ClassDesc.of(binary name), constant name)
                                  (and (= bsm-name "invoke") (= "of" (:name (cp (:ref-idx (cp mh)))))
                                       (= "java/lang/Enum$EnumDesc" (:class (cp (:ref-idx (cp mh))))))
                                  (let [[_ [_ cname]] (condy cls (cp (first args)))]
                                    (sx "enum" (str-lit (str/replace (:value (cp cname)) "." "/"))
                                        (str-lit (:value (cp (second args))))))
+                                 ;; Boolean.TRUE or FALSE, a boolean constant's label
+                                 (= bsm-name "getStaticFinal") nil
                                  :else (throw (ex-info (str "switch label not in spike: condy " bsm-name)
                                                        {:class (:name cls)}))))
-                    (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))]
-    (str "'" (apply sx (map label arg-idxs)))))
+                    (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))
+        labels (map label arg-idxs)]
+    (when (every? some? labels)
+      (str "'" (apply sx labels)))))
 
 (defn- render-steps
   "A block's steps and its terminal expression as nested lets: every store or
@@ -923,8 +933,16 @@
                        (desc->t ret)))
               ("metafactory" "altMetafactory")
               (push! (lambda-expr ctx name ret args argv bsm) "A")
-              ("typeSwitch" "enumSwitch") ; java.lang.runtime.SwitchBootstraps: pattern switches
-              (push! (sx "jswitch-index" (first argv) (second argv) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm))) "I")
+              ;; java.lang.runtime.SwitchBootstraps: pattern switches on a
+              ;; reference whose labels handles.ss matches; any other runs for real
+              ("typeSwitch" "enumSwitch")
+              (if-let [labels (when (= \L (first (first args))) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm)))]
+                (push! (sx "jswitch-index" (first argv) (second argv) labels) "I")
+                (push! (apply sx (at pc "indy-call") (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
+                              (str "'" (sx (const-datum cls (:ref-idx bsm))
+                                           (apply sx (map #(const-datum cls %) (:args bsm)))))
+                              (str-lit name) (str-lit desc) argv)
+                       "I"))
               ;; any other bootstrap runs for real, once per call site (handles.ss)
               (let [call (apply sx (at pc "indy-call") (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
                                 (str "'" (sx (const-datum cls (:ref-idx bsm))

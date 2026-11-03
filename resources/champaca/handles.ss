@@ -700,11 +700,11 @@
 ;; with the case labels as static arguments. Codegen turns those labels into
 ;; a list and calls these directly: the answer is the index of the first
 ;; label at or after `restart` that matches, -1 for null, and the label count
-;; when none does.
+;; when none does. A switch on a primitive, or with a primitive pattern's
+;; label (JEP 507, a preview in JDK 25), runs the JDK's bootstrap instead.
 ;;
 ;; label            matches
 ;; (class "C")      an instance of C
-;; (prim "I")       any primitive value (only typeSwitch on a primitive has these)
 ;; (string "s")     a String equal to s
 ;; (int n)          an Integer, Short, Byte or Character holding n
 ;; (name "RED")     the enum constant named RED (enumSwitch)
@@ -715,7 +715,6 @@
 (define (switch-label-matches? x label)
   (case (car label)
     [(class) (jinstance? x (cadr label))]
-    [(prim) (number? x)]
     [(string) (and (jinstance? x "java/lang/String") (jstring-lit-equal? x (cadr label)))]
     [(int) (let ([p (box-prim-of x)])
              (and p (memv (string-ref p 0) '(#\I #\S #\B #\C)) (eqv? (junbox p x) (cadr label))))]
@@ -857,6 +856,28 @@
         (run-bootstrap caller (list-ref d 3)
                        (list (caller-lookup caller) (jstring-lit name) (desc->mirror desc))
                        (list-ref d 4))))))
+
+;; ConstantBootstraps.getStaticFinal asks the getter's handle for its
+;; MemberName, which champaca's handles don't have (a closure): the same
+;; lookup and checks here. javac's boolean case labels are this condy
+;; (Boolean.TRUE, a primitive pattern's switch).
+(define-override! "java/lang/invoke/ConstantBootstraps.getStaticFinal(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/Object;"
+  (lambda (lookup name type dc)
+    (nn lookup) (nn name) (nn type) (nn dc)
+    (let* ([fname (str-of name)]
+           [hit (guard (e [(and (jobj? e) (jinstance? e "java/lang/ReflectiveOperationException"))
+                           (jinit "java/lang/invoke/MethodHandleNatives")
+                           (raise ((method-proc "java/lang/invoke/MethodHandleNatives"
+                                                "mapLookupExceptionToError(Ljava/lang/ReflectiveOperationException;)Ljava/lang/LinkageError;")
+                                   e))])
+                  (field-mh (mirror-class dc) fname type #t #f)
+                  (find-field (mirror-class dc) fname #t))]
+           [owner (jclass-cname (car hit))] [desc (list-ref hit 2)])
+      (unless (fxpositive? (fxlogand (list-ref hit 3) #x10))
+        (jthrow "java/lang/IncompatibleClassChangeError" (string-append "not a final field: " fname)))
+      (jinit owner)
+      (let ([v (top-level-value (string->symbol (string-append owner ":" fname)))])
+        (if (fx= 1 (string-length desc)) (jbox desc v) v)))))
 
 ;; a bootstrap that throws anything but an Error throws BootstrapMethodError
 ;; with it as the cause, as the JVM's linkage does

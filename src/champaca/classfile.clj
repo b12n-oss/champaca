@@ -54,6 +54,29 @@
 
 (declare decode-mutf8 take-bytes)
 
+;; Whether class files of this release's preview version load (the
+;; launcher's --enable-preview); jdk.internal.misc.PreviewFeatures answers
+;; the same (natives.ss set-preview!)
+(def preview-enabled (atom false))
+
+(defn- version-refusal
+  "HotSpot's UnsupportedClassVersionError text for a class file version JDK
+  25 refuses, as a fn of the class's slashed name, or nil. Up to 69.0, the
+  minor any before 56 and 0 from then on; 69.65535 only with preview
+  enabled (verify_class_version in classFileParser.cpp)."
+  [major minor]
+  (let [v (str major "." minor)]
+    (cond (> major 69) #(str % " has been compiled by a more recent version of the Java Runtime (class file version " v
+                             "), this version of the Java Runtime only recognizes class file versions up to 69.0")
+          (< major 45) #(str % " (class file version " v ") was compiled with an invalid major version")
+          (< major 56) nil
+          (= minor 0xFFFF) (cond (not= major 69)
+                                 #(str % " (class file version " v ") was compiled with preview features that are unsupported."
+                                       " This version of the Java Runtime only recognizes preview features for class file version 69.65535")
+                                 (not @preview-enabled)
+                                 #(str "Preview features are not enabled for " % " (class file version " v "). Try running with '--enable-preview'"))
+          (not= minor 0) #(str % " (class file version " v ") was compiled with an invalid non-zero minor version"))))
+
 (defn- utf8-at
   "The constant-pool string of n bytes at the cursor: in Scheme when it is
   plain ASCII, the common case and many times faster than decoding here."
@@ -345,15 +368,18 @@
         (when (> @(:pos r) (:len r)) (throw (format-error "Truncated class file")))
         c)
       (catch Exception e
-        (throw (cond (:class-format (ex-data e)) e
+        (throw (cond (or (:class-format (ex-data e)) (:class-version (ex-data e))) e
                      (> @(:pos r) (:len r)) (format-error "Truncated class file")
                      :else (format-error (or (ex-message e) (str e)))))))))
 
 (defn- parse* [r]
   (let [magic (u4 r)
         _ (when-not (= magic 0xCAFEBABE) (throw (format-error (str "Incompatible magic value " magic " in class file") true)))
-        _minor (u2 r)
-        _major (u2 r)
+        minor (u2 r)
+        major (u2 r)
+        ;; checked before the constant pool, as HotSpot does
+        _ (when-let [f (version-refusal major minor)]
+            (throw (ex-info "unsupported class file version" {:class-version f})))
         cp (resolve-cp (read-constant-pool r))
         flags (u2 r)
         this (:name (cp (u2 r)))
@@ -363,7 +389,7 @@
         methods (vec (repeatedly (u2 r) #(read-member r cp)))
         attrs (read-attributes r cp)
         rec (record-components attrs cp)]
-    {:name this :flags flags :super super :interfaces interfaces
+    {:name this :flags flags :super super :interfaces interfaces :preview (= minor 0xFFFF)
      :fields fields :methods methods :cp cp
      ;; the SourceFile attribute, for stack traces
      :source (some #(when (= "SourceFile" (:name %)) (let [[a b] (:info %)] (:value (cp (+ (* a 256) b))))) attrs)

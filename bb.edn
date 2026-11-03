@@ -203,6 +203,12 @@
                     _ (shell "java test/gen/LongCmpGen.java target/classes")
                     ;; ArrayLoopCheck's ArrayLoopShapes: arrays moved by dup_x1 and swap in a loop
                     _ (shell "java test/gen/ArrayLoopGen.java target/classes")
+                    ;; VersionCheck's class files of every version, which javac can't write
+                    _ (shell "java test/gen/VersionGen.java target/classes")
+                    ;; PreviewCheck uses JDK 25's preview features: javac writes it as
+                    ;; 69.65535 with --enable-preview, which the other sources must not get
+                    _ (apply shell "javac --release 25 --enable-preview -Xlint:-preview -cp target/classes -d target/classes"
+                             (map str (fs/glob "test/preview" "*.java")))
                     ;; run as -jar: target/app.jar's manifest names JarMain and a
                     ;; Class-Path of lib.jar beside it
                     _ (shell "mkdir -p target/jarmain-classes")
@@ -283,7 +289,16 @@
                                                 (let [{:keys [err exit]} (xss "-Xss2g")]
                                                   (and (= 1 exit) (str/starts-with? err "Invalid thread stack size: -Xss2g\nThe specified size exceeds the maximum representable size.\n")))
                                                 (let [{:keys [err exit]} (xss "-Xss1x")]
-                                                  (and (= 1 exit) (str/starts-with? err "Invalid thread stack size: -Xss1x\nError: Could not create the Java Virtual Machine.\n"))))]
+                                                  (and (= 1 exit) (str/starts-with? err "Invalid thread stack size: -Xss1x\nError: Could not create the Java Virtual Machine.\n"))))
+                                    ;; a preview class file without --enable-preview is HotSpot's
+                                    ;; refusal, after PreviewCheck ran with it above (a cached
+                                    ;; preview class would skip the check)
+                                    {:keys [out err exit]} (run-limited 300 {:label "preview-off" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "target/classes" "PreviewCheck")
+                                    preview-off-ok (and (= 1 exit) (= out "")
+                                                        (= err (str "Error: LinkageError occurred while loading main class PreviewCheck\n"
+                                                                    "\tjava.lang.UnsupportedClassVersionError: Preview features are not enabled for PreviewCheck"
+                                                                    " (class file version 69.65535). Try running with '--enable-preview'\n")))]
                                 (println (if jar-ok "PASS" "FAIL") "-D before -jar target/app.jar")
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
                                 (println (if xss-ok "PASS" "FAIL") "-Xss: 0 the default, 512k runs, 1k too small, 2g too large, 1x invalid, with HotSpot's texts")
@@ -293,9 +308,10 @@
                                 (println (if cp-missing-ok "PASS" "FAIL") "-cp without a class path")
                                 (println (if cp-jar-ok "PASS" "FAIL") "-cp before -jar is ignored")
                                 (println (if accepted-ok "PASS" "FAIL") "-server and -client accepted, -Xshare: ignored with a warning")
+                                (println (if preview-off-ok "PASS" "FAIL") "a preview class file without --enable-preview (PreviewCheck)")
                                 (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])
                                         (when-not cp-ok ["-cp"]) (when-not star-ok ["-cp star dir"]) (when-not cp-missing-ok ["-cp missing"]) (when-not cp-jar-ok ["-cp -jar"])
-                                        (when-not accepted-ok ["accepted options"])))
+                                        (when-not accepted-ok ["accepted options"]) (when-not preview-off-ok ["preview off"])))
                     ;; how the launcher picks main (test/mainsel, JEP 512): each class
                     ;; with a .expected run with a b, its status, stdout and stderr HotSpot's
                     _ (fs/delete-tree "target/mainsel")

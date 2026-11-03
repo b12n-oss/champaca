@@ -1,0 +1,28 @@
+forName V45_3: class vers.V45_3
+forName V55_1: class vers.V55_1
+forName V69_0: class vers.V69_0
+forName V69_65535: java.lang.UnsupportedClassVersionError: Preview features are not enabled for vers/V69_65535 (class file version 69.65535). Try running with '--enable-preview'
+forName V68_65535: java.lang.UnsupportedClassVersionError: vers/V68_65535 (class file version 68.65535) was compiled with preview features that are unsupported. This version of the Java Runtime only recognizes preview features for class file version 69.65535
+forName V56_65535: java.lang.UnsupportedClassVersionError: vers/V56_65535 (class file version 56.65535) was compiled with preview features that are unsupported. This version of the Java Runtime only recognizes preview features for class file version 69.65535
+forName V69_1: java.lang.UnsupportedClassVersionError: vers/V69_1 (class file version 69.1) was compiled with an invalid non-zero minor version
+forName V70_0: java.lang.UnsupportedClassVersionError: vers/V70_0 has been compiled by a more recent version of the Java Runtime (class file version 70.0), this version of the Java Runtime only recognizes class file versions up to 69.0
+forName V70_65535: java.lang.UnsupportedClassVersionError: vers/V70_65535 has been compiled by a more recent version of the Java Runtime (class file version 70.65535), this version of the Java Runtime only recognizes class file versions up to 69.0
+forName V44_0: java.lang.UnsupportedClassVersionError: vers/V44_0 (class file version 44.0) was compiled with an invalid major version
+forName again V70_0: java.lang.UnsupportedClassVersionError: vers/V70_0 has been compiled by a more recent version of the Java Runtime (class file version 70.0), this version of the Java Runtime only recognizes class file versions up to 69.0
+forName again V69_65535: java.lang.UnsupportedClassVersionError: Preview features are not enabled for vers/V69_65535 (class file version 69.65535). Try running with '--enable-preview'
+ldc V70_0: java.lang.UnsupportedClassVersionError: vers/V70_0 has been compiled by a more recent version of the Java Runtime (class file version 70.0), this version of the Java Runtime only recognizes class file versions up to 69.0
+instanceof V69_65535: java.lang.UnsupportedClassVersionError: Preview features are not enabled for vers/V69_65535 (class file version 69.65535). Try running with '--enable-preview'
+instanceof V69_65535 again: java.lang.UnsupportedClassVersionError: Preview features are not enabled for vers/V69_65535 (class file version 69.65535). Try running with '--enable-preview'
+define V69_65535: java.lang.UnsupportedClassVersionError: Preview features are not enabled for vers/V69_65535 (class file version 69.65535). Try running with '--enable-preview'
+define unnamed V69_65535: java.lang.UnsupportedClassVersionError: Preview features are not enabled for <Unknown> (class file version 69.65535). Try running with '--enable-preview'
+define V70_0: java.lang.UnsupportedClassVersionError: vers/V70_0 has been compiled by a more recent version of the Java Runtime (class file version 70.0), this version of the Java Runtime only recognizes class file versions up to 69.0
+define unnamed V70_0: java.lang.UnsupportedClassVersionError: <Unknown> has been compiled by a more recent version of the Java Runtime (class file version 70.0), this version of the Java Runtime only recognizes class file versions up to 69.0
+define V69_1: java.lang.UnsupportedClassVersionError: vers/V69_1 (class file version 69.1) was compiled with an invalid non-zero minor version
+define unnamed V69_1: java.lang.UnsupportedClassVersionError: <Unknown> (class file version 69.1) was compiled with an invalid non-zero minor version
+define V44_0: java.lang.UnsupportedClassVersionError: vers/V44_0 (class file version 44.0) was compiled with an invalid major version
+define unnamed V44_0: java.lang.UnsupportedClassVersionError: <Unknown> (class file version 44.0) was compiled with an invalid major version
+define D69_65535: java.lang.UnsupportedClassVersionError: Preview features are not enabled for vers/D69_65535 (class file version 69.65535). Try running with '--enable-preview'
+define misnamed V70_0: java.lang.UnsupportedClassVersionError: vers/Other has been compiled by a more recent version of the Java Runtime (class file version 70.0), this version of the Java Runtime only recognizes class file versions up to 69.0
+define misnamed V69_0: java.lang.NoClassDefFoundError: vers/Other (wrong name: vers/V69_0)
+typeSwitch long label: java.lang.IllegalArgumentException: label with illegal type found: class java.lang.Long
+typeSwitch int label: 0
