@@ -2143,13 +2143,17 @@
 
 (defn init!
   "Boot the JDK once (System.initPhase1 and what precedes it) with the given
-  user classpath dirs. Returns 0 on success; a second call is a no-op."
-  [classpath]
-  (or (:boot-status @state)
-      (do (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
-                 ;; java.class.path is what was given, as the JVM's launcher has it
-                 :classpath-given (vec classpath))
-          (let [status (boot!)] (swap! state assoc :boot-status status) status))))
+  user classpath dirs. Returns 0 on success; a second call is a no-op.
+  opts: {:preview true} turns on this release's preview features, as
+  --enable-preview does, before the boot (never after: the JDK reads it once)."
+  ([classpath] (init! classpath {}))
+  ([classpath {:keys [preview]}]
+   (or (:boot-status @state)
+       (do (when preview (reset! cf/preview-enabled true))
+           (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
+                  ;; java.class.path is what was given, as the JVM's launcher has it
+                  :classpath-given (vec classpath))
+           (let [status (boot!)] (swap! state assoc :boot-status status) status)))))
 
 (defn run
   "Run cname's main method with classes found under the classpath dirs,

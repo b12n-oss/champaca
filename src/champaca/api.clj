@@ -68,10 +68,13 @@
 (declare ->arg)
 
 (defn init!
-  "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user classes."
+  "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user
+  classes, :preview true to load class files compiled with --enable-preview
+  (and turn on the JDK's preview features), as java --enable-preview does.
+  Only the first call boots, so a later call's options are ignored."
   ([] (init! {}))
-  ([{:keys [classpath]}]
-   (let [status (main/init! (or classpath []))]
+  ([{:keys [classpath preview]}]
+   (let [status (main/init! (or classpath []) {:preview preview})]
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "champaca/interop.ss")))
