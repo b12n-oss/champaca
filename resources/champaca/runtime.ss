@@ -45,10 +45,33 @@
 (define-syntax wrap-int
   (syntax-rules ()
     [(_ e) (let ([y e])
-             (if (fixnum? y) (fx- (fxlogxor (fxlogand y #xffffffff) #x80000000) #x80000000) (i32 y)))]))
+             (if (fixnum? y) (#3%fx- (#3%fxlogxor (#3%fxlogand y #xffffffff) #x80000000) #x80000000) (i32 y)))]))
 (define-syntax wrap-long
   (syntax-rules ()
     [(_ e) (let ([y e]) (if (fixnum? y) y (i64 y)))]))
+
+;; Generated code's int operations. An int is a fixnum in int's range by
+;; construction, so these skip Chez's checks (#3%): the checked fx operations
+;; were a third of an int[] sum's time. Under CHAMPACA_BT (in the cache key)
+;; they keep them, so the battery's bt mode still catches a producer that
+;; hands on something else as an int. ix* is fx*/wraparound, whose product
+;; keeps its low 32 bits (2^32 divides the fixnum range), which is all
+;; wrap-int reads; ix-quotient and ix-remainder get a nonzero divisor.
+(define-syntax define-int-ops
+  (syntax-rules ()
+    [(_ (name unchecked checked) ...)
+     (begin (define-syntax name
+              (if (getenv "CHAMPACA_BT")
+                  (syntax-rules () [(_ . args) (checked . args)])
+                  (syntax-rules () [(_ . args) (unchecked . args)])))
+            ...)]))
+(define-int-ops
+  (ix+ #3%fx+ fx+) (ix- #3%fx- fx-) (ix* #3%fx*/wraparound fx*/wraparound)
+  (ix= #3%fx= fx=) (ix< #3%fx< fx<) (ix<= #3%fx<= fx<=) (ix> #3%fx> fx>) (ix>= #3%fx>= fx>=)
+  (ix<> (lambda (a b) (not (#3%fx= a b))) (lambda (a b) (not (fx= a b))))
+  (ix-and #3%fxlogand fxlogand) (ix-or #3%fxlogor fxlogor) (ix-xor #3%fxlogxor fxlogxor)
+  (ix-sll #3%fxsll fxsll) (ix-sra #3%fxsra fxsra) (ix-srl #3%fxsrl fxsrl)
+  (ix-quotient #3%fxquotient fxquotient) (ix-remainder #3%fxremainder fxremainder))
 
 ;; Java long arithmetic. A long is an exact integer, a fixnum up to 60 bits
 ;; and a bignum past them, so generic + and * on longs made a bignum of up to
@@ -367,11 +390,21 @@
 ;; that would leave the low 32, so the shift can't overflow a fixnum.
 (define-syntax int-shl
   (syntax-rules ()
-    [(_ a s) (let ([n (fxlogand s 31)])
-               (wrap-int (fxsll (fxlogand a (fx- (fxsll 1 (fx- 32 n)) 1)) n)))]))
-(define-syntax int-shr (syntax-rules () [(_ a s) (fxsra a (fxlogand s 31))]))
+    [(_ a s) (let ([n (ix-and s 31)])
+               (wrap-int (ix-sll (ix-and a (ix- (ix-sll 1 (ix- 32 n)) 1)) n)))]))
+(define-syntax int-shr (syntax-rules () [(_ a s) (ix-sra a (ix-and s 31))]))
 (define-syntax int-ushr
-  (syntax-rules () [(_ a s) (wrap-int (fxsrl (fxlogand a #xffffffff) (fxlogand s 31)))]))
+  (syntax-rules () [(_ a s) (wrap-int (ix-srl (ix-and a #xffffffff) (ix-and s 31)))]))
+;; idiv and irem inline: the zero test, then the fixnum division. MIN_VALUE
+;; / -1 is 2^31, which wrap-int turns back into MIN_VALUE as Java does. tag
+;; and pc are codegen's site, as for array-ref's bounds-error.
+(define (div-by-zero . site) (jthrow "java/lang/ArithmeticException" "/ by zero"))
+(define-syntax int-div
+  (syntax-rules ()
+    [(_ a b tag pc) (let ([x a] [y b]) (if (ix= y 0) (div-by-zero tag pc) (wrap-int (ix-quotient x y))))]))
+(define-syntax int-rem
+  (syntax-rules ()
+    [(_ a b tag pc) (let ([x a] [y b]) (if (ix= y 0) (div-by-zero tag pc) (ix-remainder x y)))]))
 
 (define (f32 x)
   (let ([b (make-bytevector 4)])
@@ -990,8 +1023,8 @@
           [else (set-car! ic #f) (set-cdr! ic k) (set-car! ic e)])))
 (define-syntax array-length
   (syntax-rules () [(_ a tag pc) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (npe-at tag pc)))]))
-(define-syntax wrap-byte (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xff) #x80) #x80)]))
-(define-syntax wrap-short (syntax-rules () [(_ x) (fx- (fxlogxor (fxlogand x #xffff) #x8000) #x8000)]))
+(define-syntax wrap-byte (syntax-rules () [(_ x) (ix- (ix-xor (ix-and x #xff) #x80) #x80)]))
+(define-syntax wrap-short (syntax-rules () [(_ x) (ix- (ix-xor (ix-and x #xffff) #x8000) #x8000)]))
 
 (define (scheme-list->jarray elem xs) (make-jarr elem (list->vector xs)))
 
@@ -1499,12 +1532,28 @@
 ;; try/catch around an optional feature behaves the same. Under CHAMPACA_BT
 ;; the name is also printed as it's hit, which is what finding the gap needs.
 (define report-missing-natives? (and (getenv "CHAMPACA_BT") #t))
+;; Generated code's int operations skip their checks (ix+ and friends), so a
+;; native or an override declared to return int, boolean, byte, char or
+;; short must give a fixnum in int's range, never #t or #f. Under
+;; CHAMPACA_BT each such procedure is wrapped to check that, so the
+;; battery's bt mode checks every one the suite calls.
+(define (int-result-checked name proc)
+  (if (and report-missing-natives? (procedure? proc)
+           (memv (string-ref name (fx- (string-length name) 1)) '(#\I #\Z #\B #\C #\S))
+           (char=? (string-ref name (fx- (string-length name) 2)) #\)))
+      (lambda args
+        (let ([v (apply proc args)])
+          (if (and (fixnum? v) (fx<= -2147483648 v 2147483647))
+              v
+              (errorf 'champaca "~a returned ~s, not an int" name v))))
+      proc))
 (define (native-ref name)
-  (or (hashtable-ref natives name #f)
-      (let loop ([rs native-rules])
-        (cond [(null? rs) #f]
-              [((caar rs) name) ((cdar rs) name)]
-              [else (loop (cdr rs))]))
+  (or (int-result-checked name
+       (or (hashtable-ref natives name #f)
+           (let loop ([rs native-rules])
+             (cond [(null? rs) #f]
+                   [((caar rs) name) ((cdar rs) name)]
+                   [else (loop (cdr rs))]))))
       (lambda args
         (when report-missing-natives?
           (put-string (current-error-port) (string-append "champaca: missing native " name "\n")))
@@ -1634,7 +1683,7 @@
 ;; body would need machinery the spike lacks (reflection, method handles).
 (define overrides (make-hashtable string-hash string=?))
 (define (define-override! name proc) (hashtable-set! overrides name proc))
-(define (native-override name) (hashtable-ref overrides name #f))
+(define (native-override name) (int-result-checked name (hashtable-ref overrides name #f)))
 
 ;; --- records (ObjectMethods.bootstrap) -----------------------------------------------
 ;; fields: list of (name slot descriptor). Formulas follow ObjectMethods.

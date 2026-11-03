@@ -587,7 +587,7 @@
                ;; a jump passes the live locals and the stack as arguments
                (let [j (jump pc (concat (mapcat #(local-names split %) live)
                                         (map-indexed (fn [i t] (if (= t "j") (sx "lh-box" (h i) (l i)) (s i))) @st)))]
-                 (if (<= pc start-pc) (sx "begin" "(when (fx> gil-ready 0) (jsafepoint))" j) j)))
+                 (if (<= pc start-pc) (sx "begin" "(when (#3%fx> gil-ready 0) (jsafepoint))" j) j)))
         init (fn [c pc] (when (not= c this-class) (stmt! (sx "jinit-ic" ((:ic! ctx)) (str "'" (sym c)) (site pc)))))
         bin (fn [f t] (let [b (pop!) a (pop!)] (push! (f a b) t)))
         un (fn [f t] (push! (f (pop!)) t))
@@ -610,9 +610,9 @@
                      (vswap! consts #(into {} (remove (fn [[k _]] (>= k base))) %))
                      (when (seq moves) (conj! stmts [:pbind moves]))
                      (vreset! st (into (subvec @st 0 base) (map items order)))))
-        cmp0 {:ifeq "fx=" :ifne "fx<>" :iflt "fx<" :ifge "fx>=" :ifgt "fx>" :ifle "fx<="}
-        cmp2 {:if_icmpeq "fx=" :if_icmpne "fx<>" :if_icmplt "fx<" :if_icmpge "fx>="
-              :if_icmpgt "fx>" :if_icmple "fx<="}
+        cmp0 {:ifeq "ix=" :ifne "ix<>" :iflt "ix<" :ifge "ix>=" :ifgt "ix>" :ifle "ix<="}
+        cmp2 {:if_icmpeq "ix=" :if_icmpne "ix<>" :if_icmplt "ix<" :if_icmpge "ix>="
+              :if_icmpgt "ix>" :if_icmple "ix<="}
         terminal (volatile! nil)
         ;; set when an instruction also translated the one after it
         fused (volatile! false)
@@ -665,7 +665,7 @@
             (let [[vh vl] (pop-halves!)]
               (conj! stmts [:pbind [[(str "l" a0 "h") vh] [(str "l" a0 "l") vl]]]))
             (store! a0 (pop!)))
-          :iinc (store! a0 (sx "wrap-int" (sx "fx+" (str "l" a0) (str (second args)))))
+          :iinc (store! a0 (sx "wrap-int" (sx "ix+" (str "l" a0) (str (second args)))))
           (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i (site pc))) "I")
           :laload (bin (fn [a i] (sx "array-ref" a i (site pc))) "J")
           :faload (bin (fn [a i] (sx "array-ref" a i (site pc))) "F")
@@ -676,7 +676,7 @@
             (stmt! (sx "array-store!" ((:ic! ctx)) a i v (site pc))))
           (:iastore :lastore :fastore :dastore :bastore :castore :sastore)
           (let [[a i v] (popn! 3)]
-            (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "fxlogand" v "#xffff")
+            (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "ix-and" v "#xffff")
                                               :sastore (sx "wrap-short" v) v)
                        (site pc))))
           :pop (pop!)
@@ -691,18 +691,18 @@
           :swap (let [t1 (top-t) v1 (pop!) t2 (top-t) v2 (pop!)]
                   (conj! stmts [:pbind [[v1 v2] [v2 v1]]])
                   (vswap! st conj t1 t2))
-          :iadd (bin #(sx "wrap-int" (sx "fx+" %1 %2)) "I")
-          :isub (bin #(sx "wrap-int" (sx "fx-" %1 %2)) "I")
-          :imul (bin #(sx "wrap-int" (sx "*" %1 %2)) "I")
-          :idiv (bin #(sx (at pc "idiv") %1 %2) "I")
-          :irem (bin #(sx (at pc "irem") %1 %2) "I")
-          :ineg (un #(sx "wrap-int" (sx "fx-" "0" %)) "I")
+          :iadd (bin #(sx "wrap-int" (sx "ix+" %1 %2)) "I")
+          :isub (bin #(sx "wrap-int" (sx "ix-" %1 %2)) "I")
+          :imul (bin #(sx "wrap-int" (sx "ix*" %1 %2)) "I")
+          :idiv (bin #(sx "int-div" %1 %2 (site pc)) "I")
+          :irem (bin #(sx "int-rem" %1 %2 (site pc)) "I")
+          :ineg (un #(sx "wrap-int" (sx "ix-" "0" %)) "I")
           :ishl (bin #(sx "int-shl" %1 %2) "I")
           :ishr (bin #(sx "int-shr" %1 %2) "I")
           :iushr (bin #(sx "int-ushr" %1 %2) "I")
-          :iand (bin #(sx "fxlogand" %1 %2) "I")
-          :ior (bin #(sx "fxlogor" %1 %2) "I")
-          :ixor (bin #(sx "fxlogxor" %1 %2) "I")
+          :iand (bin #(sx "ix-and" %1 %2) "I")
+          :ior (bin #(sx "ix-or" %1 %2) "I")
+          :ixor (bin #(sx "ix-xor" %1 %2) "I")
           ;; on halves when an operand is in halves or the result goes on
           ;; to a long operation; else runtime.ss's long macros, fixnums
           ;; inline and anything else on 32-bit halves, boxed
@@ -735,7 +735,7 @@
                   r (count @st)
                   n (if c
                       (str (bit-and c 63))
-                      (let [v (str "s" r "n")] (bind! v (sx "fxlogand" cnt "63")) v))]
+                      (let [v (str "s" r "n")] (bind! v (sx "ix-and" cnt "63")) v))]
               (case op
                 :lshl (push-halves! (sx "lh-shl-h" ah al n) (sx "lh-shl-l" al n))
                 :lushr (push-halves! (sx "lh-ushr-h" ah n) (sx "lh-ushr-l" ah al n))
@@ -792,7 +792,7 @@
           (:f2i :d2i) (un #(sx "d2i" %) "I")
           (:f2l :d2l) (un #(sx "d2l" %) "J")
           :i2b (un #(sx "wrap-byte" %) "I")
-          :i2c (un #(sx "fxlogand" % "#xffff") "I")
+          :i2c (un #(sx "ix-and" % "#xffff") "I")
           :i2s (un #(sx "wrap-short" %) "I")
           (:ifeq :ifne :iflt :ifge :ifgt :ifle)
           (let [a (pop!)] (branch (sx (cmp0 op) a "0") a0 (+ pc len)))
