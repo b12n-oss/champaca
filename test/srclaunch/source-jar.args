@@ -1,0 +1,4 @@
+--source
+25
+-jar
+../../target/app.jar

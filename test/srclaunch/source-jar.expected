@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+Error: Option -jar is not allowed with --source

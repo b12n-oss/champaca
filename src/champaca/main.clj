@@ -2237,7 +2237,9 @@
             (#{"-server" "-client"} a) (recur (rest argv) opts)
             (= "--enable-preview" a) (recur (rest argv) (assoc opts :preview true))
             ;; as the launcher, --source takes the next argument whatever it is
-            (= "--source" a) (if (second argv) (recur (nnext argv) (assoc opts :source (second argv))) (assoc opts :argv nil))
+            (= "--source" a) (if (second argv)
+                               (recur (nnext argv) (assoc opts :source (second argv)))
+                               (launcher-error "Error: --source requires source version"))
             (str/starts-with? a "--source=") (recur (rest argv) (assoc opts :source (subs a 9)))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
@@ -2337,12 +2339,15 @@
         ;; form, the class path first (-jar ignores -cp, as java does)
         ;; in source-file mode the class path is -cp's or, as the launcher
         ;; has it, "." alone, or nothing with --source
-        ;; a .java name that isn't a file is java's main class, never
-        ;; champaca's class path (java: "Could not find or load main class")
+        ;; a lone .java name that isn't a file is java's main class
+        ;; ("Could not find or load main class"); followed by a main class
+        ;; it stays champaca's class path, which may name a d.java directory
         [cp cname & args] (cond source-mode? (list* (or classpath (if source "" ".")) source-launcher argv)
                                 (and classpath (not= "-jar" (first argv))) (cons classpath argv)
-                                (some-> (first argv) (str/ends-with? ".java")) (cons "." argv)
+                                (and (= 1 (count argv)) (str/ends-with? (first argv) ".java")) (cons "." argv)
                                 :else argv)]
+    (when (and source (= "-jar" (first argv)))
+      (launcher-error "Error: Option -jar is not allowed with --source"))
     (when (and (= cp "-jar") (not cname))
       (binding [*out* *err*] (println "Error: -jar requires jar file specification"))
       (System/exit 1))

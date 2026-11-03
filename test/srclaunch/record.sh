@@ -6,10 +6,11 @@ cd "$(dirname "$0")"
 java=${JAVA:-java}
 cases=("$@")
 [ ${#cases[@]} -eq 0 ] && cases=($(ls *.args | sed 's/\.args$//'))
+tmp=$(mktemp -d)
 for c in "${cases[@]}"; do
   args=()
   while IFS= read -r l; do args+=("$l"); done < "$c.args"
-  "$java" "${args[@]}" > /tmp/srclaunch-out.$$ 2> /tmp/srclaunch-err.$$; st=$?
-  { printf 'exit %s\n' "$st"; cat /tmp/srclaunch-out.$$; printf -- '--- stderr\n'; cat /tmp/srclaunch-err.$$; } > "$c.expected"
+  "$java" "${args[@]}" > $tmp/out 2> $tmp/err; st=$?
+  { printf 'exit %s\n' "$st"; cat $tmp/out; printf -- '--- stderr\n'; cat $tmp/err; } > "$c.expected"
 done
-rm -f /tmp/srclaunch-out.$$ /tmp/srclaunch-err.$$
+rm -rf "$tmp"
