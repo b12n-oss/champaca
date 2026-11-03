@@ -974,6 +974,13 @@
                         (let ([v (jarr-vec arr)])
                           (if (fx< -1 j (#3%vector-length v)) (#3%vector-ref v j) (bounds-error j v tag pc)))
                         (npe-at tag pc)))]))
+;; A loop's fast copy (codegen's versioning) took the array's vector and
+;; length once before the loop, which checked it was an array, so an access
+;; checks the index alone.
+(define-syntax vec-ref
+  (syntax-rules () [(_ v n i tag pc) (let ([j i]) (if (fx< -1 j n) (#3%vector-ref v j) (bounds-error j v tag pc)))]))
+(define-syntax vec-set!
+  (syntax-rules () [(_ v n i x tag pc) (let ([j i] [y x]) (if (fx< -1 j n) (#3%vector-set! v j y) (bounds-error j v tag pc)))]))
 (define-syntax array-set!
   (syntax-rules ()
     [(_ a i x tag pc) (let ([arr a] [j i])

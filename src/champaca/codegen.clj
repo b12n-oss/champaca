@@ -528,10 +528,13 @@
   stack at block entry: a vector of types (I J F D A), one per operand-stack
   value; inside the block a long kept as halves is j, in two variables sNh
   and sNl, both unsigned 32-bit (runtime.ss lh-*), and is boxed with
-  lh-box wherever something other than a long operation takes it.
-  Returns {:code text :succ {pc entry-stack}}."
+  lh-box wherever something other than a long operation takes it. In a
+  loop's fast copy (compile-method*), :hoist maps an array local the loop
+  never stores to the names of its vector and length, taken once before the
+  loop: an array operation on what an aload of it pushed uses those.
+  Returns {:code text :succ {pc entry-stack} :used hoisted-locals-used}."
   [ctx blk entry]
-  (let [{:keys [cls resolve next-pc live boxed split jump]} ctx
+  (let [{:keys [cls resolve next-pc live boxed split jump hoist]} ctx
         ;; what a direct call names: the callee inlined into this method when
         ;; it is a small leaf (compile-method), else its top-level definition
         callee (fn [pc decl name desc]
@@ -551,24 +554,28 @@
         ;; literal values on the stack by index: a shift's count, a long's
         ;; halves
         consts (volatile! {})
+        ;; in a fast copy, the stack values an aload of a hoisted local
+        ;; pushed, by index, and the hoisted locals an array operation used
+        origins (volatile! {})
+        used (volatile! #{})
         bind! (fn [v expr] (conj! stmts [:bind v expr]))
         store! (fn [i expr] (conj! stmts [(if (boxed i) :set :bind) (str "l" i) expr]))
-        push! (fn [expr t] (vswap! consts dissoc (count @st)) (bind! (s (count @st)) expr) (vswap! st conj t))
+        push! (fn [expr t] (vswap! consts dissoc (count @st)) (vswap! origins dissoc (count @st)) (bind! (s (count @st)) expr) (vswap! st conj t))
         push-const! (fn [v t] (let [i (count @st)] (push! (num-lit v) t) (vswap! consts assoc i v)))
         ;; a long as halves, both computed from what was there before
         push-halves! (fn [hx lx]
                        (let [i (count @st)]
-                         (vswap! consts dissoc i)
+                         (vswap! consts dissoc i) (vswap! origins dissoc i)
                          (conj! stmts [:pbind [[(h i) hx] [(l i) lx]]])
                          (vswap! st conj "j")))
         ;; the popped value as an expression: a long kept as halves is boxed
         pop! (fn [] (let [i (dec (count @st)) t (peek @st)]
-                      (vswap! st pop) (vswap! consts dissoc i)
+                      (vswap! st pop) (vswap! consts dissoc i) (vswap! origins dissoc i)
                       (if (= t "j") (sx "lh-box" (h i) (l i)) (s i))))
         ;; a long's halves, split here if it was boxed (lh-split-l reads what
         ;; lh-split-h put in long-buf, so nothing comes between them)
         pop-halves! (fn [] (let [i (dec (count @st)) t (peek @st) c (@consts i)]
-                             (vswap! st pop) (vswap! consts dissoc i)
+                             (vswap! st pop) (vswap! consts dissoc i) (vswap! origins dissoc i)
                              (cond (= t "j") [(h i) (l i)]
                                    c [(str (bit-and (bit-shift-right c 32) 0xffffffff)) (str (bit-and c 0xffffffff))]
                                    :else (do (bind! (h i) (sx "lh-split-h" (s i)))
@@ -576,6 +583,9 @@
                                              [(h i) (l i)]))))
         halves? (fn [n insns] (or (some #{"j"} (take-last n @st)) (halves-use? cp split (rest insns))))
         top-t (fn [] (peek @st))
+        ;; [vector length] of the array at stack index i when it's a hoisted
+        ;; local's, which counts as a use
+        hoisted (fn [i] (when-let [k (@origins i)] (vswap! used conj k) (hoist k)))
         popn! (fn [n] (vec (reverse (repeatedly n pop!))))
         stmt! (fn [x] (conj! stmts [:do x]))
         start-pc (:pc (first blk))
@@ -608,6 +618,7 @@
                                                                  [[(s to) (s from)]])))
                                                            order)))]
                      (vswap! consts #(into {} (remove (fn [[k _]] (>= k base))) %))
+                     (vswap! origins #(into {} (remove (fn [[k _]] (>= k base))) %))
                      (when (seq moves) (conj! stmts [:pbind moves]))
                      (vreset! st (into (subvec @st 0 base) (map items order)))))
         cmp0 {:ifeq "ix=" :ifne "ix<>" :iflt "ix<" :ifge "ix>=" :ifgt "ix>" :ifle "ix<="}
@@ -659,26 +670,26 @@
           :lload (if (split a0) (push-halves! (str "l" a0 "h") (str "l" a0 "l")) (push! (str "l" a0) "J"))
           :fload (push! (str "l" a0) "F")
           :dload (push! (str "l" a0) "D")
-          :aload (push! (str "l" a0) "A")
+          :aload (do (push! (str "l" a0) "A")
+                     (when (get hoist a0) (vswap! origins assoc (dec (count @st)) a0)))
           (:istore :lstore :fstore :dstore :astore)
           (if (and (= op :lstore) (split a0))
             (let [[vh vl] (pop-halves!)]
               (conj! stmts [:pbind [[(str "l" a0 "h") vh] [(str "l" a0 "l") vl]]]))
             (store! a0 (pop!)))
           :iinc (store! a0 (sx "wrap-int" (sx "ix+" (str "l" a0) (str (second args)))))
-          (:iaload :baload :caload :saload) (bin (fn [a i] (sx "array-ref" a i (site pc))) "I")
-          :laload (bin (fn [a i] (sx "array-ref" a i (site pc))) "J")
-          :faload (bin (fn [a i] (sx "array-ref" a i (site pc))) "F")
-          :daload (bin (fn [a i] (sx "array-ref" a i (site pc))) "D")
-          :aaload (bin (fn [a i] (sx "array-ref" a i (site pc))) "A")
+          (:iaload :baload :caload :saload :laload :faload :daload :aaload)
+          (let [hv (hoisted (- (count @st) 2))]
+            (bin (fn [a i] (if-let [[v n] hv] (sx "vec-ref" v n i (site pc)) (sx "array-ref" a i (site pc))))
+                 (case op :laload "J" :faload "F" :daload "D" :aaload "A" "I")))
           :aastore
           (let [[a i v] (popn! 3)]
             (stmt! (sx "array-store!" ((:ic! ctx)) a i v (site pc))))
           (:iastore :lastore :fastore :dastore :bastore :castore :sastore)
-          (let [[a i v] (popn! 3)]
-            (stmt! (sx "array-set!" a i (case op :bastore (sx "wrap-byte" v) :castore (sx "ix-and" v "#xffff")
-                                              :sastore (sx "wrap-short" v) v)
-                       (site pc))))
+          (let [hv (hoisted (- (count @st) 3))
+                [a i v] (popn! 3)
+                x (case op :bastore (sx "wrap-byte" v) :castore (sx "ix-and" v "#xffff") :sastore (sx "wrap-short" v) v)]
+            (stmt! (if-let [[vv n] hv] (sx "vec-set!" vv n i x (site pc)) (sx "array-set!" a i x (site pc)))))
           :pop (pop!)
           :pop2 (if (cat2? (top-t)) (pop!) (do (pop!) (pop!)))
           :dup (shuffle! 1 0)
@@ -935,7 +946,9 @@
                        (un #(sx (at pc "jnewarray-interned") el % "#f") "A"))
           :multianewarray (let [c (:name (cp a0)) dims (popn! (second args))]
                             (push! (sx (at pc "jmultiarray") (str-lit c) (apply sx "list" dims)) "A"))
-          :arraylength (un #(sx "array-length" % (site pc)) "I")
+          :arraylength (if-let [[_ n] (hoisted (dec (count @st)))]
+                         (do (pop!) (push! n "I"))
+                         (un #(sx "array-length" % (site pc)) "I"))
           :checkcast (let [c (:name (cp a0))]
                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
                        (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast-ic" ((:ic! ctx)) v (str-lit c) (site pc)))))
@@ -975,7 +988,8 @@
        (recur (if @fused (drop 2 insns) (rest insns))))))
     (let [term (or @terminal (goto next-pc))]
       {:code (render-steps (persistent! stmts) term)
-       :succ @succ})))
+       :succ @succ
+       :used @used})))
 
 (defn- entry-label [pc] (sym (str *method-tag* "#E" pc)))
 
@@ -1104,6 +1118,63 @@
                      :else (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f))]
       (sx "set-top-level-value!" (str "'" g) (sx "let" (sx (sx g body)) g)))))
 
+;; --- array loops ------------------------------------------------------------------
+;; An array access checks for null, takes the array's vector and checks the
+;; index against its length, and a loop's test reads the length again, every
+;; step. In an innermost loop that reads an array local it never stores, the
+;; vector and length can't change, so compile-method* versions the loop: a
+;; jump into it from outside goes through #V<header>, which checks once that
+;; each such local holds an array, takes its vector and length, and runs a
+;; copy of the loop's blocks (#F<pc>) in which an access checks its index
+;; alone (runtime.ss vec-ref); a null or anything else runs the loop as it
+;; was, so an exception comes where it would have.
+
+(def ^:private array-ops
+  #{:iaload :laload :faload :daload :aaload :baload :caload :saload
+    :iastore :lastore :fastore :dastore :bastore :castore :sastore :arraylength})
+
+(defn- array-loops
+  "header pc -> {:body #{pc} :locals #{slot}}: the innermost natural loops of
+  blks that do something to an array and aload a local they never store."
+  [blks]
+  (let [succs (into {} (for [[pc blk] blks] [pc (filter blks (successors (peek blk)))]))]
+    (when (and (some (fn [[_ blk]] (some #(array-ops (:op %)) blk)) blks)
+               (some (fn [[pc ss]] (some #(<= % pc) ss)) succs))
+      (let [;; reachable blocks in reverse postorder, iteratively
+            rpo (loop [stack [[0 (succs 0)]] seen #{0} out ()]
+                  (if-let [[pc ss] (peek stack)]
+                    (let [ss (drop-while seen ss)]
+                      (if-let [n (first ss)]
+                        (recur (conj (pop stack) [pc (rest ss)] [n (succs n)]) (conj seen n) out)
+                        (recur (pop stack) seen (conj out pc))))
+                    out))
+            reach (set rpo)
+            preds (reduce (fn [m [p ss]] (if (reach p) (reduce #(update %1 %2 (fnil conj []) p) m ss) m)) {} succs)
+            meet (fn [sets] (reduce (fn [a b] (into #{} (filter b) a)) sets))
+            dom (loop [dom (into {0 #{0}} (map (fn [pc] [pc reach]) (rest rpo)))]
+                  (let [d (reduce (fn [d pc] (assoc d pc (conj (meet (map d (preds pc))) pc))) dom (rest rpo))]
+                    (if (= d dom) dom (recur d))))
+            ;; a back edge p -> h, h dominating p, and the blocks that reach
+            ;; p without passing h
+            bodies (reduce (fn [m [p h]]
+                             (update m h (fn [b]
+                                           (loop [b (conj (or b #{h}) p) work [p]]
+                                             (if-let [x (peek work)]
+                                               (let [new (remove b (when (not= x h) (preds x)))]
+                                                 (recur (into b new) (into (pop work) new)))
+                                               b)))))
+                           {}
+                           (for [p rpo h (succs p) :when ((dom p) h)] [p h]))]
+        (into {}
+              (for [[h body] bodies
+                    :when (not-any? #(and (not= % h) (bodies %)) body)
+                    :let [insns (mapcat blks body)
+                          stored (set (keep #(when (store-ops (:op %)) (first (:args %))) insns))
+                          locals (set (keep #(when (= :aload (:op %)) (first (:args %))) insns))
+                          locals (into #{} (remove stored) locals)]
+                    :when (and (seq locals) (some #(array-ops (:op %)) insns))]
+                [h {:body body :locals locals}]))))))
+
 (defn- compile-method*
   "The method as a lambda. ic! names a fresh inline-cache cell, inline! the
   inlined procedure for a direct callee or nil."
@@ -1142,6 +1213,16 @@
                                       (for [{:keys [op args]} insns
                                             :when (or (load-ops op) (store-ops op))]
                                         (first args))))))
+        ;; array loops to version (handler-free methods of a size whose
+        ;; blocks' dominators are cheap to find)
+        loops (or (when (and (empty? handlers) (<= (count code) ic-vector-limit))
+                    (array-loops blks))
+                  {})
+        vlabel (fn [pc] (sym (str *method-tag* "#V" pc)))
+        flabel (fn [pc] (sym (str *method-tag* "#F" pc)))
+        ;; a jump into a versioned loop's header from outside the loop goes
+        ;; through its #V
+        into-loop (fn [from pc] (if (and (loops pc) (not ((:body (loops pc)) from))) (vlabel pc) (label pc)))
         ;; covered blocks entered from outside their region, each needing a
         ;; guarded entry (entry-label)
         entered (volatile! (sorted-set))
@@ -1154,7 +1235,7 @@
         ;; so it returns a thunk to the trampoline
         jump (fn [from]
                (fn [pc args]
-                 (cond (= (cover from) (cover pc)) (apply sx (label pc) args)
+                 (cond (= (cover from) (cover pc)) (apply sx (into-loop from pc) args)
                        (empty? (cover from)) (apply sx (enter pc) args)
                        :else (sx "lambda" "()" (apply sx (enter pc) args)))))
         ;; worklist over blocks: each is emitted once, at the stack depth its
@@ -1173,10 +1254,39 @@
         ;; each block takes the live locals and its entry stack
         block-defs (for [[pc [dep code]] (sort-by key emitted)]
                      (sx (label pc) (sx "lambda" (apply sx (args-of dep)) code)))
+        ;; each versioned loop's #V: its blocks copied with the hoisted
+        ;; locals' vectors and lengths, entered when every local the copy
+        ;; used holds an array, else the loop as it was. The copy's jumps stay
+        ;; in the copy or leave it as the loop's would.
+        version-defs (for [[h {:keys [body locals]}] (sort-by key loops)
+                           :when (emitted h)
+                           :let [hoist (into {} (map (fn [k] [k [(str "l" k "v") (str "l" k "n")]]) locals))
+                                 fast (for [pc (sort body) :when (emitted pc)
+                                            :let [dep (first (emitted pc))]]
+                                        [pc dep (emit-block {:cls cls :resolve resolve :next-pc (next-pc pc)
+                                                             :live live :boxed boxed :split split :ic! ic! :inline! inline!
+                                                             :hoist hoist
+                                                             :jump (fn [to args] (apply sx (if (body to) (flabel to) (into-loop pc to)) args))}
+                                                            (blks pc) dep)])
+                                 ks (sort (distinct (mapcat (comp :used #(nth % 2)) fast)))
+                                 as (args-of (first (emitted h)))]]
+                       (sx (vlabel h)
+                           (sx "lambda" (apply sx as)
+                               (if (empty? ks)
+                                 (apply sx (label h) as)
+                                 (sx "if" (apply sx "and" (map #(sx "jarr?" (str "l" %)) ks))
+                                     (sx "let*" (apply sx (mapcat (fn [k] (let [[v n] (hoist k)]
+                                                                            [(sx v (sx "jarr-vec" (str "l" k)))
+                                                                             (sx n (sx "#3%vector-length" v))]))
+                                                                  ks))
+                                         (sx "letrec" (apply sx (for [[pc dep {:keys [code]}] fast]
+                                                                  (sx (flabel pc) (sx "lambda" (apply sx (args-of dep)) code))))
+                                             (apply sx (flabel h) as)))
+                                     (apply sx (label h) as))))))
         ;; the first block, called with the parameters, a long one kept as
         ;; halves split first
         start (let [split-params (filter #(and (param-set %) (split %)) live)
-                    call (apply sx (enter 0) (mapcat #(cond (split %) (if (param-set %) (local-names split %) ["0" "0"])
+                    call (apply sx (if (loops 0) (vlabel 0) (enter 0)) (mapcat #(cond (split %) (if (param-set %) (local-names split %) ["0" "0"])
                                                             (param-set %) [(str "l" %)]
                                                             :else ["0"])
                                                      live))]
@@ -1213,7 +1323,7 @@
                           (let [t (sym (str *method-tag* "#T"))]
                             (sx "let" t (sx (sx "r" start))
                                 (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))))
-                  (sx "letrec" (apply sx block-defs) start))
+                  (sx "letrec" (apply sx (concat block-defs version-defs)) start))
           ;; ACC_SYNCHRONIZED: the monitor of this, or of the class for a
           ;; static method, held for the call and released however it ends.
           ;; dynamic-wind rather than guard: an exception leaves through a

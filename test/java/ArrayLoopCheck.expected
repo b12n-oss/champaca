@@ -1,0 +1,33 @@
+sum: 14 effects 0
+sum empty: 0 effects 0
+sum null: java.lang.NullPointerException: Cannot read the array length because "<parameter1>" is null at sum:10 effects 0
+upTo: 14 effects 5
+upTo past the end: java.lang.ArrayIndexOutOfBoundsException: Index 5 out of bounds for length 5 at upTo:11 effects 6
+upTo null, no steps: 0 effects 0
+upTo null, one step: java.lang.NullPointerException: Cannot load from int array because "<parameter1>" is null at upTo:11 effects 1
+lsum: -9223368738319892501 effects 0
+dot: -9.0 effects 0
+dot short b: java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2 at dot:13 effects 0
+dot null b: java.lang.NullPointerException: Cannot load from double array because "<parameter2>" is null at dot:13 effects 0
+dot null b, empty a: 0.0 effects 0
+fromZero: 2804234 effects 0
+fromZero past: 0 effects 0
+fromZero negative: java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 5 at fromZero:14 effects 0
+two arrays, b unread: 14 effects 0
+two arrays, b read: 11 effects 0
+two arrays, b null when read: java.lang.NullPointerException: Cannot load from int array because "<parameter2>" is null at twoArrays:17 effects 0
+two arrays, b short: java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 1 at twoArrays:17 effects 0
+reassigned: 66870 effects 0
+grid: 179 effects 0
+grid null row: java.lang.NullPointerException: Cannot read the array length because "<local3>" is null at grid:27 effects 0
+breaks: 9 effects 0
+breaks return: -4 effects 0
+stores: 1207257216 [0, 100, -56, 44, -112] [0, 30000, -5536, 24464, -11072] [0, 5124095575326720, 10248191150653440, 15372286725980160, 20496382301306880] [e0, 1, e2, 3, e4] effects 0
+lengths: 34 effects 0
+lengths short: java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1 at lengths:49 effects 0
+locked: 2 effects 0
+guarded: -14 effects 0
+cast: 8 effects 0
+cast wrong type: java.lang.ClassCastException at cast:57 effects 0
+cast null, no steps: 0 effects 0
+trace: 5061 effects 0
