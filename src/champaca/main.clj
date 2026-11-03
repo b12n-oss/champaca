@@ -2019,7 +2019,11 @@
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (s/call "set-classpath!" (str/join ":" (:classpath-given @state)))
   (when-let [c (:java-command @state)] (s/call "set-java-command!" c))
-  (when-let [ps (seq (:command-line-properties @state))]
+  ;; --add-modules reaches ModuleBootstrap as the launcher passes it, one
+  ;; jdk.module.addmods.<n> per occurrence; with one, the boot layer is
+  ;; resolved instead of read from the image's pre-generated graph
+  (when-let [ps (seq (concat (:command-line-properties @state)
+                             (map-indexed (fn [i ms] [(str "jdk.module.addmods." i) ms]) (:add-modules @state))))]
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (when-let [ds (seq (:assertion-directives @state))]
     (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
@@ -2073,11 +2077,14 @@
                      ((method-proc \"java/lang/System\" \"initPhase1()V\"))
                      ;; initPhase2 builds the boot layer from the image's
                      ;; pre-generated module graph (SystemModules$default, no
-                     ;; resolution) and initPhase3 makes the app class loader the
-                     ;; system and context loader, as the JVM does before main; a
-                     ;; failing phase 2 has printed its cause to stderr already
-                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 1 1))
-                       (error 'champaca \"the boot layer failed to initialize\"))
+                     ;; resolution, unless --add-modules asks for one) and
+                     ;; initPhase3 makes the app class loader the system and
+                     ;; context loader, as the JVM does before main; a failing
+                     ;; phase 2 has printed its cause already, as HotSpot's: to
+                     ;; stdout, the exception and its cause without a trace,
+                     ;; and the VM ends with status 1, as a halt does
+                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 0))
+                       (raise (make-java-halt 1)))
                      ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
         ;; a cold boot's code goes to boot.so, and from here on only what
@@ -2153,11 +2160,14 @@
   "Boot the JDK once (System.initPhase1 and what precedes it) with the given
   user classpath dirs. Returns 0 on success; a second call is a no-op.
   opts: {:preview true} turns on this release's preview features, as
-  --enable-preview does, before the boot (never after: the JDK reads it once)."
+  --enable-preview does, before the boot (never after: the JDK reads it once);
+  :add-modules [\"jdk.incubator.vector\" ...] adds root modules to the boot
+  layer, as --add-modules does."
   ([classpath] (init! classpath {}))
-  ([classpath {:keys [preview]}]
+  ([classpath {:keys [preview add-modules]}]
    (or (:boot-status @state)
        (do (when preview (reset! cf/preview-enabled true))
+           (when (seq add-modules) (swap! state assoc :add-modules [(str/join "," add-modules)]))
            (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
                   ;; java.class.path is what was given, as the JVM's launcher has it
                   :classpath-given (vec classpath))
@@ -2204,6 +2214,19 @@
   (let [[_ n unit] (re-matches #"([0-9]+)([kKmMgGtT]?)" s)]
     (* (parse-long n) (case (str/lower-case unit) "k" 1024 "m" 1048576 "g" 1073741824 "t" 1099511627776 1))))
 
+;; HotSpot's Arguments::is_internal_module_property: jdk.module. then one of
+;; these, alone or followed by a dot (jdk.module.addmods.0, not
+;; jdk.module.addmodsx); the launcher's module options set them
+(def ^:private reserved-module-suffixes
+  ["addexports" "addreads" "addopens" "patch" "addmods" "limitmods" "path"
+   "upgrade.path" "enable.native.access" "illegal.native.access"])
+
+(defn- reserved-module-property? [k]
+  (and (str/starts-with? k "jdk.module.")
+       (let [rest-k (subs k 11)]
+         (boolean (some (fn [x] (or (= rest-k x) (str/starts-with? rest-k (str x "."))))
+                        reserved-module-suffixes)))))
+
 (defn- jvm-options
   "The options before the main class or -jar, as the java launcher reads
   them, as {:props [[k v]...] :classpath s-or-nil :assertions [...] :argv rest}:
@@ -2213,8 +2236,12 @@
   -server and -client, which the launcher accepts and ignores;
   --enable-preview, as :preview (this release's preview class files load,
   PreviewFeatures says so); --source N or --source=N, as :source (the
-  source launcher compiles at that release, source-file mode); -Xss, the
-  thread stack size, as :stack in bytes (bound-stack!). A heap size (-Xmx,
+  source launcher compiles at that release, source-file mode); --add-modules M[,M...] or
+  --add-modules=M..., each occurrence one entry of :add-modules (the boot
+  layer's extra roots); -Xss, the thread stack size, as :stack in bytes
+  (bound-stack!). A -D naming one of the module system's own properties
+  (reserved-module-property?) is dropped and :module-props-ignored set, as
+  HotSpot ignores it with a warning. A heap size (-Xmx,
   -Xms, -Xmn), -Xshare: and any -XX: flag are ignored with a warning, since
   start scripts pass them and they tune only the VM; any other option is the
   launcher's Unrecognized option."
@@ -2225,7 +2252,9 @@
             (str/starts-with? a "-D")
             (let [kv (subs a 2) i (str/index-of kv "=")
                   k (if i (subs kv 0 i) kv)]
-              (recur (rest argv) (cond-> opts (not= "" k) (update :props conj [k (if i (subs kv (inc i)) "")]))))
+              (recur (rest argv) (cond (= "" k) opts
+                                       (reserved-module-property? k) (assoc opts :module-props-ignored true)
+                                       :else (update opts :props conj [k (if i (subs kv (inc i)) "")]))))
             (#{"-cp" "-classpath" "--class-path"} a)
             (if-let [cp (second argv)]
               (recur (nnext argv) (assoc opts :classpath cp))
@@ -2241,6 +2270,13 @@
                                (recur (nnext argv) (assoc opts :source (second argv)))
                                (launcher-error "Error: --source requires source version"))
             (str/starts-with? a "--source=") (recur (rest argv) (assoc opts :source (subs a 9)))
+            (= "--add-modules" a) (if-let [ms (second argv)]
+                                    (recur (nnext argv) (update opts :add-modules (fnil conj []) ms))
+                                    (launcher-error "Error: --add-modules requires modules to be specified"))
+            (str/starts-with? a "--add-modules=")
+            (if (= a "--add-modules=")
+              (launcher-error "Error: --add-modules= requires modules to be specified")
+              (recur (rest argv) (update opts :add-modules (fnil conj []) (subs a 14))))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
                                                                           "Error: A fatal exception has occurred. Program will exit."])))
@@ -2264,12 +2300,16 @@
   jvm-options consumed: each as given and in place, except the class path
   ones, which become java.class.path alone, and -server/-client, which the
   launcher drops; --source N is -Djdk.internal.javac.source=N, the property
-  the launcher passes; source-file mode ends with --add-modules=ALL-DEFAULT."
+  the launcher passes; --add-modules M is --add-modules=M; source-file mode
+  ends with --add-modules=ALL-DEFAULT."
   [consumed source-mode?]
   (concat (loop [[a & more :as as] consumed out []]
             (cond (empty? as) out
-                  (#{"-cp" "-classpath" "--class-path" "--source"} a)
-                  (recur (rest more) (cond-> out (= "--source" a) (conj (str "-Djdk.internal.javac.source=" (first more)))))
+                  (#{"-cp" "-classpath" "--class-path" "--source" "--add-modules"} a)
+                  (recur (rest more) (case a
+                                       "--source" (conj out (str "-Djdk.internal.javac.source=" (first more)))
+                                       "--add-modules" (conj out (str "--add-modules=" (first more)))
+                                       out))
                   (str/starts-with? a "--source=") (recur more (conj out (str "-Djdk.internal.javac.source=" (subs a 9))))
                   (or (str/starts-with? a "--class-path=") (#{"-server" "-client"} a)) (recur more out)
                   :else (recur more (conj out a))))
@@ -2322,7 +2362,7 @@
 (def ^:private source-launcher "com/sun/tools/javac/launcher/SourceLauncher")
 
 (defn -main [& all-argv]
-  (let [{:keys [props classpath assertions argv stack preview source]} (jvm-options all-argv)
+  (let [{:keys [props classpath assertions argv stack preview source add-modules module-props-ignored]} (jvm-options all-argv)
         consumed (take (- (count all-argv) (count argv)) all-argv)
         ;; source-file mode, as java's: --source, or a first argument that is
         ;; a .java file; the file and its arguments go to javac's
@@ -2335,6 +2375,10 @@
         _ (swap! state assoc :command-line-properties props :assertion-directives assertions
                  :runtime-arguments (vec (runtime-arguments consumed source-mode?)) :source-mode source-mode?)
         _ (when preview (reset! cf/preview-enabled true))
+        _ (when module-props-ignored
+            (binding [*out* *err*]
+              (println "OpenJDK 64-Bit Server VM warning: Ignoring system property options whose names match the '-Djdk.module.*'. names that are reserved for internal use.")))
+        _ (swap! state assoc :add-modules add-modules)
         ;; with -cp the main class comes first; without, champaca's own
         ;; form, the class path first (-jar ignores -cp, as java does)
         ;; in source-file mode the class path is -cp's or, as the launcher
@@ -2357,7 +2401,7 @@
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
         (println "   or: jolt -M -m champaca.main [options] [--source <release>] <file.java> [args...]")
-        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview; -server, -client accepted;")
+        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --add-modules <module>[,...]; -server, -client accepted;")
         (println "         -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX: ignored with a warning"))
       (System/exit 2))
     (if (= cp "-jar")

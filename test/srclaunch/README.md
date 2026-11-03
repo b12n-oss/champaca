@@ -13,3 +13,5 @@ JAVA=<jdk 25>/bin/java test/srclaunch/record.sh [case...]
 
 `args-cp` and `uses-lib` need `target/lib.jar`, which bb test builds first.
 `script` is a source file whose name doesn't end `.java`, run with `--source`.
+`addmods-*` run `--add-modules` and its errors, `Modules.java` printing the boot layer
+and `VectorSum.java` the Vector API.

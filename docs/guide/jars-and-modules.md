@@ -17,6 +17,8 @@ Pass the whole classpath on the first `init!`. A second call does nothing, so it
 
 A jar or directory compiled with `javac --enable-preview`, whose classes use one of JDK 25's preview features, needs `:preview true` on that first call, as `java` needs `--enable-preview`: `(ldk/init! {:classpath ["classes"] :preview true})`. Without it such a class is refused with HotSpot's `UnsupportedClassVersionError` the first time something names it. The option also turns the JDK's preview features on, such as structured concurrency and stable values ([running Java programs](running-java-programs.md) has the version rules, `examples/preview.clj` loads one).
 
+A module outside the JDK's default module graph, such as the Vector API's `jdk.incubator.vector`, needs `:add-modules` on that first call, as `java` needs `--add-modules`: `(ldk/init! {:add-modules ["jdk.incubator.vector"]})` puts it in the boot layer (`examples/vector.clj`). The Vector API then gives HotSpot's results, though none of it is accelerated ([limitations](limitations.md)).
+
 ### A real library
 
 Eight libraries have been run this way and checked against the JVM, with identical output:

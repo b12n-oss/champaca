@@ -70,11 +70,13 @@
 (defn init!
   "Boot the JDK. opts: {:classpath [\"dir\" \"lib.jar\" ...]} for user
   classes, :preview true to load class files compiled with --enable-preview
-  (and turn on the JDK's preview features), as java --enable-preview does.
-  Only the first call boots, so a later call's options are ignored."
+  (and turn on the JDK's preview features), as java --enable-preview does,
+  :add-modules [\"jdk.incubator.vector\"] for modules outside the default
+  boot layer, as java --add-modules does. Only the first call boots, so a
+  later call's options are ignored."
   ([] (init! {}))
-  ([{:keys [classpath preview]}]
-   (let [status (main/init! (or classpath []) {:preview preview})]
+  ([{:keys [classpath preview add-modules]}]
+   (let [status (main/init! (or classpath []) {:preview preview :add-modules add-modules})]
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "champaca/interop.ss")))

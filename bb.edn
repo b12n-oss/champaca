@@ -79,7 +79,8 @@
                          ["serialization" "Java serialization of the program's own classes from jolt"]
                          ["proxy" "java.lang.reflect.Proxy from jolt, and jolt errors through Java"]
                          ["classes" "real Java classes defined from jolt"]
-                         ["preview" "class files compiled with --enable-preview, from jolt"]])
+                         ["preview" "class files compiled with --enable-preview, from jolt"]
+                         ["vector" "the Vector API, with :add-modules, from jolt"]])
           ;; test/jar packed into target/lib.jar, which jars, fields,
           ;; serialization and classes put on their classpath
           (defn lib-jar! []
@@ -210,6 +211,11 @@
                     ;; 69.65535 with --enable-preview, which the other sources must not get
                     _ (apply shell "javac --release 25 --enable-preview -Xlint:-preview -cp target/classes -d target/classes"
                              (map str (fs/glob "test/preview" "*.java")))
+                    ;; VectorCheck uses jdk.incubator.vector, outside the default
+                    ;; module graph: javac needs --add-modules, as the run does
+                    ;; (VectorCheck.options)
+                    _ (apply shell "javac --add-modules jdk.incubator.vector -Xlint:-incubating -d target/classes"
+                             (map str (fs/glob "test/vector" "*.java")))
                     ;; run as -jar: target/app.jar's manifest names JarMain and a
                     ;; Class-Path of lib.jar beside it
                     _ (shell "mkdir -p target/jarmain-classes")

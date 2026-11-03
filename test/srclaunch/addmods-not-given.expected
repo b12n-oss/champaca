@@ -1,0 +1,8 @@
+exit 1
+--- stderr
+VectorSum.java:3: error: package jdk.incubator.vector is not visible
+import jdk.incubator.vector.*;
+                    ^
+  (package jdk.incubator.vector is declared in module jdk.incubator.vector, which is not in the module graph)
+1 error
+error: compilation failed

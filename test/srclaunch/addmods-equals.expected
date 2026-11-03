@@ -1,0 +1,11 @@
+exit 0
+jdk.incubator.vector true
+java.se false
+java.sql true
+[--add-modules=jdk.incubator.vector,,java.sql, --add-modules=ALL-DEFAULT]
+jdk.module.addmods [null]
+jdk.module.path.x [null]
+jdk.module.pathfoo [null]
+foo [null]
+--- stderr
+WARNING: Using incubator modules: jdk.incubator.vector

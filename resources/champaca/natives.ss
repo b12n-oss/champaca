@@ -286,6 +286,25 @@
           (jthrow "java/lang/UnsatisfiedLinkError"
                   (string-append "no " n " in java.library.path, and champaca loads no JNI libraries"))))))
 
+;; --- jdk.internal.vm.vector (the Vector API's VM side) --------------------------
+;; Every VectorSupport intrinsic is a Java method with a Java fallback, which
+;; is what runs here; the VM answers only these. A vector's width is
+;; HotSpot's on the machines measured: 128 bits on arm64 (NEON, -Xint too),
+;; and AVX2's 256 on x86_64, whatever the CPU has.
+(define vector-bytes (case (machine-type) [(ta6osx a6osx ta6le a6le) 32] [else 16]))
+(defnative "jdk/internal/vm/vector/VectorSupport.registerNatives()I" () 0)
+(defnative "jdk/internal/vm/vector/VectorSupport.getMaxLaneCount(Ljava/lang/Class;)I" (etype)
+  (let ([size (case (mirror->desc etype) [("B" "Z") 1] [("S" "C") 2] [("I" "F") 4] [("J" "D") 8] [else #f])])
+    (if size (fxquotient vector-bytes size) -1)))
+(defnative "jdk/internal/vm/vector/VectorSupport.getCPUFeatures()Ljava/lang/String;" () (jstring ""))
+;; The vector math library (SLEEF, SVML) is found through FFM symbol lookup,
+;; which champaca lacks, so it fails to load as a missing library does on
+;; HotSpot, and VectorMathLibrary falls back to its Java implementations.
+(define-override! "jdk/internal/vm/vector/VectorSupport.loadNativeLibrary(Ljava/lang/String;)V"
+  (lambda (name)
+    (jthrow "java/lang/UnsatisfiedLinkError"
+            (string-append "no " (jstring->scheme (nn name)) ": champaca has no vector math library"))))
+
 (defnative "java/lang/Runtime.availableProcessors()I" (this) 1)
 ;; Chez's heap: committed and allocated bytes; max is a nominal 4 GB, or
 ;; the heap once it's bigger
