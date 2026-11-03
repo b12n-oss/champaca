@@ -934,9 +934,10 @@
               ("metafactory" "altMetafactory")
               (push! (lambda-expr ctx name ret args argv bsm) "A")
               ;; java.lang.runtime.SwitchBootstraps: pattern switches on a
-              ;; reference whose labels handles.ss matches; any other runs for real
+              ;; reference (an object or an array) whose labels handles.ss
+              ;; matches; a primitive selector or label runs for real
               ("typeSwitch" "enumSwitch")
-              (if-let [labels (when (= \L (first (first args))) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm)))]
+              (if-let [labels (when (#{\L \[} (first (first args))) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm)))]
                 (push! (sx "jswitch-index" (first argv) (second argv) labels) "I")
                 (push! (apply sx (at pc "indy-call") (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
                               (str "'" (sx (const-datum cls (:ref-idx bsm))

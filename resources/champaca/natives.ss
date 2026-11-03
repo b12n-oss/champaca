@@ -2680,24 +2680,66 @@
       (make-mh d (lambda args (apply vh-call this mode d args)) #f))))
 
 ;; the field named fname in class c or a superclass: (declaring-class . meta)
-(define (find-field c fname static?)
+
+;; A field by name and descriptor as JVMS 5.4.3.2 resolves one: the class's
+;; own, then its superinterfaces', then its superclass's. (class name desc
+;; flags ...) or #f.
+(define (find-field c fname desc)
   (let loop ([c c])
     (and c
-         (let ([m (find (lambda (f) (and (string=? (car f) fname)
-                                         (eq? static? (static-flag? (caddr f)))))
+         (let ([m (find (lambda (f) (and (string=? (car f) fname) (string=? (cadr f) desc)))
                         (cadr (jclass-meta c)))])
-           (if m (cons c m) (and (jclass-super c) (loop (find-class (jclass-super c)))))))))
+           (cond [m (cons c m)]
+                 [(exists (lambda (i) (loop (find-class i))) (jclass-interfaces c))]
+                 [(jclass-super c) (loop (find-class (jclass-super c)))]
+                 [else #f])))))
 
-(define (field-vh recv name type static?)
-  (let* ([c (mirror-class (nn recv))] [fname (jstring->scheme (nn name))]
-         [hit (find-field c fname static?)])
+;; The field a Lookup or a field handle constant names, with the JDK's
+;; failures (MemberName and its makeAccessException): NoSuchFieldException
+;; caused by the VM's NoSuchFieldError when nothing has that name and type,
+;; IllegalAccessException when it's static and wasn't asked to be or the
+;; reverse, or when a setter is asked of a final field (final-checked?, a
+;; Lookup's find*Setter, unless the Lookup is trusted). lookup is the Lookup asking, for the text's
+;; "from", or #f. Access isn't checked.
+(define (field-kind static? setter?) (if static? (if setter? "putStatic" "getStatic") (if setter? "putField" "getField")))
+(define (mirror-name m) (jstring->scheme ((jvirt m "getName()Ljava/lang/String;") m)))
+(define (lookup-from-text lookup)
+  (cond [(not lookup) ""]
+        [(eq? lookup (begin (jinit "java/lang/invoke/MethodHandles")
+                            ((method-proc "java/lang/invoke/MethodHandles" "publicLookup()Ljava/lang/invoke/MethodHandles$Lookup;"))))
+         ", from public Lookup"]
+        [else
+         (let* ([lk "java/lang/invoke/MethodHandles$Lookup"]
+                [lc (jslot lookup (jfield-index lk "lookupClass"))]
+                [plc (jslot lookup (jfield-index lk "prevLookupClass"))]
+                [module-of (lambda (m) (jstring-of ((jvirt m "getModule()Ljava/lang/Module;") m)))])
+           (string-append ", from " (jstring-of lc) " (" (module-of lc) ")"
+                          (if plc (string-append ", previous lookup " (mirror-name plc) " (" (module-of plc) ")") "")))]))
+(define (resolve-field c fname type static? setter? final-checked? lookup)
+  (let* ([desc (mirror->desc type)] [hit (find-field c fname desc)]
+         [member (lambda (cls kind) (string-append (slashes->dots (jclass-cname cls)) "." fname "/" (mirror-name type) "/" kind))]
+         [access (lambda (what cls kind)
+                   (jthrow "java/lang/IllegalAccessException" (string-append what ": " (member cls kind) (lookup-from-text lookup))))])
     (unless hit
-      ;; the JDK's MemberName text: "no such field: pkg.Cls.name/type/getField"
-      (let ([dots (lambda (n) (list->string (map (lambda (ch) (if (char=? ch #\/) #\. ch)) (string->list n))))])
-        (jthrow "java/lang/NoSuchFieldException"
-                (string-append "no such field: " (dots (jclass-cname c)) "." fname "/"
-                               (dots (jclass-cname (mirror-class (nn type))))
-                               (if static? "/getStatic" "/getField")))))
+      (let ([e (construct "java/lang/NoSuchFieldException" "(Ljava/lang/String;)V"
+                          (jstring-lit (string-append "no such field: " (member c (field-kind static? setter?)))))])
+        ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
+         e (construct "java/lang/NoSuchFieldError" "(Ljava/lang/String;)V"
+                      (jstring-lit (string-append "Class " (slashes->dots (jclass-cname c)) " does not have member field '"
+                                                  (type-external desc) " " fname "'"))))
+        (raise e)))
+    (let ([found-static? (static-flag? (list-ref hit 3))])
+      (unless (eq? found-static? static?)
+        (access (if static? "expected a static field" "expected a non-static field") (car hit) (field-kind found-static? setter?)))
+      ;; a TRUSTED lookup (allowedModes -1, the JDK's IMPL_LOOKUP) checks no access
+      (when (and setter? final-checked? (fxpositive? (fxlogand (list-ref hit 3) #x10))
+                 (not (eqv? -1 (jslot lookup (jfield-index "java/lang/invoke/MethodHandles$Lookup" "allowedModes")))))
+        (access "unexpected set of a final field" (car hit) (field-kind static? setter?)))
+      hit)))
+
+(define (field-vh recv name type static? lookup)
+  (let* ([c (mirror-class (nn recv))] [fname (jstring->scheme (nn name))]
+         [hit (resolve-field c fname (nn type) static? #f #f lookup)])
     (let ([dc (car hit)] [desc (cadr (cdr hit))] [final? (fxpositive? (fxlogand (caddr (cdr hit)) #x10))])
       (if static?
           (make-vh 'static (string->symbol (string-append (jclass-cname dc) ":" fname)) (jclass-cname dc) desc
@@ -2899,15 +2941,15 @@
                                      (lambda (r) (apply fromp (append ex (list r))))))))))]))))
 
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
-  (lambda (this recv name type) (field-vh recv name type #f)))
+  (lambda (this recv name type) (field-vh recv name type #f this)))
 (define-override! "java/lang/invoke/MethodHandles$Lookup.findStaticVarHandle(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
-  (lambda (this recv name type) (field-vh recv name type #t)))
+  (lambda (this recv name type) (field-vh recv name type #t this)))
 
 ;; from a reflective Field, which names the declaring class
 (define-override! "java/lang/invoke/MethodHandles$Lookup.unreflectVarHandle(Ljava/lang/reflect/Field;)Ljava/lang/invoke/VarHandle;"
   (lambda (this f)
     (let ([slot (lambda (n) (jslot (nn f) (jfield-index "java/lang/reflect/Field" n)))])
-      (field-vh (slot "clazz") (slot "name") (slot "type") (static-flag? (slot "modifiers"))))))
+      (field-vh (slot "clazz") (slot "name") (slot "type") (static-flag? (slot "modifiers")) #f))))
 
 (define (array-class-elem cls)
   (let ([n (jclass-cname (mirror-class (nn cls)))])

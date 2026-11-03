@@ -128,6 +128,7 @@ public class CondyCheck {
         calls("missc", "missc");
         calls("nullMessage", "nullMessage");
         System.out.println("null message bootstrap runs " + Boot.nullMessages);
+        calls("sfInt", "sfBool", "sfNonFinal", "sfNonFinal", "sfMissing");
         calls("indy", "indy");
         calls("notCallSite", "notCallSite");
         calls("nullCallSite", "nullCallSite");

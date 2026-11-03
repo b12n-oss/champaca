@@ -10,7 +10,9 @@ import static java.lang.constant.ConstantDescs.*;
 // that ldcs the same entry twice, a dynamic constant whose static argument
 // is another one's entry, ones two threads resolve at once, one failing
 // with no message, and invokedynamics whose bootstraps fail once, return no
-// CallSite, null, or a target of the wrong type. javac shares an entry only within what it compiles, and never emits
+// CallSite, null, or a target of the wrong type, and ConstantBootstraps.
+// getStaticFinal on a primitive constant, a field that isn't final and one
+// that isn't there. javac shares an entry only within what it compiles, and never emits
 // these. Run with `java CondyGen.java <dir>`.
 public class CondyGen {
     public static void main(String[] args) throws Exception {
@@ -51,6 +53,19 @@ public class CondyGen {
             b.withMethodBody("pair", MethodTypeDesc.of(CD_boolean), ACC_PUBLIC | ACC_STATIC, cb -> {
                 Label no = cb.newLabel();
                 cb.ldc(ok); cb.ldc(ok); cb.if_acmpne(no); cb.iconst_1(); cb.ireturn(); cb.labelBinding(no); cb.iconst_0(); cb.ireturn(); });
+            // getStaticFinal: the int is boxed for the method's Object result
+            Object[][] statics = {
+                {"sfInt", DynamicConstantDesc.ofNamed(BSM_GET_STATIC_FINAL, "MAX_VALUE", CD_int, CD_Integer), CD_int},
+                {"sfNonFinal", DynamicConstantDesc.ofNamed(BSM_GET_STATIC_FINAL, "made", CD_int, boot), CD_int},
+                {"sfMissing", DynamicConstantDesc.ofNamed(BSM_GET_STATIC_FINAL, "nope", CD_int, boot), CD_int},
+                // the three-argument form: the declaring class is the type's own
+                {"sfBool", DynamicConstantDesc.ofNamed(MethodHandleDesc.ofMethod(DirectMethodHandleDesc.Kind.STATIC, CD_ConstantBootstraps,
+                    "getStaticFinal", MethodTypeDesc.of(CD_Object, CD_MethodHandles_Lookup, CD_String, CD_Class)), "TRUE", CD_Boolean), CD_Boolean}};
+            for (Object[] m : statics)
+                b.withMethodBody((String) m[0], MethodTypeDesc.of(CD_Object), ACC_PUBLIC | ACC_STATIC, cb -> {
+                    cb.ldc((ConstantDesc) m[1]);
+                    if (m[2] == CD_int) cb.invokestatic(CD_Integer, "valueOf", MethodTypeDesc.of(CD_Integer, CD_int));
+                    cb.areturn(); });
             // indy bootstraps: failing once, returning a String (declared Object), null, a target of another type
             Object[][] indys = {{"indy", "indyFailOnce", callSite}, {"notCallSite", "notCallSite", CD_Object},
                                 {"nullCallSite", "nullCallSite", callSite}, {"wrongType", "wrongType", callSite}};

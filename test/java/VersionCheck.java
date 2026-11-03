@@ -65,6 +65,8 @@ public class VersionCheck {
         // PreviewCheck defined these bytes with preview on, through a loader of
         // its own; a run without it refuses them still (they aren't cached)
         row("define D69_65535", () -> new Definer().define("vers.D69_65535", bytes("D69_65535")));
+        // a lambda over a preview interface, which PreviewCheck made with preview on
+        row("lambda over PI", () -> Class.forName("vers.LamUser").getMethod("make").invoke(null));
         row("define misnamed V70_0", () -> new Definer().define("vers.Other", bytes("V70_0")));
         row("define misnamed V69_0", () -> new Definer().define("vers.Other", bytes("V69_0")));
         // a long case label is a primitive pattern's, a preview feature

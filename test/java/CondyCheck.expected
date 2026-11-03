@@ -22,6 +22,11 @@ missc: java.lang.NoClassDefFoundError: CondyNowhere, cause java.lang.ClassNotFou
 nullMessage: java.lang.LinkageError: null
 nullMessage: java.lang.LinkageError: nullMessage, same object false, same cause true
 null message bootstrap runs 1
+sfInt: 2147483647
+sfBool: true
+sfNonFinal: java.lang.IncompatibleClassChangeError: not a final field: made
+sfNonFinal: java.lang.IncompatibleClassChangeError: not a final field: made, same object false, same cause true
+sfMissing: java.lang.NoSuchFieldError: Class CondyCheck$Boot does not have member field 'int nope', same object false, same cause true
 indy: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.IllegalStateException: indy first
 indy: java.lang.BootstrapMethodError: bootstrap method initialization exception, same object false, same cause false
 notCallSite: java.lang.BootstrapMethodError: bootstrap method initialization exception, cause java.lang.ClassCastException: Cannot cast java.lang.String to java.lang.invoke.CallSite

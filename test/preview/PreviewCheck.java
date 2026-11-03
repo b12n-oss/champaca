@@ -68,6 +68,11 @@ public class PreviewCheck {
             default -> "other " + o;
         };
     }
+    // a primitive selector whose labels champaca could match itself (an int,
+    // a class): the JDK's bootstrap still decides, since the selector is raw
+    static String onIntBoxing(int v) {
+        return switch (v) { case 1 -> "one"; case Integer i when i > 10 -> "big " + i; case Integer i -> "Integer " + i; };
+    }
     static String onBoxed(Integer i) {
         return switch (i) { case float f -> "float " + f; case Integer x -> "Integer " + x; };
     }
@@ -111,6 +116,7 @@ public class PreviewCheck {
         row("int switch", () -> onInt(100) + ", " + onInt(-129) + ", " + onInt(40000) + ", " + onInt(70000));
         row("Object switch", () -> onObject(9) + ", " + onObject(2) + ", " + onObject(4L) + ", " + onObject(2.5) + ", "
                 + onObject(2.5f) + ", " + onObject((short) 3) + ", " + onObject('c'));
+        row("int switch to Integer", () -> onIntBoxing(1) + ", " + onIntBoxing(20) + ", " + onIntBoxing(3));
         row("Integer switch", () -> onBoxed(100) + ", " + onBoxed(16_777_216) + ", " + onBoxed(16_777_217));
         int big = 300; long l = 1L << 40; double three = 3.0; double frac = 3.5; long exact = 1L << 53;
         row("instanceof", () -> (big instanceof byte) + " " + (100 instanceof byte b ? "b" + b : "no") + " "
@@ -123,6 +129,8 @@ public class PreviewCheck {
         row("forName V69_65535", () -> Class.forName("vers.V69_65535"));
         // VersionCheck defines the same bytes without preview, which refuses them
         row("define D69_65535", () -> new Definer().define("vers.D69_65535", bytes("D69_65535")));
+        // VersionCheck makes it again without preview, which refuses the interface
+        row("lambda over PI", () -> Class.forName("vers.LamUser").getMethod("make").invoke(null));
         row("forName V68_65535", () -> Class.forName("vers.V68_65535"));
         row("typeSwitch long label", () -> SwitchBootstraps.typeSwitch(MethodHandles.lookup(), "typeSwitch",
                 MethodType.methodType(int.class, Object.class, int.class), 1L).getTarget().invoke((Object) 1L, 0));

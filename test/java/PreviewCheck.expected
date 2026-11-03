@@ -11,10 +11,12 @@ float switch: f1.5 f 2.0
 boolean switch: yes no
 int switch: byte 100, short -129, char 40000, int 70000
 Object switch: big Integer, int 2, Long 4, double 2.5, other 2.5, other 3, other c
+int switch to Integer: one, big 20, Integer 3
 Integer switch: float 100.0, float 1.6777216E7, Integer 16777217
 instanceof: false b100 false i3 false cA true false false true
 instanceof unboxing: int 42 false false
 forName V69_65535: class vers.V69_65535
 define D69_65535: class vers.D69_65535
+lambda over PI: lam
 forName V68_65535: java.lang.UnsupportedClassVersionError: vers/V68_65535 (class file version 68.65535) was compiled with preview features that are unsupported. This version of the Java Runtime only recognizes preview features for class file version 69.65535
 typeSwitch long label: 0

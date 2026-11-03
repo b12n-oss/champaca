@@ -1066,13 +1066,15 @@
   entry is used. nil when one can't be checked later (one not in the class
   table, or one a loader defined, unless defined? says the entry is a
   loader-defined class's own, whose dependencies on others are checked by
-  their fingerprints when its methods are first called: deps-still-hold!),
-  which keeps the entry out of the cache."
+  their fingerprints when its methods are first called: deps-still-hold!,
+  or a preview class file, never cached itself, so that a run without
+  --enable-preview reaches it and refuses it), which keeps the entry out of
+  the cache."
   [names & [defined?]]
   (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))]
     (when (every? origin names)
       (reduce (fn [acc n]
-                (case (origin n)
+                (case (if (:preview (get-in @state [:classes n])) :preview (origin n))
                   :jdk (if (str/starts-with? n "champaca/") (assoc acc n :present) acc)
                   :user (if-let [fp (:fp (class-source n))] (assoc acc n fp) (reduced nil))
                   :defined (if-let [fp (when defined? (get-in @state [:classes n :src-fp]))] (assoc acc n fp) (reduced nil))

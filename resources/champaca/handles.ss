@@ -225,16 +225,12 @@
                #f (varargs-flag? m)))))
 
 ;; getter or setter on field fname of c; static? from the lookup kind
-(define (field-mh c fname type static? setter?)
-  (let ([hit (find-field c fname static?)])
-    (unless hit
-      (jthrow "java/lang/NoSuchFieldException"
-              (string-append "no such field: " (slashes->dots (jclass-cname c)) "." fname)))
+;; lookup: the Lookup asking (find*Getter/Setter), whose setters refuse a
+;; final field, or #f (unreflect, a method handle constant)
+(define (field-mh c fname type static? setter? . lookup)
+  (let ([hit (resolve-field c fname type static? setter? (pair? lookup) (and (pair? lookup) (car lookup)))])
     (let* ([dc (jclass-cname (car hit))] [desc (cadr (cdr hit))]
            [recv (cname->desc (jclass-cname c))])
-      (unless (string=? desc (mirror->desc type))
-        (jthrow "java/lang/NoSuchFieldException"
-                (string-append "no such field: " (slashes->dots (jclass-cname c)) "." fname "/" (mirror->desc type))))
       (if static?
           (let ([sym (string->symbol (string-append dc ":" fname))])
             (if setter?
@@ -264,7 +260,7 @@
 (for-each
  (lambda (spec)
    (def-lookup (car spec) (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)" mh-ret)
-     (lambda (this c name type) (field-mh (mirror-class (nn c)) (str-of name) type (cadr spec) (caddr spec)))))
+     (lambda (this c name type) (field-mh (mirror-class (nn c)) (str-of name) (nn type) (cadr spec) (caddr spec) this))))
  '(("findGetter" #f #f) ("findSetter" #f #t) ("findStaticGetter" #t #f) ("findStaticSetter" #t #t)))
 
 ;; reflective objects carry their class and their index in its meta list
@@ -859,7 +855,8 @@
 
 ;; ConstantBootstraps.getStaticFinal asks the getter's handle for its
 ;; MemberName, which champaca's handles don't have (a closure): the same
-;; lookup and checks here. javac's boolean case labels are this condy
+;; resolution (resolve-field, as findStaticGetter's) and checks here, access
+;; unchecked as for every Lookup here. javac's boolean case labels are this condy
 ;; (Boolean.TRUE, a primitive pattern's switch).
 (define-override! "java/lang/invoke/ConstantBootstraps.getStaticFinal(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lang/String;Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/Object;"
   (lambda (lookup name type dc)
@@ -870,8 +867,7 @@
                            (raise ((method-proc "java/lang/invoke/MethodHandleNatives"
                                                 "mapLookupExceptionToError(Ljava/lang/ReflectiveOperationException;)Ljava/lang/LinkageError;")
                                    e))])
-                  (field-mh (mirror-class dc) fname type #t #f)
-                  (find-field (mirror-class dc) fname #t))]
+                  (resolve-field (mirror-class dc) fname type #t #f #f lookup))]
            [owner (jclass-cname (car hit))] [desc (list-ref hit 2)])
       (unless (fxpositive? (fxlogand (list-ref hit 3) #x10))
         (jthrow "java/lang/IncompatibleClassChangeError" (string-append "not a final field: " fname)))

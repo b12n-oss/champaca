@@ -1,0 +1,26 @@
+own over interface: 9
+superinterface: 7
+interface itself: 7
+superclass: 3
+var handle superinterface: 7
+missing int: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/int/getStatic, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int Q'
+missing String: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/java.lang.String/getStatic, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'java.lang.String Q'
+missing int[]: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/[I/getStatic, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int[] Q'
+missing Object[][]: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/[[Ljava.lang.Object;/getStatic, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'java.lang.Object[][] Q'
+wrong type: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.B/long/getStatic, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'long B'
+missing static setter: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/int/putStatic, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int Q'
+missing getter: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/int/getField, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int Q'
+missing setter: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/int/putField, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int Q'
+missing var handle: java.lang.NoSuchFieldException: no such field: FieldLookupCheck$Base.Q/int/getField, cause java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int Q'
+instance through static getter: java.lang.IllegalAccessException: expected a static field: FieldLookupCheck$Base.inst/int/getField, from class FieldLookupCheck (unnamed module)
+instance through static setter: java.lang.IllegalAccessException: expected a static field: FieldLookupCheck$Base.inst/int/putField, from class FieldLookupCheck (unnamed module)
+static through getter: java.lang.IllegalAccessException: expected a non-static field: FieldLookupCheck$Base.S/java.lang.String/getStatic, from class FieldLookupCheck (unnamed module)
+static through setter: java.lang.IllegalAccessException: expected a non-static field: FieldLookupCheck$Base.S/java.lang.String/putStatic, from class FieldLookupCheck (unnamed module)
+static through var handle: java.lang.IllegalAccessException: expected a non-static field: FieldLookupCheck$Base.S/java.lang.String/getStatic, from class FieldLookupCheck (unnamed module)
+final static setter: java.lang.IllegalAccessException: unexpected set of a final field: FieldLookupCheck$Base.F/int/putStatic, from class FieldLookupCheck (unnamed module)
+public lookup: java.lang.IllegalAccessException: expected a static field: FieldLookupCheck$Pub.inst/int/getField, from public Lookup
+getStaticFinal superinterface: 7
+getStaticFinal instance: java.lang.IllegalAccessError: expected a static field: FieldLookupCheck$Base.inst/int/getField, from class FieldLookupCheck (unnamed module), cause java.lang.IllegalAccessException: expected a static field: FieldLookupCheck$Base.inst/int/getField, from class FieldLookupCheck (unnamed module)
+getStaticFinal missing: java.lang.NoSuchFieldError: Class FieldLookupCheck$Base does not have member field 'int NOPE'
+getStaticFinal not final: java.lang.IncompatibleClassChangeError: not a final field: S
+getStaticFinal own: 3
