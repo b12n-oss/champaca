@@ -178,6 +178,19 @@ What single operations cost, measured in a loop of two million, before these cha
 | `ReentrantLock` lock and unlock | 1435 ns | 34 ns | 13 ns |
 | `StringBuilder.append(char)` | 390 ns | 36 ns | 2.0 ns |
 
+### Int arithmetic
+
+An `int` is a fixnum in `int`'s range by construction, but generated code did its arithmetic with Chez's checked `fx+`, `fx<` and the rest, which test every operand for a fixnum each time, and that was about a third of an `int[]` sum's time. Since spike 86 codegen emits macros from `runtime.ss` (`ix+`, `ix<`, `ix-and`, `int-div` and the rest) that expand to the unchecked forms (`#3%fx+`). `imul` is `fx*/wraparound` instead of generic `*`, since the low 32 bits are all that's kept, and `idiv` and `irem` test for zero inline instead of calling a procedure. Under `CHAMPACA_BT` the macros keep their checks, and every native champaca provides with an `int`, `boolean`, `byte`, `char` or `short` result is checked to return a fixnum in range, so a run with it set catches a value that isn't an `int` where the unchecked operations would compute garbage. A million elements, with a warm cache:
+
+| Kernel | Before spike 86 | Now | JVM |
+|---|---|---|---|
+| summing an `int[]` | 3.5 ms | 2.2 ms | 0.32 ms |
+| filling an `int[]` with `i * 3` | 3.8 ms | 2.2 ms | 0.16 ms |
+| a for-each loop xoring an `int[]` | 2.9 ms | 2.2 ms | 0.32 ms |
+| a `31 * h + b` hash over a `byte[]` | 4.4 ms | 3.5 ms | 0.96 ms |
+
+Values from jolt are held to the same rule where they enter: an `int` parameter or an `implement` result refuses `1.5` or `nil` ([calling-java](calling-java.md#with-descriptors)).
+
 ### Long arithmetic
 
 A `long` is an exact integer. Up to 60 bits that's a Chez fixnum and costs what an `int` does, but past 60 bits it's a bignum, and hashing, random numbers and `BigInteger` live there. Generic `*` on two such longs made a bignum of up to 128 bits, and cutting it back to 64 took three more bignum operations, so `x = x * 3 + 1` ran about 110 times slower than on the JVM. Since spike 84, generated code uses macros from `runtime.ss` (`ladd`, `lmul`, `lshl` and the rest): two fixnums stay inline, and anything else goes to a procedure that does the 64-bit operation on 32-bit halves in fixnum arithmetic and makes one bignum, the result. An `lcmp` followed by a branch on its result is one comparison, which never allocates.
@@ -245,7 +258,7 @@ Calls themselves cost little here: a call to a static method is about 1 ns on to
 
 Reading a 4 MB file a byte at a time through a `BufferedInputStream`, which takes a lock and a `try` for every byte, went from 2.1 s before any of this to 0.79 s, then 0.44 s, then 0.28 s, against 37 ms on the JVM.
 
-What's left is spread thin. Each method call still goes through a top-level name and passes its live locals, only leaves get inlined, and safe-mode checks stay on field access and arithmetic.
+What's left is spread thin. Each method call still goes through a top-level name and passes its live locals, only leaves get inlined, and safe-mode checks stay on field access and on `float` and `double` arithmetic (`fl+`).
 
 ### What threads cost a single thread
 
