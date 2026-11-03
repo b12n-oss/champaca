@@ -2083,8 +2083,10 @@
                      ;; phase 2 has printed its cause already, as HotSpot's: to
                      ;; stdout, the exception and its cause without a trace,
                      ;; and the VM ends with status 1, as a halt does
-                     ;; (under CHAMPACA_BT with the trace, for champaca's own faults)
-                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 (if (getenv \"CHAMPACA_BT\") 1 0)))
+                     ;; (under CHAMPACA_BT too: the exception line names a
+                     ;; champaca fault, a missing native say, and BT must not
+                     ;; change what the program prints)
+                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 0))
                        (raise (make-java-halt 1)))
                      ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
