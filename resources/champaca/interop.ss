@@ -8,9 +8,30 @@
 ;; jolt's truth: nil and false are false, anything else true
 (define (jolt-true? v) (not (or (eq? v jolt-nil) (eq? v #f))))
 
-(define (ldk-in d v)
+;; An integral parameter or result takes a jolt integer in its type's range,
+;; or a char as its code, and nothing else: generated code's int and long
+;; operations don't check their operands (runtime.ss ix+, ladd), so 1.5 or
+;; nil passed on would compute garbage. Anything else is the Java exception
+;; cls (IllegalArgumentException for an argument, as Method.invoke throws,
+;; ClassCastException for a jolt fn's result, as a lambda's cast would).
+(define (ldk-integral d v cls)
+  (let* ([c (string-ref d 0)]
+         [x (if (char? v) (char->integer v) v)]
+         [range (case c [(#\I) '(-2147483648 . 2147483647)] [(#\S) '(-32768 . 32767)]
+                  [(#\B) '(-128 . 127)] [(#\C) '(0 . 65535)]
+                  [else '(#x-8000000000000000 . #x7fffffffffffffff)])])
+    (if (and (or (fixnum? x) (and (char=? c #\J) (exact? x) (integer? x)))
+             (<= (car range) x (cdr range)))
+        x
+        (jthrow cls (format "~a is not a Java ~a"
+                            (if (eq? v jolt-nil) "nil" (format "~s" v))
+                            (case c [(#\I) "int"] [(#\S) "short"] [(#\B) "byte"] [(#\C) "char"] [else "long"]))))))
+
+(define (ldk-in d v . cls)
   (cond
     [(char=? (string-ref d 0) #\Z) (if (jolt-true? v) 1 0)]
+    [(memv (string-ref d 0) '(#\I #\S #\B #\C #\J))
+     (ldk-integral d v (if (null? cls) "java/lang/IllegalArgumentException" (car cls)))]
     [(eq? v jolt-nil) #f]
     [else
      (case (string-ref d 0)
@@ -68,7 +89,7 @@
     (jlambda cname
              (lambda args
                (let ([r (call-from-java f (map ldk-out arg-ds args))])
-                 (if (char=? (string-ref ret-d 0) #\V) (void) (ldk-in ret-d r)))))))
+                 (if (char=? (string-ref ret-d 0) #\V) (void) (ldk-in ret-d r "java/lang/ClassCastException")))))))
 
 (define (ldk-to-string obj) (if (eq? obj jolt-nil) "null" (with-java-errors (lambda () (jstring-of obj)))))
 (define (ldk-java-exception? e) (java-exception? e))

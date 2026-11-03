@@ -34,3 +34,34 @@
   (is (= "java.lang.NumberFormatException: For input string: \"nope\""
          (try (ldk/call-static "java/lang/Integer" "parseInt" "(Ljava/lang/String;)I" "nope")
               (catch Exception e (ex-message e))))))
+
+;; an integral parameter or a jolt fn's integral result takes an integer in
+;; its type's range (or a char, as its code) and refuses anything else, as
+;; Method.invoke and a lambda's cast would
+(defn- message [f] (try (f) (catch Exception e (ex-message e))))
+
+(deftest integral-arguments
+  (is (= "1100001" (ldk/call-static "java/lang/Integer" "toBinaryString" "(I)Ljava/lang/String;" \a)))
+  (is (= "java.lang.IllegalArgumentException: 1.5 is not a Java int"
+         (message #(ldk/call-static "java/lang/Integer" "toBinaryString" "(I)Ljava/lang/String;" 1.5))))
+  (is (= "java.lang.IllegalArgumentException: nil is not a Java int"
+         (message #(ldk/call-static "java/lang/Integer" "toBinaryString" "(I)Ljava/lang/String;" nil))))
+  (is (= "java.lang.IllegalArgumentException: 2147483648 is not a Java int"
+         (message #(ldk/call-static "java/lang/Integer" "toBinaryString" "(I)Ljava/lang/String;" 2147483648))))
+  (is (= "java.lang.IllegalArgumentException: 128 is not a Java byte"
+         (message #(ldk/call-static "java/lang/Byte" "toString" "(B)Ljava/lang/String;" 128))))
+  (is (= "java.lang.IllegalArgumentException: 0.5 is not a Java long"
+         (message #(ldk/call-static "java/lang/Long" "toString" "(J)Ljava/lang/String;" 0.5))))
+  (is (= "9223372036854775807" (ldk/call-static "java/lang/Long" "toString" "(J)Ljava/lang/String;" 9223372036854775807))))
+
+(deftest integral-results
+  (let [xs (ldk/new-object "java/util/ArrayList" "()V")]
+    (doseq [w ["b" "a"]] (ldk/call xs "add" "(Ljava/lang/Object;)Z" w))
+    (is (= "java.lang.ClassCastException: 1.5 is not a Java int"
+           (message #(ldk/call-static "java/util/Collections" "sort" "(Ljava/util/List;Ljava/util/Comparator;)V"
+                                      xs (ldk/implement "java/util/Comparator" "compare" "(Ljava/lang/Object;Ljava/lang/Object;)I"
+                                                        (fn [a b] 1.5))))))
+    (is (= "java.lang.ClassCastException: nil is not a Java int"
+           (message #(ldk/call-static "java/util/Collections" "sort" "(Ljava/util/List;Ljava/util/Comparator;)V"
+                                      xs (ldk/implement "java/util/Comparator" "compare" "(Ljava/lang/Object;Ljava/lang/Object;)I"
+                                                        (fn [a b] nil))))))))

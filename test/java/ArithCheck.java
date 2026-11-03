@@ -63,5 +63,9 @@ public class ArithCheck {
             rh = rh * 31 + Double.doubleToRawLongBits(x % y);
         }
         System.out.println("drem spread " + rh);
+        // a char literal past 0x7fff goes to castore with no i2c before it
+        char[] cs = new char[3];
+        cs[0] = '\uffff'; cs[1] = '\u8000'; cs[2] = (char) -1;
+        System.out.println("castore " + (int) cs[0] + " " + (int) cs[1] + " " + (int) cs[2]);
     }
 }

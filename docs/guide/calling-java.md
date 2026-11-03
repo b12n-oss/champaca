@@ -307,3 +307,5 @@ The older functions take the JVM descriptor explicitly and skip overload resolut
 ```
 
 They're there for exact control, such as reaching an overload the scoring wouldn't pick. Since the call-site cache arrived ([performance](performance.md#the-call-site-cache)), speed alone is rarely a reason to use them. `examples/interop.clj` uses nothing else.
+
+An `int`, `short`, `byte`, `char` or `long` parameter takes a jolt integer in that type's range, or a character as its code, and refuses anything else (`1.5`, `nil`, `2147483648` for an `int`) with `java.lang.IllegalArgumentException: 1.5 is not a Java int`, as `Method.invoke` would. An `implement` fn whose method returns one of those types is held to the same rule, and a result that breaks it throws `java.lang.ClassCastException` inside the Java code that called the fn.
