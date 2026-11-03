@@ -897,8 +897,9 @@
                                  :code-len (some-> (:code m) :code count)
                                  :virtual (not (or (cf/static? m) (str/starts-with? (:name m) "<")))))
                   (:methods c))}
-    ;; a preview class file is never cached: a restore skips the parse, so a
-    ;; run without --enable-preview would take it
+    ;; a preview class file is never cached, nor anything depending on it
+    ;; (user-deps): a restore skips the parse, so a run without
+    ;; --enable-preview would take it
     (:preview c) (assoc :preview true)))
 
 (defn- overridden?
@@ -1269,7 +1270,7 @@
                 linked (binding [*reads* reads] (timed :link #(link info)))]
             (swap! state assoc-in [:classes cname] linked)
             (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
-                  linked (if-let [ks (when (and reads (not (:preview linked))) (library-cache-keys cname @reads))]
+                  linked (if-let [ks (when reads (library-cache-keys cname @reads))]
                            (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
                            linked)]
               (record! (cache-origin linked) [cname] {:text text})
@@ -1359,8 +1360,7 @@
                        (if-let [f (:class-version (ex-data e))]
                          {:version (f (or given "<Unknown>"))}
                          {:bad (let [m (or (ex-message e) (str (class e)))]
-                                 (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))})))
-              fp (when-not (:preview c) fp)]
+                                 (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))})))]
           (cond
             (:bad c) (str "bad " (:bad c))
             (:version c) (str "link java/lang/UnsupportedClassVersionError|" (:version c))
