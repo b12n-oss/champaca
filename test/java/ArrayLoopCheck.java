@@ -1,9 +1,13 @@
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.util.Arrays;
 
 // Loops over arrays, which codegen versions (compile-method*'s array loops):
 // a copy of the loop reads each array local's vector and length taken once,
 // entered only when every such local holds an array. Each row has to print
 // what HotSpot prints, exceptions, their messages and their lines included.
+// Needs ArrayLoopShapes, which bb test writes with test/gen/ArrayLoopGen.java.
 public class ArrayLoopCheck {
     static int effects;
 
@@ -78,7 +82,7 @@ public class ArrayLoopCheck {
         effects = 0;
     }
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Throwable {
         int[] five = {3, 1, 4, 1, 5};
         row("sum", () -> sum(five));
         row("sum empty", () -> sum(new int[0]));
@@ -113,5 +117,13 @@ public class ArrayLoopCheck {
         row("cast wrong type", () -> cast(new long[] {1, 2}, 2));
         row("cast null, no steps", () -> cast(null, 0));
         row("trace", () -> trace(new int[] {1, 2, 7, 3}));
+        // stack shapes javac doesn't emit (ArrayLoopShapes, from test/gen/ArrayLoopGen.java)
+        Class<?> shapes = Class.forName("ArrayLoopShapes");
+        MethodType t = MethodType.methodType(int.class, int[].class, int[].class, int.class);
+        for (String m : new String[] {"dupX1", "swap"}) {
+            MethodHandle mh = MethodHandles.lookup().findStatic(shapes, m, t);
+            row(m, () -> { try { return (int) mh.invokeExact(new int[] {1, 2, 3}, new int[] {100, 200, 300}, 3); }
+                           catch (Throwable e) { throw new RuntimeException(e); } });
+        }
     }
 }

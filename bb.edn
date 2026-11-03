@@ -201,6 +201,8 @@
                     _ (shell "java test/gen/CondyGen.java target/classes")
                     ;; LongOpsCheck's LongCmp: lcmp returned, kept in a local, branched on in another block
                     _ (shell "java test/gen/LongCmpGen.java target/classes")
+                    ;; ArrayLoopCheck's ArrayLoopShapes: arrays moved by dup_x1 and swap in a loop
+                    _ (shell "java test/gen/ArrayLoopGen.java target/classes")
                     ;; run as -jar: target/app.jar's manifest names JarMain and a
                     ;; Class-Path of lib.jar beside it
                     _ (shell "mkdir -p target/jarmain-classes")
