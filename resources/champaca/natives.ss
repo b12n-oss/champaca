@@ -142,7 +142,8 @@
               "getLoadedClassSize()J" "getUnloadedClassSize()J" "getClassLoadingTime()J"
               "getMethodDataSize()J" "getClassInitializationTime()J" "getClassVerificationTime()J"))
   (def "getProcessId()I" (lambda (this) (libc-getpid)))
-  (def "getVmArguments0()[Ljava/lang/String;" (lambda (this) (make-jarr "Ljava/lang/String;" (vector))))
+  ;; the same list as VM.getRuntimeArguments (runtime-arguments, below), as HotSpot's jmm
+  (def "getVmArguments0()[Ljava/lang/String;" (lambda (this) (make-jarr "Ljava/lang/String;" (list->vector (map jstring runtime-arguments)))))
   (def "getStartupTime()J" (lambda (this) vm-start-ms))
   (def "getUptime0()J" (lambda (this) (uptime-ms)))
   (def "getAvailableProcessors()I" (lambda (this) 1))   ; as Runtime says
@@ -958,15 +959,26 @@
 (define command-line-properties '())
 (define (set-command-line-properties! s)
   (set! command-line-properties
-        (let loop ([fields (let split ([i 0] [start 0])
-                             (cond [(fx= 0 (string-length s)) '()]
-                                   [(fx= i (string-length s)) (list (substring s start i))]
-                                   [(char=? (string-ref s i) #\nul)
-                                    (cons (substring s start i) (split (fx+ i 1) (fx+ i 1)))]
-                                   [else (split (fx+ i 1) start)]))])
+        (let loop ([fields (nul-fields s)])
           (if (or (null? fields) (null? (cdr fields)))
               '()
               (cons (cons (car fields) (cadr fields)) (loop (cddr fields)))))))
+(define (nul-fields s)
+  (let split ([i 0] [start 0])
+    (cond [(fx= 0 (string-length s)) '()]
+          [(fx= i (string-length s)) (list (substring s start i))]
+          [(char=? (string-ref s i) #\nul)
+           (cons (substring s start i) (split (fx+ i 1) (fx+ i 1)))]
+          [else (split (fx+ i 1) start)])))
+;; the VM options champaca.main read, as HotSpot's Arguments::jvm_args:
+;; every option before the main class except the class path ones, in order,
+;; and --add-modules=ALL-DEFAULT in source-file mode, as the launcher adds
+;; it (RuntimeMXBean.getInputArguments, the source launcher's options);
+;; none when jolt calls in
+(define runtime-arguments '())
+(define (set-runtime-arguments! s) (set! runtime-arguments (nul-fields s)))
+(defnative "jdk/internal/misc/VM.getRuntimeArguments()[Ljava/lang/String;" ()
+  (make-jarr "Ljava/lang/String;" (list->vector (map jstring runtime-arguments))))
 
 ;; The locale properties (user.language, user.script, user.country, and
 ;; their .format forms when the format locale differs) as the JDK finds

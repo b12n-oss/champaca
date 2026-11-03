@@ -7,3 +7,5 @@ ci/linux/cache/
 /.nrepl-port
 /_site/
 /bench/*/target/
+# jolt's classpath cache, written where bb test runs it from test/srclaunch
+/test/srclaunch/.jolt/

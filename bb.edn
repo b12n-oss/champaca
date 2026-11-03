@@ -327,6 +327,20 @@
                                                        (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
                                                        (not ok))]
                                          (str "mainsel-" c)))
+                    ;; source-file mode (test/srclaunch): each <case>.args, one
+                    ;; argument a line, run from that directory, its status,
+                    ;; stdout and stderr HotSpot's (record.sh records them)
+                    src-deps (str "{:deps {champaca/champaca {:local/root " (pr-str (str (fs/absolutize "."))) "}}}")
+                    srclaunch-fails (vec (for [f (sort (map str (fs/glob "test/srclaunch" "*.args")))
+                                               :let [c (str/replace (fs/file-name f) ".args" "")
+                                                     args (str/split-lines (slurp f))
+                                                     {:keys [out err exit]} (apply run-limited 300 {:label (str "srclaunch-" c) :err :string :dir "test/srclaunch"}
+                                                                                   (jolt-bin) "-Sdeps" src-deps "-M" "-m" "champaca.main" args)
+                                                     ok (= (slurp (str "test/srclaunch/" c ".expected")) (str "exit " exit "\n" out "--- stderr\n" err))]
+                                               :when (do (println (if ok "PASS" "FAIL") (str "source-file launch: " c))
+                                                         (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
+                                                         (not ok))]
+                                           (str "srclaunch-" c)))
                     ;; a warm start whose boot loads classes the cached boot never
                     ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
                     ;; plain runs that use them, on a cache of their own
@@ -618,7 +632,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

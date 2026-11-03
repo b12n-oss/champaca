@@ -1,0 +1,6 @@
+exit 1
+before
+--- stderr
+Exception in thread "main" java.lang.IllegalStateException: from a source file
+	at Throws.deeper(Throws.java:8)
+	at Throws.main(Throws.java:4)

@@ -1409,10 +1409,12 @@
 
 (defn- defined-jar
   "The library cache's key for the classes a program's own loaders define:
-  one file per class path, the bytes having no path of their own."
+  one file per class path, the bytes having no path of their own. A
+  source-file run has its own (\"source:\"), since its defined classes
+  compile with line numbers (lines?) and other runs' don't."
   []
   (or (:defined-jar @state)
-      (let [j (str "defined:" (str/join ":" (map jar-path (:classpath @state))))]
+      (let [j (str (if (:source-mode @state) "source:" "defined:") (str/join ":" (map jar-path (:classpath @state))))]
         (swap! state assoc :defined-jar j)
         j)))
 
@@ -1490,15 +1492,19 @@
   from a classpath directory, a developer's own build, does; a jar's or a
   loader-defined class names its file without a line, as a JDK frame does,
   because the information costs about as much memory as the code itself (a
-  warm Spring Boot: 100 of 460 MB live). CHAMPACA_LINES=all gives every
+  warm Spring Boot: 100 of 460 MB live). A source-file run's defined
+  classes do too: javac's source launcher defines the program's own classes
+  (their cache file is apart, defined-jar). CHAMPACA_LINES=all gives every
   class but the JDK's lines, CHAMPACA_LINES=off none. Every compile path
   asks, cached or not, so a frame's line doesn't depend on the cache."
   [cname info]
   (case (some-> (env "CHAMPACA_LINES") str/lower-case)
     "all" (contains? #{:user :defined} (:origin info))
     "off" false
-    (and (= :user (:origin info))
-         (boolean (when-let [src (class-source cname)] (not (jar-entry? (:entry src))))))))
+    (case (:origin info)
+      :user (boolean (when-let [src (class-source cname)] (not (jar-entry? (:entry src)))))
+      :defined (boolean (:source-mode @state))
+      false)))
 
 (defn- compile-method! [cname mname desc]
   (let [p (parsed cname)
@@ -2017,6 +2023,8 @@
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (when-let [ds (seq (:assertion-directives @state))]
     (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
+  (when-let [as (seq (:runtime-arguments @state))]
+    (s/call "set-runtime-arguments!" (str/join "\u0000" as)))
   (when @cf/preview-enabled (s/call "set-preview!" true))
   (s/call "set-define-class-hook!" (fn [& args] (timed :define #(apply define-class! args))))
   ;; annotation instances: a synthetic class implementing the annotation
@@ -2204,7 +2212,8 @@
   package... or nothing, and -esa/-dsa, in order (assertion-directive);
   -server and -client, which the launcher accepts and ignores;
   --enable-preview, as :preview (this release's preview class files load,
-  PreviewFeatures says so); -Xss, the
+  PreviewFeatures says so); --source N or --source=N, as :source (the
+  source launcher compiles at that release, source-file mode); -Xss, the
   thread stack size, as :stack in bytes (bound-stack!). A heap size (-Xmx,
   -Xms, -Xmn), -Xshare: and any -XX: flag are ignored with a warning, since
   start scripts pass them and they tune only the VM; any other option is the
@@ -2227,6 +2236,9 @@
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
             (#{"-server" "-client"} a) (recur (rest argv) opts)
             (= "--enable-preview" a) (recur (rest argv) (assoc opts :preview true))
+            ;; as the launcher, --source takes the next argument whatever it is
+            (= "--source" a) (if (second argv) (recur (nnext argv) (assoc opts :source (second argv))) (assoc opts :argv nil))
+            (str/starts-with? a "--source=") (recur (rest argv) (assoc opts :source (subs a 9)))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
                                                                           "Error: A fatal exception has occurred. Program will exit."])))
@@ -2244,6 +2256,28 @@
             (launcher-error (str "Unrecognized option: " a)
                             "Error: Could not create the Java Virtual Machine."
                             "Error: A fatal exception has occurred. Program will exit.")))))
+
+(defn- runtime-arguments
+  "The VM options HotSpot reports (VM.getRuntimeArguments) for the options
+  jvm-options consumed: each as given and in place, except the class path
+  ones, which become java.class.path alone, and -server/-client, which the
+  launcher drops; --source N is -Djdk.internal.javac.source=N, the property
+  the launcher passes; source-file mode ends with --add-modules=ALL-DEFAULT."
+  [consumed source-mode?]
+  (concat (loop [[a & more :as as] consumed out []]
+            (cond (empty? as) out
+                  (#{"-cp" "-classpath" "--class-path" "--source"} a)
+                  (recur (rest more) (cond-> out (= "--source" a) (conj (str "-Djdk.internal.javac.source=" (first more)))))
+                  (str/starts-with? a "--source=") (recur more (conj out (str "-Djdk.internal.javac.source=" (subs a 9))))
+                  (or (str/starts-with? a "--class-path=") (#{"-server" "-client"} a)) (recur more out)
+                  :else (recur more (conj out a))))
+          (when source-mode? ["--add-modules=ALL-DEFAULT"])))
+
+(defn- source-file?
+  "Whether the launcher runs a as a source file: a name ending .java that is
+  a regular file (a missing one is a main class that isn't found)."
+  [a]
+  (and (string? a) (str/ends-with? a ".java") (.isFile (io/file a))))
 
 (defn- expand-class-path
   "A class path string as a list of entries, a dir/* (or a bare *) standing
@@ -2283,16 +2317,32 @@
                       "           (top-level-value 'jolt-stack-limit-defaulted?))"
                       "  ((top-level-value 'jolt-stack-limit-set!) " bytes "))")))
 
-(defn -main [& argv]
-  (let [{:keys [props classpath assertions argv stack preview]} (jvm-options argv)
+(def ^:private source-launcher "com/sun/tools/javac/launcher/SourceLauncher")
+
+(defn -main [& all-argv]
+  (let [{:keys [props classpath assertions argv stack preview source]} (jvm-options all-argv)
+        consumed (take (- (count all-argv) (count argv)) all-argv)
+        ;; source-file mode, as java's: --source, or a first argument that is
+        ;; a .java file; the file and its arguments go to javac's
+        ;; SourceLauncher, which compiles it in memory and runs its main
+        source-mode? (boolean (and (seq argv) (not= "-jar" (first argv)) (or source (source-file? (first argv)))))
+        props (cond-> props source (conj ["jdk.internal.javac.source" source]))
         _ (when (and stack (System/getenv "JOLT_STACK_LIMIT"))
             (binding [*out* *err*] (println "champaca: ignoring -Xss; JOLT_STACK_LIMIT sets the stack bound")))
         _ (bound-stack! (or stack default-stack-limit))
-        _ (swap! state assoc :command-line-properties props :assertion-directives assertions)
+        _ (swap! state assoc :command-line-properties props :assertion-directives assertions
+                 :runtime-arguments (vec (runtime-arguments consumed source-mode?)) :source-mode source-mode?)
         _ (when preview (reset! cf/preview-enabled true))
         ;; with -cp the main class comes first; without, champaca's own
         ;; form, the class path first (-jar ignores -cp, as java does)
-        [cp cname & args] (if (and classpath (not= "-jar" (first argv))) (cons classpath argv) argv)]
+        ;; in source-file mode the class path is -cp's or, as the launcher
+        ;; has it, "." alone, or nothing with --source
+        ;; a .java name that isn't a file is java's main class, never
+        ;; champaca's class path (java: "Could not find or load main class")
+        [cp cname & args] (cond source-mode? (list* (or classpath (if source "" ".")) source-launcher argv)
+                                (and classpath (not= "-jar" (first argv))) (cons classpath argv)
+                                (some-> (first argv) (str/ends-with? ".java")) (cons "." argv)
+                                :else argv)]
     (when (and (= cp "-jar") (not cname))
       (binding [*out* *err*] (println "Error: -jar requires jar file specification"))
       (System/exit 1))
@@ -2301,6 +2351,7 @@
         (println "usage: jolt -M -m champaca.main [options] <classpath[:entry...] (dirs, jars, dir/*)> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
+        (println "   or: jolt -M -m champaca.main [options] [--source <release>] <file.java> [args...]")
         (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview; -server, -client accepted;")
         (println "         -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX: ignored with a warning"))
       (System/exit 2))
@@ -2321,6 +2372,7 @@
         (swap! state assoc :java-command (str/join " " (cons cname args)))
         (System/exit (run [cname] (str/replace (str/trim main) "." "/") (vec args))))
       (do
-        ;; sun.java.command, as the launcher has it: the main class as given, then the arguments
-        (swap! state assoc :java-command (str/join " " (cons cname args)))
-        (System/exit (run (vec (expand-class-path cp)) (str/replace cname "." "/") (vec args)))))))
+        ;; sun.java.command, as the launcher has it: the main class as given
+        ;; (the source launcher with its module), then the arguments
+        (swap! state assoc :java-command (str/join " " (cons (if source-mode? (str "jdk.compiler/" (str/replace cname "/" ".")) cname) args)))
+        (System/exit (run (if (= "" cp) [] (vec (expand-class-path cp))) (str/replace cname "." "/") (vec args)))))))

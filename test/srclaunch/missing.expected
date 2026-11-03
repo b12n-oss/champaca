@@ -1,0 +1,4 @@
+exit 1
+--- stderr
+Error: Could not find or load main class Missing.java
+Caused by: java.lang.ClassNotFoundException: Missing.java

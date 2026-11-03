@@ -1,0 +1,10 @@
+exit 0
+[-Dx=1, -ea, -Xss1m, --add-modules=ALL-DEFAULT]
+class path [.]
+command [jdk.compiler/com.sun.tools.javac.launcher.SourceLauncher Args.java a b]
+source [null]
+x [1]
+assertions true
+args a,b
+loader false
+--- stderr

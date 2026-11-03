@@ -1,0 +1,8 @@
+exit 1
+--- stderr
+Prim.java:7: error: primitive patterns are a preview feature and are disabled by default.
+            case byte b -> "byte " + b;
+                 ^
+  (use --enable-preview to enable primitive patterns)
+1 error
+error: compilation failed

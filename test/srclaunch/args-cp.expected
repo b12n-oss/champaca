@@ -1,0 +1,10 @@
+exit 0
+[-Djdk.internal.javac.source=25, --add-modules=ALL-DEFAULT]
+class path [../../target/lib.jar]
+command [jdk.compiler/com.sun.tools.javac.launcher.SourceLauncher Args.java]
+source [25]
+x [null]
+assertions false
+args 
+loader false
+--- stderr

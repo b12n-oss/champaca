@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+error: invalid value for --source option: 99

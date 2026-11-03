@@ -1,0 +1,6 @@
+// a source file whose name doesn't end .java runs with --source
+public class Script {
+    public static void main(String[] args) {
+        System.out.println("script " + String.join(" ", args));
+    }
+}

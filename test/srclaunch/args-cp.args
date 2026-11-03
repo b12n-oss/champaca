@@ -1,0 +1,4 @@
+-cp
+../../target/lib.jar
+--source=25
+Args.java
