@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+Error: -cp requires class path specification

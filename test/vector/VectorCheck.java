@@ -4,7 +4,8 @@ import static jdk.incubator.vector.VectorOperators.*;
 
 // The Vector API with --add-modules jdk.incubator.vector (VectorCheck.options).
 // champaca answers the VM's questions (VectorSupport natives) and runs each
-// operation through the JDK's Java fallback; every row is HotSpot's output.
+// operation through the JDK's Java fallback; every row is HotSpot's output,
+// none depends on the machine's vector width.
 // Not here: reinterpretAs*, castShape, viewAs*, test(IS_NAN) and the other
 // operations that view lanes as another type, which go through heap
 // MemorySegment access (ROADMAP 38o).
@@ -25,9 +26,17 @@ public class VectorCheck {
         var I = IntVector.SPECIES_128; var L = LongVector.SPECIES_128; var F = FloatVector.SPECIES_128;
         var D = DoubleVector.SPECIES_128; var B = ByteVector.SPECIES_128; var S = ShortVector.SPECIES_128;
         p("module in the boot layer", ModuleLayer.boot().findModule("jdk.incubator.vector").isPresent());
-        p("preferred shape", VectorShape.preferredShape());
+        // the widest vector is the machine's (128 bits on arm64, 256 or 512 on
+        // x86_64), so these rows check how the sizes relate, not the size
+        var max = IntVector.SPECIES_MAX;
+        p("preferred is the max shape's size", VectorShape.preferredShape().vectorBitSize() == max.vectorBitSize()
+            && IntVector.SPECIES_PREFERRED.length() == max.length());
         p("species", I + " " + L + " " + F + " " + D + " " + B + " " + S);
-        p("max species", IntVector.SPECIES_MAX + " " + DoubleVector.SPECIES_MAX);
+        // NEON's 128 bits on aarch64 (an SVE machine would differ); at least
+        // that on x86_64
+        p("width for the arch", System.getProperty("os.arch").equals("aarch64") ? max.vectorBitSize() == 128 : max.vectorBitSize() >= 128);
+        p("max species lanes", max.length() * 32 == max.vectorBitSize() && max.length() >= 4
+            && DoubleVector.SPECIES_MAX.length() * 2 == max.length());
         p("species 64 and 256", IntVector.SPECIES_64.length() + " " + IntVector.SPECIES_256.length() + " " + IntVector.SPECIES_512.length());
 
         int[] a = {1, -2, 3, Integer.MAX_VALUE}, b = {10, 20, -30, 1};

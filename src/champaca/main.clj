@@ -2083,7 +2083,8 @@
                      ;; phase 2 has printed its cause already, as HotSpot's: to
                      ;; stdout, the exception and its cause without a trace,
                      ;; and the VM ends with status 1, as a halt does
-                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 0))
+                     ;; (under CHAMPACA_BT with the trace, for champaca's own faults)
+                     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 (if (getenv \"CHAMPACA_BT\") 1 0)))
                        (raise (make-java-halt 1)))
                      ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
@@ -2161,13 +2162,15 @@
   user classpath dirs. Returns 0 on success; a second call is a no-op.
   opts: {:preview true} turns on this release's preview features, as
   --enable-preview does, before the boot (never after: the JDK reads it once);
-  :add-modules [\"jdk.incubator.vector\" ...] adds root modules to the boot
-  layer, as --add-modules does."
+  :add-modules [\"jdk.incubator.vector\" ...] (or one comma-separated string)
+  adds root modules to the boot layer, as --add-modules does."
   ([classpath] (init! classpath {}))
   ([classpath {:keys [preview add-modules]}]
    (or (:boot-status @state)
        (do (when preview (reset! cf/preview-enabled true))
-           (when (seq add-modules) (swap! state assoc :add-modules [(str/join "," add-modules)]))
+           ;; a string is one module list, as the option's value
+           (when (seq add-modules)
+             (swap! state assoc :add-modules [(if (string? add-modules) add-modules (str/join "," add-modules))]))
            (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
                   ;; java.class.path is what was given, as the JVM's launcher has it
                   :classpath-given (vec classpath))
@@ -2227,6 +2230,13 @@
          (boolean (some (fn [x] (or (= rest-k x) (str/starts-with? rest-k (str x "."))))
                         reserved-module-suffixes)))))
 
+(defn- option-value
+  "An option's separate value as HotSpot's launcher takes it: nil when
+  there is none or it starts with \"-\", or when it's empty and empty?
+  is false."
+  [v empty?]
+  (when (and v (not (str/starts-with? v "-")) (or empty? (not= "" v))) v))
+
 (defn- jvm-options
   "The options before the main class or -jar, as the java launcher reads
   them, as {:props [[k v]...] :classpath s-or-nil :assertions [...] :argv rest}:
@@ -2255,8 +2265,11 @@
               (recur (rest argv) (cond (= "" k) opts
                                        (reserved-module-property? k) (assoc opts :module-props-ignored true)
                                        :else (update opts :props conj [k (if i (subs kv (inc i)) "")]))))
+            ;; as the launcher, an option's separate value can't start with
+            ;; "-" (it's the next option); -cp takes an empty one, --source
+            ;; and --add-modules don't
             (#{"-cp" "-classpath" "--class-path"} a)
-            (if-let [cp (second argv)]
+            (if-let [cp (option-value (second argv) true)]
               (recur (nnext argv) (assoc opts :classpath cp))
               (launcher-error (str "Error: " a " requires class path specification")))
             (str/starts-with? a "--class-path=") (recur (rest argv) (assoc opts :classpath (subs a 13)))
@@ -2265,12 +2278,11 @@
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
             (#{"-server" "-client"} a) (recur (rest argv) opts)
             (= "--enable-preview" a) (recur (rest argv) (assoc opts :preview true))
-            ;; as the launcher, --source takes the next argument whatever it is
-            (= "--source" a) (if (second argv)
-                               (recur (nnext argv) (assoc opts :source (second argv)))
+            (= "--source" a) (if-let [v (option-value (second argv) false)]
+                               (recur (nnext argv) (assoc opts :source v))
                                (launcher-error "Error: --source requires source version"))
             (str/starts-with? a "--source=") (recur (rest argv) (assoc opts :source (subs a 9)))
-            (= "--add-modules" a) (if-let [ms (second argv)]
+            (= "--add-modules" a) (if-let [ms (option-value (second argv) false)]
                                     (recur (nnext argv) (update opts :add-modules (fnil conj []) ms))
                                     (launcher-error "Error: --add-modules requires modules to be specified"))
             (str/starts-with? a "--add-modules=")
