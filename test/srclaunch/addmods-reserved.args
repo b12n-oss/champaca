@@ -1,5 +1,6 @@
 -Djdk.module.addmods=x
 -Djdk.module.path.x=1
 -Djdk.module.pathfoo=2
+-Djdk.module.illegal.native.access=deny
 -Dfoo=3
 Modules.java

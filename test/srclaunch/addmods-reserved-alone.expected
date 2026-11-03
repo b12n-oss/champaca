@@ -1,0 +1,12 @@
+exit 0
+jdk.incubator.vector false
+java.se false
+java.sql true
+[-Djdk.module.illegal.native.access=deny, --add-modules=ALL-DEFAULT]
+jdk.module.addmods [null]
+jdk.module.path.x [null]
+jdk.module.pathfoo [null]
+jdk.module.illegal.native.access [null]
+foo [null]
+--- stderr
+OpenJDK 64-Bit Server VM warning: Ignoring system property options whose names match the '-Djdk.module.*'. names that are reserved for internal use.

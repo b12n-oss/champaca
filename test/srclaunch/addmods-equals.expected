@@ -6,6 +6,7 @@ java.sql true
 jdk.module.addmods [null]
 jdk.module.path.x [null]
 jdk.module.pathfoo [null]
+jdk.module.illegal.native.access [null]
 foo [null]
 --- stderr
 WARNING: Using incubator modules: jdk.incubator.vector

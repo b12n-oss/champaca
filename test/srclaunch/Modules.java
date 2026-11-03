@@ -5,7 +5,7 @@ public class Modules {
         for (String m : new String[]{"jdk.incubator.vector", "java.se", "java.sql"})
             System.out.println(m + " " + ModuleLayer.boot().findModule(m).isPresent());
         System.out.println(java.lang.management.ManagementFactory.getRuntimeMXBean().getInputArguments());
-        for (String k : new String[]{"jdk.module.addmods", "jdk.module.path.x", "jdk.module.pathfoo", "foo"})
+        for (String k : new String[]{"jdk.module.addmods", "jdk.module.path.x", "jdk.module.pathfoo", "jdk.module.illegal.native.access", "foo"})
             System.out.println(k + " [" + System.getProperty(k) + "]");
     }
 }
