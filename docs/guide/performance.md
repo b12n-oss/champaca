@@ -246,6 +246,19 @@ Stack traces made a throw dearer again: `fillInStackTrace` walks the continuatio
 
 A loop comparing two 100-byte arrays took 7.0 ns per element. Measured on its own, a plain Chez loop over two vectors takes 2.4 ns per element in safe mode and 0.6 ns unchecked, so most of the 7 ns was checks, and several ran twice: `array-ref` checked the index against the vector and then `vector-ref` checked it again, and `array-length` made a procedure call for its null check. The array macros now check null and bounds once and then use Chez's unchecked vector access (`#3%vector-ref`), which is safe because the index has just been checked against that vector. That brought the loop to 4.4 ns per element, against 0.6 ns on the JVM.
 
+Even checked once, an access still tested for null, read the array's vector out of its record and compared the index with its length, and the loop's test read the length again, every step. Since spike 87 a loop is versioned, as upstream OpenLDK does it: in a method without exception handlers, an innermost loop that does something to an array held in a local the loop never assigns is entered through a check, made once, that each such local holds an array. If they all do, a copy of the loop runs with each array's vector and length taken before the first step, so an access compares its index with that length and nothing else, and `a.length` is a variable. A null or anything else runs the loop as it was, so an exception comes where it would have. Bounds checks stay: dropping them saved 0.1 of 1.7 ms in a hand-written copy and would need a proof about the index. A million elements, with a warm cache, after spike 86's [int arithmetic](#int-arithmetic):
+
+| Kernel | Before | Versioned | JVM |
+|---|---|---|---|
+| summing an `int[]` | 2.27 ms | 1.72 ms | 0.32 ms |
+| summing a `long[]` | 2.69 ms | 2.01 ms | 0.32 ms |
+| a `double[]` dot product | 5.31 ms | 3.64 ms | 0.95 ms |
+| a for-each loop over an `int[]` | 2.22 ms | 1.44 ms | 0.32 ms |
+| filling an `int[]` | 2.22 ms | 1.70 ms | 0.16 ms |
+| summing to a bound `n` passed in | 2.06 ms | 1.72 ms | 0.32 ms |
+
+The copy doubles the loop's code. A loop that reads a local the copy doesn't use as an array (`this` in `this.data[i]`, say) still gets one, which is then dropped, and its entry is one more tail call. Recursion inside such a method reaches about 25% less deep before `StackOverflowError`, still far past the JVM's default. `test/java/ArrayLoopCheck.java` checks the cases where the copy and the original could differ against HotSpot: nulls with and without steps, an index past the end after side effects, a second array that is null only when read, arrays the loop reassigns, jagged grids, `break` and `continue`, stores of every width, stack traces from inside the copy, and arrays moved by `dup_x1` and `swap`, which only hand-made bytecode does. Upstream's `ArrayLoopProbe`, `InlineLeafProbe` and `PrimitiveOptimizationProbe` run as they are.
+
 Calls themselves cost little here: a call to a static method is about 1 ns on top of the loop, 3 ns into another class with its initialization check. Code like `StringBuilder.append` pays for many of them, though, so small leaf methods are now inlined and calls that can only reach one method skip dispatch ([how-it-works](how-it-works.md#the-shape-of-a-translated-method)). A static call to a leaf now costs nothing beyond the loop around it.
 
 | Operation | Before | Now | JVM |
