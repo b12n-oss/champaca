@@ -1,0 +1,66 @@
+1 int[] get: 3
+2 long[] set get: -5
+3 byte[] int unaligned: 1
+4 byte[] int aligned refused: java.lang.IllegalArgumentException: Target offset 0 is incompatible with alignment constraint 4 (of i4) for segment MemorySegment{ kind: heap, heapBase: [B@H, address: 0x0, byteSize: 8 }
+5 byte[] int BE: 258
+6 int[] read bytes: 14
+7 long[] read int halves: 1,2
+8 int[] write short: 458752
+9 double[] get: 2.5
+10 float[] set: 3.25
+11 char[] get: b
+12 boolean: false,true
+13 oob index: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: heap, heapBase: [I@H, address: 0x0, byteSize: 8 }; new offset = 8; new length = 4
+14 negative offset: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: heap, heapBase: [I@H, address: 0x0, byteSize: 8 }; new offset = -4; new length = 4
+15 read-only set: java.lang.IllegalArgumentException: Attempt to write a read-only segment
+16 read-only get: 9
+17 native set get: -9223372036854775808
+18 native misaligned: java.lang.IllegalArgumentException: Target offset 2 is incompatible with alignment constraint 4 (of i4) for segment MemorySegment{ kind: native, address: 0xADDR, byteSize: 16 }
+19 native unaligned ok: 77
+20 closed arena: java.lang.IllegalStateException: Already closed
+21 null segment: java.lang.NullPointerException
+22 NULL segment: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: native, address: 0x0, byteSize: 0 }; new offset = 0; new length = 4
+23 vh coords: [interface java.lang.foreign.MemorySegment, long]
+24 vh type: int
+25 vh CAS: true,false,6
+26 vh getAndAdd: 5,8
+27 vh bitwise: 6,7,3,1
+28 vh volatile: 5
+29 vh cax: 1,2,9
+30 vh long native add: 40,42
+31 vh BE getAndAdd: 33554432,2
+32 vh float CAS: true,2.0
+33 vh float add refused: java.lang.UnsupportedOperationException: getAndAdd
+34 vh byte CAS refused: java.lang.UnsupportedOperationException: compareAndSet
+35 vh byte supported: true,false
+36 vh unaligned CAS misaligned: java.lang.UnsupportedOperationException: compareAndSet
+37 vh unaligned getVolatile refused: java.lang.UnsupportedOperationException: getVolatile
+38 vh unaligned supported: true,false
+39 vh toMethodHandle: 3
+40 path coords: [interface java.lang.foreign.MemorySegment, long, long]
+41 path set get: [0, 0, 0, 0, 0, 42, 0, 0]
+42 path index oob: java.lang.IndexOutOfBoundsException: Index 4 out of bounds for length 4
+43 path small segment: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: heap, heapBase: [I@H, address: 0x0, byteSize: 12 }; new offset = 0; new length = 32
+44 arrayElementVarHandle: 3
+45 struct offset: 4
+46 allocateFrom ints: [1, 2, 3]
+47 string utf8: 7 héllo
+48 setString: [97, 98, 99, 0, 0, 0, 0, 0]
+49 asSlice get: 4
+50 mismatch: 8
+51 elements: 6
+52 auto arena: 11
+53 shared arena: 0.5
+54 other thread confined: java.lang.WrongThreadException: Attempted access outside owning thread
+55 shared closed by another thread: java.lang.IllegalStateException: Already closed
+56 shared mismatch: 41 -1
+57 closed mismatch: java.lang.IllegalStateException: Already closed
+58 double[] to native and back: [1.5, -0.0, NaN] -9223372036854775808
+59 float[] to native and back: [3.25, 1.4E-45] 1078984704
+60 direct DoubleBuffer: [2.5, 7.0]
+61 double[] copy swapped: [3.03865E-319, 3.16E-322]
+62 long bits of a double[]: 4607182418800017408
+63 double from a long[]: 2.0
+64 heap address: 4
+65 ofBuffer: 5
+66 asByteBuffer: 67305985

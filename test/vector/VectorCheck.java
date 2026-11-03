@@ -5,10 +5,9 @@ import static jdk.incubator.vector.VectorOperators.*;
 // The Vector API with --add-modules jdk.incubator.vector (VectorCheck.options).
 // champaca answers the VM's questions (VectorSupport natives) and runs each
 // operation through the JDK's Java fallback; every row is HotSpot's output,
-// none depends on the machine's vector width.
-// Not here: reinterpretAs*, castShape, viewAs*, test(IS_NAN) and the other
-// operations that view lanes as another type, which go through heap
-// MemorySegment access (ROADMAP 38o).
+// none depends on the machine's vector width. Operations that view lanes as
+// another type (reinterpretAs*, castShape, viewAs*, test(IS_NAN)) and memory
+// segment loads and stores go through heap MemorySegment access.
 public class VectorCheck {
     static int row = 0;
     static void p(String what, Object v) {
@@ -110,5 +109,29 @@ public class VectorCheck {
         for (; i < sp.loopBound(big.length); i += sp.length()) acc = acc.add(IntVector.fromArray(sp, big, i));
         int sum = acc.reduceLanes(ADD); for (; i < big.length; i++) sum += big[i];
         p("loop sum", sum);
+
+        var bv = ByteVector.fromArray(B, new byte[]{1, 0, 0, 0, 2, 0, 0, 0, -1, -1, -1, -1, 0, 0, 0, -128}, 0);
+        p("reinterpret bytes as ints", bv.reinterpretAsInts());
+        p("reinterpret ints as floats", IntVector.fromArray(I, new int[]{0x3f800000, 0x40000000, 0x7fc00000, -1}, 0).reinterpretAsFloats());
+        p("reinterpret floats as longs", vf.reinterpretAsLongs());
+        p("reinterpret doubles as bytes", vd.reinterpretAsBytes());
+        p("viewAsIntegralLanes, viewAsFloatingLanes", vf.viewAsIntegralLanes() + " " + va.viewAsFloatingLanes());
+        p("castShape int to long", va.castShape(L, 0) + " " + va.castShape(L, 1));
+        p("convert I2D, L2I, B2S", va.convert(I2D, 0) + " " + LongVector.fromArray(L, new long[]{1L << 40, -1}, 0).convert(L2I, 0)
+            + " " + bv.convert(B2S, 1));
+        p("float IS_NAN, IS_INFINITE, IS_NEGATIVE", vf.test(IS_NAN) + " " + vf.test(IS_INFINITE) + " " + vf.test(IS_NEGATIVE));
+        p("double IS_FINITE", vd.test(IS_FINITE));
+        p("int IS_NEGATIVE", va.test(IS_NEGATIVE));
+        var seg = java.lang.foreign.MemorySegment.ofArray(new int[]{10, 20, 30, 40, 50, 60, 70, 80});
+        var sv = IntVector.fromMemorySegment(I, seg, 4, java.nio.ByteOrder.nativeOrder());
+        p("fromMemorySegment", sv);
+        sv.mul(2).intoMemorySegment(seg, 16, java.nio.ByteOrder.nativeOrder());
+        p("intoMemorySegment", Arrays.toString(seg.toArray(java.lang.foreign.ValueLayout.JAVA_INT)));
+        p("fromMemorySegment big-endian", IntVector.fromMemorySegment(I, java.lang.foreign.MemorySegment.ofArray(new byte[]{0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4}), 0, java.nio.ByteOrder.BIG_ENDIAN));
+        p("fromMemorySegment out of bounds", attempt(() -> IntVector.fromMemorySegment(I, seg, 20, java.nio.ByteOrder.nativeOrder())));
+        p("masked segment load", IntVector.fromMemorySegment(I, seg, 20, java.nio.ByteOrder.nativeOrder(), VectorMask.fromArray(I, new boolean[]{true, true, true, false}, 0)));
+        p("byte vector into a long[] segment", attempt(() -> { var ls = java.lang.foreign.MemorySegment.ofArray(new long[2]); bv.intoMemorySegment(ls, 0, java.nio.ByteOrder.LITTLE_ENDIAN); return Arrays.toString(ls.toArray(java.lang.foreign.ValueLayout.JAVA_LONG)); }));
+        p("native segment round trip", attempt(() -> { try (var ar = java.lang.foreign.Arena.ofConfined()) { var ns = ar.allocate(16); va.intoMemorySegment(ns, 0, java.nio.ByteOrder.nativeOrder()); return IntVector.fromMemorySegment(I, ns, 0, java.nio.ByteOrder.nativeOrder()).add(1); } }));
+        p("closed segment", attempt(() -> { java.lang.foreign.MemorySegment ns; try (var ar = java.lang.foreign.Arena.ofConfined()) { ns = ar.allocate(16); } return IntVector.fromMemorySegment(I, ns, 0, java.nio.ByteOrder.nativeOrder()); }));
     }
 }

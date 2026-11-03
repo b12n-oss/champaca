@@ -651,22 +651,27 @@
 (define (same-type? t u) (char=? (string-ref t 0) (string-ref u 0)))
 (define (elem-type a) (let ([e (jarr-elem a)]) (if (memv (string-ref e 0) '(#\L #\[)) "L" e)))
 
+;; a float[] or double[] element is its bits here, as in memory
+(define (elem-bits t e)
+  (case t [("F") (float->bits e)] [("D") (double->bits e)] [else e]))
+
 (define (byte-of a bpos)
-  (let* ([se (type-size (elem-type a))]
-         [e (vector-ref (jarr-vec a) (quotient bpos se))])
+  (let* ([t (elem-type a)] [se (type-size t)]
+         [e (elem-bits t (vector-ref (jarr-vec a) (quotient bpos se)))])
     (logand (ash (logand e (- (ash 1 (* 8 se)) 1)) (- (* 8 (remainder bpos se)))) #xff)))
 
 (define (set-byte! a bpos b)
   (let* ([t (elem-type a)] [se (type-size t)] [i (quotient bpos se)] [sh (* 8 (remainder bpos se))]
          [mask (- (ash 1 (* 8 se)) 1)]
-         [old (logand (vector-ref (jarr-vec a) i) mask)]
+         [old (logand (elem-bits t (vector-ref (jarr-vec a) i)) mask)]
          [new (logior (logand old (lognot (ash #xff sh))) (ash b sh))])
     (vector-set! (jarr-vec a) i (signed-as t new))))
 
 (define (signed-as t u)
   (case (string-ref t 0)
     [(#\B) (i2b u)] [(#\S) (i2s u)] [(#\C) (logand u #xffff)] [(#\Z) (logand u 1)]
-    [(#\I) (i32 u)] [(#\J) (i64 u)] [else u]))
+    [(#\I) (i32 u)] [(#\J) (i64 u)] [(#\F) (bits->float (i32 u))] [(#\D) (bits->double (i64 u))]
+    [else u]))
 
 ;; Static fields: like HotSpot, the base is the class mirror. The offset is
 ;; static-offset-tag plus the field's index in the class meta list, so it
@@ -701,8 +706,66 @@
      (let* ([b (- off array-base)] [et (elem-type o)] [se (type-size et)] [st (type-size t)])
        (if (and (= se st) (zero? (remainder b se)) (or (same-type? t et) (char=? (string-ref et 0) #\L) (char=? (string-ref t 0) #\L)))
            (vector-set! (jarr-vec o) (quotient b se) v)
-           (do ([k 0 (+ k 1)]) ((= k st))
-             (set-byte! o (+ b k) (logand (ash v (* -8 k)) #xff)))))]))
+           (let ([v (elem-bits t v)])
+             (do ([k 0 (+ k 1)]) ((= k st))
+               (set-byte! o (+ b k) (logand (ash v (* -8 k)) #xff))))))]))
+
+;; --- scoped memory access and closing a shared arena ------------------------------
+;; HotSpot closes a shared session with a handshake: a thread inside one of
+;; ScopedMemoryAccess's @Scoped methods on that session gets the
+;; ScopedAccessError thrown at it, so no access outlives the memory. Here a
+;; thread can only be switched out at a safepoint (a backward branch) or a
+;; blocking call. Most scoped methods check the session and then reach memory
+;; with no branch in between, and the few with loops (vectorizedMismatch, the
+;; Vector API's loads and stores through their Java fallbacks) run without
+;; yields. So while a thread closes a session no other thread is inside a
+;; scoped access, and closeScope0 has nothing to do.
+(defnative "jdk/internal/misc/ScopedMemoryAccess.closeScope0(Ljdk/internal/foreign/MemorySessionImpl;Ljdk/internal/misc/ScopedMemoryAccess$ScopedAccessError;)V"
+  (this session error) (void))
+
+(define (scoped-rethrow thunk)
+  (guard (e [(and (jobj? e) (jinstance? e "jdk/internal/misc/ScopedMemoryAccess$ScopedAccessError"))
+             (raise ((jvirt e "newRuntimeException()Ljava/lang/RuntimeException;") e))])
+    (thunk)))
+
+(define-override! "jdk/internal/misc/ScopedMemoryAccess.vectorizedMismatch(Ljdk/internal/foreign/MemorySessionImpl;Ljdk/internal/foreign/MemorySessionImpl;Ljava/lang/Object;JLjava/lang/Object;JII)I"
+  (lambda args
+    (scoped-rethrow
+      (lambda ()
+        (without-yields
+          (lambda ()
+            (apply (method-proc "jdk/internal/misc/ScopedMemoryAccess"
+                                "vectorizedMismatchInternal(Ljdk/internal/foreign/MemorySessionImpl;Ljdk/internal/foreign/MemorySessionImpl;Ljava/lang/Object;JLjava/lang/Object;JII)I")
+                   args)))))))
+
+;; the Vector API's static entries: the Internal method takes the segment's
+;; session first, then the same arguments; seg is the segment's position
+(for-each
+  (lambda (spec)
+    (let* ([name (car spec)] [args (cadr spec)] [ret (caddr spec)] [seg (cadddr spec)]
+           [key (string-append name "ScopedInternal(Ljdk/internal/foreign/MemorySessionImpl;" args ")" ret)])
+      (define-override! (string-append "jdk/internal/misc/ScopedMemoryAccess." name "(" args ")" ret)
+        (lambda xs
+          (let ([msp (list-ref xs seg)])
+            (scoped-rethrow
+              (lambda ()
+                (without-yields
+                  (lambda ()
+                    (apply (method-proc "jdk/internal/misc/ScopedMemoryAccess" key)
+                           ((jvirt msp "sessionImpl()Ljdk/internal/foreign/MemorySessionImpl;") msp)
+                           xs))))))))))
+  '(("loadFromMemorySegment"
+     "Ljava/lang/Class;Ljava/lang/Class;ILjdk/internal/foreign/AbstractMemorySegmentImpl;JLjdk/internal/vm/vector/VectorSupport$VectorSpecies;Ljdk/internal/vm/vector/VectorSupport$LoadOperation;"
+     "Ljdk/internal/vm/vector/VectorSupport$Vector;" 3)
+    ("loadFromMemorySegmentMasked"
+     "Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/Class;ILjdk/internal/foreign/AbstractMemorySegmentImpl;JLjdk/internal/vm/vector/VectorSupport$VectorMask;Ljdk/internal/vm/vector/VectorSupport$VectorSpecies;ILjdk/internal/vm/vector/VectorSupport$LoadVectorMaskedOperation;"
+     "Ljdk/internal/vm/vector/VectorSupport$Vector;" 4)
+    ("storeIntoMemorySegment"
+     "Ljava/lang/Class;Ljava/lang/Class;ILjdk/internal/vm/vector/VectorSupport$Vector;Ljdk/internal/foreign/AbstractMemorySegmentImpl;JLjdk/internal/vm/vector/VectorSupport$StoreVectorOperation;"
+     "V" 4)
+    ("storeIntoMemorySegmentMasked"
+     "Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/Class;ILjdk/internal/vm/vector/VectorSupport$Vector;Ljdk/internal/vm/vector/VectorSupport$VectorMask;Ljdk/internal/foreign/AbstractMemorySegmentImpl;JLjdk/internal/vm/vector/VectorSupport$StoreVectorMaskedOperation;"
+     "V" 6)))
 
 ;; --- the Unaligned accessors ------------------------------------------------------
 ;; Unsafe.get<T>Unaligned(Object, long[, boolean]) and put<T>Unaligned, and
@@ -726,6 +789,15 @@
         acc
         (loop (fx+ k 1)
               (fxlogor acc (fxsll (fxlogand (vector-ref v (fx+ i k)) #xff) (fx* 8 (if be? (fx- (fx- n 1) k) k))))))))
+;; the index of the element of primitive array o that off and n cover
+;; exactly, or #f: a heap memory segment over an int[] reads its ints this way
+(define (whole-element o off n)
+  (and (jarr? o)
+       (let ([e (jarr-elem o)])
+         (and (fx= (string-length e) 1)
+              (fx= (type-size e) n)
+              (let ([b (fx- off array-base)])
+                (and (fx= 0 (fxremainder b n)) (fxquotient b n)))))))
 ;; the unsigned n-byte value at off in o: a byte[], native memory, or any
 ;; other array (mem-byte); n is 1, 2, 4 or 8
 (define (unaligned-u o off n be?)
@@ -738,6 +810,10 @@
     [(not o)
      (let ([u (case n [(1) (#3%foreign-ref 'unsigned-8 off 0)] [(2) (#3%foreign-ref 'unsigned-16 off 0)] [(4) (#3%foreign-ref 'unsigned-32 off 0)] [else (#3%foreign-ref 'unsigned-64 off 0)])])
        (if be? (bswap u n) u))]
+    [(whole-element o off n)
+     => (lambda (i)
+          (let ([u (logand (elem-bits (elem-type o) (vector-ref (jarr-vec o) i)) (- (ash 1 (fx* 8 n)) 1))])
+            (if be? (bswap u n) u)))]
     [else
      (let loop ([k 0] [acc 0])
        (if (fx= k n)
@@ -755,6 +831,10 @@
        (case n
          [(1) (#3%foreign-set! 'unsigned-8 off 0 u)] [(2) (#3%foreign-set! 'unsigned-16 off 0 u)]
          [(4) (#3%foreign-set! 'unsigned-32 off 0 u)] [else (#3%foreign-set! 'unsigned-64 off 0 u)]))]
+    [(whole-element o off n)
+     => (lambda (i)
+          (let ([u (let ([u (logand x (- (ash 1 (fx* 8 n)) 1))]) (if be? (bswap u n) u))])
+            (vector-set! (jarr-vec o) i (signed-as (elem-type o) u))))]
     [else
      (do ([k 0 (fx+ k 1)]) ((fx= k n))
        (mem-byte-set! o (+ off (if be? (fx- (fx- n 1) k) k)) (logand (ash x (fx* -8 k)) #xff)))]))
@@ -1329,17 +1409,27 @@
   (when (fx> gil-blocked 0)
     (with-mutex gil (condition-broadcast gil-cv))))
 
+;; thunk runs without giving the GIL up at a safepoint. Only the GIL's holder
+;; runs, so one global depth serves every thread; thunk must not block.
+(define (without-yields thunk)
+  (dynamic-wind
+    (lambda () (set! no-yield-depth (fx+ no-yield-depth 1)))
+    thunk
+    (lambda () (set! no-yield-depth (fx- no-yield-depth 1)))))
+
 ;; Let a thread that is ready run first, then queue for the GIL again.
 (define (gil-yield!)
   (let ([n gil-takes])
     (gil-block! (lambda () (or (not (fx= gil-takes n)) (fx= gil-ready 0))) #f)))
 
 ;; Generated code checks gil-ready inline at each backward branch and calls
-;; this only when some thread is waiting for the GIL.
+;; this only when some thread is waiting for the GIL. While no-yield-depth is
+;; above zero the thread keeps the GIL (see without-yields).
 (define safepoint-count 0)
+(define no-yield-depth 0)
 (define (jsafepoint)
   (set! safepoint-count (fx+ safepoint-count 1))
-  (when (fx>= safepoint-count 1000)
+  (when (and (fx>= safepoint-count 1000) (fx= no-yield-depth 0))
     (set! safepoint-count 0)
     (gil-yield!)))
 
@@ -2623,6 +2713,11 @@
       (vh-run-direct t op mode args)))
 
 (define (vh-run-direct t op mode args)
+  (if (eq? (vh-target-kind t) 'segment)
+      (segment-access t op mode args)
+      (vh-run-plain t op mode args)))
+
+(define (vh-run-plain t op mode args)
   (let* ([ty (vh-target-type t)]
          [vals (list-tail args (length (vh-target-coords t)))])
     (define (get) (vh-get t args))
@@ -2990,6 +3085,71 @@
 
 (define-override! "java/lang/invoke/MethodHandles.arrayElementVarHandle(Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
   (lambda (cls) (make-vh 'array #f #f (array-class-elem cls) (list (mirror->desc cls) "I") #f)))
+;; A memory segment's VarHandle is the JDK's own SegmentVarHandle (its form
+;; and fields, so checkSegment and the alignment checks run as written) held
+;; by a champaca handle of kind segment, whose accesses call the static named
+;; after the mode in the form's implClass or its superclass, as HotSpot links
+;; them through the VarForm: VarHandleSegmentAsInts.get(VarHandle, Object,
+;; long) and the rest, which reach memory through ScopedMemoryAccess.
+;; Coordinates are (MemorySegment long), plus a second long when the offset
+;; isn't constant. A mode is supported when such a static exists: an
+;; unaligned layout's form (VarHandleSegmentAsInts) has plain get and set
+;; only, an aligned one's (VarHandleSegmentAsIntsAligned) every mode its
+;; carrier allows.
+(define segment-forms
+  '(("B" . "Bytes") ("C" . "Chars") ("S" . "Shorts") ("I" . "Ints") ("J" . "Longs")
+    ("F" . "Floats") ("D" . "Doubles") ("Z" . "Booleans")))
+
+(define (segment-desc ty op ncoords)
+  (string-append "(Ljava/lang/invoke/VarHandle;Ljava/lang/Object;" (if (fx= ncoords 2) "J" "JJ")
+                 (case op [(get) ""] [(cas cax) (string-append ty ty)] [else ty])
+                 ")" (case op [(set) "V"] [(cas) "Z"] [else ty])))
+
+(define segment-op-modes
+  '((get . "get") (set . "set") (cas . "compareAndSet") (cax . "compareAndExchange")
+    (gas . "getAndSet") (add . "getAndAdd") (or . "getAndBitwiseOr")
+    (and . "getAndBitwiseAnd") (xor . "getAndBitwiseXor")))
+
+(define-override! "java/lang/invoke/VarHandles.memorySegmentViewHandle(Ljava/lang/Class;Ljava/lang/foreign/MemoryLayout;JZJLjava/nio/ByteOrder;)Ljava/lang/invoke/VarHandle;"
+  (lambda (carrier enclosing mask constant? offset order)
+    (let* ([d (mirror->desc (nn carrier))]
+           [form (assoc d segment-forms)])
+      (unless form
+        (jthrow "java/lang/IllegalArgumentException"
+                (string-append "Invalid carrier: " (jstring->scheme ((jvirt carrier "getName()Ljava/lang/String;") carrier)))))
+      (let* ([fc (string-append "java/lang/invoke/VarHandleSegmentAs" (cdr form))]
+             [be? (string=? "BIG_ENDIAN" (jstring->scheme (jslot (nn order) (jfield-index "java/nio/ByteOrder" "name"))))]
+             [_ (begin (jinit "java/lang/invoke/MethodHandleStatics") (jinit fc) (jinit "java/lang/invoke/SegmentVarHandle"))]
+             [exact (top-level-value (string->symbol "java/lang/invoke/MethodHandleStatics:VAR_HANDLE_SEGMENT_FORCE_EXACT"))]
+             [vform ((method-proc fc "selectForm(JZ)Ljava/lang/invoke/VarForm;") mask constant?)]
+             [impl (find-class (jclass-cname (mirror-class (jslot vform (jfield-index "java/lang/invoke/VarForm" "implClass")))))]
+             [coords (if (eqv? constant? 1)
+                         '("Ljava/lang/foreign/MemorySegment;" "J")
+                         '("Ljava/lang/foreign/MemorySegment;" "J" "J"))]
+             [has? (lambda (op name) (and (find-method impl name (segment-desc d op (length coords))) #t))]
+             [jvh (jnew "java/lang/invoke/SegmentVarHandle")])
+        ((method-proc "java/lang/invoke/SegmentVarHandle"
+                      "<init>(Ljava/lang/invoke/VarForm;ZLjava/lang/foreign/MemoryLayout;JZ)V")
+         jvh vform (if be? 1 0) enclosing offset exact)
+        (vh-of (make-vh-target 'segment jvh impl d coords
+                               (map car (filter (lambda (e) (has? (car e) (cdr e))) segment-op-modes))
+                               (not (has? 'get "getVolatile"))
+                               (make-vector 5 #f))
+               (eqv? exact 1))))))
+
+;; the static for a mode, cached by the mode name's identity
+(define segment-procs (make-weak-eq-hashtable))
+(define (segment-access t op mode args)
+  (let* ([procs (or (eq-hashtable-ref segment-procs t #f)
+                    (let ([h (make-weak-eq-hashtable)]) (eq-hashtable-set! segment-procs t h) h))]
+         [proc (or (eq-hashtable-ref procs mode #f)
+                   (let* ([key (string-append mode (segment-desc (vh-target-type t) op (length (vh-target-coords t))))]
+                          [m (find-method (vh-target-b t) mode (substring key (string-length mode) (string-length key)))]
+                          [p (method-proc (jclass-cname (car m)) key)])
+                     (eq-hashtable-set! procs mode p)
+                     p))])
+    (apply proc (vh-target-a t) args)))
+
 (define-override! "java/lang/invoke/MethodHandles.byteArrayViewVarHandle(Ljava/lang/Class;Ljava/nio/ByteOrder;)Ljava/lang/invoke/VarHandle;"
   (lambda (cls order)
     (let ([e (array-class-elem cls)]
