@@ -61,6 +61,8 @@
 61 double[] copy swapped: [3.03865E-319, 3.16E-322]
 62 long bits of a double[]: 4607182418800017408
 63 double from a long[]: 2.0
-64 heap address: 4
-65 ofBuffer: 5
-66 asByteBuffer: 67305985
+64 Unsafe putFloat into int[]: 3fc00000
+65 Unsafe putDouble into long[]: c000000000000000
+66 heap address: 4
+67 ofBuffer: 5
+68 asByteBuffer: 67305985

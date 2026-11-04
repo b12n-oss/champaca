@@ -86,6 +86,10 @@ public class SegmentCheck {
     row("double[] copy swapped", () -> { double[] be = new double[2]; MemorySegment.copy(MemorySegment.ofArray(new double[]{1, 2}), JAVA_DOUBLE.withOrder(ByteOrder.BIG_ENDIAN), 0, be, 0, 2); return Arrays.toString(be); });
     row("long bits of a double[]", () -> MemorySegment.ofArray(new double[]{1.0}).get(JAVA_LONG, 0));
     row("double from a long[]", () -> MemorySegment.ofArray(new long[]{0x4000000000000000L}).get(JAVA_DOUBLE, 0));
+    // sun.misc.Unsafe storing a float or double into an int[] or long[]: champaca
+    // writes the value's bits byte by byte (the JVM warns on stderr only)
+    row("Unsafe putFloat into int[]", () -> { var f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe"); f.setAccessible(true); var u = (sun.misc.Unsafe) f.get(null); int[] a = new int[2]; u.putFloat(a, (long) sun.misc.Unsafe.ARRAY_INT_BASE_OFFSET + 4, 1.5f); return Integer.toHexString(a[1]); });
+    row("Unsafe putDouble into long[]", () -> { var f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe"); f.setAccessible(true); var u = (sun.misc.Unsafe) f.get(null); long[] a = new long[1]; u.putDouble(a, (long) sun.misc.Unsafe.ARRAY_LONG_BASE_OFFSET, -2.0); return Long.toHexString(a[0]); });
     row("heap address", () -> MemorySegment.ofArray(new int[2]).asSlice(4).address());
     row("ofBuffer", () -> MemorySegment.ofBuffer(java.nio.ByteBuffer.wrap(new byte[]{0,0,0,5}).order(ByteOrder.BIG_ENDIAN)).get(JAVA_INT_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN), 0));
     row("asByteBuffer", () -> MemorySegment.ofArray(new byte[]{1,2,3,4}).asByteBuffer().order(ByteOrder.LITTLE_ENDIAN).getInt());
