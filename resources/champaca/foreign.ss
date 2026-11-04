@@ -381,7 +381,7 @@
          [ret-struct (and ret-layout (layout-group? ret-layout) ret-layout)]
          [_ (when (chez-misplaces? layouts variadic)
               (jthrow "java/lang/UnsupportedOperationException"
-                      (string-append "champaca: Chez Scheme misplaces a struct passed on the stack here on macOS arm64: "
+                      (string-append "champaca: Chez Scheme would put an argument passed on the stack in the wrong place here on macOS arm64: "
                                      (jstring-of fd))))]
          [maker (ffi-maker types (if ret-struct `(& ,(struct-ftype ret-struct)) (ffi-type ret)) variadic (not critical?))]
          [ret-address (and (not ret-struct) (string=? ret ms-desc)
