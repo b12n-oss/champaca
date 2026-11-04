@@ -1293,18 +1293,20 @@
 ;; another thread is ready to run.
 ;;
 ;; The runtime keeps some per-thread values in globals: the current
-;; java.lang.Thread, the CHAMPACA_BT shadow stack, the scoped value cache.
+;; java.lang.Thread, the CHAMPACA_BT shadow stack, the scoped value cache,
+;; the no-yield depth.
 ;; They are saved when a thread gives the GIL up and restored when it takes
 ;; it back.
 
 (define-record-type jthread-state
-  (fields (mutable jthread) (mutable jstack) (mutable svc) (mutable permit) (mutable depth) (mutable tid))
-  (sealed #t) (nongenerative champaca-jthread-state))
+  (fields (mutable jthread) (mutable jstack) (mutable svc) (mutable permit) (mutable depth) (mutable tid)
+          (mutable no-yield))
+  (sealed #t) (nongenerative champaca-jthread-state-2))
 ;; This Chez thread's jthread-state. A forked Chez thread inherits its parent's
 ;; value, so a thread jolt started (a future, say) would see its parent's
 ;; state: gil-enter! checks the thread id before trusting it.
 (define self (make-thread-parameter #f))
-(define main-state (make-jthread-state #f '() #f #f 1 (get-thread-id)))
+(define main-state (make-jthread-state #f '() #f #f 1 (get-thread-id) 0))
 (self main-state)
 
 (define gil (make-mutex))
@@ -1317,11 +1319,14 @@
 (define main-thread #f)
 (define current-jthread #f)        ; the running thread's java.lang.Thread
 (define scoped-value-cache #f)
+(define no-yield-depth 0)          ; see without-yields
 
 (define (gil-save! s)
   (jthread-state-jstack-set! s jstack)
-  (jthread-state-svc-set! s scoped-value-cache))
+  (jthread-state-svc-set! s scoped-value-cache)
+  (jthread-state-no-yield-set! s no-yield-depth))
 (define (gil-restore! s)
+  (set! no-yield-depth (jthread-state-no-yield s))
   (set! current-jthread (jthread-state-jthread s))
   (set! jstack (jthread-state-jstack s))
   (set! scoped-value-cache (jthread-state-svc s)))
@@ -1371,7 +1376,7 @@
 (define (gil-enter!)
   (let* ([s0 (self)]
          [known (and s0 (eqv? (jthread-state-tid s0) (get-thread-id)))]
-         [s (if known s0 (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id))]) (self s) s))])
+         [s (if known s0 (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id) 0)]) (self s) s))])
     (if (eq? gil-owner s)
         (jthread-state-depth-set! s (fx+ (jthread-state-depth s) 1))
         (begin
@@ -1409,8 +1414,10 @@
   (when (fx> gil-blocked 0)
     (with-mutex gil (condition-broadcast gil-cv))))
 
-;; thunk runs without giving the GIL up at a safepoint. Only the GIL's holder
-;; runs, so one global depth serves every thread; thunk must not block.
+;; thunk runs without giving the GIL up at a safepoint. The depth is a
+;; per-thread value (saved and restored with the GIL), so a thunk that does
+;; block, waiting for another thread's <clinit> or a monitor, holds back no
+;; other thread's safepoints.
 (define (without-yields thunk)
   (dynamic-wind
     (lambda () (set! no-yield-depth (fx+ no-yield-depth 1)))
@@ -1426,7 +1433,6 @@
 ;; this only when some thread is waiting for the GIL. While no-yield-depth is
 ;; above zero the thread keeps the GIL (see without-yields).
 (define safepoint-count 0)
-(define no-yield-depth 0)
 (define (jsafepoint)
   (set! safepoint-count (fx+ safepoint-count 1))
   (when (and (fx>= safepoint-count 1000) (fx= no-yield-depth 0))
@@ -1632,7 +1638,7 @@
 (define threads-started 0)   ; for the management beans; main isn't counted
 (define threads-peak 1)
 (defnative "java/lang/Thread.start0()V" (this)
-  (let ([s (make-jthread-state this '() #f #f 0 #f)])
+  (let ([s (make-jthread-state this '() #f #f 0 #f 0)])
     (eq-hashtable-set! jthread-states this s)
     (thread-alive! this #t)
     (set! java-live-threads (cons this java-live-threads))
