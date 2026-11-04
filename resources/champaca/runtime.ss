@@ -899,9 +899,7 @@
     (cond [(null? ms) #f]
           [(and (string=? name (caar ms)) (string=? desc (cadar ms))) (caddar ms)]
           [else (loop (cdr ms))])))
-(define (same-runtime-package? a b)
-  (and (string=? (class-package a) (class-package b))
-       (eq? (class-loader-of a) (class-loader-of b))))
+;; same-runtime-package? (package and defining loader) is reflect.ss's, for nest hosts
 (define (package-private-selection rc dc name desc)
   ;; rc the receiver's class, dc the resolved method's; #f when rc isn't
   ;; below dc (dispatch then goes by the vtable)
