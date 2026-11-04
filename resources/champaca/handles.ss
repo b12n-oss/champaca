@@ -203,9 +203,11 @@
 (define (virtual-mh c name desc)
   (let ([hit (find-method c name desc)])
     (unless (and hit (not (static-flag? (caddr (cdr hit))))) (no-such-method c name desc "invokeVirtual"))
-    (let ([key (string-append name desc)])
+    (let ([key (string-append name desc)] [dc (jclass-cname (car hit))] [flags (caddr (cdr hit))])
       (make-mh (string-append "(" (cname->desc (jclass-cname c)) (substring desc 1 (string-length desc)))
-               (lambda (o . xs) (apply (jvirt o key) o xs)) #f (varargs-flag? (cdr hit))))))
+               ;; findVirtual on a private method is its own, as on the JVM,
+               ;; and a package-private one is selected by run-time package
+               (lambda (o . xs) (apply (virtual-target o dc key flags) o xs)) #f (varargs-flag? (cdr hit))))))
 
 (define (special-mh c name desc caller)
   (let ([hit (find-method c name desc)])

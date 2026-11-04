@@ -310,7 +310,10 @@
                        (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl)))
                            (apply sx (method-global decl name desc) actuals))))
                7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
-               (5 9) (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals)
+               (5 9) (if-let [pp (and (= kind 5) ((:package-private-decl resolve) class name desc))]
+                       ;; as invokevirtual of a package-private method (JVMS 5.4.5)
+                       (apply sx (sx "package-private-target" (sx "nn" (first actuals)) (sx "symbol-class" (str "'" (sym pp))) (str-lit (str name desc))) actuals)
+                       (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals))
                8 (do ((:ensure-loaded resolve) class)
                      (sx "let" (sx (sx "o" (sx "jnew-ic" (ic!) (str "'" (sym class)))))
                          (apply sx (method-global class name desc) "o" actuals) "o")))
@@ -877,7 +880,12 @@
                                ;; method, which javac calls this way
                                (apply sx (at pc (callee pc decl name desc))
                                       (sx "nn-at" recv (site pc)) argv)
-                               (apply sx (at pc (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc))) recv argv))))
+                               (if-let [pp (and (= op :invokevirtual) ((:package-private-decl resolve) class name desc))]
+                                 ;; a package-private method is overridden
+                                 ;; only from its run-time package (JVMS
+                                 ;; 5.4.5), which the vtable's keys can't say
+                                 (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (str "'" (sym pp)) (site pc))) recv argv)
+                                 (apply sx (at pc (sx "jvirt-ic" ((:ic! ctx)) recv (str "'" (sym (str name desc))) (site pc))) recv argv)))))
                        :invokespecial
                        (let [decl ((:resolve-method resolve) class name desc)
                              _ ((:check-kind resolve) :special class name desc)]

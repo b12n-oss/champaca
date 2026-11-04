@@ -597,7 +597,9 @@
                 (lambda ()
                   (if static?
                       (apply (method-proc cname key) argv)
-                      (apply (jvirt obj key) obj argv))))])
+                      ;; a private method is its own, a package-private one
+                      ;; selected by run-time package (runtime.ss)
+                      (apply (virtual-target obj cname key (caddr meta)) obj argv))))])
         (cond [(string=? ret "V") #f] [(prim-desc? ret) (jbox ret r)] [else r])))))
 
 (defnative "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;"

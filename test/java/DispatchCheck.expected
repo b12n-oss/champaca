@@ -1,0 +1,16 @@
+1 Base: call=base reflect=base handle=base reference=base
+2 same package: call=same reflect=same handle=same reference=same
+3 same package, public: call=bridge reflect=bridge handle=bridge reference=bridge
+4 another package: call=base reflect=base handle=base reference=base
+5 another package, public, below Base: call=base reflect=base handle=base reference=base
+6 Base's package below Mid: call=back reflect=back handle=back reference=back
+7 another package below Back: call=after-mid reflect=after-mid handle=after-mid reference=after-mid
+8 another package below Bridge: call=after-bridge reflect=after-bridge handle=after-bridge reference=after-bridge
+9 same package name, another loader: call=base reflect=base handle=base reference=base
+10 private, bytecode: base-private
+11 private, reflection: base-private
+12 private, findVirtual: base-private
+13 private, unreflect: base-private
+14 public h, another package: foreign-h
+15 an override made private: call=weak reflect=weak handle=weak
+16 serialization hooks: [A.write, B.write, A.read, B.read] 1 2

@@ -882,6 +882,76 @@
       (set-cdr! ic proc))
     proc))
 
+;; Selection for a call whose resolved method is package-private (JVMS
+;; 5.4.5). The vtable is keyed by name and descriptor, which is right when
+;; the resolved method is public or protected: any method of that name and
+;; descriptor overrides it, so the nearest one wins. A package-private mA is
+;; overridden only by a method in its own run-time package (package and
+;; defining loader), or by one overriding a method that overrides mA
+;; (transitively, through a public or protected one between). So the
+;; classes from just below the resolved method's down to the receiver's are
+;; walked in that order, keeping every overriding declaration as an anchor
+;; for the ones below it; the deepest overrider is selected. Generated code
+;; reaches this through jvirt-pp-ic on a miss; reflection and method handles
+;; through virtual-target.
+(define (own-method-flags c name desc)
+  (let loop ([ms (car (jclass-meta c))])
+    (cond [(null? ms) #f]
+          [(and (string=? name (caar ms)) (string=? desc (cadar ms))) (caddar ms)]
+          [else (loop (cdr ms))])))
+(define (same-runtime-package? a b)
+  (and (string=? (class-package a) (class-package b))
+       (eq? (class-loader-of a) (class-loader-of b))))
+(define (package-private-selection rc dc name desc)
+  ;; rc the receiver's class, dc the resolved method's; #f when rc isn't
+  ;; below dc (dispatch then goes by the vtable)
+  (let ([below (let loop ([c rc] [acc '()])
+                 (cond [(eq? c dc) acc]
+                       [(jclass-super c) (loop (find-class (jclass-super c)) (cons c acc))]
+                       [else #f]))])
+    (and below
+         (let loop ([cs below] [anchors (list (cons dc (or (own-method-flags dc name desc) 0)))] [sel dc])
+           (if (null? cs)
+               sel
+               (let* ([c (car cs)] [f (own-method-flags c name desc)])
+                 (if (and f (fxzero? (fxlogand f #x000a))   ; neither private nor static
+                          (exists (lambda (a) (or (fxpositive? (fxlogand (cdr a) #x0005))
+                                                  (same-runtime-package? c (car a))))
+                                  anchors))
+                     (loop (cdr cs) (cons (cons c f) anchors) c)
+                     (loop (cdr cs) anchors sel))))))))
+(define (package-private-target o dc key)
+  (let* ([i (let find ([i 0]) (if (char=? (string-ref key i) #\() i (find (fx+ i 1))))]
+         [sel (and (jobj? o) (package-private-selection (jobj-cls o) dc (substring key 0 i) (substring key i (string-length key))))])
+    (cond [(not sel) (jvirt o key)]
+          ;; a selected method without code (abstract) is what the vtable
+          ;; can't hold: AbstractMethodError, as for any abstract selection
+          [(fxpositive? (fxlogand (or (own-method-flags sel (substring key 0 i) (substring key i (string-length key))) 0) #x0400))
+           (no-such-virtual (jobj-cls o) (string->symbol key))]
+          [else (method-proc (jclass-cname sel) key)])))
+;; a reflected or looked-up instance method's target on receiver o: a private
+;; one is its own (it overrides nothing and nothing overrides it), a
+;; package-private one by the rule above, any other through the vtable
+(define (virtual-target o dcname key flags)
+  (cond [(fxpositive? (fxlogand flags #x0002)) (method-proc dcname key)]
+        [(fxzero? (fxlogand flags #x0005)) (package-private-target (nn o) (find-class dcname) key)]
+        [else (jvirt o key)]))
+;; generated code's call of a resolved package-private method: an inline
+;; cache as jvirt-ic's, filled by the selection
+(define-syntax jvirt-pp-ic
+  (syntax-rules ()
+    [(_ ic x key dc tag pc)
+     (let ([o x])
+       (if (and (jobj? o) (eq? (jobj-cls o) (car ic)))
+           (cdr ic)
+           (jvirt-pp-miss ic o key dc tag pc)))]))
+(define (jvirt-pp-miss ic o key dc tag pc)
+  (let ([proc (package-private-target (or o (npe-at tag pc)) (symbol-class dc) (symbol->string key))])
+    (when (and (jobj? o) (not (eq-hashtable-contains? stub-procs proc)))
+      (set-car! ic (jobj-cls o))
+      (set-cdr! ic proc))
+    proc))
+
 ;; Generated code names classes by symbol: the class is found through an eq
 ;; table instead of hashing its name on every new and every initialization
 ;; check.

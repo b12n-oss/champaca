@@ -818,8 +818,23 @@
                      (pos? (bit-and (:flags (class-info cname)) 0x0010))))
         decl)))))
 
+(defn- package-private-decl
+  "The class declaring the method cname.mname(desc) an invokevirtual resolves
+  to, when that method is package-private, or nil. Selection for it has to
+  follow JVMS 5.4.5's run-time package rule (runtime.ss jvirt-pp-ic), where
+  any other resolved method is overridden by the nearest same-named one, as
+  the vtable has it."
+  [cname mname desc]
+  (when-not (str/starts-with? cname "[")
+    (when-let [decl (try (resolve-method cname mname desc) (catch Exception _ nil))]
+      (let [m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (class-methods decl)))]
+        (when (and m (not (cf/static? m)) (zero? (bit-and (:flags m) 0x0007))
+                   (not (cf/interface? (class-info decl))))
+          decl)))))
+
 (def ^:private resolver
   {:ensure-loaded #(ensure-loaded! %)
+   :package-private-decl package-private-decl
    :inline-candidate inline-candidate
    :direct-target direct-target
    :resolve-static-field resolve-static-field
@@ -922,12 +937,18 @@
         ;; the superclass's entries for methods some class declares; the
         ;; defaults it picked are picked again below, since this class may
         ;; implement a more specific interface
-        vtable (into (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
-                                                      (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
-                                      (vtable-of sup)))
+        sup-vt (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
+                                                (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
+                                (vtable-of sup)))
+        vtable (into sup-vt
                      (for [m (:methods info)
-                           :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
-                       [(str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))]))
+                           :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))
+                           :let [k (str (:name m) (:desc m))]
+                           ;; a private method overrides nothing: it doesn't
+                           ;; replace an inherited entry, which a call
+                           ;; through the superclass still selects
+                           :when (not (and (pos? (bit-and (:flags m) 0x0002)) (contains? sup-vt k)))]
+                       [k (str (:name info) "." (:name m) (:desc m))]))
         picked (for [[k cands] (iface-methods (filter #(cf/interface? (class-info %))
                                                       (rest (ancestry-of-unlinked info))))
                      :when (not (contains? vtable k))
