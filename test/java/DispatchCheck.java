@@ -129,12 +129,18 @@ public class DispatchCheck {
             return MethodHandles.lookup().unreflect(h).invoke(new Foreign());
         });
         row("public h, another package", () -> Foreign.class.getMethod("h").invoke(new Foreign()));
+        row("private, same package, reflection", () -> {
+            Method h = Base.class.getDeclaredMethod("h");
+            h.setAccessible(true);
+            return h.invoke(new Base.SameH()) + " " + Base.viaPrivateHandle(new Base.SameH());
+        });
         row("an override made private", () -> {
             Weak x = (Weak) fx.define("champaca.dispatch.a.WeakSub", "w").getConstructor().newInstance();
             Method w = Weak.class.getMethod("w");
             return "call=" + Weak.call(x) + " reflect=" + w.invoke(x) + " handle="
                 + MethodHandles.publicLookup().unreflect(w).invoke(x);
         });
+        row("a private method below a public anchor", () -> all((Base) fx.define("champaca.dispatch.b.PrivateAfterBridge", "m").getConstructor().newInstance()));
         row("serialization hooks", () -> {
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             try (ObjectOutputStream o = new ObjectOutputStream(bo)) { o.writeObject(new SerB()); }

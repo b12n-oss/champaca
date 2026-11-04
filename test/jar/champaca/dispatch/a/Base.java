@@ -35,4 +35,8 @@ public class Base {
     public static class Bridge extends Base {
         public String m() { return "bridge"; }
     }
+    // same package, with a public h(): Base's private h() isn't overridden
+    public static class SameH extends Base {
+        public String h() { return "same-h"; }
+    }
 }
