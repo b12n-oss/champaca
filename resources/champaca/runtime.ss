@@ -1732,8 +1732,8 @@
   (set! halted #f)
   (let ([status (run-guarded (lambda () (launch-main cname args)))])
     ;; as the java launcher: unless System.exit ended it, main's thread ends
-    ;; (its joiners wake), then the launcher waits for the other non-daemon
-    ;; threads and runs the shutdown hooks, keeping main's status
+    ;; (its joiners wake), then as DestroyJavaVM it waits for the other
+    ;; non-daemon threads and runs the shutdown hooks, keeping main's status
     (if halted
         status
         (let ([s (run-guarded (lambda () (main-thread-exit!) (java-shutdown!)))])

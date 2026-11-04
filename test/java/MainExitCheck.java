@@ -1,6 +1,9 @@
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 // What other threads see of the main thread once main returns: the launcher
 // detaches it (Thread.exit, terminated, joiners notified) before it waits
@@ -9,10 +12,11 @@ import java.util.concurrent.CountDownLatch;
 // doesn't reorder the output.
 public class MainExitCheck {
     static volatile boolean returning;
-    static final CountDownLatch started = new CountDownLatch(3);
+    static final CountDownLatch started = new CountDownLatch(4);
+    static final CountDownLatch daemonDone = new CountDownLatch(1);
 
     static final List<String> mainRows = new ArrayList<>(), joinerRows = new ArrayList<>(),
-        waiterRows = new ArrayList<>(), untimedRows = new ArrayList<>();
+        waiterRows = new ArrayList<>(), untimedRows = new ArrayList<>(), daemonRows = new ArrayList<>();
 
     static void row(List<String> rows, String name, Object v) {
         synchronized (rows) { rows.add(name + ": " + v); }
@@ -30,7 +34,19 @@ public class MainExitCheck {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             row(mainRows, "hook: main alive", main.isAlive());
             row(mainRows, "hook: main state", main.getState());
-            print(mainRows); print(joinerRows); print(waiterRows); print(untimedRows);
+            // HotSpot's DestroyJavaVM thread waits for the others and runs the hooks
+            Thread destroy = null;
+            for (Thread t : Thread.getAllStackTraces().keySet())
+                if (t.getName().equals("DestroyJavaVM")) destroy = t;
+            row(mainRows, "hook: DestroyJavaVM listed", destroy != null);
+            if (destroy != null) {
+                row(mainRows, "hook: DestroyJavaVM daemon", destroy.isDaemon());
+                row(mainRows, "hook: DestroyJavaVM alive", destroy.isAlive());
+                row(mainRows, "hook: DestroyJavaVM group", destroy.getThreadGroup().getName());
+            }
+            try { row(mainRows, "hook: daemon joiner done", daemonDone.await(10, TimeUnit.SECONDS)); }
+            catch (InterruptedException e) { throw new RuntimeException(e); }
+            print(mainRows); print(joinerRows); print(waiterRows); print(untimedRows); print(daemonRows);
         }));
         Thread joiner = new Thread(() -> {
             try {
@@ -49,6 +65,10 @@ public class MainExitCheck {
                 for (int i = 0; i < n; i++) if (all[i] == main) inArray = true;
                 row(joinerRows, "enumerated after join", inArray);
                 row(joinerRows, "join(1) after end", joinQuick(main));
+                row(joinerRows, "group after end", main.getThreadGroup());
+                ThreadMXBean mx = ManagementFactory.getThreadMXBean();
+                row(joinerRows, "thread count is the ids' count",
+                    mx.getThreadCount() == mx.getAllThreadIds().length);
             } catch (Throwable e) { e.printStackTrace(); System.exit(1); }
         }, "joiner");
         Thread waiter = new Thread(() -> {
@@ -67,7 +87,16 @@ public class MainExitCheck {
                 row(untimedRows, "untimed join returned", !main.isAlive());
             } catch (Throwable e) { e.printStackTrace(); System.exit(1); }
         }, "untimed");
-        joiner.start(); waiter.start(); untimed.start();
+        Thread daemon = new Thread(() -> {
+            try {
+                started.countDown();
+                main.join();
+                row(daemonRows, "daemon join returned", !main.isAlive());
+                daemonDone.countDown();
+            } catch (Throwable e) { e.printStackTrace(); System.exit(1); }
+        }, "daemon");
+        daemon.setDaemon(true);
+        joiner.start(); waiter.start(); untimed.start(); daemon.start();
         started.await();
         Thread.sleep(200);
         row(mainRows, "main still alive at the end", main.isAlive());

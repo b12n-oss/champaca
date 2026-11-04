@@ -150,8 +150,9 @@
   (def "getTotalClassCount()J" (lambda (this) (hashtable-size classes)))
   (def "getInitializedClassCount()J"
        (lambda (this) (length (filter (lambda (c) (eq? (jclass-state c) 'initialized)) (vector->list (hashtable-values classes))))))
-  (def "getTotalThreadCount()J" (lambda (this) (fx+ 1 threads-started)))
-  (def "getLiveThreadCount()I" (lambda (this) (fx+ 1 (length java-live-threads))))
+  ;; main, and DestroyJavaVM once it's attached, besides the started ones
+  (def "getTotalThreadCount()J" (lambda (this) (fx+ (if destroy-jthread 2 1) threads-started)))
+  (def "getLiveThreadCount()I" (lambda (this) (length (live-jthreads))))
   (def "getPeakThreadCount()I" (lambda (this) threads-peak))
   (def "getDaemonThreadCount()I" (lambda (this) (length (filter thread-daemon? java-live-threads)))))
 
@@ -1610,22 +1611,41 @@
 
 ;; What HotSpot does as a thread ends (JavaThread::exit): Thread.exit(), then
 ;; ensure_join, which marks the thread terminated and notifies its monitor,
-;; which is what join() waits on.
-(define (thread-terminated! t)
-  (guard (e [#t (void)]) ((method-proc "java/lang/Thread" "exit()V") t))
+;; which is what join() waits on. unlisted! takes the thread off the live
+;; list before the notify, so a joiner that wakes doesn't find it listed.
+;; Thread.exit()'s exceptions are dropped as HotSpot drops them, but not a
+;; System.exit, which only main raises (halt0 ends the process on any other).
+(define (thread-terminated! t unlisted!)
+  (guard (e [(java-halt? e) (raise e)] [#t (void)])
+    ((method-proc "java/lang/Thread" "exit()V") t))
   (jmonitor-enter t)
   (thread-alive! t #f)
+  (unlisted!)
   ((native-ref "java/lang/Object.notifyAll()V") t)
   (jmonitor-exit t))
 
 ;; The launcher's main thread ends when main returns, before the launcher
-;; waits for the other non-daemon threads (DestroyJavaVM), so they can join
-;; it. Only the launcher's path does this: a jolt program calling into Java
-;; keeps its main thread, since jolt goes on running on it.
+;; waits for the other non-daemon threads, so they can join it. Only the
+;; launcher's path does this: a jolt program calling into Java keeps its main
+;; thread, since jolt goes on running on it. Then, as HotSpot's DestroyJavaVM
+;; attaches a new thread for the wait and the shutdown hooks, this Chez
+;; thread goes on as a live non-daemon java.lang.Thread named DestroyJavaVM in
+;; main's group, sharing main's jthread-state; main's own entry goes, so
+;; interrupting or unparking the ended main reaches nothing.
 (define main-ended #f)
+(define destroy-jthread #f)
 (define (main-thread-exit!)
-  (thread-terminated! main-thread)
-  (set! main-ended #t))
+  (thread-terminated! main-thread (lambda () (set! main-ended #t)))
+  (eq-hashtable-delete! jthread-states main-thread)
+  (let ([t (jnew "java/lang/Thread")])
+    (jthread-state-jthread-set! main-state t)
+    (set! current-jthread t)
+    (eq-hashtable-set! jthread-states t main-state)
+    ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
+     t main-group (jstring "DestroyJavaVM"))
+    (note-native-thread! t)
+    (thread-alive! t #t)
+    (set! destroy-jthread t)))
 
 ;; A started thread: run(), then what HotSpot does on the way out. An
 ;; uncaught exception goes to dispatchUncaughtException, which prints it the
@@ -1644,8 +1664,7 @@
                 ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") t e))]
              [else (report-uncaught e)]))))
       (lambda () ((jvirt t "run()V") t)))))
-  (thread-terminated! t)
-  (set! java-live-threads (remq t java-live-threads))
+  (thread-terminated! t (lambda () (set! java-live-threads (remq t java-live-threads))))
   (flush-output-port (current-output-port)))
 
 (define threads-started 0)   ; for the management beans; main isn't counted
@@ -1679,17 +1698,17 @@
     (set! current-jthread t)
     (eq-hashtable-set! jthread-states t s)
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
-     t ((jvirt main-thread "getThreadGroup()Ljava/lang/ThreadGroup;") main-thread)
+     t main-group
      (jstring (string-append "jolt-" (number->string (get-thread-id)))))
     (note-native-thread! t)
     (thread-alive! t #t)))
 
-;; The live Java threads, main first until it ends, as Thread.getThreads and
-;; the management beans list them (a jolt thread calling in isn't one, as a
-;; native thread attached to a JVM is)
+;; The live Java threads, main first until it ends, then DestroyJavaVM, as
+;; Thread.getThreads and the management beans list them (a jolt thread
+;; calling in isn't one, as a native thread attached to a JVM is)
 (define (live-jthreads)
   (let ([others (reverse java-live-threads)])
-    (if main-ended others (cons main-thread others))))
+    (if main-ended (cons destroy-jthread others) (cons main-thread others))))
 (defnative "java/lang/Thread.getThreads()[Ljava/lang/Thread;" ()
   (make-jarr "Ljava/lang/Thread;" (list->vector (live-jthreads))))
 ;; Thread.getAllStackTraces: the current thread's stack, from the native's
@@ -1795,10 +1814,14 @@
   (jinit "java/lang/Shutdown")
   ((method-proc "java/lang/Shutdown" "shutdown()V")))
 
+;; main's ThreadGroup, which jolt's threads and DestroyJavaVM join: the main
+;; thread's getThreadGroup() is null once it has ended
+(define main-group #f)
 (define (boot-threads!)
   (jinit "java/lang/ThreadGroup")
   (let ([system (jnew "java/lang/ThreadGroup")]
         [main (jnew "java/lang/ThreadGroup")])
+    (set! main-group main)
     ((method-proc "java/lang/ThreadGroup" "<init>()V") system)
     ((method-proc "java/lang/ThreadGroup" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
      main system (jstring "main"))

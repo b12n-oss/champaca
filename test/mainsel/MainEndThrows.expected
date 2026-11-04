@@ -1,0 +1,4 @@
+exit 1
+handler: main alive=true main fails
+joined: alive=false state=TERMINATED
+--- stderr
