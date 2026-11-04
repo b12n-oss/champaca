@@ -25,7 +25,7 @@
 25 closed arg: java.lang.IllegalStateException: Already closed
 26 bad layout: java.lang.IllegalArgumentException: Unsupported layout: 8%i4
 27 canonical: j8
-28 bool and byte: true
+28 isalpha nonzero: true
 29 p2_add: 13 24 8
 30 p2 heap arg: 2 4
 31 p2 heap result: false 10 12

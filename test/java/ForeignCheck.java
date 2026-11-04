@@ -55,7 +55,8 @@ public class ForeignCheck {
     row("closed arg", () -> { MemorySegment s; try (Arena ar = Arena.ofConfined()) { s = ar.allocateFrom("x"); } return (long) L.downcallHandle(std.findOrThrow("strlen"), FunctionDescriptor.of(JAVA_LONG, ADDRESS)).invokeExact(s); });
     row("bad layout", () -> L.downcallHandle(std.findOrThrow("abs"), FunctionDescriptor.of(JAVA_INT, JAVA_INT.withByteAlignment(8))));
     row("canonical", () -> L.canonicalLayouts().get("size_t"));
-    row("bool and byte", () -> (boolean) L.downcallHandle(std.findOrThrow("isalpha"), FunctionDescriptor.of(JAVA_BOOLEAN, JAVA_INT)).invokeExact((int) 'x'));
+    // isalpha's int is a mask (1024 on glibc, low byte 0), never a C bool: is_odd is the bool row
+    row("isalpha nonzero", () -> (int) L.downcallHandle(std.findOrThrow("isalpha"), FunctionDescriptor.of(JAVA_INT, JAVA_INT)).invokeExact((int) 'x') != 0);
     Arena ar = Arena.ofConfined();
     Path libPath = Path.of("target", System.mapLibraryName("ffitest")).toAbsolutePath();
     lib = SymbolLookup.libraryLookup(libPath, ar);
