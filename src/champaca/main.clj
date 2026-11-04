@@ -940,15 +940,14 @@
         sup-vt (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
                                                 (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
                                 (vtable-of sup)))
-        vtable (into sup-vt
-                     (for [m (:methods info)
-                           :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))
-                           :let [k (str (:name m) (:desc m))]
-                           ;; a private method overrides nothing: it doesn't
-                           ;; replace an inherited entry, which a call
-                           ;; through the superclass still selects
-                           :when (not (and (pos? (bit-and (:flags m) 0x0002)) (contains? sup-vt k)))]
-                       [k (str (:name info) "." (:name m) (:desc m))]))
+        own-methods (for [m (:methods info)
+                          :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
+                      [(pos? (bit-and (:flags m) 0x0002)) (str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))])
+        ;; a private method overrides nothing: it neither replaces an
+        ;; inherited entry nor keeps a default from being picked (JVMS
+        ;; 5.4.6), so it goes in last, under a key nothing else has
+        own-privates (for [[p? k g] own-methods :when p?] [k g])
+        vtable (into sup-vt (for [[p? k g] own-methods :when (not p?)] [k g]))
         picked (for [[k cands] (iface-methods (filter #(cf/interface? (class-info %))
                                                       (rest (ancestry-of-unlinked info))))
                      :when (not (contains? vtable k))
@@ -968,7 +967,7 @@
                        m (class-methods i)
                        :when (and (:virtual m) (:code m) (pos? (bit-and (:flags m) 0x0002)))]
                    [(str (:name m) (:desc m)) (str i "." (:name m) (:desc m))])
-        vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable privates)]
+        vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable (concat own-privates privates))]
     (assoc info :layout layout :template template :vtable vtable :conflicts conflicts)))
 
 (defn- ancestry-of-unlinked

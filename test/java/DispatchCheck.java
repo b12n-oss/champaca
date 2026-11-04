@@ -140,6 +140,12 @@ public class DispatchCheck {
             return "call=" + Weak.call(x) + " reflect=" + w.invoke(x) + " handle="
                 + MethodHandles.publicLookup().unreflect(w).invoke(x);
         });
+        row("private, method reference", () -> new Foreign().viaPrivateReference());
+        row("private, findVirtual, null receiver", () -> Base.viaPrivateHandle(null));
+        row("a private method where a default would be picked", () -> {
+            champaca.dispatch.a.Greets g = (champaca.dispatch.a.Greets) fx.define("champaca.dispatch.a.GreetsSub", "hi").getConstructor().newInstance();
+            return champaca.dispatch.a.Greets.call(g);
+        });
         row("a private method below a public anchor", () -> all((Base) fx.define("champaca.dispatch.b.PrivateAfterBridge", "m").getConstructor().newInstance()));
         row("serialization hooks", () -> {
             ByteArrayOutputStream bo = new ByteArrayOutputStream();

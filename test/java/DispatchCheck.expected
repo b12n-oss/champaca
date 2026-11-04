@@ -14,5 +14,8 @@
 14 public h, another package: foreign-h
 15 private, same package, reflection: base-private base-private
 16 an override made private: call=weak reflect=weak handle=weak
-17 a private method below a public anchor: call=bridge reflect=bridge handle=bridge reference=bridge
-18 serialization hooks: [A.write, B.write, A.read, B.read] 1 2
+17 private, method reference: foreign-g
+18 private, findVirtual, null receiver: java.lang.NullPointerException: null
+19 a private method where a default would be picked: default-hi
+20 a private method below a public anchor: call=bridge reflect=bridge handle=bridge reference=bridge
+21 serialization hooks: [A.write, B.write, A.read, B.read] 1 2

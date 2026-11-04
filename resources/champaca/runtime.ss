@@ -918,7 +918,7 @@
                                   anchors))
                      (loop (cdr cs) (cons (cons c f) anchors) c)
                      (loop (cdr cs) anchors sel))))))))
-(define (package-private-target o dc key)
+(define (package-private-select o dc key)
   (let* ([i (let find ([i 0]) (if (char=? (string-ref key i) #\() i (find (fx+ i 1))))]
          [sel (and (jobj? o) (package-private-selection (jobj-cls o) dc (substring key 0 i) (substring key i (string-length key))))])
     (cond [(not sel) (jvirt o key)]
@@ -928,11 +928,30 @@
           [(global-bound? (string->symbol (string-append (jclass-cname sel) "." key)))
            (method-proc (jclass-cname sel) key)]
           [else (no-such-virtual (jobj-cls o) (string->symbol key))])))
+;; The selection depends on the receiver's class, the resolved method's and
+;; the key alone, so it is kept per receiver class: a call site whose
+;; receivers alternate (HashMap.putVal's newNode, with HashMap and
+;; LinkedHashMap) walks once per class, not once per change. A stub isn't
+;; kept, as the inline caches don't keep one.
+(define package-private-selections (make-weak-eq-hashtable))   ; class -> eq table key symbol -> ((dc . proc) ...)
+(define (package-private-target o dc key)
+  (if (not (jobj? o))
+      (jvirt o key)
+      (let* ([rc (jobj-cls o)] [k (if (symbol? key) key (string->symbol key))]
+             [t (or (eq-hashtable-ref package-private-selections rc #f)
+                    (let ([t (make-eq-hashtable)]) (eq-hashtable-set! package-private-selections rc t) t))]
+             [hit (assq dc (eq-hashtable-ref t k '()))])
+        (if hit
+            (cdr hit)
+            (let ([proc (package-private-select o dc (if (string? key) key (symbol->string key)))])
+              (unless (eq-hashtable-contains? stub-procs proc)
+                (eq-hashtable-set! t k (cons (cons dc proc) (eq-hashtable-ref t k '()))))
+              proc)))))
 ;; a reflected or looked-up instance method's target on receiver o: a private
 ;; one is its own (it overrides nothing and nothing overrides it), a
 ;; package-private one by the rule above, any other through the vtable
 (define (virtual-target o dcname key flags)
-  (cond [(fxpositive? (fxlogand flags #x0002)) (method-proc dcname key)]
+  (cond [(fxpositive? (fxlogand flags #x0002)) (nn o) (method-proc dcname key)]
         [(fxzero? (fxlogand flags #x0005)) (package-private-target (nn o) (find-class dcname) key)]
         [else (jvirt o key)]))
 ;; generated code's call of a resolved package-private method: an inline
@@ -945,7 +964,7 @@
            (cdr ic)
            (jvirt-pp-miss ic o key dc tag pc)))]))
 (define (jvirt-pp-miss ic o key dc tag pc)
-  (let ([proc (package-private-target (or o (npe-at tag pc)) (symbol-class dc) (symbol->string key))])
+  (let ([proc (package-private-target (or o (npe-at tag pc)) (symbol-class dc) key)])
     (when (and (jobj? o) (not (eq-hashtable-contains? stub-procs proc)))
       (set-car! ic (jobj-cls o))
       (set-cdr! ic proc))

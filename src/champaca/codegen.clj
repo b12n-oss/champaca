@@ -310,9 +310,20 @@
                        (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl)))
                            (apply sx (method-global decl name desc) actuals))))
                7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
-               (5 9) (if-let [pp (and (= kind 5) ((:package-private-decl resolve) class name desc))]
+               (5 9) (cond
+                       ;; a private or final method, or a final class's: the
+                       ;; one method, after the null check dispatch would do,
+                       ;; as invokevirtual; javac 25 references a private
+                       ;; method (this::foo) as kind 5, and the vtable keeps
+                       ;; an inherited entry under its name
+                       (when (= kind 5) ((:direct-target resolve) class name desc))
+                       (let [decl ((:direct-target resolve) class name desc)]
+                         (apply sx (method-global decl name desc) (sx "nn" (first actuals)) (rest actuals)))
                        ;; as invokevirtual of a package-private method (JVMS 5.4.5)
-                       (apply sx (sx "package-private-target" (sx "nn" (first actuals)) (sx "symbol-class" (str "'" (sym pp))) (str-lit (str name desc))) actuals)
+                       (when (= kind 5) ((:package-private-decl resolve) class name desc))
+                       (let [pp ((:package-private-decl resolve) class name desc)]
+                         (apply sx (sx "package-private-target" (sx "nn" (first actuals)) (sx "symbol-class" (str "'" (sym pp))) (str-lit (str name desc))) actuals))
+                       :else
                        (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals))
                8 (do ((:ensure-loaded resolve) class)
                      (sx "let" (sx (sx "o" (sx "jnew-ic" (ic!) (str "'" (sym class)))))

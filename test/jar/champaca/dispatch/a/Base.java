@@ -11,6 +11,7 @@ import java.util.function.Function;
 public class Base {
     String m() { return "base"; }
     private String h() { return "base-private"; }
+    String g() { return "base-g"; }
 
     public static String call(Base b) { return b.m(); }
     public static String callPrivate(Base b) { return b.h(); }
