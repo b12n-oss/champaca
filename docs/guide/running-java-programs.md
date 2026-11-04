@@ -52,7 +52,7 @@ As with `java -jar`, `jolt -M -m champaca.main -jar app.jar args...` runs the cl
 
 `main` is found as Java 25's launcher finds it (JEP 512), by the JDK's own `LauncherHelper`: a `static` or instance `main`, with a `String[]` or no parameters, public, protected or package-private, declared or inherited, a default method included. `main(String[])` wins over `main()`, whichever of them is `static`. An instance `main` runs on an object made with the class's no-argument constructor. A class with none of these, a private constructor, an abstract class or a class that isn't there fails with the launcher's text and status 1 (`test/mainsel`, run by `bb test`).
 
-`System.out` and `System.err` go through the JDK's own `PrintStream` and encoder down to a native write, and the process exits with the status a JVM would give: 0, the argument to `System.exit`, or 1 after an uncaught exception. As with `java`, the main thread ends when `main` returns, so a thread that joins it wakes and sees it terminated, and then the process waits for any non-daemon threads still running and runs the shutdown hooks.
+`System.out` and `System.err` go through the JDK's own `PrintStream` and encoder down to a native write, and the process exits with the status a JVM would give: 0, the argument to `System.exit`, or 1 after an uncaught exception. As with `java`, the main thread ends when `main` returns, so a thread that joins it wakes and sees it terminated, and then the process waits for any non-daemon threads still running and runs the shutdown hooks (`test/java/MainExitCheck.java`; `test/mainsel`'s MainEndThrows and MainEndExit cover an uncaught exception and `System.exit`, after which main never ends).
 
 Here's a small program that throws on its second line of output:
 

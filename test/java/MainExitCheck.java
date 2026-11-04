@@ -31,6 +31,7 @@ public class MainExitCheck {
         row(mainRows, "alive before return", main.isAlive());
         row(mainRows, "state before return", main.getState());
         row(mainRows, "listed before return", Thread.getAllStackTraces().containsKey(main));
+        row(mainRows, "main id", main.threadId());
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             row(mainRows, "hook: main alive", main.isAlive());
             row(mainRows, "hook: main state", main.getState());
@@ -39,6 +40,10 @@ public class MainExitCheck {
             for (Thread t : Thread.getAllStackTraces().keySet())
                 if (t.getName().equals("DestroyJavaVM")) destroy = t;
             row(mainRows, "hook: DestroyJavaVM listed", destroy != null);
+            java.util.Set<Long> ids = new java.util.HashSet<>();
+            boolean distinct = true;
+            for (Thread t : Thread.getAllStackTraces().keySet()) distinct &= ids.add(t.threadId());
+            row(mainRows, "hook: thread ids distinct", distinct);
             if (destroy != null) {
                 row(mainRows, "hook: DestroyJavaVM daemon", destroy.isDaemon());
                 row(mainRows, "hook: DestroyJavaVM alive", destroy.isAlive());

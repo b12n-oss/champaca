@@ -1,10 +1,12 @@
 alive before return: true
 state before return: RUNNABLE
 listed before return: true
+main id: 3
 main still alive at the end: true
 hook: main alive: false
 hook: main state: TERMINATED
 hook: DestroyJavaVM listed: true
+hook: thread ids distinct: true
 hook: DestroyJavaVM daemon: false
 hook: DestroyJavaVM alive: true
 hook: DestroyJavaVM group: main

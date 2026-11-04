@@ -1566,7 +1566,9 @@
 (defnative "java/lang/Thread.setCurrentThread(Ljava/lang/Thread;)V" (this t) (void))
 (defnative "java/lang/Thread.setPriority0(I)V" (this p) (void))
 (defnative "java/lang/Thread.setNativeName(Ljava/lang/String;)V" (this n) (void))
-(defnative "java/lang/Thread.getNextThreadIdOffset()J" () (native-alloc! 3))
+;; the counter ThreadIdentifiers.next() takes ids from; main has Thread's
+;; PRIMORDIAL_TID, 3, so the counter starts after it, as HotSpot's does
+(defnative "java/lang/Thread.getNextThreadIdOffset()J" () (native-alloc! 4))
 (defnative "java/lang/Thread.scopedValueCache()[Ljava/lang/Object;" () scoped-value-cache)
 (defnative "java/lang/Thread.setScopedValueCache([Ljava/lang/Object;)V" (c) (set! scoped-value-cache c))
 (defnative "java/lang/Thread.findScopedValueBindings()Ljava/lang/Object;" () #f)
