@@ -924,11 +924,12 @@
   (let* ([i (let find ([i 0]) (if (char=? (string-ref key i) #\() i (find (fx+ i 1))))]
          [sel (and (jobj? o) (package-private-selection (jobj-cls o) dc (substring key 0 i) (substring key i (string-length key))))])
     (cond [(not sel) (jvirt o key)]
-          ;; a selected method without code (abstract) is what the vtable
-          ;; can't hold: AbstractMethodError, as for any abstract selection
-          [(fxpositive? (fxlogand (or (own-method-flags sel (substring key 0 i) (substring key i (string-length key))) 0) #x0400))
-           (no-such-virtual (jobj-cls o) (string->symbol key))]
-          [else (method-proc (jclass-cname sel) key)])))
+          ;; a selected method with no procedure (abstract, and the runtime
+          ;; doesn't override it, as natives.ss does VarHandle's) is
+          ;; AbstractMethodError, as for any abstract selection
+          [(global-bound? (string->symbol (string-append (jclass-cname sel) "." key)))
+           (method-proc (jclass-cname sel) key)]
+          [else (no-such-virtual (jobj-cls o) (string->symbol key))])))
 ;; a reflected or looked-up instance method's target on receiver o: a private
 ;; one is its own (it overrides nothing and nothing overrides it), a
 ;; package-private one by the rule above, any other through the vtable
