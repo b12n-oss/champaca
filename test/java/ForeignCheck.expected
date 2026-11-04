@@ -1,0 +1,65 @@
+1 linker: true
+2 strlen: 5
+3 abs: 7
+4 labs long: 1099511627776
+5 getpid > 0: true
+6 sqrt double: 1.4142135623730951
+7 sqrtf float: 1.4142135
+8 toupper char-ish: 81
+9 strcat into buffer: abcd true 0
+10 snprintf variadic: 9 42 3.14 x
+11 void return: 117901063
+12 div struct return: 3 2 8
+13 lldiv struct return: -14 -2
+14 errno capture: -1 2
+15 critical heap: false
+16 heap not allowed: java.lang.IllegalArgumentException: Heap segment not allowed: MemorySegment{ kind: heap, heapBase: [B@H, address: 0x0, byteSize: 2 }
+17 find missing: false
+18 NULL symbol: java.lang.IllegalArgumentException: Symbol is NULL: MemorySegment{ kind: native, address: 0x0, byteSize: 0 }
+19 handle type: (MemorySegment)long
+20 unbound type: (MemorySegment,MemorySegment)long
+21 unbound call: 3
+22 libraryLookup missing: java.lang.IllegalArgumentException: Cannot open library: libnosuchlib_zz
+23 libraryLookup libz: false
+24 closed arg: java.lang.IllegalStateException: Already closed
+25 bad layout: java.lang.IllegalArgumentException: Unsupported layout: 8%i4
+26 canonical: j8
+27 bool and byte: true
+28 p2_add: 13 24 8
+29 p2 heap arg: 2 4
+30 p2 heap result: false 10 12
+31 p2 too small: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: native, address: 0xADDR, byteSize: 4 }; new offset = 0; new length = 8
+32 f3_sum hfa: 7.75
+33 f3_scale: 0.5 1.0 1.5
+34 d4_rev big: 3.5 0.5 0.5
+35 cd_sum padded: 7.25
+36 l3_mix: 25769803776 4 -1
+37 n_sum nested: 5433
+38 u_bits union: 3f800000
+39 b2_swap: -2 1
+40 many stack right or refused: ok
+41 v_pp: 3456
+42 v_ip: 98034
+43 v_sp right or refused: ok
+44 sum_va: 60
+45 dsum_va: 3.75
+46 va float refused: java.lang.IllegalArgumentException: Invalid variadic argument layout: f4
+47 fill critical heap: [0, 1, 4, 9, 16]
+48 fill native: 9
+49 neg8: -128
+50 ch: 0
+51 sh: -25536
+52 is_odd: true
+53 invoke boxed: 6
+54 null arg: java.lang.NullPointerException
+55 closed lib: java.lang.IllegalStateException: Already closed
+56 symbol by name missing: false
+57 blocking call lets threads run: true
+58 loaderLookup before load: false
+59 loadLibrary: ok
+60 loaderLookup after load: 42
+61 loadLibrary again: ok
+62 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
+63 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
+64 load absolute: ok
+65 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread

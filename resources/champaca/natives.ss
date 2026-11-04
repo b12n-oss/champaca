@@ -276,15 +276,14 @@
 (defnative "java/lang/System.mapLibraryName(Ljava/lang/String;)Ljava/lang/String;" (name)
   (jstring (string-append "lib" (jstring->scheme (nn name)) (if natives-macos? ".dylib" ".so"))))
 ;; The JDK's own libraries are champaca's natives, so loading one is a no-op.
-;; Nothing else can load (there is no JNI), which is the JVM's error for a
-;; library that isn't on java.library.path.
+;; Any other library loads as the JDK loads it (foreign.ss java-load-library),
+;; for SymbolLookup.loaderLookup; its JNI code can't run.
 (define-override! "java/lang/ClassLoader.loadLibrary(Ljava/lang/Class;Ljava/lang/String;)Ljdk/internal/loader/NativeLibrary;"
   (lambda (from name)
     (let ([n (jstring->scheme (nn name))])
       (if (file-exists? (string-append java-home-dir "/lib/lib" n (if natives-macos? ".dylib" ".so")))
           #f   ; Runtime.loadLibrary0 drops the result
-          (jthrow "java/lang/UnsatisfiedLinkError"
-                  (string-append "no " n " in java.library.path, and champaca loads no JNI libraries"))))))
+          (java-load-library from name)))))
 
 ;; --- jdk.internal.vm.vector (the Vector API's VM side) --------------------------
 ;; Every VectorSupport intrinsic is a Java method with a Java fallback, which

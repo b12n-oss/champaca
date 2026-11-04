@@ -1653,7 +1653,7 @@
 (def ^:private runtime-files
   "The Scheme runtime, in load order."
   ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"
-   "champaca/net.ss" "champaca/spawn.ss"])
+   "champaca/net.ss" "champaca/spawn.ss" "champaca/foreign.ss"])
 
 ;; The text of a helpful NPE message, from the failing method's bytecode
 ;; (champaca.npe, loaded on the first message so other runs don't pay for
@@ -2023,7 +2023,11 @@
   ;; jdk.module.addmods.<n> per occurrence; with one, the boot layer is
   ;; resolved instead of read from the image's pre-generated graph
   (when-let [ps (seq (concat (:command-line-properties @state)
-                             (map-indexed (fn [i ms] [(str "jdk.module.addmods." i) ms]) (:add-modules @state))))]
+                             (map-indexed (fn [i ms] [(str "jdk.module.addmods." i) ms]) (:add-modules @state))
+                             ;; --enable-native-access the same way, one
+                             ;; jdk.module.enable.native.access.<n> each
+                             (map-indexed (fn [i ms] [(str "jdk.module.enable.native.access." i) ms])
+                                          (:enable-native-access @state))))]
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (when-let [ds (seq (:assertion-directives @state))]
     (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
@@ -2250,7 +2254,9 @@
   PreviewFeatures says so); --source N or --source=N, as :source (the
   source launcher compiles at that release, source-file mode); --add-modules M[,M...] or
   --add-modules=M..., each occurrence one entry of :add-modules (the boot
-  layer's extra roots); -Xss, the thread stack size, as :stack in bytes
+  layer's extra roots); --enable-native-access M[,M...] or
+  --enable-native-access=M..., the same way, as :enable-native-access (the
+  modules whose restricted calls don't warn); -Xss, the thread stack size, as :stack in bytes
   (bound-stack!). A -D naming one of the module system's own properties
   (reserved-module-property?) is dropped and :module-props-ignored set, as
   HotSpot ignores it with a warning. A heap size (-Xmx,
@@ -2291,6 +2297,14 @@
             (if (= a "--add-modules=")
               (launcher-error "Error: --add-modules= requires modules to be specified")
               (recur (rest argv) (update opts :add-modules (fnil conj []) (subs a 14))))
+            (= "--enable-native-access" a)
+            (if-let [ms (option-value (second argv) false)]
+              (recur (nnext argv) (update opts :enable-native-access (fnil conj []) ms))
+              (launcher-error "Error: --enable-native-access requires modules to be specified"))
+            (str/starts-with? a "--enable-native-access=")
+            (if (= a "--enable-native-access=")
+              (launcher-error "Error: --enable-native-access= requires modules to be specified")
+              (recur (rest argv) (update opts :enable-native-access (fnil conj []) (subs a 23))))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
                                                                           "Error: A fatal exception has occurred. Program will exit."])))
@@ -2314,15 +2328,17 @@
   jvm-options consumed: each as given and in place, except the class path
   ones, which become java.class.path alone, and -server/-client, which the
   launcher drops; --source N is -Djdk.internal.javac.source=N, the property
-  the launcher passes; --add-modules M is --add-modules=M; source-file mode
+  the launcher passes; --add-modules M is --add-modules=M, and
+  --enable-native-access M --enable-native-access=M; source-file mode
   ends with --add-modules=ALL-DEFAULT."
   [consumed source-mode?]
   (concat (loop [[a & more :as as] consumed out []]
             (cond (empty? as) out
-                  (#{"-cp" "-classpath" "--class-path" "--source" "--add-modules"} a)
+                  (#{"-cp" "-classpath" "--class-path" "--source" "--add-modules" "--enable-native-access"} a)
                   (recur (rest more) (case a
                                        "--source" (conj out (str "-Djdk.internal.javac.source=" (first more)))
                                        "--add-modules" (conj out (str "--add-modules=" (first more)))
+                                       "--enable-native-access" (conj out (str "--enable-native-access=" (first more)))
                                        out))
                   (str/starts-with? a "--source=") (recur more (conj out (str "-Djdk.internal.javac.source=" (subs a 9))))
                   (or (str/starts-with? a "--class-path=") (#{"-server" "-client"} a)) (recur more out)
@@ -2376,7 +2392,7 @@
 (def ^:private source-launcher "com/sun/tools/javac/launcher/SourceLauncher")
 
 (defn -main [& all-argv]
-  (let [{:keys [props classpath assertions argv stack preview source add-modules module-props-ignored]} (jvm-options all-argv)
+  (let [{:keys [props classpath assertions argv stack preview source add-modules enable-native-access module-props-ignored]} (jvm-options all-argv)
         consumed (take (- (count all-argv) (count argv)) all-argv)
         ;; source-file mode, as java's: --source, or a first argument that is
         ;; a .java file; the file and its arguments go to javac's
@@ -2392,7 +2408,7 @@
         _ (when module-props-ignored
             (binding [*out* *err*]
               (println "OpenJDK 64-Bit Server VM warning: Ignoring system property options whose names match the '-Djdk.module.*'. names that are reserved for internal use.")))
-        _ (swap! state assoc :add-modules add-modules)
+        _ (swap! state assoc :add-modules add-modules :enable-native-access enable-native-access)
         ;; with -cp the main class comes first; without, champaca's own
         ;; form, the class path first (-jar ignores -cp, as java does)
         ;; in source-file mode the class path is -cp's or, as the launcher
