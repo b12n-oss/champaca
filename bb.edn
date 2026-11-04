@@ -223,6 +223,7 @@
                     _ (shell "jar cfm target/app.jar test/jarmain.mf -C target/jarmain-classes .")
                     ;; ForeignCheck's native library, loaded through SymbolLookup.libraryLookup
                     _ (shell (str "cc -shared -fPIC -O1 -o target/" (System/mapLibraryName "ffitest") " test/native/ffitest.c"))
+                    _ (shell (str "cc -shared -fPIC -O1 -o target/" (System/mapLibraryName "jnibad") " test/native/jnibad.c"))
                     ;; BlockingIoCheck's FIFO
                     _ (fs/delete-if-exists "target/blocking-io.fifo")
                     _ (shell "mkfifo target/blocking-io.fifo")

@@ -20,6 +20,7 @@
 (define jlib-dlopen (foreign-procedure "dlopen" (utf-8 int) uptr))
 (define jlib-dlsym (foreign-procedure "dlsym" (uptr utf-8) uptr))
 (define jlib-dlclose (foreign-procedure "dlclose" (uptr) int))
+(define jlib-dlerror (foreign-procedure "dlerror" () string))
 
 (define (ffi-open! impl cname name)
   (let ([h (jlib-dlopen (jstring->scheme (nn name)) RTLD_LAZY)])
@@ -28,8 +29,8 @@
 
 ;; NativeLibraries loads the system lookup's libsyslookup and any library
 ;; System.loadLibrary or System.load names that the JDK doesn't ship (see
-;; java-load-library). HotSpot's text for a library that fails to open is "Can't
-;; load library: <name>". HotSpot runs a library's JNI_OnLoad, which needs
+;; java-load-library). HotSpot's text for a library that fails to open is
+;; "<name>: <dlerror's text>". HotSpot runs a library's JNI_OnLoad, which needs
 ;; JNI; champaca refuses such a library instead. One without it loads, so
 ;; SymbolLookup.loaderLookup finds its symbols, and a Java native method it
 ;; would implement stays missing (UnsatisfiedLinkError when called).
@@ -42,7 +43,8 @@
       [(eqv? h 0)
        (if (eqv? throw? 0)
            0
-           (jthrow "java/lang/UnsatisfiedLinkError" (string-append "Can't load library: " (jstring->scheme name))))]
+           (jthrow "java/lang/UnsatisfiedLinkError"
+                   (string-append (jstring->scheme name) ": " (or (jlib-dlerror) "dlopen failed"))))]
       [(not (eqv? (jlib-dlsym h "JNI_OnLoad") 0))
        (jslot-set! impl (jfield-index cname "handle") 0)
        (jlib-dlclose h)
@@ -60,14 +62,15 @@
 (define (java-load-library from name)
   (let* ([n (jstring->scheme name)]
          [loader (and from ((jvirt from "getClassLoader()Ljava/lang/ClassLoader;") from))]
-         [prop (lambda (k) (let ([v ((ffi-static "java/lang/System" "getProperty(Ljava/lang/String;)Ljava/lang/String;") (jstring k))])
+         ;; StaticProperty's values, read at startup, as the JDK's texts use
+         [prop (lambda (m) (let ([v ((ffi-static "jdk/internal/util/StaticProperty" (string-append m "()Ljava/lang/String;")))])
                              (if v (jstring->scheme v) "null")))]
          [by-name (lambda (libs)
                     ((jvirt libs "loadLibrary(Ljava/lang/Class;Ljava/lang/String;)Ljdk/internal/loader/NativeLibrary;") libs from name))])
     (if (not loader)
         (or (by-name ((ffi-static "jdk/internal/loader/BootLoader" "getNativeLibraries()Ljdk/internal/loader/NativeLibraries;")))
             (jthrow "java/lang/UnsatisfiedLinkError"
-                    (string-append "no " n " in system library path: " (prop "sun.boot.library.path"))))
+                    (string-append "no " n " in system library path: " (prop "sunBootLibraryPath"))))
         (let ([libs (jslot loader (jfield-index "java/lang/ClassLoader" "libraries"))]
               [file ((jvirt loader "findLibrary(Ljava/lang/String;)Ljava/lang/String;") loader name)])
           (if file
@@ -80,7 +83,7 @@
                     (jthrow "java/lang/UnsatisfiedLinkError" (string-append "Can't load " (jstring->scheme file)))))
               (or (by-name libs)
                   (jthrow "java/lang/UnsatisfiedLinkError"
-                          (string-append "no " n " in java.library.path: " (prop "java.library.path")))))))))
+                          (string-append "no " n " in java.library.path: " (prop "javaLibraryPath")))))))))
 (defnative "jdk/internal/loader/NativeLibraries.unload(Ljava/lang/String;ZJ)V" (name builtin? h)
   (unless (eqv? h 0) (jlib-dlclose h)))
 (defnative "jdk/internal/loader/RawNativeLibraries.load0(Ljdk/internal/loader/RawNativeLibraries$RawNativeLibraryImpl;Ljava/lang/String;)Z"
@@ -103,6 +106,17 @@
     [(#\C) 'unsigned-16] [(#\Z) 'unsigned-8] [(#\F) 'float] [(#\D) 'double]
     [(#\V) 'void] [else 'uptr]))
 
+;; eval for the generated forms: Chez refuses some signatures only when it
+;; compiles the foreign-procedure (a struct over 16 bytes passed on the
+;; stack, measured on macOS arm64: "unexpected Triv"), and that must reach
+;; Java as an exception, not end the process
+(define (ffi-eval form)
+  (guard (e [(and (not (jobj? e)) (condition? e))
+             (jthrow "java/lang/UnsupportedOperationException"
+                     (string-append "champaca: Chez Scheme can't make this foreign call: "
+                                    (call-with-string-output-port (lambda (p) (display-condition e p)))))])
+    (eval form)))
+
 ;; foreign-procedure makers, one per signature: (maker address) is the
 ;; procedure that calls the function at address. A struct argument is given
 ;; as the address of a native copy, a struct result as the address to store
@@ -114,7 +128,7 @@
         (let* ([xs (map (lambda (t) (gensym "x")) types)]
                [wrap (lambda (t x) (if (pair? t) `(make-ftype-pointer ,(cadr t) ,x) x))]
                [rp (gensym "r")]
-               [m (eval `(lambda (a)
+               [m (ffi-eval `(lambda (a)
                            (let ([f (foreign-procedure ,@(if safe? '(__collect_safe) '())
                                                        ,@(if variadic `((__varargs_after ,variadic)) '())
                                                        a ,types ,ret)])
@@ -175,8 +189,8 @@
   (let ([ft (layout-ftype l)])
     (or (hashtable-ref ffi-ftypes ft #f)
         (let ([name (string->symbol (format "champaca-ffi-struct-~a" (hashtable-size ffi-ftypes)))])
-          (eval `(define-ftype ,name ,ft))
-          (unless (= (eval `(ftype-sizeof ,name)) (layout-size l))
+          (ffi-eval `(define-ftype ,name ,ft))
+          (unless (= (ffi-eval `(ftype-sizeof ,name)) (layout-size l))
             (jthrow "java/lang/UnsupportedOperationException"
                     (format "champaca: struct layout ~a doesn't map to a C struct" (jstring-of l))))
           (hashtable-set! ffi-ftypes ft name)
@@ -204,66 +218,96 @@
   (jinit cname)
   (method-proc cname key))
 
-;; Chez Scheme 10.4.1 lays out macOS arm64 stack arguments wrongly for a
-;; struct of 16 bytes or less that isn't all floats or all doubles: Apple's
-;; ABI packs only scalars at their natural alignment, and such a struct still
-;; starts on an 8-byte boundary and takes a multiple of 8 bytes, as in
-;; standard AAPCS64, where Chez packs it like a scalar (measured against
-;; clang). The callee would read the wrong bytes, so a signature where that
-;; changes anything is refused. Variadic arguments are placed right (8-byte
-;; slots, measured). Linux arm64 and x86_64 aren't affected: Chez gives
-;; every stack argument there a multiple of 8 bytes, as their ABIs do.
+;; Chez Scheme 10.4.1 places some macOS arm64 stack arguments where Apple's
+;; ABI doesn't (measured against clang). Apple packs a scalar or a float or
+;; double aggregate (HFA) at its natural alignment, but a struct of 16 bytes
+;; or less that isn't an HFA starts on an 8-byte boundary and takes a
+;; multiple of 8 bytes, as in standard AAPCS64, where Chez packs it like a
+;; scalar. And Chez pads before a stack argument by its alignment minus the
+;; previous end's offset mod 8, which goes negative when that offset is the
+;; larger (an HFA of 3 floats, a char, then another HFA: the second starts
+;; at 13, not 16; three chars and a short: the short at 2). chez-misplaces?
+;; places each stack argument both ways and refuses a signature where any
+;; starts differ. Registers are assigned alike by both; variadic arguments
+;; take 8-byte slots in both. Linux arm64 and x86_64 aren't affected: Chez
+;; gives every stack argument there a multiple of 8 bytes, as their ABIs do.
 (define ffi-macos-arm64? (memq (machine-type) '(arm64osx tarm64osx)))
 
+;; a layout's scalar leaves as (kind size . offset), kind float, double or
+;; other, with a union's members at one offset and duplicates dropped, as
+;; Chez's filter-union drops them
 (define (layout-leaves l)
-  (cond [(layout-is? l "java/lang/foreign/PaddingLayout") '()]
-        [(layout-is? l "java/lang/foreign/SequenceLayout")
-         (let ([e (layout-leaves ((jvirt l "elementLayout()Ljava/lang/foreign/MemoryLayout;") l))])
-           (apply append (make-list ((jvirt l "elementCount()J") l) e)))]
-        [(layout-group? l) (apply append (map layout-leaves (layout-members l)))]
-        [else (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
-                (list (case (string-ref d 0) [(#\F) 'float] [(#\D) 'double] [else 'other])))]))
+  (let walk ([l l] [base 0])
+    (cond [(layout-is? l "java/lang/foreign/PaddingLayout") '()]
+          [(layout-is? l "java/lang/foreign/SequenceLayout")
+           (let ([e ((jvirt l "elementLayout()Ljava/lang/foreign/MemoryLayout;") l)])
+             (let loop ([k 0])
+               (if (= k ((jvirt l "elementCount()J") l))
+                   '()
+                   (append (walk e (+ base (* k (layout-size e)))) (loop (+ k 1))))))]
+          [(layout-is? l "java/lang/foreign/UnionLayout")
+           (fold-left (lambda (acc m) (append acc (remove-dups acc (walk m base)))) '() (layout-members l))]
+          [(layout-group? l)
+           (let loop ([ms (layout-members l)] [off base])
+             (if (null? ms)
+                 '()
+                 (append (walk (car ms) off) (loop (cdr ms) (+ off (layout-size (car ms)))))))]
+          [else (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
+                  (list (cons* (case (string-ref d 0) [(#\F) 'float] [(#\D) 'double] [else 'other])
+                               (layout-size l) base)))])))
+(define (remove-dups seen xs) (filter (lambda (x) (not (member x seen))) xs))
 
-(define (hfa-of l)   ; the member type of a homogeneous float aggregate, or #f
+(define (hfa-of l)   ; an HFA's member kind, float or double, or #f
   (let ([ls (layout-leaves l)])
-    (and (pair? ls) (fx<= (length ls) 4) (memq (car ls) '(float double))
-         (for-all (lambda (x) (eq? x (car ls))) ls)
-         (car ls))))
+    (and (pair? ls) (fx<= (length ls) 4) (memq (caar ls) '(float double))
+         (for-all (lambda (x) (eq? (car x) (caar ls))) ls)
+         (caar ls))))
 
 (define (chez-misplaces? layouts variadic)
   (and ffi-macos-arm64?
-       (let loop ([ls layouts] [i 0] [gp 0] [fp 0] [off 0] [ragged #f])
-         (define (on-stack! size align)
-           ;; a ragged struct before this stack argument is misplaced by Chez
-           (or ragged (loop (cdr ls) (fx+ i 1) gp fp (+ (round-up off align) size) #f)))
-         (cond
-           [(null? ls) #f]
-           [(and variadic (fx>= i variadic))   ; macOS variadics: 8-byte slots, Chez agrees
-            (if ragged #t (loop (cdr ls) (fx+ i 1) gp fp (+ (round-up off 8) 8) #f))]
-           [else
-            (let* ([l (car ls)] [size (layout-size l)])
-              (cond
-                [(not (layout-group? l))
-                 (let ([float? (memq (car (layout-leaves l)) '(float double))])
-                   (cond [(and float? (fx< fp 8)) (loop (cdr ls) (fx+ i 1) gp (fx+ fp 1) off ragged)]
-                         [(and (not float?) (fx< gp 8)) (loop (cdr ls) (fx+ i 1) (fx+ gp 1) fp off ragged)]
-                         [else (on-stack! size size)]))]
-                [(hfa-of l)
-                 => (lambda (t)
-                      (let ([n (length (layout-leaves l))])
-                        (if (fx<= (fx+ fp n) 8)
-                            (loop (cdr ls) (fx+ i 1) gp (fx+ fp n) off ragged)
-                            (let ([m (if (eq? t 'float) 4 8)])
-                              (if ragged #t (loop (cdr ls) (fx+ i 1) gp 8 (+ (round-up off m) size) #f))))))]
-                [(> size 16)   ; passed as a pointer
-                 (if (fx< gp 8) (loop (cdr ls) (fx+ i 1) (fx+ gp 1) fp off ragged) (on-stack! 8 8))]
-                [else
-                 (let ([words (quotient (+ size 7) 8)])
-                   (if (fx<= (fx+ gp words) 8)
-                       (loop (cdr ls) (fx+ i 1) (fx+ gp words) fp off ragged)
-                       (cond [ragged #t]
-                             [(not (= 0 (modulo off 8))) #t]
-                             [else (loop (cdr ls) (fx+ i 1) 8 fp (+ off size) (not (= 0 (modulo size 8))))])))]))]))))
+       ;; each stack argument as (apple-align apple-size chez-align chez-size)
+       (let loop ([ls layouts] [i 0] [gp 0] [fp 0] [stack '()])
+         (if (null? ls)
+             (stack-starts-differ? (reverse stack))
+             (let* ([l (car ls)] [size (layout-size l)] [group? (layout-group? l)]
+                    [hfa (and group? (hfa-of l))]
+                    [next (lambda (gp fp entry) (loop (cdr ls) (fx+ i 1) gp fp (if entry (cons entry stack) stack)))])
+               (cond
+                 [(and variadic (fx>= i variadic))
+                  (let ([n (if (and group? (> size 16)) 8 (round-up size 8))])
+                    (next gp fp (list 8 n 8 n)))]
+                 [(not group?)
+                  (if (memq (car (car (layout-leaves l))) '(float double))
+                      (if (fx< fp 8) (next gp (fx+ fp 1) #f) (next gp fp (list size size size size)))
+                      (if (fx< gp 8) (next (fx+ gp 1) fp #f) (next gp fp (list size size size size))))]
+                 [hfa
+                  (let ([n (length (layout-leaves l))] [m (if (eq? hfa 'float) 4 8)])
+                    (if (fx<= (fx+ fp n) 8) (next gp (fx+ fp n) #f) (next gp 8 (list m size m size))))]
+                 [(> size 16)   ; passed as a pointer
+                  (if (fx< gp 8) (next (fx+ gp 1) fp #f) (next gp fp (list 8 8 8 8)))]
+                 [else
+                  (let ([words (quotient (+ size 7) 8)])
+                    (if (fx<= (fx+ gp words) 8)
+                        (next (fx+ gp words) fp #f)
+                        (next 8 fp (list 8 (round-up size 8) (struct-align l) size))))]))))))
+
+(define (struct-align l)
+  (fold-left (lambda (a x) (max a (cadr x))) 1 (layout-leaves l)))
+
+;; Apple's start for each: the end so far rounded up to its alignment.
+;; Chez's: the end so far plus (align - end mod 8) when end mod 8 isn't a
+;; multiple of align (s/arm64.ss alignment-via-lookahead).
+(define (stack-starts-differ? entries)
+  (let loop ([es entries] [apple 0] [chez 0] [first #t])
+    (and (pair? es)
+         (let* ([e (car es)]
+                [a-start (round-up apple (car e))]
+                [c-align (caddr e)]
+                [c-start (if (or first (= 0 (modulo (modulo chez 8) c-align)))
+                             chez
+                             (+ chez (- c-align (modulo chez 8))))])
+           (or (not (= a-start c-start))
+               (loop (cdr es) (+ a-start (cadr e)) (+ c-start (cadddr e)) #f))))))
 
 ;; a native buffer of n bytes, and a segment over it for the JDK's copy
 (define (native-temp n) (foreign-alloc (max n 1)))
@@ -293,7 +337,28 @@
                "copy(Ljava/lang/foreign/MemorySegment;JLjava/lang/foreign/MemorySegment;JJ)V")
    from from-off to to-off n))
 
+;; the JDK's own CallArranger.getBindings for this platform, run for its
+;; checks alone: they are what HotSpot's arrangeDowncall does before it
+;; generates code (a struct of size zero, say, is "Stack must be empty after
+;; recipe")
+(define (ffi-validate! mt fd options)
+  (case (machine-type)
+    [(arm64osx tarm64osx arm64le tarm64le)
+     (let* ([c "jdk/internal/foreign/abi/aarch64/CallArranger"]
+            [_ (jinit c)]
+            [arranger (top-level-value (string->symbol (string-append c (if ffi-macos-arm64? ":MACOS" ":LINUX"))))])
+       ((jvirt arranger "getBindings(Ljava/lang/invoke/MethodType;Ljava/lang/foreign/FunctionDescriptor;ZLjdk/internal/foreign/abi/LinkerOptions;)Ljdk/internal/foreign/abi/aarch64/CallArranger$Bindings;")
+        arranger mt fd 0 options))]
+    [else
+     ((ffi-static "jdk/internal/foreign/abi/x64/sysv/CallArranger"
+                  "getBindings(Ljava/lang/invoke/MethodType;Ljava/lang/foreign/FunctionDescriptor;ZLjdk/internal/foreign/abi/LinkerOptions;)Ljdk/internal/foreign/abi/x64/sysv/CallArranger$Bindings;")
+      mt fd 0 options)]))
+
+;; an address as the signed long Java sees (a uptr result is unsigned)
+(define (signed-address a) (if (> a #x7fffffffffffffff) (- a (expt 2 64)) a))
+
 (define (ffi-arrange mt fd options)
+  (ffi-validate! mt fd options)
   (let* ([d (mt-desc mt)]
          [params (desc-args d)]
          [ret (desc-ret d)]
@@ -322,7 +387,7 @@
          [ret-address (and (not ret-struct) (string=? ret ms-desc)
                            (let ([f (ffi-static "jdk/internal/foreign/Utils"
                                                 "longToAddress(JLjava/lang/foreign/AddressLayout;)Ljava/lang/foreign/MemorySegment;")])
-                             (lambda (a) (f a ret-layout))))]
+                             (lambda (a) (f (signed-address a) ret-layout))))]
          [unbox-java (ffi-static "jdk/internal/foreign/abi/SharedUtils" "unboxSegment(Ljava/lang/foreign/MemorySegment;)J")]
          [unbox (lambda (s) (if (seg-native? s) (jslot s (cdr (seg-field-indexes))) (unbox-java s)))]
          [set-int (lambda (s v)

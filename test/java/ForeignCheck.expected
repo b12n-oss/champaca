@@ -1,70 +1,78 @@
-1 linker: true
-2 strlen: 5
-3 abs: 7
-4 labs long: 1099511627776
-5 getpid > 0: true
-6 sqrt double: 1.4142135623730951
-7 sqrtf float: 1.4142135
-8 toupper char-ish: 81
-9 strcat into buffer: abcd true 0
-10 snprintf variadic: 9 42 3.14 x
-11 void return: 117901063
-12 div struct return: 3 2 8
-13 lldiv struct return: -14 -2
-14 errno capture: -1 2
-15 critical heap: false
-16 heap not allowed: java.lang.IllegalArgumentException: Heap segment not allowed: MemorySegment{ kind: heap, heapBase: [B@H, address: 0x0, byteSize: 2 }
-17 find missing: false
-18 NULL symbol: java.lang.IllegalArgumentException: Symbol is NULL: MemorySegment{ kind: native, address: 0x0, byteSize: 0 }
-19 handle type: (MemorySegment)long
-20 unbound type: (MemorySegment,MemorySegment)long
-21 unbound call: 3
-22 libraryLookup missing: java.lang.IllegalArgumentException: Cannot open library: libnosuchlib_zz
-23 libraryLookup libz: false
-24 closed arg: java.lang.IllegalStateException: Already closed
-25 bad layout: java.lang.IllegalArgumentException: Unsupported layout: 8%i4
-26 canonical: j8
-27 bool and byte: true
-28 p2_add: 13 24 8
-29 p2 heap arg: 2 4
-30 p2 heap result: false 10 12
-31 p2 too small: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: native, address: 0xADDR, byteSize: 4 }; new offset = 0; new length = 8
-32 f3_sum hfa: 7.75
-33 f3_scale: 0.5 1.0 1.5
-34 d4_rev big: 3.5 0.5 0.5
-35 cd_sum padded: 7.25
-36 l3_mix: 25769803776 4 -1
-37 n_sum nested: 5433
-38 u_bits union: 3f800000
-39 b2_swap: -2 1
-40 many stack right or refused: ok
-41 v_pp: 3456
-42 v_ip: 98034
-43 v_sp right or refused: ok
-44 sum_va: 60
-45 dsum_va: 3.75
-46 va float refused: java.lang.IllegalArgumentException: Invalid variadic argument layout: f4
-47 fill critical heap: [0, 1, 4, 9, 16]
-48 fill native: 9
-49 neg8: -128
-50 ch: 0
-51 sh: -25536
-52 is_odd: true
-53 invoke boxed: 6
-54 null arg: java.lang.NullPointerException
-55 closed lib: java.lang.IllegalStateException: Already closed
-56 symbol by name missing: false
-57 blocking call lets threads run: true
-58 pad_sum extra padding: java.lang.IllegalArgumentException: Member layout 'i4', of '[i4x4i4]' found at unexpected offset: 8 != 4
-59 v_cs right or refused: ok
-60 ch high: 32769
-61 unbound two symbols: 5 65 6
-62 native access enabled: true
-63 loaderLookup before load: false
-64 loadLibrary: ok
-65 loaderLookup after load: 42
-66 loadLibrary again: ok
-67 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
-68 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
-69 load absolute: ok
-70 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread
+1 native access enabled: true
+2 linker: true
+3 strlen: 5
+4 abs: 7
+5 labs long: 1099511627776
+6 getpid > 0: true
+7 sqrt double: 1.4142135623730951
+8 sqrtf float: 1.4142135
+9 toupper char-ish: 81
+10 strcat into buffer: abcd true 0
+11 snprintf variadic: 9 42 3.14 x
+12 void return: 117901063
+13 div struct return: 3 2 8
+14 lldiv struct return: -14 -2
+15 errno capture: -1 2
+16 critical heap: false
+17 heap not allowed: java.lang.IllegalArgumentException: Heap segment not allowed: MemorySegment{ kind: heap, heapBase: [B@H, address: 0x0, byteSize: 2 }
+18 find missing: false
+19 NULL symbol: java.lang.IllegalArgumentException: Symbol is NULL: MemorySegment{ kind: native, address: 0x0, byteSize: 0 }
+20 handle type: (MemorySegment)long
+21 unbound type: (MemorySegment,MemorySegment)long
+22 unbound call: 3
+23 libraryLookup missing: java.lang.IllegalArgumentException: Cannot open library: libnosuchlib_zz
+24 libraryLookup libz: false
+25 closed arg: java.lang.IllegalStateException: Already closed
+26 bad layout: java.lang.IllegalArgumentException: Unsupported layout: 8%i4
+27 canonical: j8
+28 bool and byte: true
+29 p2_add: 13 24 8
+30 p2 heap arg: 2 4
+31 p2 heap result: false 10 12
+32 p2 too small: java.lang.IndexOutOfBoundsException: Out of bound access on segment MemorySegment{ kind: native, address: 0xADDR, byteSize: 4 }; new offset = 0; new length = 8
+33 f3_sum hfa: 7.75
+34 f3_scale: 0.5 1.0 1.5
+35 d4_rev big: 3.5 0.5 0.5
+36 cd_sum padded: 7.25
+37 l3_mix: 25769803776 4 -1
+38 n_sum nested: 5433
+39 u_bits union: 3f800000
+40 b2_swap: -2 1
+41 many stack right or refused: ok
+42 v_pp: 3456
+43 v_ip: 98034
+44 v_sp right or refused: ok
+45 sum_va: 60
+46 dsum_va: 3.75
+47 va float refused: java.lang.IllegalArgumentException: Invalid variadic argument layout: f4
+48 fill critical heap: [0, 1, 4, 9, 16]
+49 fill native: 9
+50 neg8: -128
+51 ch: 0
+52 sh: -25536
+53 is_odd: true
+54 invoke boxed: 6
+55 null arg: java.lang.NullPointerException
+56 closed lib: java.lang.IllegalStateException: Already closed
+57 symbol by name missing: false
+58 blocking call lets threads run: true
+59 pad_sum extra padding: java.lang.IllegalArgumentException: Member layout 'i4', of '[i4x4i4]' found at unexpected offset: 8 != 4
+60 v_cs right or refused: ok
+61 ch high: 32769
+62 unbound two symbols: 5 65 6
+63 many_big right or refused: ok
+64 h3_mix right or refused: ok
+65 f1_mix right or refused: ok
+66 chars_short right or refused: ok
+67 address -1 returned: -1
+68 zero-size struct: java.lang.IllegalArgumentException: Stack must be empty after recipe
+69 loaderLookup before load: false
+70 loadLibrary: ok
+71 loaderLookup after load: 42
+72 loadLibrary again: ok
+73 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
+74 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
+75 load absolute: ok
+76 load a file that isn't a library: true
+77 loadLibrary with JNI_OnLoad: UnsatisfiedLinkError
+78 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread

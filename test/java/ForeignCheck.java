@@ -26,6 +26,8 @@ public class ForeignCheck {
   static SymbolLookup lib;
   static MethodHandle h(String n, FunctionDescriptor fd, Linker.Option... o) { return L.downcallHandle(lib.findOrThrow(n), fd, o); }
   public static void main(String[] a) throws Throwable {
+    // first: a restricted call that warns turns native access on for the module
+    row("native access enabled", () -> ForeignCheck.class.getModule().isNativeAccessEnabled());
     SymbolLookup std = L.defaultLookup();
     row("linker", () -> L.getClass().getSimpleName().endsWith("Linker") && L == Linker.nativeLinker());
     row("strlen", () -> { var h = L.downcallHandle(std.findOrThrow("strlen"), FunctionDescriptor.of(JAVA_LONG, ADDRESS)); try (Arena ar = Arena.ofConfined()) { return (long) h.invokeExact(ar.allocateFrom("hello")); } });
@@ -111,7 +113,18 @@ public class ForeignCheck {
     row("v_cs right or refused", () -> { var v = ar.allocate(C3); v.set(JAVA_BYTE, 0, (byte) 1); v.set(JAVA_BYTE, 1, (byte) 2); v.set(JAVA_BYTE, 2, (byte) 3); try { int r = (int) h("v_cs", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, C3, JAVA_SHORT)).invokeExact(1, 2, 3, 4, 5, 6, 7, 8, v, (short) 4); return r == 1234 ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
     row("ch high", () -> (int) (char) h("ch", FunctionDescriptor.of(JAVA_CHAR, JAVA_CHAR)).invokeExact((char) 0x8000));
     row("unbound two symbols", () -> { var u = L.downcallHandle(FunctionDescriptor.of(JAVA_INT, JAVA_INT)); return (int) u.invokeExact(std.findOrThrow("abs"), -5) + " " + (int) u.invokeExact(std.findOrThrow("toupper"), (int) 'a') + " " + (int) u.invokeExact(std.findOrThrow("abs"), -6); });
-    row("native access enabled", () -> ForeignCheck.class.getModule().isNativeAccessEnabled());
+    var F1 = MemoryLayout.structLayout(JAVA_FLOAT);
+    var I8D8 = new java.util.ArrayList<MemoryLayout>(); for (int i = 0; i < 8; i++) I8D8.add(JAVA_INT); for (int i = 0; i < 8; i++) I8D8.add(JAVA_DOUBLE);
+    row("many_big right or refused", () -> { var v = ar.allocate(L3); v.setAtIndex(JAVA_LONG, 0, 1); v.setAtIndex(JAVA_LONG, 1, 20); v.setAtIndex(JAVA_LONG, 2, 300); try { long r = (long) h("many_big", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, L3)).invokeExact(1, 2, 3, 4, 5, 6, 7, 8, v); return r == 321 ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
+    row("h3_mix right or refused", () -> { var x = ar.allocate(F3); x.set(JAVA_FLOAT, 0, 1f); x.set(JAVA_FLOAT, 4, 2f); x.set(JAVA_FLOAT, 8, 3f); var y = ar.allocate(F3); y.set(JAVA_FLOAT, 0, 4f); y.set(JAVA_FLOAT, 4, 5f); y.set(JAVA_FLOAT, 8, 6f);
+      var ls = new java.util.ArrayList<>(I8D8); ls.add(F3); ls.add(JAVA_BYTE); ls.add(F3);
+      try { float r = (float) h("h3_mix", FunctionDescriptor.of(JAVA_FLOAT, ls.toArray(new MemoryLayout[0]))).invokeExact(0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, x, (byte) 9, y); return r == 9462f ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
+    row("f1_mix right or refused", () -> { var x = ar.allocate(F1); x.set(JAVA_FLOAT, 0, 7f); var y = ar.allocate(F1); y.set(JAVA_FLOAT, 0, 8f);
+      var ls = new java.util.ArrayList<>(I8D8); ls.add(F1); ls.add(JAVA_BYTE); ls.add(F1);
+      try { float r = (float) h("f1_mix", FunctionDescriptor.of(JAVA_FLOAT, ls.toArray(new MemoryLayout[0]))).invokeExact(0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, x, (byte) 9, y); return r == 798f ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
+    row("chars_short right or refused", () -> { try { int r = (int) h("chars_short", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_BYTE, JAVA_BYTE, JAVA_BYTE, JAVA_SHORT)).invokeExact(0, 0, 0, 0, 0, 0, 0, 0, (byte) 1, (byte) 2, (byte) 3, (short) 4); return r == 1234 ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
+    row("address -1 returned", () -> ((MemorySegment) h("minus_one", FunctionDescriptor.of(ADDRESS)).invokeExact()).address());
+    row("zero-size struct", () -> h("nap", FunctionDescriptor.ofVoid(MemoryLayout.structLayout())));
     // System.loadLibrary with -Djava.library.path=target (ForeignCheck.options),
     // then the loader's lookup
     row("loaderLookup before load", () -> SymbolLookup.loaderLookup().find("sh").isPresent());
@@ -121,6 +134,8 @@ public class ForeignCheck {
     row("loadLibrary missing", () -> { System.loadLibrary("nosuch_zz"); return "ok"; });
     row("load relative", () -> { System.load("target/" + System.mapLibraryName("ffitest")); return "ok"; });
     row("load absolute", () -> { System.load(libPath.toString()); return "ok"; });
+    row("load a file that isn't a library", () -> { var junk = Path.of("target", "junk-" + System.mapLibraryName("x")).toAbsolutePath(); java.nio.file.Files.writeString(junk, "junk"); try { System.load(junk.toString()); return "ok"; } catch (UnsatisfiedLinkError e) { return e.getMessage().startsWith(junk + ": "); } });
+    row("loadLibrary with JNI_OnLoad", () -> { try { System.loadLibrary("jnibad"); return "ok"; } catch (UnsatisfiedLinkError e) { return "UnsatisfiedLinkError"; } });
     row("target from another thread", () -> {
       var sh = h("sh", FunctionDescriptor.of(JAVA_SHORT, JAVA_SHORT));
       Object[] out = new Object[1];

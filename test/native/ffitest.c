@@ -46,3 +46,9 @@ typedef struct { char a, b, c; } C3;
 typedef struct { int a; int pad; int b; } PI;
 int pad_sum(PI p) { return p.a * 10 + p.b; }
 int v_cs(int a, int b, int c, int d, int e, int f, int g, int h, C3 v, short s) { return v.a * 1000 + v.b * 100 + v.c * 10 + s; }
+int64_t many_big(int a, int b, int c, int d, int e, int f, int g, int h, L3 v) { return v.a + v.b + v.c; }
+typedef struct { float a; } F1;
+float h3_mix(int a, int b, int c, int d, int e, int f, int g, int h, double i, double j, double k, double l, double m, double n, double o, double p, F3 x, char ch, F3 y) { return x.a + x.b + x.c + ch * 1000 + y.a * 100 + y.b * 10 + y.c; }
+float f1_mix(int a, int b, int c, int d, int e, int f, int g, int h, double i, double j, double k, double l, double m, double n, double o, double p, F1 x, char ch, F1 y) { return x.a * 100 + ch * 10 + y.a; }
+int chars_short(int a, int b, int c, int d, int e, int f, int g, int h, char p, char q, char r, short s) { return p * 1000 + q * 100 + r * 10 + s; }
+void *minus_one(void) { return (void *) -1; }
