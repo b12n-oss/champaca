@@ -1,0 +1,15 @@
+alive before return: true
+state before return: RUNNABLE
+listed before return: true
+main still alive at the end: true
+hook: main alive: false
+hook: main state: TERMINATED
+join returned before timeout: true
+returning seen: true
+alive after join: false
+state after join: TERMINATED
+listed after join: false
+enumerated after join: false
+join(1) after end: true
+waiter: woken, main alive: false
+untimed join returned: true

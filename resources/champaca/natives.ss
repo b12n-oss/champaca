@@ -1608,11 +1608,29 @@
       (jthread-state-permit-set! s #t)
       (gil-poke!))))
 
+;; What HotSpot does as a thread ends (JavaThread::exit): Thread.exit(), then
+;; ensure_join, which marks the thread terminated and notifies its monitor,
+;; which is what join() waits on.
+(define (thread-terminated! t)
+  (guard (e [#t (void)]) ((method-proc "java/lang/Thread" "exit()V") t))
+  (jmonitor-enter t)
+  (thread-alive! t #f)
+  ((native-ref "java/lang/Object.notifyAll()V") t)
+  (jmonitor-exit t))
+
+;; The launcher's main thread ends when main returns, before the launcher
+;; waits for the other non-daemon threads (DestroyJavaVM), so they can join
+;; it. Only the launcher's path does this: a jolt program calling into Java
+;; keeps its main thread, since jolt goes on running on it.
+(define main-ended #f)
+(define (main-thread-exit!)
+  (thread-terminated! main-thread)
+  (set! main-ended #t))
+
 ;; A started thread: run(), then what HotSpot does on the way out. An
 ;; uncaught exception goes to dispatchUncaughtException, which prints it the
 ;; JDK's way; anything else (a runtime bug) is reported here. Then
-;; Thread.exit(), and the thread is marked terminated and its monitor
-;; notified, which is what join() waits on.
+;; thread-terminated!.
 (define (thread-body t)
   (call/cc
    (lambda (k)
@@ -1626,11 +1644,7 @@
                 ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") t e))]
              [else (report-uncaught e)]))))
       (lambda () ((jvirt t "run()V") t)))))
-  (guard (e [#t (void)]) ((method-proc "java/lang/Thread" "exit()V") t))
-  (jmonitor-enter t)
-  (thread-alive! t #f)
-  ((native-ref "java/lang/Object.notifyAll()V") t)
-  (jmonitor-exit t)
+  (thread-terminated! t)
   (set! java-live-threads (remq t java-live-threads))
   (flush-output-port (current-output-port)))
 
@@ -1670,10 +1684,12 @@
     (note-native-thread! t)
     (thread-alive! t #t)))
 
-;; The live Java threads, main first, as Thread.getThreads and the
-;; management beans list them (a jolt thread calling in isn't one, as a
+;; The live Java threads, main first until it ends, as Thread.getThreads and
+;; the management beans list them (a jolt thread calling in isn't one, as a
 ;; native thread attached to a JVM is)
-(define (live-jthreads) (cons main-thread (reverse java-live-threads)))
+(define (live-jthreads)
+  (let ([others (reverse java-live-threads)])
+    (if main-ended others (cons main-thread others))))
 (defnative "java/lang/Thread.getThreads()[Ljava/lang/Thread;" ()
   (make-jarr "Ljava/lang/Thread;" (list->vector (live-jthreads))))
 ;; Thread.getAllStackTraces: the current thread's stack, from the native's
