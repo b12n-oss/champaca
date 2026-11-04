@@ -52,3 +52,4 @@ float h3_mix(int a, int b, int c, int d, int e, int f, int g, int h, double i, d
 float f1_mix(int a, int b, int c, int d, int e, int f, int g, int h, double i, double j, double k, double l, double m, double n, double o, double p, F1 x, char ch, F1 y) { return x.a * 100 + ch * 10 + y.a; }
 int chars_short(int a, int b, int c, int d, int e, int f, int g, int h, char p, char q, char r, short s) { return p * 1000 + q * 100 + r * 10 + s; }
 void *minus_one(void) { return (void *) -1; }
+float h3_pair(int a, int b, int c, int d, int e, int f, int g, int h, double i, double j, double k, double l, double m, double n, double o, double p, F3 x, F3 y) { return x.a + x.b + x.c + y.a * 100 + y.b * 10 + y.c; }

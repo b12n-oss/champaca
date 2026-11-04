@@ -122,8 +122,12 @@ public class ForeignCheck {
     row("f1_mix right or refused", () -> { var x = ar.allocate(F1); x.set(JAVA_FLOAT, 0, 7f); var y = ar.allocate(F1); y.set(JAVA_FLOAT, 0, 8f);
       var ls = new java.util.ArrayList<>(I8D8); ls.add(F1); ls.add(JAVA_BYTE); ls.add(F1);
       try { float r = (float) h("f1_mix", FunctionDescriptor.of(JAVA_FLOAT, ls.toArray(new MemoryLayout[0]))).invokeExact(0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, x, (byte) 9, y); return r == 798f ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
+    // two HFAs on the stack, which Chez places as Apple does: run, not refused
+    row("h3_pair on the stack", () -> { var x = ar.allocate(F3); x.set(JAVA_FLOAT, 0, 1f); x.set(JAVA_FLOAT, 4, 2f); x.set(JAVA_FLOAT, 8, 3f); var y = ar.allocate(F3); y.set(JAVA_FLOAT, 0, 4f); y.set(JAVA_FLOAT, 4, 5f); y.set(JAVA_FLOAT, 8, 6f);
+      var ls = new java.util.ArrayList<>(I8D8); ls.add(F3); ls.add(F3);
+      return (float) h("h3_pair", FunctionDescriptor.of(JAVA_FLOAT, ls.toArray(new MemoryLayout[0]))).invokeExact(0, 0, 0, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, x, y); });
     row("chars_short right or refused", () -> { try { int r = (int) h("chars_short", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_BYTE, JAVA_BYTE, JAVA_BYTE, JAVA_SHORT)).invokeExact(0, 0, 0, 0, 0, 0, 0, 0, (byte) 1, (byte) 2, (byte) 3, (short) 4); return r == 1234 ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
-    row("address -1 returned", () -> ((MemorySegment) h("minus_one", FunctionDescriptor.of(ADDRESS)).invokeExact()).address());
+    row("address -1 returned", () -> { var r = (MemorySegment) h("minus_one", FunctionDescriptor.of(ADDRESS)).invokeExact(); return "" + r.address() + " " + (r.address() == -1L) + " " + r.equals(MemorySegment.ofAddress(-1)); });
     row("zero-size struct", () -> h("nap", FunctionDescriptor.ofVoid(MemoryLayout.structLayout())));
     // System.loadLibrary with -Djava.library.path=target (ForeignCheck.options),
     // then the loader's lookup

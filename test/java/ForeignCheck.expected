@@ -63,16 +63,17 @@
 63 many_big right or refused: ok
 64 h3_mix right or refused: ok
 65 f1_mix right or refused: ok
-66 chars_short right or refused: ok
-67 address -1 returned: -1
-68 zero-size struct: java.lang.IllegalArgumentException: Stack must be empty after recipe
-69 loaderLookup before load: false
-70 loadLibrary: ok
-71 loaderLookup after load: 42
-72 loadLibrary again: ok
-73 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
-74 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
-75 load absolute: ok
-76 load a file that isn't a library: true
-77 loadLibrary with JNI_OnLoad: UnsatisfiedLinkError
-78 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread
+66 h3_pair on the stack: 462.0
+67 chars_short right or refused: ok
+68 address -1 returned: -1 true true
+69 zero-size struct: java.lang.IllegalArgumentException: Stack must be empty after recipe
+70 loaderLookup before load: false
+71 loadLibrary: ok
+72 loaderLookup after load: 42
+73 loadLibrary again: ok
+74 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
+75 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
+76 load absolute: ok
+77 load a file that isn't a library: true
+78 loadLibrary with JNI_OnLoad: UnsatisfiedLinkError
+79 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread
