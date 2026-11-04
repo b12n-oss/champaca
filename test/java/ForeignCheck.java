@@ -105,6 +105,13 @@ public class ForeignCheck {
       while (t.isAlive()) { Thread.sleep(10); ticks++; }
       return ticks >= 10;
     });
+    var PI = MemoryLayout.structLayout(JAVA_INT, MemoryLayout.paddingLayout(4), JAVA_INT);
+    var C3 = MemoryLayout.structLayout(JAVA_BYTE, JAVA_BYTE, JAVA_BYTE);
+    row("pad_sum extra padding", () -> { var v = ar.allocate(PI); v.set(JAVA_INT, 0, 4); v.set(JAVA_INT, 4, 99); v.set(JAVA_INT, 8, 2); return (int) h("pad_sum", FunctionDescriptor.of(JAVA_INT, PI)).invokeExact(v); });
+    row("v_cs right or refused", () -> { var v = ar.allocate(C3); v.set(JAVA_BYTE, 0, (byte) 1); v.set(JAVA_BYTE, 1, (byte) 2); v.set(JAVA_BYTE, 2, (byte) 3); try { int r = (int) h("v_cs", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, C3, JAVA_SHORT)).invokeExact(1, 2, 3, 4, 5, 6, 7, 8, v, (short) 4); return r == 1234 ? "ok" : "WRONG " + r; } catch (UnsupportedOperationException e) { return "ok"; } });
+    row("ch high", () -> (int) (char) h("ch", FunctionDescriptor.of(JAVA_CHAR, JAVA_CHAR)).invokeExact((char) 0x8000));
+    row("unbound two symbols", () -> { var u = L.downcallHandle(FunctionDescriptor.of(JAVA_INT, JAVA_INT)); return (int) u.invokeExact(std.findOrThrow("abs"), -5) + " " + (int) u.invokeExact(std.findOrThrow("toupper"), (int) 'a') + " " + (int) u.invokeExact(std.findOrThrow("abs"), -6); });
+    row("native access enabled", () -> ForeignCheck.class.getModule().isNativeAccessEnabled());
     // System.loadLibrary with -Djava.library.path=target (ForeignCheck.options),
     // then the loader's lookup
     row("loaderLookup before load", () -> SymbolLookup.loaderLookup().find("sh").isPresent());

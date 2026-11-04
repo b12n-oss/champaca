@@ -55,11 +55,16 @@
 55 closed lib: java.lang.IllegalStateException: Already closed
 56 symbol by name missing: false
 57 blocking call lets threads run: true
-58 loaderLookup before load: false
-59 loadLibrary: ok
-60 loaderLookup after load: 42
-61 loadLibrary again: ok
-62 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
-63 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
-64 load absolute: ok
-65 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread
+58 pad_sum extra padding: java.lang.IllegalArgumentException: Member layout 'i4', of '[i4x4i4]' found at unexpected offset: 8 != 4
+59 v_cs right or refused: ok
+60 ch high: 32769
+61 unbound two symbols: 5 65 6
+62 native access enabled: true
+63 loaderLookup before load: false
+64 loadLibrary: ok
+65 loaderLookup after load: 42
+66 loadLibrary again: ok
+67 loadLibrary missing: java.lang.UnsatisfiedLinkError: no nosuch_zz in java.library.path: target
+68 load relative: java.lang.UnsatisfiedLinkError: Expecting an absolute path of the library: target/<lib>
+69 load absolute: ok
+70 target from another thread: java.lang.WrongThreadException: Attempted access outside owning thread

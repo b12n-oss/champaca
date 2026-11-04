@@ -125,15 +125,16 @@
           m))))
 
 ;; --- struct layouts as ftypes ------------------------------------------------------
-;; A group layout is defined once as an ftype of the same shape: a struct's
-;; padding is dropped where the next member's alignment (or, at the end, the
-;; struct's) would put it anyway, since the ABIs classify a struct by its
-;; members and a padding byte would read as an integer member; any other
-;; padding stays as bytes.
+;; A group layout is defined once as an ftype of the same shape. A struct's
+;; padding is dropped: the linker accepts only the padding natural alignment
+;; needs (AbstractLinker.checkLayouts refuses a member at any other offset),
+;; which Chez puts back, and the ABIs classify a struct by its members, so a
+;; padding byte would read as an integer member. struct-ftype checks the
+;; size all the same. A union's padding, which only makes it larger, stays as
+;; bytes.
 (define (layout-is? l cname) (class-assignable? (jclass-cname (jobj-cls l)) cname))
 (define (layout-group? l) (layout-is? l "java/lang/foreign/GroupLayout"))
 (define (layout-size l) ((jvirt l "byteSize()J") l))
-(define (layout-align l) ((jvirt l "byteAlignment()J") l))
 (define (layout-members l)
   (let ([ms ((jvirt l "memberLayouts()Ljava/util/List;") l)])
     (vector->list (jarr-vec ((jvirt ms "toArray()[Ljava/lang/Object;") ms)))))
@@ -153,20 +154,14 @@
                        [else (cons `(,(string->symbol (format "f~a" i)) ,(layout-ftype (car ms)))
                                    (loop (cdr ms) (fx+ i 1)))])))]
     [(layout-group? l)
-     (let ([total (layout-size l)] [align (layout-align l)])
-       `(struct
-          ,@(let loop ([ms (layout-members l)] [off 0] [i 0])
-              (cond
-                [(null? ms) '()]
-                [(layout-is? (car ms) "java/lang/foreign/PaddingLayout")
-                 (let* ([n (layout-size (car ms))] [next (+ off n)])
-                   (if (= next (if (null? (cdr ms)) (round-up off align) (round-up off (layout-align (cadr ms)))))
-                       (loop (cdr ms) next i)
-                       (cons `(,(string->symbol (format "f~a" i)) (array ,n unsigned-8))
-                             (loop (cdr ms) next (fx+ i 1)))))]
-                [else
-                 (cons `(,(string->symbol (format "f~a" i)) ,(layout-ftype (car ms)))
-                       (loop (cdr ms) (+ off (layout-size (car ms))) (fx+ i 1)))]))))]
+     `(struct
+        ,@(let loop ([ms (layout-members l)] [i 0])
+            (cond
+              [(null? ms) '()]
+              [(layout-is? (car ms) "java/lang/foreign/PaddingLayout") (loop (cdr ms) i)]
+              [else
+               (cons `(,(string->symbol (format "f~a" i)) ,(layout-ftype (car ms)))
+                     (loop (cdr ms) (fx+ i 1)))])))]
     [else
      (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
        (case (string-ref d 0)

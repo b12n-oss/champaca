@@ -42,3 +42,7 @@ int v_sp(int a, int b, int c, int d, int e, int f, int g, int h, short i, P2 p) 
 typedef struct { int64_t x; } L1;
 int v_il(int a, int b, int c, int d, int e, int f, int g, int h, int i, L1 p) { return i*10000 + (int) p.x; }
 void nap(int us) { usleep(us); }
+typedef struct { char a, b, c; } C3;
+typedef struct { int a; int pad; int b; } PI;
+int pad_sum(PI p) { return p.a * 10 + p.b; }
+int v_cs(int a, int b, int c, int d, int e, int f, int g, int h, C3 v, short s) { return v.a * 1000 + v.b * 100 + v.c * 10 + s; }
