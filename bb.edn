@@ -281,7 +281,7 @@
                                                     ;; -- form before it means stdout; -Xdiag is silent
                                                     (let [{:keys [out err exit]} (version "-version" "-showversion" "-bogus" "target/classes" "Hello")]
                                                       (and (zero? exit) (= out "") (= err err-text)))
-                                                    (let [{:keys [out err exit]} (version "--version" "-version")] (and (zero? exit) (= out out-text) (= err "")))
+                                                    (let [{:keys [out err exit]} (version "--show-version" "-version")] (and (zero? exit) (= out out-text) (= err "")))
                                                     (let [{:keys [out err exit]} (version "-version" "--version")] (and (zero? exit) (= out "") (= err err-text)))
                                                     (let [{:keys [out err exit]} (version "--show-version" "-showversion" "-Xdiag" "target/classes" "Hello")]
                                                       (and (zero? exit) (= out (str out-text (slurp "test/java/Hello.expected"))) (= err "")))
