@@ -127,16 +127,16 @@ The table holds at most 4096 entries and empties itself when full, so a call sit
 
 ## The pinned jolt
 
-Inside this repo, `deps.edn` names a jolt commit, the v0.8.23 tag:
+Inside this repo, `deps.edn` names a jolt commit, the v0.8.24 tag:
 
 ```clojure
 :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                :git/sha "a0ac71c3f638fe55158bd01b4ecbb0dd3d7545e5"}
+                :git/sha "a9b24d4c9dd57e3615d68975eb457e7b16554da9"}
 ```
 
-It's the release's own code, built from source. Built that way it ran a warm `Hello` in 0.32 s (median of seven, interleaved), where one release binary of the same commit took 0.45 s and started jolt itself 50 ms slower. A local build of the commit the pin used before, from upstream main, was as fast as the new one, so the slowdown comes from how that release binary was built, not from jolt's code.
+It's the release's own code, built from source. Built that way it ran a warm `Hello` in 0.42 s (median of eight, interleaved, on a loaded machine), where the installed release binary of the same version took 0.59 s and started jolt itself 70 ms slower. The same held for 0.8.23 (0.32 s against 0.45 s), and a local build of v0.8.23 runs a warm `Hello` as fast as one of v0.8.24, so the gap comes from how the release binaries are built, not from jolt's code.
 
-0.8.23 is also the first release with `java.io.RandomAccessFile` ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375)), which champaca reads the JDK's runtime image with, so it's the minimum.
+0.8.24 is the minimum because it's the first release where `String(byte[], offset, length, charset)` copies only the slice ([jolt#1413](https://github.com/jolt-lang/jolt/pull/1413)). Champaca reads the runtime image's string table that way, and on an older jolt each read cost the whole table. It also has `java.io.RandomAccessFile` ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375), since 0.8.23) and a shutdown watcher that no longer ends the process when a profiling signal arrives ([jolt#1462](https://github.com/jolt-lang/jolt/pull/1462)). Its Chez Scheme patches 0006 and 0007 fix foreign calls with arguments on the stack ([jolt#1502](https://github.com/jolt-lang/jolt/pull/1502)), but `make build` only uses them when it builds its own Chez. A system Chez, such as Homebrew's, is used as it is, so champaca keeps refusing the signatures an unpatched Chez gets wrong (see the foreign function notes in [limitations](limitations.md)).
 
 `bb jolt` builds the pinned commit:
 
@@ -147,7 +147,7 @@ bb test        # prints which jolt it picked
 
 It makes a detached worktree of a jolt checkout (`$JOLT_SRC`, else `~/dev/jolt`, cloned from the URL if neither exists) at `~/.cache/champaca/jolt/<sha8>/src` (`<sha8>` being the commit's first eight characters), runs `make build` there and copies the binary next to it. `bb test` uses `$JOLT` when it's set, then the pinned build, then whatever `jolt` is on your `PATH`.
 
-The pin only affects this repo's bb tasks that run jolt (`test`, `libs`, `example`, `nrepl`, `bench`). Champaca works on any released 0.8.23 or later.
+The pin only affects this repo's bb tasks that run jolt (`test`, `libs`, `example`, `nrepl`, `bench`). Champaca works on any released 0.8.24 or later.
 
 ## The generated code
 

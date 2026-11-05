@@ -2,7 +2,7 @@
 
 ## What you need
 
-- **jolt 0.8.23 or later.** Champaca's `deps.edn` declares it as `:jolt/min-version "0.8.23"`.
+- **jolt 0.8.24 or later.** Champaca's `deps.edn` declares it as `:jolt/min-version "0.8.24"`.
 - **JDK 25, with `JAVA_HOME` set.** Champaca doesn't run a JVM. It reads the JDK's classes out of its runtime image, `$JAVA_HOME/lib/modules`, and compiles them itself, so it needs only that, plus `javac` if you want to compile Java of your own. It's tested with OpenJDK 25.0.2 (the build from jdk.java.net) on macOS and Linux. GraalVM CE 25.0.1, Temurin 25.0.4.1 on macOS and a `jlink`-built runtime compressed with `--compress zip-6` passed earlier, smaller versions of the suite and haven't been run against today's.
 - **babashka**, for the `bb` tasks in this repo.
 

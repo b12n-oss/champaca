@@ -85,9 +85,7 @@
   (let [s (+ strings off)]
     (loop [e s]
       (if (zero? (aget index e))
-        ;; copied out first: jolt's String.(bytes, off, len, charset) takes
-        ;; time in the whole array's length, and this one is the index
-        (String. (java.util.Arrays/copyOfRange index (int s) (int e)) "UTF-8")
+        (String. index (int s) (int (- e s)) "UTF-8")
         (recur (inc e))))))
 
 ;; ImageLocation: a run of attributes, each a byte holding kind << 3 and
