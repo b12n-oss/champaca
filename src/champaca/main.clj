@@ -2317,13 +2317,13 @@
   champaca accepts with a warning: a heap size, -Xshare:, -XX:, -verbose
   (alone or with any kind, as HotSpot takes any), -Xlog (alone or with a
   selection), the execution modes (-Xint, -Xmixed, -Xcomp, -Xbatch), -Xrs,
-  -Xverify:, -Xdiag, -Xcheck:jni and -Xnoclassgc."
+  -Xverify:, -Xcheck:jni and -Xnoclassgc."
   [a]
   (boolean (or (re-matches #"-X(mx|ms|mn)[0-9]+[kKmMgGtT]?" a)
                (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a)
                (re-matches #"-verbose(:.*)?" a) (re-matches #"-Xlog(:.*)?" a)
                (re-matches #"-Xverify:.*" a)
-               (#{"-Xint" "-Xmixed" "-Xcomp" "-Xbatch" "-Xrs" "-Xdiag" "-Xcheck:jni" "-Xnoclassgc"} a))))
+               (#{"-Xint" "-Xmixed" "-Xcomp" "-Xbatch" "-Xrs" "-Xcheck:jni" "-Xnoclassgc"} a))))
 
 (defn- option-value
   "An option's separate value as HotSpot's launcher takes it: nil when
@@ -2346,8 +2346,9 @@
   --add-opens, --add-exports, --add-reads, --limit-modules), each value
   as given and --illegal-native-access=V, as [suffix value] entries of
   :module-options in order; -version and --version (print the version and
-  exit) and -showversion and --show-version (print it, then run main), as
-  :version {:err? :exit?}, the dashed-once forms on stderr; -Xss, the
+  exit, the options after them unread) and -showversion and --show-version
+  (print it, then run main), as :version {:err? :exit?}, on stderr unless a
+  -- form came first; -Xss, the
   thread stack size, as :stack in bytes
   (bound-stack!). A non-empty -Djava.endorsed.dirs or -Djava.ext.dirs is
   HotSpot's refusal. A -D naming one of the module system's own properties
@@ -2390,7 +2391,8 @@
             (assertion-directive a) (recur (rest argv) (update opts :assertions conj (assertion-directive a)))
             (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
-            (#{"-server" "-client"} a) (recur (rest argv) opts)
+            ;; -Xdiag only makes the launcher's own errors longer
+            (#{"-server" "-client" "-Xdiag"} a) (recur (rest argv) opts)
             (= "--enable-preview" a) (recur (rest argv) (assoc opts :preview true))
             (= "--source" a) (if-let [v (option-value (second argv) false)]
                                (recur (nnext argv) (assoc opts :source v))
@@ -2409,8 +2411,14 @@
             ;; ModuleBootstrap judges the value, an empty one too
             (str/starts-with? a "--illegal-native-access=")
             (recur (rest argv) (update opts :module-options conj ["illegal.native.access" (subs a 24)]))
+            ;; as java.c: a -- form sends the version to stdout from then on,
+            ;; and -version or --version ends the parsing there, whatever
+            ;; follows it (a bad option, -showversion) left unread
             (#{"-version" "--version" "-showversion" "--show-version"} a)
-            (recur (rest argv) (assoc opts :version {:err? (not (str/starts-with? a "--")) :exit? (contains? #{"-version" "--version"} a)}))
+            (let [opts (update opts :version (fn [v] {:err? (and (get v :err? true) (not (str/starts-with? a "--")))}))]
+              (if (#{"-version" "--version"} a)
+                (assoc opts :argv [] :version (assoc (:version opts) :exit? true))
+                (recur (rest argv) opts)))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
                                                                           "Error: A fatal exception has occurred. Program will exit."])))
@@ -2538,6 +2546,8 @@
       (binding [*out* *err*] (println "Error: -jar requires jar file specification"))
       (System/exit 1))
     (when-not cname
+      ;; -showversion without a program prints the version, then the usage
+      (when version (run [] nil []))
       (binding [*out* *err*]
         (println "usage: jolt -M -m champaca.main [options] <classpath[:entry...] (dirs, jars, dir/*)> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
@@ -2546,8 +2556,8 @@
         (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --source <release>,")
         (println "         --add-modules, --limit-modules, --enable-native-access <module>[,...], --add-opens, --add-exports <module>/<package>=<module>[,...],")
         (println "         --add-reads <module>=<module>[,...], --illegal-native-access=allow|warn|deny, -version, -showversion, --version, --show-version;")
-        (println "         -server, -client accepted; -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX:, -verbose, -Xlog,")
-        (println "         -Xint, -Xmixed, -Xcomp, -Xbatch, -Xrs, -Xverify:, -Xdiag, -Xcheck:jni, -Xnoclassgc ignored with a warning"))
+        (println "         -server, -client, -Xdiag accepted; -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX:, -verbose, -Xlog,")
+        (println "         -Xint, -Xmixed, -Xcomp, -Xbatch, -Xrs, -Xverify:, -Xcheck:jni, -Xnoclassgc ignored with a warning"))
       (System/exit 2))
     (if (= cp "-jar")
       ;; as java -jar: the manifest's Main-Class, the jar alone as the class

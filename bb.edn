@@ -276,7 +276,17 @@
                                                     (let [{:keys [out err exit]} (version "-showversion" "target/classes" "Hello")]
                                                       (and (zero? exit) (= out (slurp "test/java/Hello.expected")) (= err err-text)))
                                                     (let [{:keys [out err exit]} (version "--show-version" "-cp" "target/classes" "Hello")]
-                                                      (and (zero? exit) (= out (str out-text (slurp "test/java/Hello.expected"))) (= err ""))))
+                                                      (and (zero? exit) (= out (str out-text (slurp "test/java/Hello.expected"))) (= err "")))
+                                                    ;; java.c's order: nothing after -version is read, a
+                                                    ;; -- form before it means stdout; -Xdiag is silent
+                                                    (let [{:keys [out err exit]} (version "-version" "-showversion" "-bogus" "target/classes" "Hello")]
+                                                      (and (zero? exit) (= out "") (= err err-text)))
+                                                    (let [{:keys [out err exit]} (version "--version" "-version")] (and (zero? exit) (= out out-text) (= err "")))
+                                                    (let [{:keys [out err exit]} (version "-version" "--version")] (and (zero? exit) (= out "") (= err err-text)))
+                                                    (let [{:keys [out err exit]} (version "--show-version" "-showversion" "-Xdiag" "target/classes" "Hello")]
+                                                      (and (zero? exit) (= out (str out-text (slurp "test/java/Hello.expected"))) (= err "")))
+                                                    (let [{:keys [out err exit]} (version "-showversion")]
+                                                      (and (= 2 exit) (= out "") (str/starts-with? err (str err-text "usage: jolt")))))
                                     ;; -cp and its spellings take the main class first; a dir/*
                                     ;; entry is the jars in it; -jar ignores -cp, as java does
                                     _ (fs/delete-tree "target/wild")
@@ -355,7 +365,7 @@
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
                                 (println (if xss-ok "PASS" "FAIL") "-Xss: 0 the default, 512k runs, 1k too small, 2g too large, 1x invalid, with HotSpot's texts")
                                 (println (if ignored-ok "PASS" "FAIL") "-Xmx, -XX:, -verbose, -Xlog and the execution-mode options ignored with a warning")
-                                (println (if version-ok "PASS" "FAIL") "-version, --version, -showversion, --show-version: this JDK's lines, champaca's VM")
+                                (println (if version-ok "PASS" "FAIL") "-version, --version, -showversion, --show-version: this JDK's lines, champaca's VM, java.c's order")
                                 (println (if cp-ok "PASS" "FAIL") "-cp, --class-path= and -classpath, the last winning, with a dir/* entry (JarCheck)")
                                 (println (if star-ok "PASS" "FAIL") "a dir/* with no jars stays as written (a directory named *)")
                                 (println (if cp-missing-ok "PASS" "FAIL") "-cp without a class path")
