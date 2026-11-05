@@ -449,6 +449,40 @@
     (eqv? len (if (and (fxpositive? len) (char=? (string-ref n 0) #\[))
                   (skip-field-descriptor n 0 len)
                   (skip-class-name n 0 len)))))
+;; JVM_FindClassFromCaller's limit, after Class.c's checks: a name whose
+;; modified UTF-8 (each UTF-16 unit 1-3 bytes, NUL 2) is over 65535 bytes is
+;; not found, and HotSpot's message abridges it to its first and last 128
+;; bytes. The bytes are cut wherever 128 falls, so a character cut in two
+;; reads back byte by byte as Latin-1, as HotSpot's String does, and that
+;; String is as long as the bytes that aren't continuation bytes
+;; (UTF8::unicode_length), which drops a character off the end for each
+;; continuation byte read as Latin-1.
+(define (unit-mutf8 u)
+  (cond [(and (fx> u 0) (fx< u #x80)) (list u)]
+        [(fx< u #x800) (list (fxlogor #xc0 (fxsrl u 6)) (fxlogor #x80 (fxlogand u #x3f)))]
+        [else (list (fxlogor #xe0 (fxsrl u 12)) (fxlogor #x80 (fxlogand (fxsrl u 6) #x3f)) (fxlogor #x80 (fxlogand u #x3f)))]))
+(define (mutf8->units bs)
+  (let loop ([bs bs] [acc '()])
+    (define (cont? x) (and (pair? x) (fx= (fxlogand (car x) #xc0) #x80)))
+    (cond [(null? bs) (reverse acc)]
+          [(and (fx= (fxlogand (car bs) #xe0) #xc0) (cont? (cdr bs)))
+           (loop (cddr bs) (cons (fxlogor (fxsll (fxlogand (car bs) #x1f) 6) (fxlogand (cadr bs) #x3f)) acc))]
+          [(and (fx= (fxlogand (car bs) #xf0) #xe0) (cont? (cdr bs)) (cont? (cddr bs)))
+           (loop (cdddr bs) (cons (fxlogor (fxsll (fxlogand (car bs) #x0f) 12) (fxsll (fxlogand (cadr bs) #x3f) 6) (fxlogand (caddr bs) #x3f)) acc))]
+          [else (loop (cdr bs) (cons (car bs) acc))])))
+(define max-class-name-bytes 65535)
+(define (overlong-class-name name)
+  (let* ([bs (apply append (map (lambda (u) (unit-mutf8 (if (fx= u 46) 47 u))) (jstring-units name)))]
+         [len (length bs)])
+    (when (fx> len max-class-name-bytes)
+      (let ([ascii (lambda (s) (map char->integer (string->list s)))])
+        ;; the message as code units, which jstring takes as a vector
+        (let* ([msg (append (ascii (string-append "Class name exceeds maximum length of " (number->string max-class-name-bytes) ": "))
+                            (list-head bs 128)
+                            (ascii (string-append " ... (" (number->string (fx- len 256)) " characters omitted) ... "))
+                            (list-tail bs (fx- len 128)))]
+               [count (length (filter (lambda (b) (not (fx= (fxlogand b #xc0) #x80))) msg))])
+          (jthrow "java/lang/ClassNotFoundException" (list->vector (list-head (mutf8->units msg) count))))))))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
@@ -474,7 +508,8 @@
               ;; slashed form isn't a class name or descriptor (an empty name,
               ;; over 255 dimensions) is not found by that slashed form
               [(memv #\/ (string->list s)) (jthrow "java/lang/ClassNotFoundException" s)]
-              [(not (valid-class-name? n)) (jthrow "java/lang/ClassNotFoundException" n)])]
+              [(not (valid-class-name? n)) (jthrow "java/lang/ClassNotFoundException" n)]
+              [else (overlong-class-name name)])]
          ;; an array with a class element exists once the element resolves
          ;; through the loader (its pseudo-class would be made for any name,
          ;; and mirrored, it loads its element)
@@ -2408,9 +2443,9 @@
 (define (jdk-package? n)
   (or (fxzero? (hashtable-size package-modules))
       (and (hashtable-ref package-modules (package-dir n) #f) #t)))
-;; the class file the application loader would read for binary name s from
-;; the class path (main.clj's hook): "ok <name>", "format <text>", or #f
-(define classpath-class-hook (lambda (path) #f))
+;; the class file the application loader would read for a slashed name from
+;; the class path (main.clj's hook, which says what it answers), or #f
+(define classpath-class-hook (lambda (cname parse?) #f))
 (define (set-classpath-class-hook! f) (set! classpath-class-hook f))
 ;; what the JDK's application loader does with a name it can't load as a
 ;; class: it reads <s with . as />.class from the class path all the same
@@ -2421,13 +2456,20 @@
 ;; path with a leading slash.
 (define (misnamed-classpath-class s)
   (let* ([p (slashes s)]
-         [r (and (not (char=? (string-ref p 0) #\/)) (classpath-class-hook (string-append p ".class")))])
+         [slash? (memv #\/ (string->list s))]
+         ;; checkName refuses a slashed name before the bytes are parsed
+         [r (and (not (char=? (string-ref p 0) #\/)) (classpath-class-hook p (not slash?)))]
+         [after (lambda (k) (and (fx>= (string-length r) (string-length k))
+                                 (string=? (substring r 0 (string-length k)) k)
+                                 (substring r (string-length k) (string-length r))))])
     (when r
-      (cond [(memv #\/ (string->list s)) (jthrow "java/lang/NoClassDefFoundError" (string-append "IllegalName: " s))]
-            [(and (fx> (string-length r) 7) (string=? (substring r 0 7) "format "))
-             (jthrow "java/lang/ClassFormatError" (substring r 7 (string-length r)))]
-            [else (jthrow "java/lang/NoClassDefFoundError"
-                          (string-append (slashes s) " (wrong name: " (substring r 3 (string-length r)) ")"))]))
+      (cond [slash? (jthrow "java/lang/NoClassDefFoundError" (string-append "IllegalName: " s))]
+            [(after "ok ") => (lambda (real) (jthrow "java/lang/NoClassDefFoundError" (string-append p " (wrong name: " real ")")))]
+            [(after "format ") => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))]
+            [(after "version ") => (lambda (msg) (jthrow "java/lang/UnsupportedClassVersionError" msg))]
+            [(after "error ") => (lambda (msg) (jthrow "java/lang/NoClassDefFoundError"
+                                                      (string-append (slashes->dots p) ": champaca could not load it: " msg)))]
+            [else (error 'champaca "classpath-class-hook answered" r)]))
     #f))
 (define (class-or-null this name)
   ;; loadClass takes a binary name: one with slashes or an array descriptor is

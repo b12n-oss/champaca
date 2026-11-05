@@ -58,6 +58,21 @@ forName java.lang.String\u0000 -> java.lang.ClassNotFoundException: java/lang/St
 loadClass java.lang.String\u0000 -> java.lang.ClassNotFoundException: java.lang.String\u0000
 forName [Lchampaca.names.NameFixture; -> [Lchampaca.names.NameFixture;
 loadClass [Lchampaca.names.NameFixture; -> java.lang.ClassNotFoundException: [Lchampaca.names.NameFixture;
+forName null loader no.Such -> java.lang.ClassNotFoundException: no/Such
+forName null loader [Lno.Such; -> java.lang.ClassNotFoundException: [Lno/Such;
+forName null loader [[Lno.Such; -> java.lang.ClassNotFoundException: [[Lno/Such;
+forName null loader champaca.names.NameFixture -> java.lang.ClassNotFoundException: champaca/names/NameFixture
+forName null loader java.lang.String -> java.lang.String
+forName null loader [Ljava.lang.Object; -> [Ljava.lang.Object;
+platform loadClass champaca/names/NameFixture -> java.lang.ClassNotFoundException: champaca/names/NameFixture
+platform loadClass champaca..names.NameFixture -> java.lang.ClassNotFoundException: champaca..names.NameFixture
+platform loadClass champaca.names.NameFixture -> java.lang.ClassNotFoundException: champaca.names.NameFixture
+long forName a.a.a.a.a.a....(65535 chars) -> java.lang.ClassNotFoundException: length 65535 hash -1134477841
+long forName a.a.a.a.a.a....(65536 chars) -> java.lang.ClassNotFoundException: length 336 hash -613011524
+long forName éééééééééééé...(32768 chars) -> java.lang.ClassNotFoundException: length 208 hash -1899188119
+long forName 中中中中中中中中中中中中...(21846 chars) -> java.lang.ClassNotFoundException: length 165 hash -880947331
+long forName 😀😀😀😀😀😀...(21846 chars) -> java.lang.ClassNotFoundException: length 165 hash 1778535491
+long forName \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000...(32768 chars) -> java.lang.ClassNotFoundException: length 32768 hash 0
 forName [[[[[[[[[[[[...(256 chars) -> [[[[[[[[[[[[...(256 chars)
 forName [[[[[[[[[[[[...(273 chars) -> [[[[[[[[[[[[...(273 chars)
 forName null loader [[[[[[[[[[[[...(256 chars) -> [[[[[[[[[[[[...(256 chars)
@@ -98,5 +113,11 @@ loadClass .champaca.lib.Greeter -> java.lang.ClassNotFoundException: .champaca.l
 forName .champaca.lib.Greeter -> java.lang.ClassNotFoundException: /champaca/lib/Greeter
 loadClass champaca.names.Renamed -> java.lang.NoClassDefFoundError: champaca/names/Renamed (wrong name: champaca/names/NameFixture)
 forName champaca.names.Renamed -> java.lang.NoClassDefFoundError: champaca/names/Renamed (wrong name: champaca/names/NameFixture)
+loadClass champaca.names..Cut -> java.lang.ClassFormatError: Truncated class file
+loadClass champaca/names/Cut -> java.lang.NoClassDefFoundError: IllegalName: champaca/names/Cut
+loadClass champaca.names.Cut -> java.lang.ClassFormatError: Truncated class file
+loadClass champaca.names..Future -> java.lang.UnsupportedClassVersionError: champaca/names//Futu...(232 chars)
+loadClass champaca/names/Future -> java.lang.NoClassDefFoundError: IllegalName: champaca/names/Future
+loadClass champaca.names.Future -> java.lang.UnsupportedClassVersionError: champaca/names/Futur...(231 chars)
 defineClass champaca.names.Wrong -> java.lang.NoClassDefFoundError: champaca/names/Wrong (wrong name: champaca/names/NameFixture)
 defineClass champaca/names/NameFixture -> java.lang.NoClassDefFoundError: IllegalName: champaca/names/NameFixture

@@ -2071,18 +2071,26 @@
   (s/call "set-jpackage-hook!" package-info)
   ;; the JDK's resources alone, for the platform loader
   (s/call "set-jdk-resource-hook!" (fn [path] (or (when (plain-resource-path? path) (jdk-resource-bytes path)) false)))
-  ;; the class in a class file on the class path at path, found as the JDK's
+  ;; the class file <cname>.class on the class path, found as the JDK's
   ;; URLClassPath finds it (a directory through the file system, so a//b is
-  ;; a/b; a jar by its exact entry): "ok <class name>", "format <text>" for
-  ;; bytes that aren't a class file, or false when there's no such file.
-  ;; The application loader asks it for a name it can't load (natives.ss
-  ;; class-or-null)
+  ;; a/b; a jar by its exact entry), for the application loader's names it
+  ;; can't load (natives.ss misnamed-classpath-class): false when there's no
+  ;; such file, else "found" when parse? is false, else what parsing it as
+  ;; cname gives, as normalize would: "ok <its class name>", "format <text>"
+  ;; or "version <text>" (HotSpot's ClassFormatError and
+  ;; UnsupportedClassVersionError texts), "error <text>" for anything else,
+  ;; so no Clojure exception crosses the native
   (s/call "set-classpath-class-hook!"
-          (fn [path]
-            (if-let [bs (user-resource-bytes path)]
-              (try (str "ok " (:name (cf/parse bs)))
-                   (catch Exception e
-                     (if-let [msg (:class-format (ex-data e))] (str "format " msg) (throw e))))
+          (fn [cname parse?]
+            (if-let [bs (user-resource-bytes (str cname ".class"))]
+              (if-not parse?
+                "found"
+                (try (str "ok " (:name (cf/parse bs)))
+                     (catch Exception e
+                       (let [{:keys [class-format named class-version]} (ex-data e)]
+                         (cond class-format (str "format " (if named (str class-format " " cname) class-format))
+                               class-version (str "version " (class-version cname))
+                               :else (str "error " (ex-message e)))))))
               false)))
   ;; a classpath class's code source: its entry's URL, or false
   (s/call "set-code-source-hook!" (fn [cname] (if-let [e (get-in @state [:class-entries cname])] (entry-url e) false)))
