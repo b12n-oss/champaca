@@ -1,0 +1,9 @@
+--limit-modules
+java.management,java.sql
+--add-reads
+java.base=ALL-UNNAMED
+--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED
+--illegal-native-access=allow
+-cp
+.
+Opt

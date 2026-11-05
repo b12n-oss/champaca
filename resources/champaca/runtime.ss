@@ -1759,6 +1759,11 @@
                   [else (error 'champaca "main not found after the launcher found it" name)])))
         (let ([o (construct name "()V")])
           (apply (jvirt o (string-append "main" desc)) o jargs)))))
+;; -version and its kin: the JDK's VersionProps.print, as the launcher calls
+;; it once the VM is up, on stderr when err? (-version, -showversion), else
+;; stdout (--version, --show-version). The exit status, 0 unless it threw.
+(define (java-print-version err?)
+  (run-guarded (lambda () ((method-proc "java/lang/VersionProps" "print(Z)V") (if err? 1 0)))))
 (define (run-main cname . args)
   (set! halted #f)
   (let ([status (run-guarded (lambda () (launch-main cname args)))])

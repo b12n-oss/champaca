@@ -255,10 +255,28 @@
                                                                     "-Dchampaca.test.plain=bar" "-Xbogus" "target/classes" "Hello")
                                     bad-ok (and (= 1 exit) (str/starts-with? err "Unrecognized option: -Xbogus\n"))
                                     {:keys [out err exit]} (run-limited 300 {:label "ignored-options" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
-                                                                    "-Xmx512m" "-XX:+UseG1GC" "target/classes" "Hello")
+                                                                    "-Xmx512m" "-XX:+UseG1GC" "-verbose:gc" "-verbose" "-Xlog:gc" "-Xint" "-Xrs" "-Xverify:none"
+                                                                    "target/classes" "Hello")
                                     ignored-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected"))
-                                                    (str/includes? err "champaca: ignoring option -Xmx512m; it has no counterpart here\n")
-                                                    (str/includes? err "champaca: ignoring option -XX:+UseG1GC; it has no counterpart here\n"))
+                                                    (= err (apply str (map (fn [o] (str "champaca: ignoring option " o "; it has no counterpart here\n"))
+                                                                           ["-Xmx512m" "-XX:+UseG1GC" "-verbose:gc" "-verbose" "-Xlog:gc" "-Xint" "-Xrs" "-Xverify:none"]))))
+                                    ;; -version and its kin print what the JDK's VersionProps
+                                    ;; does, so the first two lines are this JDK's own (java
+                                    ;; -version's), the third champaca's VM; -version and
+                                    ;; --version exit, -showversion and --show-version run main
+                                    hs-version (str/split-lines (:err (process/sh "java" "-version")))
+                                    hs-version2 (str/split-lines (:out (process/sh "java" "--version")))
+                                    vm-line "champaca (build 0.0-spike, compiled mode)\n"
+                                    version (fn [& args] (apply run-limited 300 {:label "version" :err :string} (jolt-bin) "-M" "-m" "champaca.main" args))
+                                    err-text (str (hs-version 0) "\n" (hs-version 1) "\n" vm-line)
+                                    out-text (str (hs-version2 0) "\n" (hs-version2 1) "\n" vm-line)
+                                    version-ok (and (let [{:keys [out err exit]} (version "-version")] (and (zero? exit) (= out "") (= err err-text)))
+                                                    (let [{:keys [out err exit]} (version "--version" "-cp" "target/classes" "Hello")]
+                                                      (and (zero? exit) (= out out-text) (= err "")))
+                                                    (let [{:keys [out err exit]} (version "-showversion" "target/classes" "Hello")]
+                                                      (and (zero? exit) (= out (slurp "test/java/Hello.expected")) (= err err-text)))
+                                                    (let [{:keys [out err exit]} (version "--show-version" "-cp" "target/classes" "Hello")]
+                                                      (and (zero? exit) (= out (str out-text (slurp "test/java/Hello.expected"))) (= err ""))))
                                     ;; -cp and its spellings take the main class first; a dir/*
                                     ;; entry is the jars in it; -jar ignores -cp, as java does
                                     _ (fs/delete-tree "target/wild")
@@ -336,7 +354,8 @@
                                 (println (if jar-ok "PASS" "FAIL") "-D before -jar target/app.jar")
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
                                 (println (if xss-ok "PASS" "FAIL") "-Xss: 0 the default, 512k runs, 1k too small, 2g too large, 1x invalid, with HotSpot's texts")
-                                (println (if ignored-ok "PASS" "FAIL") "-Xmx and -XX: ignored with a warning")
+                                (println (if ignored-ok "PASS" "FAIL") "-Xmx, -XX:, -verbose, -Xlog and the execution-mode options ignored with a warning")
+                                (println (if version-ok "PASS" "FAIL") "-version, --version, -showversion, --show-version: this JDK's lines, champaca's VM")
                                 (println (if cp-ok "PASS" "FAIL") "-cp, --class-path= and -classpath, the last winning, with a dir/* entry (JarCheck)")
                                 (println (if star-ok "PASS" "FAIL") "a dir/* with no jars stays as written (a directory named *)")
                                 (println (if cp-missing-ok "PASS" "FAIL") "-cp without a class path")
@@ -347,7 +366,7 @@
                                 (println (if endorsed-ok "PASS" "FAIL") "-Djava.endorsed.dirs refused with HotSpot's text, before a later -Djava.ext.dirs")
                                 (println (if ext-ok "PASS" "FAIL") "-Djava.ext.dirs refused with HotSpot's text, a later empty one too late")
                                 (println (if empty-dirs-ok "PASS" "FAIL") "an empty -Djava.ext.dirs= and -Djava.endorsed.dirs accepted")
-                                (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])
+                                (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"]) (when-not version-ok ["version"])
                                         (when-not cp-ok ["-cp"]) (when-not star-ok ["-cp star dir"]) (when-not cp-missing-ok ["-cp missing"]) (when-not cp-jar-ok ["-cp -jar"])
                                         (when-not accepted-ok ["accepted options"]) (when-not preview-off-ok ["preview off"]) (when-not dotjava-ok ["dotjava dir"])
                                         (when-not endorsed-ok ["endorsed dirs"]) (when-not ext-ok ["ext dirs"]) (when-not empty-dirs-ok ["empty dirs"])))
@@ -379,6 +398,22 @@
                                                          (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
                                                          (not ok))]
                                            (str "srclaunch-" c)))
+                    ;; the module options (test/modopts): each <case>.args, one
+                    ;; argument a line, run from the compiled probes in
+                    ;; target/modopts, its status, stdout and stderr HotSpot's
+                    ;; (record.sh records them)
+                    _ (fs/delete-tree "target/modopts")
+                    _ (apply shell "javac" "-d" "target/modopts" (map str (fs/glob "test/modopts" "*.java")))
+                    modopts-fails (vec (for [f (sort (map str (fs/glob "test/modopts" "*.args")))
+                                             :let [c (str/replace (fs/file-name f) ".args" "")
+                                                   args (str/split-lines (slurp f))
+                                                   {:keys [out err exit]} (apply run-limited 300 {:label (str "modopts-" c) :err :string :dir "target/modopts"}
+                                                                                 (jolt-bin) "-Sdeps" src-deps "-M" "-m" "champaca.main" args)
+                                                   ok (= (slurp (str "test/modopts/" c ".expected")) (str "exit " exit "\n" out "--- stderr\n" err))]
+                                             :when (do (println (if ok "PASS" "FAIL") (str "module options: " c))
+                                                       (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
+                                                       (not ok))]
+                                         (str "modopts-" c)))
                     ;; a warm start whose boot loads classes the cached boot never
                     ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
                     ;; plain runs that use them, on a cache of their own
@@ -670,7 +705,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails boot-fails save-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

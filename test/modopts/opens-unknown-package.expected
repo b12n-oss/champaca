@@ -1,0 +1,10 @@
+exit 0
+args [--add-opens=java.base/nosuch=ALL-UNNAMED]
+opens java.lang: java.lang.reflect.InaccessibleObjectException
+exports jdk.internal.misc: false
+opens jdk.internal.misc: false
+VM.isBooted through reflection: IllegalAccessException
+java.logging reads java.sql: false
+java.base reads the unnamed module: false
+--- stderr
+WARNING: package nosuch not in java.base

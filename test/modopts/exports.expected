@@ -1,0 +1,9 @@
+exit 0
+args [--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED]
+opens java.lang: java.lang.reflect.InaccessibleObjectException
+exports jdk.internal.misc: true
+opens jdk.internal.misc: false
+VM.isBooted through reflection: true
+java.logging reads java.sql: false
+java.base reads the unnamed module: false
+--- stderr

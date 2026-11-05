@@ -1,0 +1,5 @@
+exit 1
+Error occurred during initialization of boot layer
+java.lang.ExceptionInInitializerError
+Caused by: java.lang.RuntimeException: Value specified to --illegal-native-access not recognized: 'bogus'
+--- stderr

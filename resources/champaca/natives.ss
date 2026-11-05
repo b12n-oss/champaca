@@ -1106,6 +1106,9 @@
      ("java.vm.name" . "champaca")
      ("java.vm.vendor" . "champaca")
      ("java.vm.version" . "0.0-spike")
+     ;; HotSpot's mode words (VersionProps prints them in -version's last
+     ;; line): champaca compiles every method before it runs
+     ("java.vm.info" . "compiled mode")
      ("java.vm.specification.name" . "Java Virtual Machine Specification")
      ("java.vm.specification.vendor" . "Oracle Corporation")
      ("java.vm.specification.version" . "25")
@@ -2436,8 +2439,21 @@
   (let* ([e (element-name c)] [dl (hashtable-ref class-loaders e #f)])
     (cond [dl (eq? dl this)]
           [(user-class? e) (let ([a (app-loader)]) (and a (eq? this a)))]
+          [(not (in-boot-layer? c)) #f]
           [this #t]
           [else (not (module-loader (class-module c)))])))
+;; once initPhase2 has built the boot layer, a JDK class is there only when a
+;; module of the layer owns its package: a module the layer didn't resolve
+;; (jdk.incubator.vector without --add-modules, anything --limit-modules
+;; leaves out) has no classes for the JVM's loaders. An array goes by its
+;; element, a primitive is java.lang's (class-package), and champaca's own
+;; classes (lambdas, annotations, package champaca) are always there.
+(define boot-layer-complete #f)
+(define (boot-layer-complete!) (set! boot-layer-complete #t))
+(define (in-boot-layer? c)
+  (or (not boot-layer-complete)
+      (let ([p (class-package c)])
+        (or (string=? p "champaca") (and (hashtable-ref package-modules p #f) #t)))))
 ;; whether a class not loaded yet would be a JDK class: its package is one
 ;; the boot layer's modules own (before the layer exists, anything may be)
 (define (jdk-package? n)

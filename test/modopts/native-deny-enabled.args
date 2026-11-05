@@ -1,0 +1,5 @@
+--illegal-native-access=deny
+--enable-native-access=ALL-UNNAMED
+-cp
+.
+Nat

@@ -1,0 +1,11 @@
+exit 0
+boot modules: 61
+java.sql.Connection: found; boot loader CNFE java/sql/Connection; platform found
+java.util.logging.Logger: found; boot loader found; platform found
+java.lang.management.ManagementFactory: found; boot loader found; platform found
+java.net.http.HttpClient: found; boot loader CNFE java/net/http/HttpClient; platform found
+jdk.incubator.vector.IntVector: CNFE jdk.incubator.vector.IntVector; boot loader CNFE jdk/incubator/vector/IntVector; platform CNFE jdk.incubator.vector.IntVector
+int[]: found; boot loader found; platform found
+platform loadClass java.sql.Date: found
+findModule java.logging: true
+--- stderr

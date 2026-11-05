@@ -1,0 +1,10 @@
+--add-reads
+java.logging=java.sql
+--add-opens
+java.base/java.lang=ALL-UNNAMED
+--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED
+--add-opens
+java.base/jdk.internal.misc=ALL-UNNAMED
+-cp
+.
+Opt

@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+Error: --limit-modules= requires modules to be specified

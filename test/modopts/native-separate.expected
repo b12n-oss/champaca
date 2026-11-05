@@ -1,0 +1,5 @@
+exit 1
+--- stderr
+Unrecognized option: --illegal-native-access
+Error: Could not create the Java Virtual Machine.
+Error: A fatal exception has occurred. Program will exit.

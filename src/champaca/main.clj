@@ -2002,6 +2002,32 @@
       (swap! state update :library-dirty (fn [s] (set (remove nil? s))))
       (prune-library! dir))))
 
+;; The launcher's module options, each the jdk.module.<suffix> property
+;; HotSpot makes of it (Arguments::parse_each_vm_init_arg): numbered ones
+;; are one property per occurrence, .0 up, per option; the others one
+;; property, the last occurrence winning. Taken as --opt value or --opt=value;
+;; an empty value is the launcher's refusal, except --add-opens=, which it
+;; lets through to ModuleBootstrap.
+(def ^:private module-options
+  {"--add-modules" ["addmods" :numbered]
+   "--enable-native-access" ["enable.native.access" :numbered]
+   "--add-opens" ["addopens" :numbered]
+   "--add-exports" ["addexports" :numbered]
+   "--add-reads" ["addreads" :numbered]
+   "--limit-modules" ["limitmods" :single]})
+
+(defn- module-properties
+  "The [key value] system properties for :module-options, a vector of
+  [suffix value] in command-line order, as HotSpot passes them to
+  ModuleBootstrap."
+  [opts]
+  (let [numbered (set (keep (fn [[sfx kind]] (when (= kind :numbered) sfx)) (vals module-options)))]
+    (loop [[[sfx v] & more :as os] opts counts {} singles {} out []]
+      (cond (empty? os) (into out (map (fn [[sfx v]] [(str "jdk.module." sfx) v]) singles))
+            (numbered sfx) (let [n (get counts sfx 0)]
+                             (recur more (assoc counts sfx (inc n)) singles (conj out [(str "jdk.module." sfx "." n) v])))
+            :else (recur more counts (assoc singles sfx v) out)))))
+
 (defn- boot!
   "Load the runtime, then run System.initPhase1 the way the JVM does before
   main. Uses the boot cache when it is valid and writes it when it is not.
@@ -2044,15 +2070,11 @@
   (s/call "set-hooks!" jit! (fn [n] (ensure-loaded! n) nil))
   (s/call "set-classpath!" (str/join ":" (:classpath-given @state)))
   (when-let [c (:java-command @state)] (s/call "set-java-command!" c))
-  ;; --add-modules reaches ModuleBootstrap as the launcher passes it, one
-  ;; jdk.module.addmods.<n> per occurrence; with one, the boot layer is
-  ;; resolved instead of read from the image's pre-generated graph
+  ;; the module options reach ModuleBootstrap as the launcher passes them
+  ;; (module-properties); --add-modules or --limit-modules makes it resolve
+  ;; the boot layer instead of reading the image's pre-generated graph
   (when-let [ps (seq (concat (:command-line-properties @state)
-                             (map-indexed (fn [i ms] [(str "jdk.module.addmods." i) ms]) (:add-modules @state))
-                             ;; --enable-native-access the same way, one
-                             ;; jdk.module.enable.native.access.<n> each
-                             (map-indexed (fn [i ms] [(str "jdk.module.enable.native.access." i) ms])
-                                          (:enable-native-access @state))))]
+                             (module-properties (:module-options @state))))]
     (s/call "set-command-line-properties!" (str/join "\u0000" (mapcat identity ps))))
   (when-let [ds (seq (:assertion-directives @state))]
     (s/call "set-assertion-directives!" (str/join "\u0000" ds)))
@@ -2138,6 +2160,9 @@
                      ;; change what the program prints)
                      (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 0))
                        (raise (make-java-halt 1)))
+                     ;; from here the boot layer decides which JDK classes
+                     ;; the built-in loaders see (builtin-loader-sees?)
+                     (boot-layer-complete!)
                      ((method-proc \"java/lang/System\" \"initPhase3()V\"))))")]
       (when-let [rec (:recording @state)]
         ;; a cold boot's code goes to boot.so, and from here on only what
@@ -2222,7 +2247,8 @@
        (do (when preview (reset! cf/preview-enabled true))
            ;; a string is one module list, as the option's value
            (when (seq add-modules)
-             (swap! state assoc :add-modules [(if (string? add-modules) add-modules (str/join "," add-modules))]))
+             (swap! state update :module-options (fnil conj [])
+                    ["addmods" (if (string? add-modules) add-modules (str/join "," add-modules))]))
            (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
                   ;; java.class.path is what was given, as the JVM's launcher has it
                   :classpath-given (vec classpath))
@@ -2230,7 +2256,9 @@
 
 (defn run
   "Run cname's main method with classes found under the classpath dirs,
-  after booting the JDK. Returns the exit status."
+  after booting the JDK. Returns the exit status. With :version in the
+  state (-showversion and friends) the JDK's VersionProps prints the
+  version first; a nil cname runs nothing after it (-version)."
   [classpath cname args]
   (saves-generation!) ; save-generation! runs at exit below
   (let [t0 (System/nanoTime)
@@ -2238,7 +2266,9 @@
         _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
     (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
-      (let [status (apply s/call "run-main" cname args)]
+      (let [v (:version @state)
+            vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)
+            status (if (and cname (zero? vs)) (apply s/call "run-main" cname args) vs)]
         (when (env "CHAMPACA_PROF") (prof-report "run" (- (System/nanoTime) t0)))
         (when (env "CHAMPACA_STATS") (stats))
         (save-generation!)
@@ -2282,6 +2312,19 @@
          (boolean (some (fn [x] (or (= rest-k x) (str/starts-with? rest-k (str x "."))))
                         reserved-module-suffixes)))))
 
+(defn- ignored-option?
+  "An option HotSpot takes that tunes, traces or checks only the VM, which
+  champaca accepts with a warning: a heap size, -Xshare:, -XX:, -verbose
+  (alone or with any kind, as HotSpot takes any), -Xlog (alone or with a
+  selection), the execution modes (-Xint, -Xmixed, -Xcomp, -Xbatch), -Xrs,
+  -Xverify:, -Xdiag, -Xcheck:jni and -Xnoclassgc."
+  [a]
+  (boolean (or (re-matches #"-X(mx|ms|mn)[0-9]+[kKmMgGtT]?" a)
+               (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a)
+               (re-matches #"-verbose(:.*)?" a) (re-matches #"-Xlog(:.*)?" a)
+               (re-matches #"-Xverify:.*" a)
+               (#{"-Xint" "-Xmixed" "-Xcomp" "-Xbatch" "-Xrs" "-Xdiag" "-Xcheck:jni" "-Xnoclassgc"} a))))
+
 (defn- option-value
   "An option's separate value as HotSpot's launcher takes it: nil when
   there is none or it starts with \"-\", or when it's empty and empty?
@@ -2298,20 +2341,24 @@
   -server and -client, which the launcher accepts and ignores;
   --enable-preview, as :preview (this release's preview class files load,
   PreviewFeatures says so); --source N or --source=N, as :source (the
-  source launcher compiles at that release, source-file mode); --add-modules M[,M...] or
-  --add-modules=M..., each occurrence one entry of :add-modules (the boot
-  layer's extra roots); --enable-native-access M[,M...] or
-  --enable-native-access=M..., the same way, as :enable-native-access (the
-  modules whose restricted calls don't warn); -Xss, the thread stack size, as :stack in bytes
+  source launcher compiles at that release, source-file mode); the module
+  options (module-options: --add-modules, --enable-native-access,
+  --add-opens, --add-exports, --add-reads, --limit-modules), each value
+  as given and --illegal-native-access=V, as [suffix value] entries of
+  :module-options in order; -version and --version (print the version and
+  exit) and -showversion and --show-version (print it, then run main), as
+  :version {:err? :exit?}, the dashed-once forms on stderr; -Xss, the
+  thread stack size, as :stack in bytes
   (bound-stack!). A non-empty -Djava.endorsed.dirs or -Djava.ext.dirs is
   HotSpot's refusal. A -D naming one of the module system's own properties
   (reserved-module-property?) is dropped and :module-props-ignored set, as
   HotSpot ignores it with a warning. A heap size (-Xmx,
-  -Xms, -Xmn), -Xshare: and any -XX: flag are ignored with a warning, since
-  start scripts pass them and they tune only the VM; any other option is the
-  launcher's Unrecognized option."
+  -Xms, -Xmn), -Xshare:, any -XX: flag, -verbose[:...], -Xlog[:...] and the
+  execution-mode and diagnostic -X options (ignored-option?) are ignored
+  with a warning, since start scripts pass them and they tune or trace only
+  the VM; any other option is the launcher's Unrecognized option."
   [argv]
-  (loop [argv argv opts {:props [] :classpath nil :assertions []}]
+  (loop [argv argv opts {:props [] :classpath nil :assertions [] :module-options []}]
     (let [a (first argv)]
       (cond (or (nil? a) (= a "-jar") (not (str/starts-with? a "-"))) (assoc opts :argv argv)
             (str/starts-with? a "-D")
@@ -2349,21 +2396,21 @@
                                (recur (nnext argv) (assoc opts :source v))
                                (launcher-error "Error: --source requires source version"))
             (str/starts-with? a "--source=") (recur (rest argv) (assoc opts :source (subs a 9)))
-            (= "--add-modules" a) (if-let [ms (option-value (second argv) false)]
-                                    (recur (nnext argv) (update opts :add-modules (fnil conj []) ms))
-                                    (launcher-error "Error: --add-modules requires modules to be specified"))
-            (str/starts-with? a "--add-modules=")
-            (if (= a "--add-modules=")
-              (launcher-error "Error: --add-modules= requires modules to be specified")
-              (recur (rest argv) (update opts :add-modules (fnil conj []) (subs a 14))))
-            (= "--enable-native-access" a)
+            (module-options a)
             (if-let [ms (option-value (second argv) false)]
-              (recur (nnext argv) (update opts :enable-native-access (fnil conj []) ms))
-              (launcher-error "Error: --enable-native-access requires modules to be specified"))
-            (str/starts-with? a "--enable-native-access=")
-            (if (= a "--enable-native-access=")
-              (launcher-error "Error: --enable-native-access= requires modules to be specified")
-              (recur (rest argv) (update opts :enable-native-access (fnil conj []) (subs a 23))))
+              (recur (nnext argv) (update opts :module-options conj [(first (module-options a)) ms]))
+              (launcher-error (str "Error: " a " requires modules to be specified")))
+            (some-> (str/index-of a "=") (#(module-options (subs a 0 %))))
+            (let [i (str/index-of a "=") o (subs a 0 i) v (subs a (inc i))]
+              (if (and (= "" v) (not= "--add-opens" o))
+                (launcher-error (str "Error: " o "= requires modules to be specified"))
+                (recur (rest argv) (update opts :module-options conj [(first (module-options o)) v]))))
+            ;; only the joined form: the launcher doesn't know this one, and
+            ;; ModuleBootstrap judges the value, an empty one too
+            (str/starts-with? a "--illegal-native-access=")
+            (recur (rest argv) (update opts :module-options conj ["illegal.native.access" (subs a 24)]))
+            (#{"-version" "--version" "-showversion" "--show-version"} a)
+            (recur (rest argv) (assoc opts :version {:err? (not (str/starts-with? a "--")) :exit? (contains? #{"-version" "--version"} a)}))
             (str/starts-with? a "-Xss")
             (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
                                                                           "Error: A fatal exception has occurred. Program will exit."])))
@@ -2374,7 +2421,7 @@
                     (zero? n) (recur (rest argv) (dissoc opts :stack))
                     (< n (* 208 1024)) (fail "" "The Java thread stack size specified is too small. Specify at least 208k")
                     :else (recur (rest argv) (assoc opts :stack n))))
-            (or (re-matches #"-X(mx|ms|mn)[0-9]+[kKmMgGtT]?" a) (re-matches #"-XX:.+" a) (re-matches #"-Xshare:.+" a))
+            (ignored-option? a)
             (do (binding [*out* *err*] (println (str "champaca: ignoring option " a "; it has no counterpart here")))
                 (recur (rest argv) opts))
             :else
@@ -2387,20 +2434,22 @@
   jvm-options consumed: each as given and in place, except the class path
   ones, which become java.class.path alone, and -server/-client, which the
   launcher drops; --source N is -Djdk.internal.javac.source=N, the property
-  the launcher passes; --add-modules M is --add-modules=M, and
-  --enable-native-access M --enable-native-access=M; source-file mode
-  ends with --add-modules=ALL-DEFAULT."
+  the launcher passes; a module option's separate value is joined to it
+  (--add-opens M is --add-opens=M); the launcher's own -version,
+  --version, -showversion, --show-version and -Xdiag aren't listed;
+  source-file mode ends with --add-modules=ALL-DEFAULT."
   [consumed source-mode?]
   (concat (loop [[a & more :as as] consumed out []]
             (cond (empty? as) out
-                  (#{"-cp" "-classpath" "--class-path" "--source" "--add-modules" "--enable-native-access"} a)
+                  (module-options a) (recur (rest more) (conj out (str a "=" (first more))))
+                  (#{"-cp" "-classpath" "--class-path" "--source"} a)
                   (recur (rest more) (case a
                                        "--source" (conj out (str "-Djdk.internal.javac.source=" (first more)))
-                                       "--add-modules" (conj out (str "--add-modules=" (first more)))
-                                       "--enable-native-access" (conj out (str "--enable-native-access=" (first more)))
                                        out))
                   (str/starts-with? a "--source=") (recur more (conj out (str "-Djdk.internal.javac.source=" (subs a 9))))
-                  (or (str/starts-with? a "--class-path=") (#{"-server" "-client"} a)) (recur more out)
+                  (or (str/starts-with? a "--class-path=")
+                      (#{"-server" "-client" "-version" "--version" "-showversion" "--show-version" "-Xdiag"} a))
+                  (recur more out)
                   :else (recur more (conj out a))))
           (when source-mode? ["--add-modules=ALL-DEFAULT"])))
 
@@ -2451,7 +2500,7 @@
 (def ^:private source-launcher "com/sun/tools/javac/launcher/SourceLauncher")
 
 (defn -main [& all-argv]
-  (let [{:keys [props classpath assertions argv stack preview source add-modules enable-native-access module-props-ignored]} (jvm-options all-argv)
+  (let [{:keys [props classpath assertions argv stack preview source module-options version module-props-ignored]} (jvm-options all-argv)
         consumed (take (- (count all-argv) (count argv)) all-argv)
         ;; source-file mode, as java's: --source, or a first argument that is
         ;; a .java file; the file and its arguments go to javac's
@@ -2467,7 +2516,7 @@
         _ (when module-props-ignored
             (binding [*out* *err*]
               (println "OpenJDK 64-Bit Server VM warning: Ignoring system property options whose names match the '-Djdk.module.*'. names that are reserved for internal use.")))
-        _ (swap! state assoc :add-modules add-modules :enable-native-access enable-native-access)
+        _ (swap! state assoc :module-options module-options :version version)
         ;; with -cp the main class comes first; without, champaca's own
         ;; form, the class path first (-jar ignores -cp, as java does)
         ;; in source-file mode the class path is -cp's or, as the launcher
@@ -2479,6 +2528,10 @@
                                 (and classpath (not= "-jar" (first argv))) (cons classpath argv)
                                 (and (= 1 (count argv)) (str/ends-with? (first argv) ".java")) (cons "." argv)
                                 :else argv)]
+    ;; -version and --version print and exit, whatever follows, as the
+    ;; launcher, which needs no main class for them
+    (when (:exit? version)
+      (System/exit (run (if classpath (vec (expand-class-path classpath)) []) nil [])))
     (when (and source (= "-jar" (first argv)))
       (launcher-error "Error: Option -jar is not allowed with --source"))
     (when (and (= cp "-jar") (not cname))
@@ -2490,8 +2543,11 @@
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
         (println "   or: jolt -M -m champaca.main [options] [--source <release>] <file.java> [args...]")
-        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --add-modules <module>[,...]; -server, -client accepted;")
-        (println "         -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX: ignored with a warning"))
+        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --source <release>,")
+        (println "         --add-modules, --limit-modules, --enable-native-access <module>[,...], --add-opens, --add-exports <module>/<package>=<module>[,...],")
+        (println "         --add-reads <module>=<module>[,...], --illegal-native-access=allow|warn|deny, -version, -showversion, --version, --show-version;")
+        (println "         -server, -client accepted; -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX:, -verbose, -Xlog,")
+        (println "         -Xint, -Xmixed, -Xcomp, -Xbatch, -Xrs, -Xverify:, -Xdiag, -Xcheck:jni, -Xnoclassgc ignored with a warning"))
       (System/exit 2))
     (if (= cp "-jar")
       ;; as java -jar: the manifest's Main-Class, the jar alone as the class

@@ -1,0 +1,7 @@
+--limit-modules
+java.base
+--add-modules
+java.logging
+-cp
+.
+Lim

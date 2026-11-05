@@ -1,0 +1,5 @@
+--illegal-native-access=allow
+--illegal-native-access=deny
+-cp
+.
+Nat

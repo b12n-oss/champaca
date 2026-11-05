@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+Error: --add-exports= requires modules to be specified

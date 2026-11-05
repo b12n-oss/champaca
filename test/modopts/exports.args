@@ -1,0 +1,5 @@
+--add-exports
+java.base/jdk.internal.misc=ALL-UNNAMED
+-cp
+.
+Opt
