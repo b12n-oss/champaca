@@ -158,6 +158,15 @@
                       (shell "git clone" (:git/url jolt-pin) src))
                     (when-not (zero? (:exit (shell {:continue true :err :string} "git -C" src "cat-file" "-e" (str sha "^{commit}"))))
                       (shell "git -C" src "fetch" (:git/url jolt-pin) sha))
+                    ;; the release tags too: jolt's version is git describe over v*
+                    ;; tags (tools/version.sh), so a commit without its tag builds as
+                    ;; the previous release plus a count, which :jolt/min-version
+                    ;; refuses. Not forced, so a moved rolling tag (vnightly) is
+                    ;; rejected and left alone; release tags never move.
+                    (let [r (shell {:continue true :err :string} "git -C" src "fetch" (:git/url jolt-pin) "refs/tags/v*:refs/tags/v*")]
+                      (when-not (zero? (:exit r))
+                        (println "bb jolt: some tags weren't updated (a moved tag is left as it was):")
+                        (println (str/trim (:err r)))))
                     (when-not (fs/exists? wt)
                       (shell "git -C" src "worktree" "add" "--detach" wt sha))
                     ;; borrow the checkout's submodule objects when it has them
