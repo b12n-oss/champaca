@@ -882,6 +882,11 @@
                              class-version
                              (throw (linkage-error cname "java/lang/UnsupportedClassVersionError" (class-version cname)))
                              :else (throw e)))))]
+        ;; a class file found under a name that isn't its own (a file system
+        ;; that ignores case, a renamed file) is HotSpot's ClassFileParser
+        ;; refusal, not a second class
+        (when (and user (not= (:name p) cname))
+          (throw (linkage-error cname "java/lang/NoClassDefFoundError" (str cname " (wrong name: " (:name p) ")"))))
         ;; HotSpot's format check: an interface's superclass is Object
         (when (and (pos? (bit-and (:flags p) 0x0200)) (not= "java/lang/Object" (:super p)))
           (let [msg (str "Interfaces must have java.lang.Object as superclass in class file " cname)]
@@ -2066,6 +2071,19 @@
   (s/call "set-jpackage-hook!" package-info)
   ;; the JDK's resources alone, for the platform loader
   (s/call "set-jdk-resource-hook!" (fn [path] (or (when (plain-resource-path? path) (jdk-resource-bytes path)) false)))
+  ;; the class in a class file on the class path at path, found as the JDK's
+  ;; URLClassPath finds it (a directory through the file system, so a//b is
+  ;; a/b; a jar by its exact entry): "ok <class name>", "format <text>" for
+  ;; bytes that aren't a class file, or false when there's no such file.
+  ;; The application loader asks it for a name it can't load (natives.ss
+  ;; class-or-null)
+  (s/call "set-classpath-class-hook!"
+          (fn [path]
+            (if-let [bs (user-resource-bytes path)]
+              (try (str "ok " (:name (cf/parse bs)))
+                   (catch Exception e
+                     (if-let [msg (:class-format (ex-data e))] (str "format " msg) (throw e))))
+              false)))
   ;; a classpath class's code source: its entry's URL, or false
   (s/call "set-code-source-hook!" (fn [cname] (if-let [e (get-in @state [:class-entries cname])] (entry-url e) false)))
   (s/call "set-cp-hook!" (fn [cname i]
@@ -2277,7 +2295,8 @@
   layer's extra roots); --enable-native-access M[,M...] or
   --enable-native-access=M..., the same way, as :enable-native-access (the
   modules whose restricted calls don't warn); -Xss, the thread stack size, as :stack in bytes
-  (bound-stack!). A -D naming one of the module system's own properties
+  (bound-stack!). A non-empty -Djava.endorsed.dirs or -Djava.ext.dirs is
+  HotSpot's refusal. A -D naming one of the module system's own properties
   (reserved-module-property?) is dropped and :module-props-ignored set, as
   HotSpot ignores it with a warning. A heap size (-Xmx,
   -Xms, -Xmn), -Xshare: and any -XX: flag are ignored with a warning, since
@@ -2289,10 +2308,22 @@
       (cond (or (nil? a) (= a "-jar") (not (str/starts-with? a "-"))) (assoc opts :argv argv)
             (str/starts-with? a "-D")
             (let [kv (subs a 2) i (str/index-of kv "=")
-                  k (if i (subs kv 0 i) kv)]
+                  k (if i (subs kv 0 i) kv)
+                  v (if i (subs kv (inc i)) "")]
+              ;; HotSpot refuses the extension and endorsed directories of
+              ;; Java 8, the first one given with a value, as it parses it:
+              ;; the text on stdout, the launcher's lines on stderr
+              (when-let [why (and (not= "" v)
+                                  ({"java.endorsed.dirs" (str " is not supported. Endorsed standards and standalone APIs\n"
+                                                              "in modular form will be supported via the concept of upgradeable modules.")
+                                    "java.ext.dirs" " is not supported.  Use -classpath instead."} k))]
+                (println (str a why))
+                (flush)
+                (launcher-error "Error: Could not create the Java Virtual Machine."
+                                "Error: A fatal exception has occurred. Program will exit."))
               (recur (rest argv) (cond (= "" k) opts
                                        (reserved-module-property? k) (assoc opts :module-props-ignored true)
-                                       :else (update opts :props conj [k (if i (subs kv (inc i)) "")]))))
+                                       :else (update opts :props conj [k v]))))
             ;; as the launcher, an option's separate value can't start with
             ;; "-" (it's the next option); -cp takes an empty one, --source
             ;; and --add-modules don't

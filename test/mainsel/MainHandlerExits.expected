@@ -1,0 +1,3 @@
+exit 5
+main handler exits
+--- stderr

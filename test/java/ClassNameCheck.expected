@@ -1,0 +1,102 @@
+forName  -> java.lang.ClassNotFoundException: 
+loadClass  -> java.lang.ClassNotFoundException: 
+forName . -> java.lang.ClassNotFoundException: /
+loadClass . -> java.lang.ClassNotFoundException: .
+forName .. -> java.lang.ClassNotFoundException: //
+loadClass .. -> java.lang.ClassNotFoundException: ..
+forName [ -> java.lang.ClassNotFoundException: [
+loadClass [ -> java.lang.ClassNotFoundException: [
+forName [[ -> java.lang.ClassNotFoundException: [[
+loadClass [[ -> java.lang.ClassNotFoundException: [[
+forName [] -> java.lang.ClassNotFoundException: []
+loadClass [] -> java.lang.ClassNotFoundException: []
+forName [I -> [I
+loadClass [I -> java.lang.ClassNotFoundException: [I
+forName [[I -> [[I
+loadClass [[I -> java.lang.ClassNotFoundException: [[I
+forName [V -> java.lang.ClassNotFoundException: [V
+loadClass [V -> java.lang.ClassNotFoundException: [V
+forName [X -> java.lang.ClassNotFoundException: [X
+loadClass [X -> java.lang.ClassNotFoundException: [X
+forName [Ljava.lang.String; -> [Ljava.lang.String;
+loadClass [Ljava.lang.String; -> java.lang.ClassNotFoundException: [Ljava.lang.String;
+forName [Ljava/lang/String; -> java.lang.ClassNotFoundException: [Ljava/lang/String;
+loadClass [Ljava/lang/String; -> java.lang.ClassNotFoundException: [Ljava/lang/String;
+forName [LI; -> java.lang.ClassNotFoundException: I
+loadClass [LI; -> java.lang.ClassNotFoundException: [LI;
+forName [L; -> java.lang.ClassNotFoundException: [L;
+loadClass [L; -> java.lang.ClassNotFoundException: [L;
+forName [L[I;; -> java.lang.ClassNotFoundException: [L[I;;
+loadClass [L[I;; -> java.lang.ClassNotFoundException: [L[I;;
+forName [L[; -> java.lang.ClassNotFoundException: [L[;
+loadClass [L[; -> java.lang.ClassNotFoundException: [L[;
+forName [Ljava.lang.String;; -> java.lang.ClassNotFoundException: [Ljava/lang/String;;
+loadClass [Ljava.lang.String;; -> java.lang.ClassNotFoundException: [Ljava.lang.String;;
+forName [Ljava.lang.String -> java.lang.ClassNotFoundException: [Ljava/lang/String
+loadClass [Ljava.lang.String -> java.lang.ClassNotFoundException: [Ljava.lang.String
+forName L; -> java.lang.ClassNotFoundException: L;
+loadClass L; -> java.lang.ClassNotFoundException: L;
+forName Ljava.lang.String; -> java.lang.ClassNotFoundException: Ljava/lang/String;
+loadClass Ljava.lang.String; -> java.lang.ClassNotFoundException: Ljava.lang.String;
+forName java.lang.String; -> java.lang.ClassNotFoundException: java/lang/String;
+loadClass java.lang.String; -> java.lang.ClassNotFoundException: java.lang.String;
+forName java.lang.String[] -> java.lang.ClassNotFoundException: java/lang/String[]
+loadClass java.lang.String[] -> java.lang.ClassNotFoundException: java.lang.String[]
+forName java/lang/String -> java.lang.ClassNotFoundException: java/lang/String
+loadClass java/lang/String -> java.lang.ClassNotFoundException: java/lang/String
+forName java/lang.String -> java.lang.ClassNotFoundException: java/lang.String
+loadClass java/lang.String -> java.lang.ClassNotFoundException: java/lang.String
+forName java.lang/String -> java.lang.ClassNotFoundException: java.lang/String
+loadClass java.lang/String -> java.lang.ClassNotFoundException: java.lang/String
+forName /java/lang/String -> java.lang.ClassNotFoundException: /java/lang/String
+loadClass /java/lang/String -> java.lang.ClassNotFoundException: /java/lang/String
+forName int -> java.lang.ClassNotFoundException: int
+loadClass int -> java.lang.ClassNotFoundException: int
+forName void -> java.lang.ClassNotFoundException: void
+loadClass void -> java.lang.ClassNotFoundException: void
+forName java.lang.String\u0000 -> java.lang.ClassNotFoundException: java/lang/String\u0000
+loadClass java.lang.String\u0000 -> java.lang.ClassNotFoundException: java.lang.String\u0000
+forName [Lchampaca.names.NameFixture; -> [Lchampaca.names.NameFixture;
+loadClass [Lchampaca.names.NameFixture; -> java.lang.ClassNotFoundException: [Lchampaca.names.NameFixture;
+forName [[[[[[[[[[[[...(256 chars) -> [[[[[[[[[[[[...(256 chars)
+forName [[[[[[[[[[[[...(273 chars) -> [[[[[[[[[[[[...(273 chars)
+forName null loader [[[[[[[[[[[[...(256 chars) -> [[[[[[[[[[[[...(256 chars)
+forName [[[[[[[[[[[[...(257 chars) -> java.lang.ClassNotFoundException: [[[[[[[[[[[[[[[[[[[[[[[[[[...(291 chars)
+forName [[[[[[[[[[[[...(274 chars) -> java.lang.ClassNotFoundException: [[[[[[[[[[[[[[[[[[[[[[[[[[...(308 chars)
+forName null loader [[[[[[[[[[[[...(257 chars) -> java.lang.ClassNotFoundException: [[[[[[[[[[[[[[[[[[[[[[[[[[...(291 chars)
+loadClass champaca..names.NameFixture -> java.lang.NoClassDefFoundError: champaca//names/NameFixture (wrong name: champaca/names/NameFixture)
+forName champaca..names.NameFixture -> java.lang.ClassNotFoundException: champaca//names/NameFixture
+loadClass champaca/names/NameFixture -> java.lang.NoClassDefFoundError: IllegalName: champaca/names/NameFixture
+forName champaca/names/NameFixture -> java.lang.ClassNotFoundException: champaca/names/NameFixture
+loadClass champaca/names.NameFixture -> java.lang.NoClassDefFoundError: IllegalName: champaca/names.NameFixture
+forName champaca/names.NameFixture -> java.lang.ClassNotFoundException: champaca/names.NameFixture
+loadClass champaca.names/NameFixture -> java.lang.NoClassDefFoundError: IllegalName: champaca.names/NameFixture
+forName champaca.names/NameFixture -> java.lang.ClassNotFoundException: champaca.names/NameFixture
+loadClass champaca.names.NameFixture -> champaca.names.NameFixture
+forName champaca.names.NameFixture -> champaca.names.NameFixture
+loadClass champaca.names..NameFixture -> java.lang.NoClassDefFoundError: champaca/names//NameFixture (wrong name: champaca/names/NameFixture)
+forName champaca.names..NameFixture -> java.lang.ClassNotFoundException: champaca/names//NameFixture
+loadClass champaca...names.NameFixture -> java.lang.NoClassDefFoundError: champaca///names/NameFixture (wrong name: champaca/names/NameFixture)
+forName champaca...names.NameFixture -> java.lang.ClassNotFoundException: champaca///names/NameFixture
+loadClass .champaca.names.NameFixture -> java.lang.ClassNotFoundException: .champaca.names.NameFixture
+forName .champaca.names.NameFixture -> java.lang.ClassNotFoundException: /champaca/names/NameFixture
+loadClass /champaca/names/NameFixture -> java.lang.ClassNotFoundException: /champaca/names/NameFixture
+forName /champaca/names/NameFixture -> java.lang.ClassNotFoundException: /champaca/names/NameFixture
+loadClass ..champaca.names.NameFixture -> java.lang.ClassNotFoundException: ..champaca.names.NameFixture
+forName ..champaca.names.NameFixture -> java.lang.ClassNotFoundException: //champaca/names/NameFixture
+loadClass champaca.names.NameFixture. -> java.lang.ClassNotFoundException: champaca.names.NameFixture.
+forName champaca.names.NameFixture. -> java.lang.ClassNotFoundException: champaca.names.NameFixture.
+loadClass champaca..lib.Greeter -> java.lang.ClassNotFoundException: champaca..lib.Greeter
+forName champaca..lib.Greeter -> java.lang.ClassNotFoundException: champaca//lib/Greeter
+loadClass champaca/lib/Greeter -> java.lang.NoClassDefFoundError: IllegalName: champaca/lib/Greeter
+forName champaca/lib/Greeter -> java.lang.ClassNotFoundException: champaca/lib/Greeter
+loadClass champaca/lib.Greeter -> java.lang.NoClassDefFoundError: IllegalName: champaca/lib.Greeter
+forName champaca/lib.Greeter -> java.lang.ClassNotFoundException: champaca/lib.Greeter
+loadClass champaca.lib.Greeter -> champaca.lib.Greeter
+forName champaca.lib.Greeter -> champaca.lib.Greeter
+loadClass .champaca.lib.Greeter -> java.lang.ClassNotFoundException: .champaca.lib.Greeter
+forName .champaca.lib.Greeter -> java.lang.ClassNotFoundException: /champaca/lib/Greeter
+loadClass champaca.names.Renamed -> java.lang.NoClassDefFoundError: champaca/names/Renamed (wrong name: champaca/names/NameFixture)
+forName champaca.names.Renamed -> java.lang.NoClassDefFoundError: champaca/names/Renamed (wrong name: champaca/names/NameFixture)
+defineClass champaca.names.Wrong -> java.lang.NoClassDefFoundError: champaca/names/Wrong (wrong name: champaca/names/NameFixture)
+defineClass champaca/names/NameFixture -> java.lang.NoClassDefFoundError: IllegalName: champaca/names/NameFixture

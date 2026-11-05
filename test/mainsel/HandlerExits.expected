@@ -1,0 +1,3 @@
+exit 4
+worker handler exits
+--- stderr

@@ -1,0 +1,21 @@
+write(byte[0]) after close -> ok
+write(b, 1, 0) after close -> ok
+write(int) after close -> java.io.IOException: Stream Closed
+write(byte[1]) after close -> java.io.IOException: Stream Closed
+write(null) after close -> java.lang.NullPointerException: Cannot read the array length because "b" is null
+write(b, -1, 0) after close -> java.lang.IndexOutOfBoundsException: null
+write(b, 0, 2) after close -> java.lang.IndexOutOfBoundsException: null
+flush after close -> ok
+file after close -> [1]
+append channel position -> 2
+append channel position(0) -> 2
+append channel write -> 1
+append channel position after write -> 3
+append file -> [1, 2, 7, 3, 4]
+append channel size -> 5
+truncate channel position -> 2
+truncate channel position(0) -> 0
+truncate file -> [5, 8]
+alias of an append stream: channel position -> 3
+alias file -> [5, 8, 6]
+RandomAccessFile channel position -> 0

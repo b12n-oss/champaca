@@ -1,0 +1,9 @@
+exit 1
+handler saw task on worker-1
+worker alive false
+main handler saw main
+--- stderr
+
+Exception: java.lang.IllegalStateException thrown from the UncaughtExceptionHandler in thread "worker-1"
+
+Exception: java.lang.UnsupportedOperationException thrown from the UncaughtExceptionHandler in thread "main"

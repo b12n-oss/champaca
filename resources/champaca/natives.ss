@@ -421,6 +421,34 @@
                   (substring s (fx+ i 1) (fx- len 1)))]
             [(and (fx= i (fx- len 1)) (memv (string-ref s i) '(#\B #\C #\D #\F #\I #\J #\S #\Z))) 'prim]
             [else #f]))))
+;; Class.c's check before the VM looks for a name, on its slashed form
+;; (check_classname.c VerifyClassname): a class name is segments of JVM
+;; identifier characters, anything but . ; [ / (and NUL, which modified
+;; UTF-8 can't decode back), between single slashes, a trailing one allowed;
+;; an array is up to 255 [ then a primitive or L<class name>;
+(define (jvm-ident-char? c) (not (memv c '(#\. #\; #\[ #\/ #\nul))))
+(define (skip-class-name s i end)
+  (let loop ([p i] [last #f])
+    (if (fx= p end)
+        (and last p)
+        (let ([c (string-ref s p)])
+          (cond [(jvm-ident-char? c) (loop (fx+ p 1) c)]
+                [(and (char=? c #\/) last) (and (not (char=? last #\/)) (loop (fx+ p 1) c))]
+                [else (and last p)])))))
+(define (skip-field-descriptor s i end)
+  (let loop ([i i] [dims 0])
+    (and (fx< i end)
+         (let ([c (string-ref s i)])
+           (cond [(memv c '(#\Z #\B #\C #\S #\I #\J #\F #\D)) (fx+ i 1)]
+                 [(char=? c #\L) (let ([p (skip-class-name s (fx+ i 1) end)])
+                                   (and p (fx< p end) (char=? (string-ref s p) #\;) (fx+ p 1)))]
+                 [(char=? c #\[) (and (fx< dims 255) (loop (fx+ i 1) (fx+ dims 1)))]
+                 [else #f])))))
+(define (valid-class-name? n)
+  (let ([len (string-length n)])
+    (eqv? len (if (and (fxpositive? len) (char=? (string-ref n 0) #\[))
+                  (skip-field-descriptor n 0 len)
+                  (skip-class-name n 0 len)))))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
@@ -441,16 +469,24 @@
                           (and m (mirror-class m)))
                         (let ([c (try-class (slashes bn))])
                           (and c (builtin-loader-sees? loader c) c))))]
-         [c (cond [(or (fxzero? (string-length s)) (memv #\/ (string->list s))) #f]
-                  ;; an array name that isn't a well-formed descriptor is not
-                  ;; found; one with a class element exists once the element
-                  ;; resolves through the loader (its pseudo-class would be
-                  ;; made for any name, and mirrored, it loads its element)
-                  [(and array? (not element)) #f]
+         [_ (cond
+              ;; Class.c: a name with a slash is not found as given; one whose
+              ;; slashed form isn't a class name or descriptor (an empty name,
+              ;; over 255 dimensions) is not found by that slashed form
+              [(memv #\/ (string->list s)) (jthrow "java/lang/ClassNotFoundException" s)]
+              [(not (valid-class-name? n)) (jthrow "java/lang/ClassNotFoundException" n)])]
+         ;; an array with a class element exists once the element resolves
+         ;; through the loader (its pseudo-class would be made for any name,
+         ;; and mirrored, it loads its element)
+         [c (cond [(and array? (not element)) #f]
                   [(and array? (not (eq? element 'prim))) (and (resolve element) (try-class n))]
                   [array? (try-class n)]
                   [else (resolve s)])])
-    (unless c (jthrow "java/lang/ClassNotFoundException" s))
+    ;; HotSpot's texts: the boot loader names the slashed name, a loader
+    ;; object the class it was asked for (an array's element, dotted)
+    (unless c
+      (jthrow "java/lang/ClassNotFoundException"
+              (cond [(not loader) n] [(and array? (string? element)) element] [else s])))
     (when (eqv? init 1) (jinit (jclass-cname c)))
     (jmirror c)))
 
@@ -1662,8 +1698,9 @@
             (cond
              [(java-halt? e) (exit-process (java-halt-status e))]
              [(jobj? e)
-              (guard (e2 [#t (report-uncaught e2)])
-                ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") t e))]
+              (let ([r (dispatch-uncaught t e)])
+                (cond [(java-halt? r) (exit-process (java-halt-status r))]
+                      [(not (eq? r 'done)) (report-uncaught r)]))]
              [else (report-uncaught e)]))))
       (lambda () ((jvirt t "run()V") t)))))
   (thread-terminated! t (lambda () (set! java-live-threads (remq t java-live-threads))))
@@ -2371,21 +2408,52 @@
 (define (jdk-package? n)
   (or (fxzero? (hashtable-size package-modules))
       (and (hashtable-ref package-modules (package-dir n) #f) #t)))
+;; the class file the application loader would read for binary name s from
+;; the class path (main.clj's hook): "ok <name>", "format <text>", or #f
+(define classpath-class-hook (lambda (path) #f))
+(define (set-classpath-class-hook! f) (set! classpath-class-hook f))
+;; what the JDK's application loader does with a name it can't load as a
+;; class: it reads <s with . as />.class from the class path all the same
+;; and defines it, so bytes there are a NoClassDefFoundError, from
+;; ClassLoader.checkName for a name with a slash ("IllegalName: s") and from
+;; the class file parser for one whose bytes name another class (a..b.C
+;; finds a/b/C's file in a directory). URLClassPath finds nothing for a
+;; path with a leading slash.
+(define (misnamed-classpath-class s)
+  (let* ([p (slashes s)]
+         [r (and (not (char=? (string-ref p 0) #\/)) (classpath-class-hook (string-append p ".class")))])
+    (when r
+      (cond [(memv #\/ (string->list s)) (jthrow "java/lang/NoClassDefFoundError" (string-append "IllegalName: " s))]
+            [(and (fx> (string-length r) 7) (string=? (substring r 0 7) "format "))
+             (jthrow "java/lang/ClassFormatError" (substring r 7 (string-length r)))]
+            [else (jthrow "java/lang/NoClassDefFoundError"
+                          (string-append (slashes s) " (wrong name: " (substring r 3 (string-length r)) ")"))]))
+    #f))
 (define (class-or-null this name)
   ;; loadClass takes a binary name: one with slashes or an array descriptor is
   ;; not found. A loader other than the application one never loads a
   ;; classpath class, not even to turn it down: a loader of the program's own
   ;; may be about to define that name itself
-  (let ([s (jstring->scheme (nn name))])
+  (let* ([s (jstring->scheme (nn name))]
+         [app? (let ([a (app-loader)]) (and a (eq? this a)))])
     (and (fx> (string-length s) 0)
          (not (char=? (string-ref s 0) #\[))
-         (not (memv #\/ (string->list s)))
-         (let ([n (slashes s)])
-           (and (or (hashtable-ref classes n #f)
-                    (jdk-package? n)
-                    (let ([a (app-loader)]) (and a (eq? this a))))
-                (let ([c (try-class n)])
-                  (and c (builtin-loader-sees? this c) (jmirror c))))))))
+         (if (memv #\/ (string->list s))
+             (and app? (misnamed-classpath-class s))
+             (let ([n (slashes s)])
+               (or (and (or (hashtable-ref classes n #f) (jdk-package? n) app?)
+                        (let ([c (try-class n)])
+                          (and c (builtin-loader-sees? this c) (jmirror c))))
+                   ;; only a path the resource hook refuses (an empty
+                   ;; segment inside it) can have a file class-exists?
+                   ;; didn't see
+                   (and app? (inner-empty-segment? n) (misnamed-classpath-class s))))))))
+(define (inner-empty-segment? n)
+  (let ([len (string-length n)])
+    (let loop ([i 2])
+      (and (fx< i len)
+           (or (and (char=? (string-ref n i) #\/) (char=? (string-ref n (fx- i 1)) #\/))
+               (loop (fx+ i 1)))))))
 ;; --- classes defined at run time -------------------------------------------------
 ;; ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
 ;; (JavaLangAccess.defineClass) and Unsafe.defineClass0 end in one family of

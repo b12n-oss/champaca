@@ -1,7 +1,7 @@
 # test/mainsel
 
 How the launcher picks `main` (JEP 512, final in Java 25), case by case, and
-how main's thread ends (MainEndThrows, MainEndExit). bb
+how main's thread ends (MainEndThrows, MainEndExit), and uncaught-exception handlers that throw or exit (HandlerThrows, HandlerError, HandlerExits, MainHandlerExits). bb
 test compiles these into target/mainsel and runs each class that has a
 `<Class>.expected` with the arguments `a b`. PrivStatic and PrivInstance
 come from test/gen/MainSelGen.java, since javac won't compile them. The file holds what HotSpot's

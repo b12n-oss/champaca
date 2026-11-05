@@ -431,18 +431,25 @@
 
 (define fos "java/io/FileOutputStream")
 
+;; as io_util_md.c's fileOpen, the FileDescriptor remembers O_APPEND: a
+;; FileChannel on it reports the file's size as its position
 (defnative "java/io/FileOutputStream.open0(Ljava/lang/String;Z)V" (this name append)
-  (fdo-fd-set! (holder-fdo this fos)
-               (java-io-open (jstring->scheme (nn name))
-                             (fxlogor (fs-const "O_WRONLY") (fs-const "O_CREAT")
-                                      (if (eqv? append 1) (fs-const "O_APPEND") (fs-const "O_TRUNC"))))))
+  (let ([fdo (holder-fdo this fos)])
+    (fdo-fd-set! fdo
+                 (java-io-open (jstring->scheme (nn name))
+                               (fxlogor (fs-const "O_WRONLY") (fs-const "O_CREAT")
+                                        (if (eqv? append 1) (fs-const "O_APPEND") (fs-const "O_TRUNC")))))
+    (jslot-set! fdo (jfield-index "java/io/FileDescriptor" "append") (if (eqv? append 1) 1 0))))
 
 (define (console-fd? fd) (or (fx= fd 1) (fx= fd 2)))
 
 (defnative "java/io/FileOutputStream.writeBytes([BIIZ)V" (this bytes off len append)
   (check-bounds bytes off len)
-  (let ([fd (holder-fd this fos)])
-    (if (console-fd? fd) (console-write-bytes fd bytes off len) (fd-write-from fd bytes off len))))
+  ;; io_util.c's writeBytes returns on an empty write before it looks at the
+  ;; fd, so writing nothing to a closed stream is no error
+  (unless (fxzero? len)
+   (let ([fd (holder-fd this fos)])
+    (if (console-fd? fd) (console-write-bytes fd bytes off len) (fd-write-from fd bytes off len)))))
 (defnative "java/io/FileOutputStream.write(IZ)V" (this b append)
   (let ([fd (holder-fd this fos)])
     (if (console-fd? fd)

@@ -1656,6 +1656,31 @@
 
 ;; --- entry --------------------------------------------------------------------
 
+;; HotSpot's JavaThread::exit when dispatchUncaughtException itself throws:
+;; one line naming the class of what the handler threw and the thread, which
+;; nothing dispatches again
+(define (report-handler-failure t x)
+  (flush-output-port (current-output-port))
+  (let ([err (current-error-port)])
+    (flush-output-port err)   ; Java's System.err shares the fd
+    (put-string err (string-append "\nException: " (slashes->dots (class-name-of x))
+                                   " thrown from the UncaughtExceptionHandler in thread \""
+                                   (jstring->scheme (jslot t (jfield-index "java/lang/Thread" "name"))) "\"\n"))
+    (flush-output-port err)))
+
+;; Thread t's uncaught exception e through its handler: 'done, a java-halt
+;; the handler raised (System.exit in it), or the Scheme condition the
+;; dispatch failed with (one during boot, say). A Java throwable from the
+;; handler is reported as HotSpot does and counts as done.
+(define (dispatch-uncaught t e)
+  (guard (x [(java-halt? x) x]
+            [#t (let ([j (java-raise-of x)])
+                  (if (jobj? j) (begin (report-handler-failure t j) 'done) x))])
+    ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") t e)
+    'done))
+
+;; Report an escaping exception or Scheme error on the main thread; the
+;; status a handler's System.exit gave, else #f
 (define (report-uncaught raised)
   (flush-output-port (current-output-port))
   (let ([err (current-error-port)] [e (java-raise-of raised)])
@@ -1663,13 +1688,16 @@
       [(jobj? e)
        ;; through the thread's own uncaught handler, as HotSpot does for main
        ;; (ThreadGroup's prints "Exception in thread" and the trace); the
-       ;; shadow stack only if that fails (an error during boot, say)
+       ;; shadow stack only if that fails with a Scheme error
        (flush-output-port err)   ; Java's System.err shares the fd
-       (unless (guard (x [#t #f])
-                 ((method-proc "java/lang/Thread" "dispatchUncaughtException(Ljava/lang/Throwable;)V") current-jthread e)
-                 #t)
-         (put-string err (string-append "Exception in thread \"main\" " (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
-         (print-jstack e err))]
+       (let ([r (dispatch-uncaught current-jthread e)])
+         (cond
+           [(java-halt? r) (java-halt-status r)]
+           [(eq? r 'done) #f]
+           [else
+            (put-string err (string-append "Exception in thread \"main\" " (guard (x [#t (class-name-of e)]) (jstring-of e)) "\n"))
+            (print-jstack e err)
+            #f]))]
       [else
        ;; the handler runs before the stack unwinds, so under CHAMPACA_BT
        ;; jstack still says where in the Java program this happened
@@ -1677,7 +1705,8 @@
        (display-condition e err)
        (newline err)
        (for-each (lambda (f) (put-string err (string-append "\tat " f "\n")))
-                 (list-head jstack (min 25 (length jstack))))])))
+                 (list-head jstack (min 25 (length jstack))))
+       #f])))
 
 ;; Run thunk; report an escaping Java exception or Scheme error and return 1,
 ;; otherwise return 0.
@@ -1694,7 +1723,9 @@
       (lambda (e)
         (if (java-halt? e)
             (begin (flush-output-port (current-output-port)) (set! halted #t) (k (java-halt-status e)))
-            (begin (report-uncaught e) (k 1))))
+            (let ([st (report-uncaught e)])
+              (flush-output-port (current-output-port))
+              (if st (begin (set! halted #t) (k st)) (k 1)))))
       (lambda () (thunk) (flush-output-port (current-output-port)) 0)))))
 
 ;; The java launcher's way to main (JEP 512): the JDK's own

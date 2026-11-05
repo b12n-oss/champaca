@@ -316,7 +316,23 @@
                                     _ (fs/copy "target/classes/Hello.class" "target/dotjava.java/Hello.class")
                                     {:keys [out exit]} (run-limited 300 {:label "dotjava-dir"} (jolt-bin) "-M" "-m" "champaca.main"
                                                                     "target/dotjava.java" "Hello")
-                                    dotjava-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected")))]
+                                    dotjava-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected")))
+                                    ;; Java 8's -Djava.endorsed.dirs and -Djava.ext.dirs: the
+                                    ;; first one with a value refused as HotSpot does (its text
+                                    ;; on stdout), an empty one accepted
+                                    vm-fail (str "Error: Could not create the Java Virtual Machine.\n"
+                                                 "Error: A fatal exception has occurred. Program will exit.\n")
+                                    {:keys [out err exit]} (run-limited 300 {:label "endorsed-dirs" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-Djava.endorsed.dirs=/x" "-Djava.ext.dirs=/y" "target/classes" "Hello")
+                                    endorsed-ok (and (= 1 exit) (= err vm-fail)
+                                                     (= out (str "-Djava.endorsed.dirs=/x is not supported. Endorsed standards and standalone APIs\n"
+                                                                 "in modular form will be supported via the concept of upgradeable modules.\n")))
+                                    {:keys [out err exit]} (run-limited 300 {:label "ext-dirs" :err :string} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-Djava.ext.dirs=/y" "-Djava.ext.dirs=" "target/classes" "Hello")
+                                    ext-ok (and (= 1 exit) (= err vm-fail) (= out "-Djava.ext.dirs=/y is not supported.  Use -classpath instead.\n"))
+                                    {:keys [out exit]} (run-limited 300 {:label "empty-ext-dirs"} (jolt-bin) "-M" "-m" "champaca.main"
+                                                                    "-Djava.ext.dirs=" "-Djava.endorsed.dirs" "target/classes" "Hello")
+                                    empty-dirs-ok (and (zero? exit) (= out (slurp "test/java/Hello.expected")))]
                                 (println (if jar-ok "PASS" "FAIL") "-D before -jar target/app.jar")
                                 (println (if bad-ok "PASS" "FAIL") "an unknown launcher option")
                                 (println (if xss-ok "PASS" "FAIL") "-Xss: 0 the default, 512k runs, 1k too small, 2g too large, 1x invalid, with HotSpot's texts")
@@ -328,9 +344,13 @@
                                 (println (if accepted-ok "PASS" "FAIL") "-server and -client accepted, -Xshare: ignored with a warning")
                                 (println (if preview-off-ok "PASS" "FAIL") "a preview class file without --enable-preview (PreviewCheck)")
                                 (println (if dotjava-ok "PASS" "FAIL") "a class path directory named d.java before the main class")
+                                (println (if endorsed-ok "PASS" "FAIL") "-Djava.endorsed.dirs refused with HotSpot's text, before a later -Djava.ext.dirs")
+                                (println (if ext-ok "PASS" "FAIL") "-Djava.ext.dirs refused with HotSpot's text, a later empty one too late")
+                                (println (if empty-dirs-ok "PASS" "FAIL") "an empty -Djava.ext.dirs= and -Djava.endorsed.dirs accepted")
                                 (concat (when-not jar-ok ["-D -jar"]) (when-not bad-ok ["bad option"]) (when-not ignored-ok ["ignored options"])
                                         (when-not cp-ok ["-cp"]) (when-not star-ok ["-cp star dir"]) (when-not cp-missing-ok ["-cp missing"]) (when-not cp-jar-ok ["-cp -jar"])
-                                        (when-not accepted-ok ["accepted options"]) (when-not preview-off-ok ["preview off"]) (when-not dotjava-ok ["dotjava dir"])))
+                                        (when-not accepted-ok ["accepted options"]) (when-not preview-off-ok ["preview off"]) (when-not dotjava-ok ["dotjava dir"])
+                                        (when-not endorsed-ok ["endorsed dirs"]) (when-not ext-ok ["ext dirs"]) (when-not empty-dirs-ok ["empty dirs"])))
                     ;; how the launcher picks main (test/mainsel, JEP 512): each class
                     ;; with a .expected run with a b, its status, stdout and stderr HotSpot's
                     _ (fs/delete-tree "target/mainsel")

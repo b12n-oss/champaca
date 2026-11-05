@@ -1,0 +1,5 @@
+exit 0
+main returns
+--- stderr
+
+Exception: java.lang.AssertionError thrown from the UncaughtExceptionHandler in thread "Thread-0"
