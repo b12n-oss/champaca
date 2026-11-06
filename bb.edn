@@ -428,6 +428,11 @@
                                                    args (str/split-lines (slurp f))
                                                    {:keys [out err exit]} (apply run-limited 300 {:label (str "modopts-" c) :err :string :dir "target/modopts"}
                                                                                  (jolt-bin) "-Sdeps" src-deps "-M" "-m" "champaca.main" args)
+                                                   ;; CHAMPACA_BT names each method whose code throws for a
+                                                   ;; class it can't find (spike 50), which HotSpot never prints
+                                                   err (if (System/getenv "CHAMPACA_BT")
+                                                         (str/replace err (re-pattern "(?m)^champaca: [^\n]* names [^\n]*; that code throws [^\n]*\n") "")
+                                                         err)
                                                    ok (= (slurp (str "test/modopts/" c ".expected")) (str "exit " exit "\n" out "--- stderr\n" err))]
                                              :when (do (println (if ok "PASS" "FAIL") (str "module options: " c))
                                                        (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
