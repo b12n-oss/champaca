@@ -476,13 +476,14 @@
 (defn- resolve-type!
   "Loads the class a checkcast or instanceof names: an array's element class
   (JVMS 5.4.3.1), whose absence is the array's (NoClassDefFoundError names the
-  array, as HotSpot's)."
+  array, as HotSpot's). A class the element needs, such as its superclass,
+  stays the one named."
   [resolve c]
   (if (str/starts-with? c "[")
     (when-let [el (array-class-element c)]
       (try ((:ensure-loaded resolve) el)
            (catch Exception e
-             (if (missing-class e) (throw (ex-info (str "class not found: " c) {:class c})) (throw e)))))
+             (if (= el (missing-class e)) (throw (ex-info (str "class not found: " c) {:class c})) (throw e)))))
     ((:ensure-loaded resolve) c)))
 
 (defn- bad-class

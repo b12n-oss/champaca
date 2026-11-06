@@ -28,6 +28,9 @@ public class LinkCheck {
     static Object checkcastArray(Object o) { return present ? (LinkGone[]) o : "absent"; }
     static Object checkcast2d(Object o) { return present ? (LinkGone[][]) o : "absent"; }
     static Object instanceOfArray(Object o) { return present ? (Object) (o instanceof LinkGone[]) : "absent"; }
+    // an array of a class whose superclass is missing names the superclass
+    static Object checkcastOrphans(Object o) { return present ? (LinkOrphan[]) o : "absent"; }
+    static Object instanceOfOrphans(Object o) { return present ? (Object) (o instanceof LinkOrphan[]) : "absent"; }
     // the array isn't printed: toString would load the element class anyway
     static Object newArray() { return present ? (new LinkGone[1] != null ? "made" : "null") : "absent"; }
     static Object getStatic() { return present ? LinkGone.FIELD : "absent"; }
@@ -76,6 +79,8 @@ public class LinkCheck {
         PROBES.put("checkcast 2d array", () -> checkcast2d(new String[0]));
         PROBES.put("instanceof array", () -> instanceOfArray("x"));
         PROBES.put("instanceof array of null", () -> instanceOfArray(null));
+        PROBES.put("checkcast array of orphans", () -> checkcastOrphans(new String[0]));
+        PROBES.put("instanceof array of orphans", () -> instanceOfOrphans("x"));
         PROBES.put("anewarray", LinkCheck::newArray);
         PROBES.put("getstatic", LinkCheck::getStatic);
         PROBES.put("putstatic", LinkCheck::putStatic);

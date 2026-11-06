@@ -9,6 +9,8 @@ checkcast array of null not run: ran (absent)
 checkcast 2d array not run: ran (absent)
 instanceof array not run: ran (absent)
 instanceof array of null not run: ran (absent)
+checkcast array of orphans not run: ran (absent)
+instanceof array of orphans not run: ran (absent)
 anewarray not run: ran (absent)
 getstatic not run: ran (absent)
 putstatic not run: ran (absent)
@@ -30,6 +32,8 @@ checkcast array of null run: ran (null)
 checkcast 2d array run: java.lang.NoClassDefFoundError: [[LLinkGone;
 instanceof array run: java.lang.NoClassDefFoundError: [LLinkGone;
 instanceof array of null run: ran (false)
+checkcast array of orphans run: java.lang.NoClassDefFoundError: LinkGone
+instanceof array of orphans run: java.lang.NoClassDefFoundError: LinkGone
 anewarray run: java.lang.NoClassDefFoundError: LinkGone
 getstatic run: java.lang.NoClassDefFoundError: LinkGone
 putstatic run: java.lang.NoClassDefFoundError: LinkGone
