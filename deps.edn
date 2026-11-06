@@ -1,7 +1,7 @@
 {:paths ["src" "resources"]
- :jolt/min-version "0.8.23"
- ;; The jolt `bb test` runs on: the v0.8.23 tag, the release's own code, built from
- ;; source by `bb jolt`. A local `make build` of it ran a warm Hello in 0.32 s where
- ;; a release binary of the same commit took 0.45 s (2026-10-18).
+ :jolt/min-version "0.8.24"
+ ;; The jolt `bb test` runs on: the v0.8.24 tag, the release's own code, built from
+ ;; source by `bb jolt`. A local `make build` of it ran a warm Hello in 0.42 s where
+ ;; the release binary of the same version took 0.59 s (2026-11-06).
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                 :git/sha "a0ac71c3f638fe55158bd01b4ecbb0dd3d7545e5"}}
+                 :git/sha "a9b24d4c9dd57e3615d68975eb457e7b16554da9"}}
