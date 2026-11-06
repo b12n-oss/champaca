@@ -9,8 +9,8 @@
 ;; here instead. Codegen sends invokeExact and invoke to mh-call with the call
 ;; site's descriptor, and mh-call converts arguments and result between the
 ;; two descriptors: boxing, unboxing and primitive widening, as asType would.
-;; invokeExact is not checked for an exact type match, and access checks are
-;; not done (spike).
+;; invokeExact goes to mh-call-exact, which requires the call site's
+;; descriptor to be the handle's type. Access checks are not done (spike).
 
 (define-record-type mh-info (fields desc args ret proc varargs?) (sealed #t) (nongenerative champaca-mh-info))
 (define obj-desc "Ljava/lang/Object;")
@@ -167,6 +167,17 @@
                         [(fx= (length sargs) (length targs)) (adapt-all sargs targs xs)]
                         [else (wrong-type info (length sargs))])))))
 
+;; invokeExact: the call site's descriptor must be the handle's type exactly,
+;; else WrongMethodTypeException with Invokers.newWrongMethodTypeException's
+;; text, as checkExactType; the procedure then takes the arguments as they are
+(define (mh-call-exact mh site . xs)
+  (let ([info (mh-info-of mh)])
+    (unless (string=? (mh-info-desc info) site)
+      (let ([sp (site-parts site)])
+        (jthrow "java/lang/invoke/WrongMethodTypeException"
+                (string-append "handle's method type " (mh-type-text mh)
+                               " but found " (type-text (car sp) (cdr sp))))))
+    (apply (mh-info-proc info) xs)))
 
 (define (invoke-with-arguments mh arr)
   (let ([xs (if arr (vector->list (jarr-vec arr)) '())])

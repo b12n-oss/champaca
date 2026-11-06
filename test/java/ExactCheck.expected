@@ -1,0 +1,49 @@
+exact (II)I: 5
+exact result as long: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int,int)long
+exact result as Object: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int,int)Object
+exact result dropped: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int,int)void
+exact long arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (long,int)int
+exact boxed arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (Integer,int)int
+exact too few: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int)int
+exact too many: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int,int,int)int
+invoke adapts: 5
+invoke boxed arg: 5
+exact (I)J: 40
+exact (I)J as int: java.lang.invoke.WrongMethodTypeException: handle's method type (int)long but found (int)int
+exact Object arg: hello w
+exact String arg: java.lang.invoke.WrongMethodTypeException: handle's method type (Object)String but found (String)String
+exact Object result: java.lang.invoke.WrongMethodTypeException: handle's method type (Object)String but found (Object)Object
+sink s
+exact void: ok
+exact void as Object: java.lang.invoke.WrongMethodTypeException: handle's method type (String)void but found (String)Object
+exact varargs array: 6
+exact varargs spread: java.lang.invoke.WrongMethodTypeException: handle's method type (int[])int but found (int,int,int)int
+invoke varargs spread: 6
+exact boxed type: 5
+exact boxed with int: java.lang.invoke.WrongMethodTypeException: handle's method type (Integer)Integer but found (int)Integer
+exact virtual: inst greets you
+exact virtual Object recv: java.lang.invoke.WrongMethodTypeException: handle's method type (ExactCheck,String)String but found (Object,String)String
+exact constructor: made
+exact constructor as Object: java.lang.invoke.WrongMethodTypeException: handle's method type (String)ExactCheck but found (String)Object
+exact getter: inst
+exact bound: inst greets b
+exact bound wrong: java.lang.invoke.WrongMethodTypeException: handle's method type (String)String but found (ExactCheck,String)String
+exact asType: 11
+exact asType original: java.lang.invoke.WrongMethodTypeException: handle's method type (Object,Object)Object but found (int,int)int
+exact inserted: 11
+exact dropped arg: 3
+exact dropped arg wrong: java.lang.invoke.WrongMethodTypeException: handle's method type (String,int,int)int but found (Object,int,int)int
+exact constant: k
+exact constant as Object: java.lang.invoke.WrongMethodTypeException: handle's method type ()String but found ()Object
+exact null handle: java.lang.NullPointerException: Cannot invoke "java.lang.invoke.MethodHandle.invokeExact(int, int)" because "<parameter1>" is null
+exact invoker: 3
+exact invoker wrong: java.lang.invoke.WrongMethodTypeException: handle's method type (int)long but found (int,int)int
+exact dynamicInvoker: 15
+exact dynamicInvoker wrong: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int,int)long
+exact array getter: a0
+exact array getter Object: java.lang.invoke.WrongMethodTypeException: handle's method type (String[],int)String but found (String[],int)Object
+exact in a loop: [0, 2, 4]
+record toString: P[a=1, b=q]
+record equals: true
+record hashCode: true
+string concat: a0c2.5inst

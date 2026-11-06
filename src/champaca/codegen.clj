@@ -896,7 +896,8 @@
                          ;; types to the access mode's, as asType would
                          (apply sx (at pc "vh-call") (sx "nn-at" recv (site pc)) (str-lit name) (str-lit desc) argv)
                          (and (= class "java/lang/invoke/MethodHandle") (#{"invokeExact" "invoke"} name))
-                         (apply sx (at pc "mh-call") (sx "nn-at" recv (site pc)) (str-lit desc) argv)
+                         (apply sx (at pc (if (= name "invokeExact") "mh-call-exact" "mh-call"))
+                                (sx "nn-at" recv (site pc)) (str-lit desc) argv)
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
                              ;; a method nothing declares is NoSuchMethodError

@@ -285,7 +285,7 @@ A method of a class `define-class` made costs about the same as a fn. The same s
 
 ### What method handles cost
 
-A method handle call goes through the runtime's handle table rather than straight to the method. In a loop of a million calls to a static `add(int, int)`, a direct call took 12 ns, `invokeExact` 117 ns, and `invoke` with boxed `Object` arguments about 1.35 µs, most of that in boxing through `Integer.valueOf` and unboxing through a virtual call. Linking a call site with a bootstrap of its own happens once, on its first call.
+A method handle call goes through the runtime's handle table rather than straight to the method. In a loop of a million calls to a static `add(int, int)` (2026-11-06, a loaded machine), `invokeExact` took 59 ns and `invoke` with boxed `Object` arguments about 0.75 µs, most of that in boxing through `Integer.valueOf` and unboxing through a virtual call. A direct call to so small a method is compiled into the loop and costs about 1 ns. `invokeExact` converts nothing, since its type must be the handle's, which took it from 90 ns to 59. Linking a call site with a bootstrap of its own happens once, on its first call.
 
 Evaluating `handles.ss` from source added about 20 ms to every start when method handles went in. Since then the warm path loads the runtime compiled (`runtime.so`, above), so that cost is now paid only on a cold start or with the cache off.
 
