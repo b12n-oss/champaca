@@ -4,6 +4,11 @@ ldc broken not run: not called
 new not run: ran (absent)
 checkcast not run: ran (absent)
 instanceof not run: ran (absent)
+checkcast array not run: ran (absent)
+checkcast array of null not run: ran (absent)
+checkcast 2d array not run: ran (absent)
+instanceof array not run: ran (absent)
+instanceof array of null not run: ran (absent)
 anewarray not run: ran (absent)
 getstatic not run: ran (absent)
 putstatic not run: ran (absent)
@@ -20,6 +25,11 @@ parameter type not run: ran (absent)
 new run: java.lang.NoClassDefFoundError: LinkGone
 checkcast run: ran (null)
 instanceof run: ran (false)
+checkcast array run: java.lang.NoClassDefFoundError: [LLinkGone;
+checkcast array of null run: ran (null)
+checkcast 2d array run: java.lang.NoClassDefFoundError: [[LLinkGone;
+instanceof array run: java.lang.NoClassDefFoundError: [LLinkGone;
+instanceof array of null run: ran (false)
 anewarray run: java.lang.NoClassDefFoundError: LinkGone
 getstatic run: java.lang.NoClassDefFoundError: LinkGone
 putstatic run: java.lang.NoClassDefFoundError: LinkGone
@@ -35,6 +45,7 @@ field type run: ran (null)
 parameter type run: ran (null)
 new again: java.lang.NoClassDefFoundError: LinkGone
 cause: java.lang.ClassNotFoundException: LinkGone
+array cause: java.lang.NoClassDefFoundError: [LLinkGone; | cause java.lang.ClassNotFoundException: LinkGone
 array of orphans: java.lang.NoClassDefFoundError: LinkGone
 forName: java.lang.ClassNotFoundException: LinkGone
 lazy reference: true A sees 42
@@ -42,8 +53,9 @@ lazy superclass: true C extends base
 lazy forName: true
 lazy missing: java.lang.ClassNotFoundException: LinkCheck$LinkLazy$HidZ
 lazy loader error: java.lang.ClassFormatError: bad bytes for LinkCheck$LinkLazy$HidBad
+lazy loader error array: java.lang.ClassFormatError: bad bytes for LinkCheck$LinkLazy$HidBad
 lazy class constant: true E names LinkCheck$LinkLazy$HidF [LLinkCheck$LinkLazy$HidF;
 lazy member types: LinkCheck$LinkLazy$HidH LinkCheck$LinkLazy$HidH 2
 lazy annotation class value: 1 LinkCheck$LinkLazy$HidTag LinkCheck$LinkLazy$HidH
-lazy asked: [HidA, HidB, HidC, HidBase, HidZ, HidD, HidBad, HidE, HidF, HidG, HidH, HidK, HidTag]
+lazy asked: [HidA, HidB, HidC, HidBase, HidZ, HidD, HidBad, HidM, HidBad, HidE, HidF, HidG, HidH, HidK, HidTag]
 lazy not ours: ran (false A sees 42)

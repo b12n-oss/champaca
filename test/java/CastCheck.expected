@@ -23,6 +23,8 @@ own loader: java.lang.ClassCastException: class CastCheck$P cannot be cast to cl
 own loader to user: java.lang.ClassCastException: class CastCheck$P cannot be cast to class CastCheck$A (CastCheck$P is in unnamed module of loader CastCheck$Loader @H; CastCheck$A is in unnamed module of loader 'app')
 named loader: java.lang.ClassCastException: class CastCheck$Q cannot be cast to class java.lang.String (CastCheck$Q is in unnamed module of loader 'plug' @H; java.lang.String is in module java.base of loader 'bootstrap')
 hidden: java.lang.ClassCastException: class CastCheck$H/0xN cannot be cast to class java.lang.String (CastCheck$H/0xN is in unnamed module of loader 'app'; java.lang.String is in module java.base of loader 'bootstrap')
+hidden array: java.lang.ClassCastException: class [LCastCheck$H/0xN; cannot be cast to class java.lang.String ([LCastCheck$H/0xN; is in unnamed module of loader 'app'; java.lang.String is in module java.base of loader 'bootstrap')
+hidden array to user array: java.lang.ClassCastException: class [LCastCheck$H/0xN; cannot be cast to class [LCastCheck$A; ([LCastCheck$H/0xN; and [LCastCheck$A; are in unnamed module of loader 'app')
 null passes: null
 asType: java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
 Class.cast: java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String

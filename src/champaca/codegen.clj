@@ -466,6 +466,25 @@
     (when (and (= (set (keys d)) #{:class}) (str/starts-with? (str (ex-message e)) "class not found"))
       (:class d))))
 
+(defn- array-class-element
+  "The class an array descriptor's element names (\"[[Lp/X;\" -> \"p/X\"), or
+  nil for an array of primitives."
+  [d]
+  (let [e (str/replace d #"^\[+" "")]
+    (when (str/starts-with? e "L") (subs e 1 (dec (count e))))))
+
+(defn- resolve-type!
+  "Loads the class a checkcast or instanceof names: an array's element class
+  (JVMS 5.4.3.1), whose absence is the array's (NoClassDefFoundError names the
+  array, as HotSpot's)."
+  [resolve c]
+  (if (str/starts-with? c "[")
+    (when-let [el (array-class-element c)]
+      (try ((:ensure-loaded resolve) el)
+           (catch Exception e
+             (if (missing-class e) (throw (ex-info (str "class not found: " c) {:class c})) (throw e)))))
+    ((:ensure-loaded resolve) c)))
+
 (defn- bad-class
   "[class message] of a class whose file isn't a class file (main.clj's
   normalize), or nil for any other failure."
@@ -988,10 +1007,10 @@
                          (do (pop!) (push! n "I"))
                          (un #(sx "array-length" % (site pc)) "I"))
           :checkcast (let [c (:name (cp a0))]
-                       (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
+                       (resolve-type! resolve c)
                        (let [v (s (dec (count @st)))] (bind! v (sx "jcheckcast-ic" ((:ic! ctx)) v (str-lit c) (site pc)))))
           :instanceof (let [c (:name (cp a0))]
-                        (when-not (str/starts-with? c "[") ((:ensure-loaded resolve) c))
+                        (resolve-type! resolve c)
                         (let [ic ((:ic! ctx))] (un #(sx "if" (sx "jinstance-ic?" ic % (str-lit c)) "1" "0") "I")))
           (throw (ex-info (str "opcode not in spike: " (name op)) {:op op :pc pc :class this-class})))
         ;; the stack depth after the instruction, which lets render-steps

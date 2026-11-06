@@ -73,8 +73,10 @@ public class CastCheck {
         row("own loader", () -> (String) own.make("CastCheck$P"));
         row("own loader to user", () -> (A) own.make("CastCheck$P"));
         row("named loader", () -> (String) new Loader("plug").make("CastCheck$Q"));
-        row("hidden", () -> (String) MethodHandles.lookup()
-                .defineHiddenClass(bytes("CastCheck$H"), true).lookupClass().getDeclaredConstructor().newInstance());
+        Class<?> hidden = MethodHandles.lookup().defineHiddenClass(bytes("CastCheck$H"), true).lookupClass();
+        row("hidden", () -> (String) hidden.getDeclaredConstructor().newInstance());
+        row("hidden array", () -> (String) id(java.lang.reflect.Array.newInstance(hidden, 0)));
+        row("hidden array to user array", () -> (A[]) id(java.lang.reflect.Array.newInstance(hidden, 0)));
         row("null passes", () -> (String) id(null));
         row("asType", () -> MethodHandles.identity(Object.class)
                 .asType(MethodType.methodType(String.class, Object.class)).invoke((Object) 1));

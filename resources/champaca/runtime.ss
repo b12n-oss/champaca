@@ -616,11 +616,19 @@
 ;; loader threw resolving it, every time, as JVMS 5.4.3 has a failed
 ;; resolution fail the same way again (natives.ss ask-resolving-loader)
 (define resolution-errors (make-hashtable string-hash string=?))
+;; An array of a missing class is the array's NoClassDefFoundError with the
+;; element's cause, and the element's loader error if one was kept
 (define (jthrow-missing name)
-  (let ([le (hashtable-ref resolution-errors name #f)])
+  (define elem
+    (let loop ([i 0])
+      (cond [(fx= i (string-length name)) name]
+            [(char=? (string-ref name i) #\[) (loop (fx+ i 1))]
+            [(and (fx> i 0) (char=? (string-ref name i) #\L)) (substring name (fx+ i 1) (fx- (string-length name) 1))]
+            [else name])))
+  (let ([le (hashtable-ref resolution-errors elem #f)])
     (when le (raise le)))
   (let ([e (construct "java/lang/NoClassDefFoundError" "(Ljava/lang/String;)V" (jstring name))]
-        [cnfe (construct "java/lang/ClassNotFoundException" "(Ljava/lang/String;)V" (jstring (slashes->dots name)))])
+        [cnfe (construct "java/lang/ClassNotFoundException" "(Ljava/lang/String;)V" (jstring (slashes->dots elem)))])
     ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;") e cnfe)
     (raise e)))
 ;; A call to a method its class doesn't have, which a JVM resolves only
@@ -1530,14 +1538,19 @@
 (define (class-place-text cname)
   (string-append (slashes->dots cname) " is in " (class-place-of (find-class cname))))
 ;; Klass::external_name: dots, but a hidden class keeps the slash before its
-;; /0x<n> suffix
+;; /0x<n> suffix, inside an array's name too
 (define (external-class-name n)
-  (if (hidden-class? n)
-      (let loop ([i (fx- (string-length n) 1)])
-        (if (char=? (string-ref n i) #\/)
-            (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
-            (loop (fx- i 1))))
-      (slashes->dots n)))
+  (define k (let loop ([i 0]) (if (and (fx< i (string-length n)) (char=? (string-ref n i) #\[)) (loop (fx+ i 1)) i)))
+  (cond
+   [(and (fx> k 0) (fx< k (string-length n)) (char=? (string-ref n k) #\L))
+    (string-append (substring n 0 (fx+ k 1))
+                   (external-class-name (substring n (fx+ k 1) (fx- (string-length n) 1))) ";")]
+   [(hidden-class? n)
+    (let loop ([i (fx- (string-length n) 1)])
+      (if (char=? (string-ref n i) #\/)
+          (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
+          (loop (fx- i 1))))]
+   [else (slashes->dots n)]))
 ;; A failed checkcast's message, HotSpot's SharedRuntime::
 ;; generate_class_cast_message: both classes, then one place when they share
 ;; a module ("X and Y are in module java.base of loader 'bootstrap'"), else

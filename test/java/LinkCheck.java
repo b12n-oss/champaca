@@ -24,6 +24,10 @@ public class LinkCheck {
     static Object newInstance() { return present ? new LinkGone() : "absent"; }
     static Object checkcast(Object o) { return present ? (LinkGone) o : "absent"; }
     static Object instanceOf(Object o) { return present ? (Object) (o instanceof LinkGone) : "absent"; }
+    // an array of a missing class resolves its element, only for an object
+    static Object checkcastArray(Object o) { return present ? (LinkGone[]) o : "absent"; }
+    static Object checkcast2d(Object o) { return present ? (LinkGone[][]) o : "absent"; }
+    static Object instanceOfArray(Object o) { return present ? (Object) (o instanceof LinkGone[]) : "absent"; }
     // the array isn't printed: toString would load the element class anyway
     static Object newArray() { return present ? (new LinkGone[1] != null ? "made" : "null") : "absent"; }
     static Object getStatic() { return present ? LinkGone.FIELD : "absent"; }
@@ -67,6 +71,11 @@ public class LinkCheck {
         PROBES.put("new", LinkCheck::newInstance);
         PROBES.put("checkcast", () -> checkcast(null));
         PROBES.put("instanceof", () -> instanceOf(null));
+        PROBES.put("checkcast array", () -> checkcastArray(new String[0]));
+        PROBES.put("checkcast array of null", () -> checkcastArray(null));
+        PROBES.put("checkcast 2d array", () -> checkcast2d(new String[0]));
+        PROBES.put("instanceof array", () -> instanceOfArray("x"));
+        PROBES.put("instanceof array of null", () -> instanceOfArray(null));
         PROBES.put("anewarray", LinkCheck::newArray);
         PROBES.put("getstatic", LinkCheck::getStatic);
         PROBES.put("putstatic", LinkCheck::putStatic);
@@ -96,6 +105,9 @@ public class LinkCheck {
         public static class GenBad { }
         public static class GenD implements Supplier<String> {
             public String get() { return "D made " + new GenBad(); }
+        }
+        public static class GenM implements Supplier<String> {
+            public String get() { Object o = new Object[0]; return "M cast " + ((GenBad[]) o).length; }
         }
         // ldc of a class only the loader can see, and of an array of it
         public static class GenF { }
@@ -176,6 +188,9 @@ public class LinkCheck {
         // the failed resolution is the same error a second time
         row("new again", fails(LinkCheck::newInstance));
         try { newInstance(); } catch (NoClassDefFoundError e) { row("cause", e.getCause()); }
+        // through the probe, not a direct call: champaca inlines a small static
+        // callee, resolving what it names when the caller compiles
+        try { PROBES.get("checkcast array").call(); } catch (Throwable e) { row("array cause", e + " | cause " + e.getCause()); }
         row("array of orphans", fails(LinkCheck::orphanArray));
         row("forName", fails(() -> Class.forName("LinkGone")));
 
@@ -185,6 +200,7 @@ public class LinkCheck {
         row("lazy forName", Class.forName("LinkCheck$LinkLazy$HidB", true, l).getClassLoader() == l);
         row("lazy missing", fails(() -> Class.forName("LinkCheck$LinkLazy$HidZ", true, l)));
         row("lazy loader error", fails(() -> lazy(l, "HidD")));
+        row("lazy loader error array", fails(() -> lazy(l, "HidM")));
         row("lazy class constant", lazy(l, "HidE"));
         Class<?> g = l.loadClass("LinkCheck$LinkLazy$HidG");
         row("lazy member types", g.getDeclaredField("h").getType().getName() + " "
