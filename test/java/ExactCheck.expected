@@ -47,3 +47,16 @@ record toString: P[a=1, b=q]
 record equals: true
 record hashCode: true
 string concat: a0c2.5inst
+exact local class arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (Local,int)int
+exact local array arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (Local[],int)int
+exact dollar class arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (Dollar$Name,int)int
+exact local result: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int,int)Local
+exact nested arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (Entry,int)int
+exact 2d array arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (int[][],int)int
+anonymous simple name: []
+exact anonymous arg: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (,int)int
+asType local: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle(int,int)int to (Local,int)int
+asType dollar: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle(int,int)int to (Dollar$Name,int)int
+exact invoker local: java.lang.invoke.WrongMethodTypeException: handle's method type (int,int)int but found (Local,int)int
+tryFinally return mismatch: java.lang.IllegalArgumentException: target and return types must match: int != class java.lang.String
+tryFinally return mismatch 2: java.lang.IllegalArgumentException: target and return types must match: class java.lang.String != int

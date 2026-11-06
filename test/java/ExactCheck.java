@@ -95,6 +95,29 @@ public class ExactCheck {
         t("record equals", () -> new P(1, "q").equals(new P(1, "q")));
         t("record hashCode", () -> new P(1, "q").hashCode() == new P(1, "q").hashCode());
         t("string concat", () -> "a" + args.length + 'c' + 2.5 + obj.name);
+        // the site's type in the message is MethodType.toString's: simple names
+        class Local {}
+        Object anon = new Object() {};
+        t("exact local class arg", () -> (int) add.invokeExact((Local) null, 2));
+        t("exact local array arg", () -> (int) add.invokeExact((Local[]) null, 2));
+        t("exact dollar class arg", () -> (int) add.invokeExact((Dollar$Name) null, 2));
+        t("exact local result", () -> (Local) add.invokeExact(1, 2));
+        t("exact nested arg", () -> (int) add.invokeExact((Map.Entry) null, 2));
+        t("exact 2d array arg", () -> (int) add.invokeExact((int[][]) null, 2));
+        t("anonymous simple name", () -> "[" + anon.getClass().getSimpleName() + "]");
+        var anonTyped = new Object() {};
+        t("exact anonymous arg", () -> (int) add.invokeExact(anonTyped, 2));
+        t("asType local", () -> add.asType(MethodType.methodType(int.class, Local.class, int.class)));
+        t("asType dollar", () -> add.asType(MethodType.methodType(int.class, Dollar$Name.class, int.class)));
+        t("exact invoker local", () -> (int) MethodHandles.exactInvoker(
+            MethodType.methodType(int.class, Local.class, int.class)).invokeExact(add, (Local) null, 2));
+        MethodHandle str0 = MethodHandles.constant(String.class, "s");
+        MethodHandle cleanupInt = MethodHandles.dropArguments(MethodHandles.constant(int.class, 0), 0, Throwable.class, int.class);
+        t("tryFinally return mismatch", () -> MethodHandles.tryFinally(str0, cleanupInt));
+        MethodHandle cleanupStr = MethodHandles.dropArguments(MethodHandles.constant(String.class, "c"), 0, Throwable.class, String.class);
+        MethodHandle int0 = MethodHandles.constant(int.class, 1);
+        t("tryFinally return mismatch 2", () -> MethodHandles.tryFinally(int0, cleanupStr));
     }
     record P(int a, String b) {}
 }
+class Dollar$Name {}

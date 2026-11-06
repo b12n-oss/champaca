@@ -6,9 +6,9 @@
 ;; The JDK builds handles out of MemberNames and LambdaForms, which need the
 ;; VM's resolver and run-time class generation, so the Lookup.find* methods,
 ;; asType, bindTo and the common MethodHandles combinators are overridden
-;; here instead. Codegen sends invokeExact and invoke to mh-call with the call
-;; site's descriptor, and mh-call converts arguments and result between the
-;; two descriptors: boxing, unboxing and primitive widening, as asType would.
+;; here instead. Codegen sends invoke to mh-call with the call site's
+;; descriptor, and mh-call converts arguments and result between the two
+;; descriptors: boxing, unboxing and primitive widening, as asType would.
 ;; invokeExact goes to mh-call-exact, which requires the call site's
 ;; descriptor to be the handle's type. Access checks are not done (spike).
 
@@ -154,8 +154,9 @@
   (or (eq-hashtable-ref site-descs d #f)
       (let ([p (cons (desc-args d) (desc-ret d))]) (eq-hashtable-set! site-descs d p) p)))
 
-;; invokeExact and invoke: site is the call site's descriptor (a literal, so
-;; its parse is cached by identity)
+;; invoke (and the converting invokers, invokeWithArguments, call sites):
+;; site is the call site's descriptor (a literal, so its parse is cached by
+;; identity)
 (define (mh-call mh site . xs)
   (let* ([info (mh-info-of mh)] [sp (site-parts site)] [sargs (car sp)] [targs (mh-info-args info)])
     (adapt (mh-info-ret info) (cdr sp)
@@ -419,20 +420,9 @@
 (def-mhs "explicitCastArguments" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)" mh-ret)
   (lambda (mh mt) (as-type mh mt #t)))
 
-;; the JVM prints a method type with simple class names: (int,int)int
-(define (desc->simple d)
-  (cond [(char=? #\[ (string-ref d 0)) (string-append (desc->simple (substring d 1 (string-length d))) "[]")]
-        [(prim-desc? d) (cdr (assoc d prim-names))]
-        [else (let* ([n (desc->class-name d)] [len (string-length n)])
-                (let loop ([i (fx- len 1)])
-                  (if (or (fx< i 0) (memv (string-ref n i) '(#\/ #\$)))
-                      (substring n (fx+ i 1) len)
-                      (loop (fx- i 1)))))]))
-(define (type-text args ret)
-  (string-append "(" (if (null? args) ""
-                         (fold-left (lambda (acc d) (string-append acc "," (desc->simple d)))
-                                    (desc->simple (car args)) (cdr args)))
-                 ")" (desc->simple ret)))
+;; a method type as MethodType.toString prints it, (int,int)int: simple names
+;; by getSimpleName, so a local class is Local and an anonymous one empty
+(define (type-text args ret) (method-type-text args ret))
 
 (def-mhs "filterArguments" (string-append "(Ljava/lang/invoke/MethodHandle;I[Ljava/lang/invoke/MethodHandle;)" mh-ret)
   (lambda (target pos filters)
@@ -683,7 +673,7 @@
                 (mh-type-text cleanup) " != class java.lang.Throwable"))
       (unless (string=? (mh-info-ret ci) tret)
         (vh-iae "target and return types must match: "
-                (desc->simple (mh-info-ret ci)) " != " (desc->simple tret)))
+                (vh-class-text (mh-info-ret ci)) " != " (vh-class-text tret)))
       (unless (and (fx>= n 0) (fx<= n (length targs))
                    (or void? (string=? (cadr cargs) tret))
                    (equal? (list-tail cargs (if void? 1 2)) (list-head targs n)))
