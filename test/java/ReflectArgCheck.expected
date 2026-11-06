@@ -59,14 +59,14 @@ ctor int Long: java.lang.IllegalArgumentException: argument type mismatch | caus
 ctor int null: java.lang.IllegalArgumentException: java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null | cause java.lang.NullPointerException: Cannot invoke "java.lang.Number.intValue()" because the return value of "sun.invoke.util.ValueConversions.primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)" is null
 ctor String,long ok: Box(String s, long 5)
 ctor String,long first wrong: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
-ctor String,long second wrong: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number
+ctor String,long second wrong: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number (java.lang.String and java.lang.Number are in module java.base of loader 'bootstrap')
 ctor count: java.lang.IllegalArgumentException: wrong number of arguments: 1 expected: 2
 ctor JDK StringBuilder Integer: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
 ctor JDK ArrayList String: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast java.lang.String to java.util.Collection
 ctor JDK String char[] for byte[]: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: Cannot cast [C to [B
 ctor JDK StringBuilder String: sb
 Lazy initialized
-ctor Lazy String: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number
+ctor Lazy String: java.lang.IllegalArgumentException: argument type mismatch | cause java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number (java.lang.String and java.lang.Number are in module java.base of loader 'bootstrap')
 ctor Lazy int: Lazy
 JDK concat Integer: java.lang.IllegalArgumentException: argument type mismatch
 JDK concat String: ab

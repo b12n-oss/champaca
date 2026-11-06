@@ -27,13 +27,8 @@ public class FieldArgCheck {
     interface K { int C = 4; }
     public static class H { public final int v = 1; public H() {} }
 
-    // a cause, without the module clause HotSpot's checkcast text ends with
-    // (champaca's ClassCastException texts don't have it yet)
     static String cause(Throwable t) {
-        if (t.getCause() == null) return "";
-        String c = String.valueOf(t.getCause());
-        int i = c.indexOf(" (");
-        return " | cause " + (c.contains(" cannot be cast to class ") && i > 0 ? c.substring(0, i) : c);
+        return t.getCause() == null ? "" : " | cause " + t.getCause();
     }
     interface Op { void run() throws Exception; }
     static void row(String name, Op op) {

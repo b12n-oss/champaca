@@ -480,7 +480,7 @@
 ;; keeps as its cause (DirectConstructorHandleAccessor; the method accessor
 ;; drops it): "Cannot cast" to the parameter's class, or to its box for a
 ;; primitive one given a box, and HotSpot's checkcast text against Number
-;; for anything else, without the module clause.
+;; for anything else (class-cast-message).
 (define (reflect-arg t v ctor?)
   (define (mismatch)
     (if ctor?
@@ -492,7 +492,7 @@
                                         (cond [(not (prim-desc? t)) (string-append "Cannot cast " from " to " (field-type-name t))]
                                               [(exists (lambda (b) (jinstance? v b)) '("java/lang/Number" "java/lang/Character" "java/lang/Boolean"))
                                                (string-append "Cannot cast " from " to " (binary-name (cadr (assoc t box-classes))))]
-                                              [else (string-append "class " from " cannot be cast to class java.lang.Number")]))))))
+                                              [else (class-cast-message (class-name-of v) "java/lang/Number")]))))))
         (reflect-type-mismatch)))
   (cond
     [(prim-desc? t)

@@ -40,13 +40,8 @@ public class ReflectArgCheck {
         public String toString() { return "Lazy"; }
     }
 
-    // a cause, without the module clause HotSpot's checkcast text ends with
-    // (champaca's ClassCastException texts don't have it yet)
     static String cause(Throwable t) {
-        if (t.getCause() == null) return "";
-        String c = String.valueOf(t.getCause());
-        int i = c.indexOf(" (");
-        return " | cause " + (c.contains(" cannot be cast to class ") && i > 0 ? c.substring(0, i) : c);
+        return t.getCause() == null ? "" : " | cause " + t.getCause();
     }
     static void row(String name, Method m, Object recv, Object... args) {
         String r;

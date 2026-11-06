@@ -69,12 +69,14 @@
 (deftest results-that-dont-fit-fail-as-on-the-jvm
   ;; the proxy's own cast to the return type's box throws, so a long for an
   ;; int is the ClassCastException a Long gives on the JVM
-  (is (= "java.lang.ClassCastException: class java/lang/Long cannot be cast to class java/lang/Integer"
+  (is (= (str "java.lang.ClassCastException: class java.lang.Long cannot be cast to class java.lang.Integer "
+              "(java.lang.Long and java.lang.Integer are in module java.base of loader 'bootstrap')")
          (thrown #(ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" (fn [] 5000000000)}) "getAsInt"))))
   (is (= (str "java.lang.NullPointerException: Cannot invoke \"java.lang.Integer.intValue()\" because the return value of "
               "\"java.lang.reflect.InvocationHandler.invoke(Object, java.lang.reflect.Method, Object[])\" is null")
          (thrown #(ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" (fn [] nil)}) "getAsInt"))))
-  (is (= "java.lang.ClassCastException: class java/lang/String cannot be cast to class java/lang/Integer"
+  (is (= (str "java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Integer "
+              "(java.lang.String and java.lang.Integer are in module java.base of loader 'bootstrap')")
          (thrown #(ldk/invoke (ldk/proxy ["java.util.function.IntSupplier"] {"getAsInt" (fn [] "x")}) "getAsInt")))))
 
 (deftest methods-without-a-fn

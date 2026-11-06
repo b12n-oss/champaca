@@ -809,8 +809,7 @@
 (define (jcheckcast x target . site)   ; site: codegen's tag and pc, for the trace
   (if (or (not x) (jinstance? x target))
       x
-      (jthrow "java/lang/ClassCastException"
-              (string-append "class " (class-name-of x) " cannot be cast to class " target))))
+      (jthrow "java/lang/ClassCastException" (class-cast-message (class-name-of x) target))))
 
 ;; Generated code's instanceof and checkcast: a per-site cell holding the
 ;; last object class seen and the answer for it, since jinstance? compares
@@ -1524,12 +1523,34 @@
 (define (module-name-of mod)
   (let ([mname (and mod (jslot mod (jfield-index "java/lang/Module" "name")))])
     (and mname (jstring->scheme mname))))
-(define (class-place-text cname)
-  (let* ([c (find-class cname)]
-         [mname (module-name-of (class-module c))])
-    (string-append (slashes->dots cname) " is in "
-                   (if mname (string-append "module " mname) "unnamed module")
+(define (class-place-of c)
+  (let ([mname (module-name-of (class-module c))])
+    (string-append (if mname (string-append "module " mname) "unnamed module")
                    " of loader " (loader-text (class-loader-of c)))))
+(define (class-place-text cname)
+  (string-append (slashes->dots cname) " is in " (class-place-of (find-class cname))))
+;; Klass::external_name: dots, but a hidden class keeps the slash before its
+;; /0x<n> suffix
+(define (external-class-name n)
+  (if (hidden-class? n)
+      (let loop ([i (fx- (string-length n) 1)])
+        (if (char=? (string-ref n i) #\/)
+            (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
+            (loop (fx- i 1))))
+      (slashes->dots n)))
+;; A failed checkcast's message, HotSpot's SharedRuntime::
+;; generate_class_cast_message: both classes, then one place when they share
+;; a module ("X and Y are in module java.base of loader 'bootstrap'"), else
+;; each one's, the target's last. An array's module and loader are its
+;; element's, a primitive array's java.base's (class-module, class-loader-of).
+(define (class-cast-message from target)
+  (let ([fc (find-class from)] [tc (find-class target)]
+        [fe (external-class-name from)] [te (external-class-name target)])
+    (string-append "class " fe " cannot be cast to class " te " ("
+                   (if (eq? (class-module fc) (class-module tc))
+                       (string-append fe " and " te " are in " (class-place-of tc))
+                       (string-append fe " is in " (class-place-of fc) "; " te " is in " (class-place-of tc)))
+                   ")")))
 ;; Why a sealed class or interface sup (JVMS 5.3.5) refuses the class name
 ;; being defined, in HotSpot's texts (InstanceKlass::has_as_permitted_subclass),
 ;; or #f when it permits it or isn't sealed: the two must share a module, a

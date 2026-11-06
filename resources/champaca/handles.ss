@@ -115,9 +115,12 @@
                      (string-append "Cannot cast " (slashes->dots (class-name-of v)) " to "
                                     (slashes->dots (cadr (assoc to box-classes))))))
            (widen p to (junbox p v)))]
-        ;; a reference narrowing is a checkcast, as asType makes it
+        ;; a reference narrowing is Class.cast, as asType makes it, with its text
         [(or (not v) (string=? to obj-desc)) v]
-        [else (jcheckcast v (desc->class-name to))]))
+        [(jinstance? v (desc->class-name to)) v]
+        [else (jthrow "java/lang/ClassCastException"
+                      (string-append "Cannot cast " (external-class-name (class-name-of v))
+                                     " to " (external-class-name (desc->class-name to))))]))
 
 (define (adapt-all froms tos args)
   (if (equal? froms tos) args (map adapt froms tos args)))
