@@ -2385,9 +2385,20 @@
            (and (resource-hook (string-append n ".class")) #t))))
 (define (condition-text e)
   (let ([p (open-output-string)]) (display-condition e p) (get-output-string p)))
+;; whether e is find-class's NoClassDefFoundError for n itself (jthrow-missing)
+(define (missing-itself? e n)
+  (and (jinstance? e "java/lang/NoClassDefFoundError")
+       (let ([m ((method-proc "java/lang/Throwable" "getMessage()Ljava/lang/String;") e)])
+         (and m (string=? (jstring->scheme m) n)))))
 (define (try-class n)
   (and (class-exists? n)
-       (guard (e [(not (jobj? e))
+       ;; a JDK class outside the boot layer is "class not found" from the
+       ;; linker (main.clj outside-boot-layer?), which find-class makes a
+       ;; NoClassDefFoundError naming the class itself: to a lookup by name
+       ;; it isn't there, a ClassNotFoundException as on HotSpot. One that
+       ;; is there but needs a missing class names that class, and stays
+       (guard (e [(and (jobj? e) (missing-itself? e n)) #f]
+                 [(not (jobj? e))
                   (jthrow "java/lang/NoClassDefFoundError"
                           (string-append (slashes->dots n) ": champaca could not load it: " (condition-text e)))])
          (find-class n))))
@@ -2454,6 +2465,15 @@
   (or (not boot-layer-complete)
       (let ([p (class-package c)])
         (or (string=? p "champaca") (and (hashtable-ref package-modules p #f) #t)))))
+;; the same for main.clj, which resolves the classes bytecode names
+;; (outside-boot-layer?) and records the modules a library cache entry
+;; needs (user-deps): the name of the module holding slashed package p,
+;; #f when none does, #t before the boot layer exists
+(define (layer-module-name p)
+  (if boot-layer-complete
+      (let ([m (hashtable-ref package-modules p #f)])
+        (and m (jstring->scheme (jslot m (jfield-index "java/lang/Module" "name")))))
+      #t))
 ;; whether a class not loaded yet would be a JDK class: its package is one
 ;; the boot layer's modules own (before the layer exists, anything may be)
 (define (jdk-package? n)

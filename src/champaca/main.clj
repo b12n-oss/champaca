@@ -145,6 +145,49 @@
          (when-let [dir (:cache-dir @state)] (delete-tree! dir))
          (throw ex))))
 
+(def ^:private layer-modules
+  "Slashed package -> the name of the boot layer module holding it, as
+  natives.ss layer-module-name answered once the layer was built. A package
+  no module holds isn't kept: a layer defined later may add one."
+  (atom {}))
+
+(defn- layer-module
+  "The name of the boot layer module holding cname's package, nil when no
+  module of it does, :open before initPhase2 has built the layer."
+  [cname]
+  (let [i (str/last-index-of cname "/")
+        p (if i (subs cname 0 i) "")
+        lm @layer-modules]
+    (if (contains? lm p)
+      (get lm p)
+      (let [r (s/call "layer-module-name" p)]
+        (if (true? r)
+          :open
+          (when (string? r)
+            (swap! layer-modules assoc p r)
+            r))))))
+
+(defn- outside-boot-layer?
+  "Whether JDK class cname is one the JVM's loaders can't find: no module of
+  the boot layer holds its package, because --limit-modules left the module
+  out or the default layer doesn't resolve it (jdk.incubator.vector without
+  --add-modules). Bytecode naming it fails as a class that isn't there, as
+  HotSpot's NoClassDefFoundError. champaca's own classes are always there,
+  and anything is before the layer exists."
+  [cname]
+  (and (not (str/starts-with? cname "["))
+       (not (str/starts-with? cname "champaca/"))
+       (nil? (layer-module cname))))
+
+(defn- refuse-outside-layer!
+  "Throw normalize's \"class not found\" for a JDK class in the class table
+  that the boot layer leaves out (outside-boot-layer?): a startup cache made
+  under another layer, or champaca's boot, may hold it."
+  [cname]
+  (let [e (get-in @state [:classes cname])]
+    (when (and e (or (packed? e) (= :jdk (:origin e))) (outside-boot-layer? cname))
+      (throw (ex-info (str "class not found: " cname) {:class cname})))))
+
 ;; The classes whose table entries a classpath class's link or method compile
 ;; reads, a volatile set while one runs: what its library cache entry depends
 ;; on (user-deps).
@@ -166,6 +209,7 @@
       e)))
 
 (defn- class-info [cname]
+  (refuse-outside-layer! cname)
   (or (thaw! cname)
       (do (ensure-loaded! cname) (thaw! cname))))
 
@@ -858,7 +902,10 @@
   "Parse cname's classfile into the linker's class map."
   [cname]
   (let [user (timed :class-bytes #(user-class-bytes cname))
-        bytes (or user (timed :class-bytes #(jdk-class-bytes cname))
+        ;; the JDK's bytes only for a class of the boot layer: the JVM's
+        ;; loaders don't find one outside it (outside-boot-layer?)
+        bytes (or user
+                  (when-not (outside-boot-layer? cname) (timed :class-bytes #(jdk-class-bytes cname)))
                   ;; a loader of the program's own may define it, when the
                   ;; class naming it is that loader's (natives.ss); nil then.
                   ;; The time is the loader's own code running (reading its
@@ -1101,7 +1148,12 @@
     (when (every? origin names)
       (reduce (fn [acc n]
                 (case (if (:preview (get-in @state [:classes n])) :preview (origin n))
-                  :jdk (if (str/starts-with? n "champaca/") (assoc acc n :present) acc)
+                  ;; a class outside java.base is :layer, there only when the
+                  ;; boot layer holds its module (--limit-modules may leave
+                  ;; it out of a later run, outside-boot-layer?)
+                  :jdk (cond (str/starts-with? n "champaca/") (assoc acc n :present)
+                             (not= "java.base" (layer-module n)) (assoc acc n :layer)
+                             :else acc)
                   :user (if-let [fp (:fp (class-source n))] (assoc acc n fp) (reduced nil))
                   :defined (if-let [fp (when defined? (get-in @state [:classes n :src-fp]))] (assoc acc n fp) (reduced nil))
                   (reduced nil)))
@@ -1151,8 +1203,9 @@
         (if (and info (= (:fp src) (:src-fp info))
                  (every? (fn [[d fp]]
                            (let [e (get-in @state [:classes d])]
-                             (if (= fp :present)
-                               (some? e)
+                             (case fp
+                               :present (some? e)
+                               :layer (not (outside-boot-layer? d))
                                ;; the classpath's copy, unchanged, and not some
                                ;; other class of that name this run already has
                                ;; (a loader's, the JDK's)
@@ -1267,6 +1320,7 @@
     (check-definition! info)))
 
 (defn ensure-loaded! [cname]
+  (refuse-outside-layer! cname)
   (cond
     ;; registered by an earlier run: its class table entry came from the
     ;; cache, and its registration is one unit of a cached generation
@@ -1606,10 +1660,12 @@
   (runtime.ss jit! and define-class! bind it); one it doesn't have is a
   mismatch."
   [d fp]
-  (let [e (or (get-in @state [:classes d])
-              (do (try (ensure-loaded! d) (catch Exception _ nil))
-                  (get-in @state [:classes d])))]
-    (cond (nil? e) false
+  (let [e (when-not (= fp :layer)
+            (or (get-in @state [:classes d])
+                (do (try (ensure-loaded! d) (catch Exception _ nil))
+                    (get-in @state [:classes d]))))]
+    (cond (= fp :layer) (not (outside-boot-layer? d)) ; a JDK class outside java.base
+          (nil? e) false
           (= fp :present) true   ; a lambda class in state.img, thawed or not
           (packed? e) false      ; a JDK class has that name now
           :else (= fp (or (:src-fp e) (:fp (class-source d)))))))

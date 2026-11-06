@@ -1,0 +1,16 @@
+exit 0
+ldc: java.lang.NoClassDefFoundError: java/sql/Connection; cause java.lang.ClassNotFoundException: java.sql.Connection
+ldc again: java.lang.NoClassDefFoundError: java/sql/Connection; cause java.lang.ClassNotFoundException: java.sql.Connection
+invokestatic: java.lang.NoClassDefFoundError: java/sql/DriverManager; cause java.lang.ClassNotFoundException: java.sql.DriverManager
+new: java.lang.NoClassDefFoundError: java/sql/Timestamp; cause java.lang.ClassNotFoundException: java.sql.Timestamp
+getstatic java.logging: java.lang.NoClassDefFoundError: java/util/logging/Level; cause java.lang.ClassNotFoundException: java.util.logging.Level
+java.net.http: java.lang.NoClassDefFoundError: java/net/http/HttpClient$Version; cause java.lang.ClassNotFoundException: java.net.http.HttpClient$Version
+instanceof null: false
+instanceof string: java.lang.NoClassDefFoundError: java/sql/Connection; cause java.lang.ClassNotFoundException: java.sql.Connection
+checkcast null: null
+descriptor only: called with null
+anewarray: java.lang.NoClassDefFoundError: java/sql/Connection; cause java.lang.ClassNotFoundException: java.sql.Connection
+invokevirtual on null: java.lang.NoClassDefFoundError: java/sql/Timestamp; cause java.lang.ClassNotFoundException: java.sql.Timestamp
+invokeinterface on null: java.lang.NoClassDefFoundError: java/sql/Connection; cause java.lang.ClassNotFoundException: java.sql.Connection
+getfield on null: java.lang.NoClassDefFoundError: java/awt/Point; cause java.lang.ClassNotFoundException: java.awt.Point
+--- stderr

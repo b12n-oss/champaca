@@ -1,0 +1,16 @@
+exit 0
+ldc: java.sql.Connection
+ldc again: java.sql.Connection
+invokestatic: 0
+new: 0
+getstatic java.logging: OFF
+java.net.http: java.lang.NoClassDefFoundError: java/net/http/HttpClient$Version; cause java.lang.ClassNotFoundException: java.net.http.HttpClient$Version
+instanceof null: false
+instanceof string: false
+checkcast null: null
+descriptor only: called with null
+anewarray: 2
+invokevirtual on null: java.lang.NullPointerException: Cannot invoke "java.sql.Timestamp.getNanos()" because "<parameter1>" is null
+invokeinterface on null: java.lang.NullPointerException: Cannot invoke "java.sql.Connection.isClosed()" because "<parameter1>" is null
+getfield on null: java.lang.NoClassDefFoundError: java/awt/Point; cause java.lang.ClassNotFoundException: java.awt.Point
+--- stderr

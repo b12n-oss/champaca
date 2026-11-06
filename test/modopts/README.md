@@ -18,9 +18,12 @@ The probes:
 - `Opt` prints the VM's input arguments, then what `--add-opens`,
   `--add-exports` and `--add-reads` change for the unnamed module.
 - `Lim` asks the application, boot and platform loaders for JDK classes, as
-  `--limit-modules` and the default boot layer leave them. Its names are all
-  strings: a class named in bytecode resolves whatever the boot layer holds
-  on champaca, where HotSpot fails.
+  `--limit-modules` and the default boot layer leave them, by name.
+- `Ref` names the same kind of classes in its bytecode instead: `ldc`, `new`,
+  `getstatic`, `invokestatic`, `invokevirtual` and `invokeinterface` on null,
+  `getfield` on null, `instanceof`, `checkcast`, `anewarray` and a descriptor.
+  bb test runs its cases in name order, so `ref-default` leaves its classes
+  in the cache for the limited runs after it.
 - `Inc` shows the default boot layer and that `jdk.incubator.vector`, outside
   it, has no classes without `--add-modules`.
 - `Nat` makes a restricted call under `--illegal-native-access`.
