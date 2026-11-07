@@ -68,7 +68,20 @@ public class UpcallCheck {
     static int sumP2(MemorySegment p) { return p.get(JAVA_INT, 0) * 10 + p.get(JAVA_INT, 4); }
     static double sumD4(MemorySegment d) { double s = 0; for (int i = 0; i < 4; i++) s += d.getAtIndex(JAVA_DOUBLE, i) * (i + 1); return s; }
     static long sumL3(MemorySegment l) { return l.getAtIndex(JAVA_LONG, 0) + l.getAtIndex(JAVA_LONG, 1) * 10 + l.getAtIndex(JAVA_LONG, 2) * 100; }
+    static final StructLayout D2 = MemoryLayout.structLayout(JAVA_DOUBLE, JAVA_DOUBLE);
+    static final StructLayout I5 = MemoryLayout.structLayout(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT);
+    static int ints10(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) { return a + 2*b + 3*c + 4*d + 5*e + 6*f + 7*g + 8*h + 9*i + 10*j; }
+    static long l2Late(int a, int b, int c, int d, int e, MemorySegment v, int g) { return a + b + c + d + e + v.getAtIndex(JAVA_LONG, 0) * 100 + v.getAtIndex(JAVA_LONG, 1) * 1000 + g * 10000L; }
+    static double d2Late(double a, double b, double c, double d, double e, double f, double g, MemorySegment v, double k) { return a + b + c + d + e + f + g + v.getAtIndex(JAVA_DOUBLE, 0) * 100 + v.getAtIndex(JAVA_DOUBLE, 1) * 1000 + k * 10000; }
+    static int sumI5(int k, MemorySegment v, int m) { int s = 0; for (int i = 0; i < 5; i++) s += v.getAtIndex(JAVA_INT, i) * (i + 1); return s + k * 1000 + m * 100000; }
     static final Arena RESULTS = Arena.ofAuto();
+    static MemorySegment makeL2Late(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j, double k) {
+        MemorySegment l = RESULTS.allocate(L2); l.setAtIndex(JAVA_LONG, 0, ints10(a, b, c, d, e, f, g, h, i, j)); l.setAtIndex(JAVA_LONG, 1, (long) (k * 10)); return l;
+    }
+    static MemorySegment makeI5Late(int a, int b, int c, int d, int e, int f, int g, int h, int i, int j) {
+        MemorySegment v = RESULTS.allocate(I5); int[] xs = { a + b, c + d, e + f, g + h, i + j };
+        for (int n = 0; n < 5; n++) v.setAtIndex(JAVA_INT, n, xs[n]); return v;
+    }
     static MemorySegment makeP2(int x) { MemorySegment p = RESULTS.allocate(P2); p.set(JAVA_INT, 0, x); p.set(JAVA_INT, 4, x + 1); return p; }
     static MemorySegment makeD4(double a) { MemorySegment d = RESULTS.allocate(D4); for (int i = 0; i < 4; i++) d.setAtIndex(JAVA_DOUBLE, i, a * (i + 1)); return d; }
     static MemorySegment makeL3(long a) { MemorySegment l = RESULTS.allocate(L3); for (int i = 0; i < 3; i++) l.setAtIndex(JAVA_LONG, i, a + i); return l; }
@@ -147,6 +160,18 @@ public class UpcallCheck {
                 .invokeExact(L.upcallStub(mh1("sumD4", double.class, MemorySegment.class), FunctionDescriptor.of(JAVA_DOUBLE, D4), a), 1.0));
             row("struct argument, 24 bytes", () -> (int) down("ffi_apply_l3", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG))
                 .invokeExact(L.upcallStub(mh1("sumL3", long.class, MemorySegment.class), FunctionDescriptor.of(JAVA_LONG, L3), a), 5L));
+            row("ten int arguments", () -> (int) down("ffi_apply_ints10", FunctionDescriptor.of(JAVA_INT, ADDRESS))
+                .invokeExact(L.upcallStub(mh("ints10", MethodType.methodType(int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class)),
+                                          FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), a)));
+            row("two longs after five ints, an int after", () -> (long) down("ffi_apply_l2_late", FunctionDescriptor.of(JAVA_LONG, ADDRESS))
+                .invokeExact(L.upcallStub(mh("l2Late", MethodType.methodType(long.class, int.class, int.class, int.class, int.class, int.class, MemorySegment.class, int.class)),
+                                          FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, L2, JAVA_INT), a)));
+            row("two doubles after seven doubles, a double after", () -> (double) down("ffi_apply_d2_late", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS))
+                .invokeExact(L.upcallStub(mh("d2Late", MethodType.methodType(double.class, double.class, double.class, double.class, double.class, double.class, double.class, double.class, MemorySegment.class, double.class)),
+                                          FunctionDescriptor.of(JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, JAVA_DOUBLE, D2, JAVA_DOUBLE), a)));
+            row("struct argument, five ints between ints", () -> (int) down("ffi_apply_i5", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT))
+                .invokeExact(L.upcallStub(mh("sumI5", MethodType.methodType(int.class, int.class, MemorySegment.class, int.class)),
+                                          FunctionDescriptor.of(JAVA_INT, JAVA_INT, I5, JAVA_INT), a), 3));
             row("struct result, 8 bytes", () -> (int) down("ffi_make_p2", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT))
                 .invokeExact(L.upcallStub(mh1("makeP2", MemorySegment.class, int.class), FunctionDescriptor.of(P2, JAVA_INT), a), 7));
             row("struct result, two longs", () -> (long) down("ffi_make_l2", FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG))
@@ -157,6 +182,12 @@ public class UpcallCheck {
                 .invokeExact(L.upcallStub(mh1("makeD4", MemorySegment.class, double.class), FunctionDescriptor.of(D4, JAVA_DOUBLE), a), 2.0));
             row("struct result, char and double", () -> (double) down("ffi_make_cd", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS, JAVA_BYTE))
                 .invokeExact(L.upcallStub(mh1("makeCD", MemorySegment.class, byte.class), FunctionDescriptor.of(CD, JAVA_BYTE), a), (byte) 64));
+            row("struct result, two longs, after ten ints and a double", () -> (long) down("ffi_make_l2_late", FunctionDescriptor.of(JAVA_LONG, ADDRESS))
+                .invokeExact(L.upcallStub(mh("makeL2Late", MethodType.methodType(MemorySegment.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, double.class)),
+                                          FunctionDescriptor.of(L2, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_DOUBLE), a)));
+            row("struct result, five ints, after ten ints", () -> (int) down("ffi_make_i5_late", FunctionDescriptor.of(JAVA_INT, ADDRESS))
+                .invokeExact(L.upcallStub(mh("makeI5Late", MethodType.methodType(MemorySegment.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class, int.class)),
+                                          FunctionDescriptor.of(I5, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), a)));
             row("struct result, 24 bytes", () -> (long) down("ffi_make_l3", FunctionDescriptor.of(JAVA_LONG, ADDRESS, JAVA_LONG))
                 .invokeExact(L.upcallStub(mh1("makeL3", MemorySegment.class, long.class), FunctionDescriptor.of(L3, JAVA_LONG), a), 10L));
             row("upcalls from four threads", () -> {

@@ -82,6 +82,18 @@ double ffi_make_f3(F3 (*f)(float), float a) { F3 r = f(a); return r.a + r.b * 10
 double ffi_make_cd(CD (*f)(char), char c) { CD r = f(c); return r.c + r.d; }
 int64_t ffi_make_l2(L2 (*f)(int64_t), int64_t a) { L2 r = f(a); return r.a * 1000 + r.b; }
 
+/* upcalls with arguments past the registers: on x86_64 a struct over 16
+   bytes always goes on the stack, and a smaller one does when the registers
+   left can't hold all of it, the arguments after it still taking them */
+typedef struct { double a, b; } D2;
+typedef struct { int a, b, c, d, e; } I5;
+int ffi_apply_ints10(int (*f)(int, int, int, int, int, int, int, int, int, int)) { return f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10); }
+int64_t ffi_apply_l2_late(int64_t (*f)(int, int, int, int, int, L2, int)) { L2 v = { 6, 7 }; return f(1, 2, 3, 4, 5, v, 8); }
+double ffi_apply_d2_late(double (*f)(double, double, double, double, double, double, double, D2, double)) { D2 v = { 8.5, 9.25 }; return f(1, 2, 3, 4, 5, 6, 7, v, 10); }
+int ffi_apply_i5(int (*f)(int, I5, int), int k) { I5 v = { 1, 2, 3, 4, 5 }; return f(k, v, k + 1); }
+int64_t ffi_make_l2_late(L2 (*f)(int, int, int, int, int, int, int, int, int, int, double)) { L2 r = f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0.5); return r.a * 1000 + r.b; }
+int ffi_make_i5_late(I5 (*f)(int, int, int, int, int, int, int, int, int, int)) { I5 r = f(1, 2, 3, 4, 5, 6, 7, 8, 9, 10); return r.a + r.b * 2 + r.c * 3 + r.d * 4 + r.e * 5; }
+
 /* an upcall from a thread C made, not Java */
 struct ffi_thread_call { int (*f)(int); int x; int times; int r; };
 static void *ffi_thread_main(void *p) {

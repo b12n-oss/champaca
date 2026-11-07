@@ -20,11 +20,17 @@ dropReturn: (int)void true
 struct argument, 8 bytes: 34
 struct argument, four doubles: 30.0
 struct argument, 24 bytes: 1605
+ten int arguments: 385
+two longs after five ints, an int after: 87615
+two doubles after seven doubles, a double after: 110128.0
+struct argument, five ints between ints: 403055
 struct result, 8 bytes: 708
 struct result, two longs: 8991
 struct result, three floats: 376.5
 struct result, four doubles: 20.0
 struct result, char and double: 65.5
+struct result, two longs, after ten ints and a double: 385005
+struct result, five ints, after ten ints: 205
 struct result, 24 bytes: 33
 upcalls from four threads: 998000 4000
 upcalls from a C thread: 7 17 [Thread-0 main daemon=true listed=true, Thread-1 main daemon=true listed=true, Thread-1 main daemon=true listed=true] one Thread per C thread true, alive once it ends falsefalse
