@@ -1,0 +1,6 @@
+-cp
+cp
+-p
+mods
+-m
+app/app.Main

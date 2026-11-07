@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+Error: -p requires module path specification

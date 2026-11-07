@@ -2159,16 +2159,43 @@
        (let* ([bv (host-bytevector found)] [n (bytevector-length bv)] [v (make-vector n)])
          (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v i (bytevector-s8-ref bv i)))
          (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v)))))
+;; A resource in a package of a named module the application loader holds
+;; (java -p) is encapsulated, as Resources.canEncapsulate has it: not a
+;; .class file, and in one of the module's packages. The loader finds it only
+;; when the module opens that package to everyone (ClassLoader.getResource
+;; hides it even from the module's own code); a class of the module finds it
+;; through the module, which lets its own code and the modules it's opened to
+;; (Module.getResourceAsStream, caller-sensitive: an override has no frame, so
+;; its caller is the Java code that asked).
+(define (resource-app-module path)
+  (let ([slash (let loop ([i (fx- (string-length path) 1)])
+                 (cond [(fx< i 0) #f] [(char=? (string-ref path i) #\/) i] [else (loop (fx- i 1))]))])
+    (and slash
+         (not (let ([n (string-length path)]) (and (fx>= n 6) (string=? (substring path (fx- n 6) n) ".class"))))
+         (let ([m (hashtable-ref package-modules (substring path 0 slash) #f)])
+           (and m (app-loader) (eq? (module-loader m) (app-loader)) (cons m (slashes->dots (substring path 0 slash))))))))
+(define (loader-hides? path)
+  (let ([mp (resource-app-module path)])
+    (and mp (not (eqv? 1 ((jvirt (car mp) "isOpen(Ljava/lang/String;)Z") (car mp) (jstring (cdr mp))))))))
+;; a class of a named application module asking for a resource in one of its
+;; module's packages: the module answers it, for its caller
+(define (class-module-resource this path)
+  (let ([mp (resource-app-module path)])
+    (and mp (eq? (car mp) (named-app-module (mirror-class this)))
+         (car mp))))
+
 ;; a built-in loader's stream: the bytes, or for a classpath directory (which
 ;; has a URL but no bytes) the URL opened, which lists it, as the JDK's
 ;; getResourceAsStream opens getResource's URL
 (define (builtin-resource-stream l path)
-  (if (platform-loader? l)
-      (bytes-stream (jdk-resource-hook path))
+  (cond
+   [(platform-loader? l) (bytes-stream (jdk-resource-hook path))]
+   [(loader-hides? path) #f]
+   [else
       (or (resource-stream path)
           (let ([u (first-resource-url path)])
             (and u (guard (e [(and (jobj? e) (jinstance? e "java/io/IOException")) #f])
-                     ((jvirt u "openStream()Ljava/io/InputStream;") u)))))))
+                     ((jvirt u "openStream()Ljava/io/InputStream;") u)))))]))
 (define (class-own-loader this)
   (let ([l (jslot this (jfield-index "java/lang/Class" "classLoader"))]) (and (own-loader? l) l)))
 (define (own-get-resource l name)
@@ -2191,9 +2218,12 @@
 (define-override! "java/lang/Class.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (this name)
     (let ([l (class-own-loader this)] [p (class-resource-path this name)])
-      (if l
-          ((jvirt l "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;") l (jstring p))
-          (builtin-resource-stream #f p)))))
+      (cond
+       [l ((jvirt l "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;") l (jstring p))]
+       [(class-module-resource this p)
+        => (lambda (m) ((jvirt m "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;") m (jstring p)))]
+       [(resource-app-module p) #f]
+       [else (builtin-resource-stream #f p)]))))
 (define-override! "java/lang/ClassLoader.getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (this name)
     (if (own-loader? this)
@@ -2223,21 +2253,29 @@
 (define-override! "java/lang/Class.getResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (this name)
     (let ([l (class-own-loader this)] [p (class-resource-path this name)])
-      (if l
-          ((jvirt l "getResource(Ljava/lang/String;)Ljava/net/URL;") l (jstring p))
-          (first-resource-url p)))))
+      (cond
+       [l ((jvirt l "getResource(Ljava/lang/String;)Ljava/net/URL;") l (jstring p))]
+       ;; the module decides for its caller, as for the stream; a URL when it
+       ;; would answer one (its stream, opened to ask, is closed)
+       [(class-module-resource this p)
+        => (lambda (m)
+             (let ([in ((jvirt m "getResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;") m (jstring p))])
+               (and in (begin ((jvirt in "close()V") in) (first-resource-url p)))))]
+       [(resource-app-module p) #f]
+       [else (first-resource-url p)]))))
 (define-override! "java/lang/ClassLoader.getResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resource this (nn name))
-        (and (not (platform-loader? this)) (first-resource-url (jstring->scheme (nn name)))))))
+        (and (not (platform-loader? this)) (not (loader-hides? (jstring->scheme (nn name))))
+             (first-resource-url (jstring->scheme (nn name)))))))
 (define-override! "java/lang/ClassLoader.getSystemResource(Ljava/lang/String;)Ljava/net/URL;"
-  (lambda (name) (first-resource-url (jstring->scheme (nn name)))))
+  (lambda (name) (let ([p (jstring->scheme (nn name))]) (and (not (loader-hides? p)) (first-resource-url p)))))
 (define-override! "java/lang/ClassLoader.getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resources this (nn name))
-        (if (platform-loader? this)
+        (if (or (platform-loader? this) (loader-hides? (jstring->scheme (nn name))))
             (resource-enumeration-of '())
             (resource-enumeration (jstring->scheme (nn name)))))))
 

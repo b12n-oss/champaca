@@ -125,6 +125,7 @@ bb site:serve                                         # build the docs site and 
 bb site:build                                         # build the docs site into _site/ (bb site:clean deletes it)
 bb bundle -o out/app -cp CP -m Main --train          # a directory that runs Main with no JDK installed (--jolt NS --project DIR for a jolt program)
 jolt -M -m champaca.main target/classes Streams   # after bb test has compiled the classes
+jolt -M -m champaca.main -p mods -m app/app.Main  # a modular application, as java -p mods -m app/app.Main
 CHAMPACA_BT=1 ...       # keep a shadow stack, so an error inside champaca itself prints Java frames, and name each missing native as it's hit
                         # (and say why an NPE got no message)
 CHAMPACA_STATS=1 ...    # print classes loaded (and how many from the library cache), methods compiled, cached units loaded, loader-defined classes the cache missed

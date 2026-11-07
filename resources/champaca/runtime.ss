@@ -1481,9 +1481,15 @@
 ;; loader's until the application loader exists); a class in a package a
 ;; module owns (a JDK class, a proxy in its dynamic module) is in that module;
 ;; a class a loader defined is in that loader's unnamed module
+;; a class path or module path class whose package a named module of the
+;; application loader holds (java -p: ModuleBootstrap defines the module path's
+;; modules to it): that module, as the JVM puts it there
+(define (named-app-module c)
+  (let ([m (hashtable-ref package-modules (class-package c) #f)])
+    (and m (app-loader) (eq? (module-loader m) (app-loader)) m)))
 (define (class-module c)
   (let ([e (element-name c)])
-    (cond [(user-class? e) (or (app-unnamed-module) unnamed-module)]
+    (cond [(user-class? e) (or (named-app-module c) (app-unnamed-module) unnamed-module)]
           [(hashtable-ref package-modules (class-package c) #f)]
           [(hashtable-ref class-loaders e #f)
            => (lambda (ld) ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld))]
@@ -1772,11 +1778,14 @@
 ;; HotSpot), the class initialized;
 ;; an instance main on an object its no-argument constructor makes, through
 ;; the vtable, so an inherited or default main runs.
-(define (launch-main cname args)
+;; mode 1 (LM_CLASS) takes a class name, 3 (LM_MODULE) java -m's
+;; module[/class], whose class the launcher finds in the module (its
+;; ModuleMainClass when none is given), with the launcher's errors
+(define (launch-main what args mode)
   (let* ([helper "sun/launcher/LauncherHelper"]
          [_ (jinit helper)]
          [mirror ((method-proc helper "checkAndLoadMain(ZILjava/lang/String;)Ljava/lang/Class;")
-                  1 1 (jstring (slashes->dots cname)))]
+                  1 mode (jstring (if (fx= mode 1) (slashes->dots what) what)))]
          [c (mirror-class mirror)]
          [name (jclass-cname c)]
          [static? (eqv? 1 (top-level-value (string->symbol (string-append helper ":isStaticMain"))))]
@@ -1798,9 +1807,12 @@
 ;; stdout (--version, --show-version). The exit status, 0 unless it threw.
 (define (java-print-version err?)
   (run-guarded (lambda () ((method-proc "java/lang/VersionProps" "print(Z)V") (if err? 1 0)))))
-(define (run-main cname . args)
+(define (run-main cname . args) (run-main-as cname args 1))
+;; java -m module[/class] args
+(define (run-module-main what . args) (run-main-as what args 3))
+(define (run-main-as what args mode)
   (set! halted #f)
-  (let ([status (run-guarded (lambda () (launch-main cname args)))])
+  (let ([status (run-guarded (lambda () (launch-main what args mode)))])
     ;; as the java launcher: unless System.exit ended it, main's thread ends
     ;; (its joiners wake), then as DestroyJavaVM it waits for the other
     ;; non-daemon threads and runs the shutdown hooks, keeping main's status

@@ -344,6 +344,20 @@
 
 (declare bytes-fp jar-path)
 
+(defn- lookup-entries
+  "The entries a class is looked for in: the class path, then the module
+  path's roots (module-path-roots), which hold only a class whose package a
+  boot layer module holds, as the JVM resolves the module path's modules into
+  the layer only as roots (-m, --add-modules) or their dependences."
+  [cname]
+  (let [n (count (:module-path-root-set @state))
+        cp (:classpath @state)]
+    ;; the roots are the lookup's tail: dropping them leaves the class path,
+    ;; which may name the same directory (java -cp mods/app -p mods)
+    (if (and (pos? n) (outside-boot-layer? cname))
+      (take (- (count cp) (:module-path-root-count @state)) cp)
+      cp)))
+
 (defn- find-user-class
   "[entry bytes held?] from the first classpath entry that has cname, the
   JVM's order, or nil. The bytes class-source held for the class are used
@@ -357,7 +371,7 @@
                                   held? held
                                   :else (read-class-file entry rel))]
                 [entry bs held?])))
-          (:classpath @state))))
+          (lookup-entries cname))))
 
 (defn- user-class-bytes
   "cname's bytes from the classpath, to load the class (normalize). The
@@ -428,7 +442,7 @@
                           (when-let [bs (read-class-file entry rel)]
                             (swap! state assoc-in [:dir-bytes cname] [entry bs])
                             {:entry entry :fp (bytes-fp bs) :jar (jar-path entry)})))
-                      (:classpath @state))]
+                      (lookup-entries cname))]
         (swap! state assoc-in [:class-sources cname] src)
         src))))
 
@@ -2481,6 +2495,35 @@
                  (conj seen k) (conj out e))))
       out)))
 
+(defn- module-path-value
+  "The module path given (-p, --module-path), the last one, or nil."
+  []
+  (some (fn [[sfx v]] (when (= sfx "path") v)) (rseq (vec (:module-options @state)))))
+
+(defn- module-path-roots
+  "Where the module path's classes are, as ModulePath finds modules: an
+  entry that is a jar or an exploded module (a directory with
+  module-info.class) is one, and a directory of them gives each jar and
+  exploded module in it, by name. They join the class lookup after the class
+  path, never java.class.path; a class from one is in its named module when
+  the boot layer resolved it (named-app-module), and outside the layer is
+  not found (refuse-outside-layer!)."
+  [mp]
+  (if-not mp
+    []
+    (vec (for [e (str/split mp (re-pattern (java.util.regex.Pattern/quote java.io.File/pathSeparator)))
+               :when (seq e)
+               :let [f (io/file e)]
+               r (cond (.isFile f) [(.getPath f)]
+                       (.isFile (io/file f "module-info.class")) [(.getPath f)]
+                       (.isDirectory f)
+                       (for [c (sort-by #(.getName ^java.io.File %) (.listFiles f))
+                             :when (or (and (.isFile c) (str/ends-with? (.getName c) ".jar"))
+                                       (.isFile (io/file c "module-info.class")))]
+                         (.getPath c))
+                       :else [])]
+           r))))
+
 (defn init!
   "Boot the JDK once (System.initPhase1 and what precedes it) with the given
   user classpath dirs. Returns 0 on success; a second call is a no-op.
@@ -2496,7 +2539,10 @@
            (when (seq add-modules)
              (swap! state update :module-options (fnil conj [])
                     ["addmods" (if (string? add-modules) add-modules (str/join "," add-modules))]))
-           (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
+           (let [roots (module-path-roots (module-path-value))]
+             (swap! state assoc :module-path-root-set (set roots) :module-path-root-count (count roots)
+                    :classpath (into (with-manifest-class-paths (vec classpath)) roots)))
+           (swap! state assoc
                   ;; java.class.path is what was given, as the JVM's launcher has it
                   :classpath-given (vec classpath))
            (let [status (boot!)] (swap! state assoc :boot-status status) status)))))
@@ -2515,7 +2561,9 @@
     (if (zero? status)
       (let [v (:version @state)
             vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)
-            status (if (and cname (zero? vs)) (apply s/call "run-main" cname args) vs)]
+            status (cond (not (and cname (zero? vs))) vs
+                         (:launch-module @state) (apply s/call "run-module-main" cname args)
+                         :else (apply s/call "run-main" cname args))]
         (when (env "CHAMPACA_PROF") (prof-report "run" (- (System/nanoTime) t0)))
         (when (env "CHAMPACA_STATS") (stats))
         (save-generation!)
@@ -2635,6 +2683,21 @@
               (recur (nnext argv) (assoc opts :classpath cp))
               (launcher-error (str "Error: " a " requires class path specification")))
             (str/starts-with? a "--class-path=") (recur (rest argv) (assoc opts :classpath (subs a 13)))
+            ;; the module path, as the launcher passes it: jdk.module.path
+            (#{"-p" "--module-path"} a)
+            (if-let [mp (option-value (second argv) false)]
+              (recur (nnext argv) (update opts :module-options conj ["path" mp]))
+              (launcher-error (str "Error: " a " requires module path specification")))
+            (str/starts-with? a "--module-path=")
+            (recur (rest argv) (update opts :module-options conj ["path" (subs a 14)]))
+            ;; -m module[/class] ends the options, as -jar does: what follows
+            ;; is the program's; jdk.module.main makes the module a root
+            (#{"-m" "--module"} a)
+            (if-let [m (option-value (second argv) false)]
+              (assoc opts :module m :argv (nnext argv))
+              (launcher-error (str "Error: " a " requires module name")))
+            (str/starts-with? a "--module=")
+            (assoc opts :module (subs a 9) :argv (rest argv))
             (assertion-directive a) (recur (rest argv) (update opts :assertions conj (assertion-directive a)))
             (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
@@ -2755,7 +2818,9 @@
 (def ^:private source-launcher "com/sun/tools/javac/launcher/SourceLauncher")
 
 (defn -main [& all-argv]
-  (let [{:keys [props classpath assertions argv stack preview source module-options version module-props-ignored]} (jvm-options all-argv)
+  (let [{:keys [props classpath assertions argv stack preview source module-options version module-props-ignored module]} (jvm-options all-argv)
+        module-options (cond-> module-options
+                         module (conj ["main" (first (str/split module #"/"))]))
         consumed (take (- (count all-argv) (count argv)) all-argv)
         ;; source-file mode, as java's: --source, or a first argument that is
         ;; a .java file; the file and its arguments go to javac's
@@ -2787,6 +2852,11 @@
     ;; launcher, which needs no main class for them
     (when (:exit? version)
       (System/exit (run (if classpath (vec (expand-class-path classpath)) []) nil [])))
+    (when module
+      ;; java -m: the main class is the module's, and the class path -cp's
+      ;; alone ("" without one, as java.class.path then is)
+      (swap! state assoc :java-command (str/join " " (cons module argv)) :launch-module module)
+      (System/exit (run (if classpath (vec (expand-class-path classpath)) []) module (vec argv))))
     (when (and source (= "-jar" (first argv)))
       (launcher-error "Error: Option -jar is not allowed with --source"))
     (when (and (= cp "-jar") (not cname))
@@ -2800,6 +2870,7 @@
         (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
         (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
         (println "   or: jolt -M -m champaca.main [options] [--source <release>] <file.java> [args...]")
+        (println "   or: jolt -M -m champaca.main [options] -p <module path> -m <module>[/<mainclass>] [args...]")
         (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --source <release>,")
         (println "         --add-modules, --limit-modules, --enable-native-access <module>[,...], --add-opens, --add-exports <module>/<package>=<module>[,...],")
         (println "         --add-reads <module>=<module>[,...], --illegal-native-access=allow|warn|deny, -version, -showversion, --version, --show-version;")

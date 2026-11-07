@@ -1,0 +1,2 @@
+--module-path=mods
+--module=app/app.Main

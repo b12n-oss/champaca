@@ -1,0 +1,5 @@
+exit 0
+hello cp from com.greet
+Probe named false, Greeter in com.greet
+forName found
+--- stderr

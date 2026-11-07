@@ -1,0 +1,15 @@
+exit 0
+hello world from com.greet
+module app named true reads greet true
+loader app same true
+layer has app true greet true
+descriptor [com.greet, java.base]
+exports [com.greet]
+java.class.path [] jdk.module.path mods
+forName com.greet.Greeter
+args [x, y z]
+class resource null | module resource null | loader resource null | loader url false
+own class a resource in com.greet | own module a resource in com.greet | own root top-level, not in a package | own loader null
+app top top-level, not in a package | loader top top-level, not in a package
+service hi from a provider in com.greet
+--- stderr

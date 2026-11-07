@@ -1,0 +1,4 @@
+exit 1
+Error occurred during initialization of boot layer
+java.lang.module.FindException: Module nope not found
+--- stderr

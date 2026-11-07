@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+module app does not have a ModuleMainClass attribute, use -m <module>/<main-class>

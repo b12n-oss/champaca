@@ -440,6 +440,22 @@
                                                        (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
                                                        (not ok))]
                                          (str "modopts-" c)))
+                    ;; the module path (test/modpath): -p and -m, as test/modopts,
+                    ;; run from the modules build.sh lays out in target/modpath
+                    _ (shell "bash" "test/modpath/build.sh" "target/modpath")
+                    modpath-fails (vec (for [f (sort (map str (fs/glob "test/modpath" "*.args")))
+                                             :let [c (str/replace (fs/file-name f) ".args" "")
+                                                   args (str/split-lines (slurp f))
+                                                   {:keys [out err exit]} (apply run-limited 300 {:label (str "modpath-" c) :err :string :dir "target/modpath"}
+                                                                                 (jolt-bin) "-Sdeps" src-deps "-M" "-m" "champaca.main" args)
+                                                   err (if (System/getenv "CHAMPACA_BT")
+                                                         (str/replace err (re-pattern "(?m)^champaca: [^\n]* names [^\n]*; that code throws [^\n]*\n") "")
+                                                         err)
+                                                   ok (= (slurp (str "test/modpath/" c ".expected")) (str "exit " exit "\n" out "--- stderr\n" err))]
+                                             :when (do (println (if ok "PASS" "FAIL") (str "module path: " c))
+                                                       (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
+                                                       (not ok))]
+                                         (str "modpath-" c)))
                     ;; a warm start whose boot loads classes the cached boot never
                     ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
                     ;; plain runs that use them, on a cache of their own
@@ -875,7 +891,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails boot-fails save-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails boot-fails save-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
