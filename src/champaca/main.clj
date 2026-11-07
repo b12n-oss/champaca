@@ -1917,7 +1917,7 @@
                     ", so this run uses none"))))
   nil)
 
-(declare delete-tree!)
+(declare delete-tree! prune-cache-root!)
 
 (defn- user-cache-root
   "Where a bundle whose own cache can't be written keeps a writable one:
@@ -1932,12 +1932,16 @@
 
 (defn- seed-id
   "What a bundle's key directory d holds, as far as a user copy of it needs to
-  know: the sizes and mtimes of state.img and boot.so (both written only by a
-  build or a save), nil when d has no cache."
+  know: state.img's CRC-32 and size, boot.so's size and the generations' names
+  (all written only by a build or a save), nil when d has no cache."
   [^java.io.File d]
   (let [img (io/file d "state.img") so (io/file d "boot.so")]
     (when (and (.isFile img) (.isFile so))
-      (str (.length img) ":" (.lastModified img) ":" (.length so) ":" (.lastModified so)))))
+      (let [c (java.util.zip.CRC32.)
+            bs (with-open [in (io/input-stream img)] (.readAllBytes in))]
+        (.update c bs 0 (count bs))
+        (str (.getValue c) ":" (count bs) ":" (.length so) ":"
+             (str/join "," (sort (filter #(str/starts-with? % "extra-") (map #(.getName ^java.io.File %) (.listFiles d))))))))))
 
 (defn- copy-tree! [^java.io.File from ^java.io.File to]
   (doseq [^java.io.File f (file-seq from)
@@ -1946,38 +1950,47 @@
     (if (.isDirectory f) (.mkdirs t) (io/copy f t))))
 
 (defn- user-copy
-  "For a bundle's key directory d that can't be written, the same key under
+  "For a bundle's key directory d that can't be written, a writable copy under
   the user's cache for this bundle (user-cache-root, then a hash of the
-  bundle's path), which runs then read and write as any cache. A copy of d's
-  cache is made there when d has one the user's doesn't come from yet: the
-  first run, or a new install (seed-id, kept beside it as <key>.seed, so a
-  copy that later fails to load and is dropped isn't copied again until the
-  bundle changes). nil when there's no writable user cache root, and the
+  bundle's path), which runs then read and write as any cache: <key>-<hash of
+  d's seed-id>, so each version of the bundle's cache gets a directory of its
+  own and none is ever deleted under a process using it. A missing one is
+  copied into a temp dir and renamed into place; when another process's
+  rename won, that one is used and the temp dropped. Asked once per process.
+  nil when there's no user cache, or it can't be written (said once), and the
   bundle's own cache is then read alone."
   [^java.io.File d]
-  (when-let [base (user-cache-root)]
-    (let [h #(format "%08x" (bit-and (hash %) 0xffffffff))
-          root (io/file base (str (h @bundle-root) (h (str/reverse @bundle-root))))
-          u (io/file root (.getName d))
-          marker (io/file root (str (.getName d) ".seed"))
-          sid (seed-id d)]
-      (when (writable-root? root)
-        (try
-          (when (and sid (not= sid (when (.isFile marker) (slurp marker))))
-            (.mkdirs root)
-            ;; into a temp dir prune-cache-root! knows, then renamed in place
-            (let [tmp (io/file root (str (.getName d) ".tmp-" (System/nanoTime)))]
-              (copy-tree! d tmp)
-              (delete-tree! u)
-              (when-not (.renameTo tmp u)
-                (delete-tree! tmp)
-                (throw (ex-info "rename failed" {})))
-              (spit marker sid)))
-          u
-          (catch Exception e
-            (binding [*out* *err*]
-              (println "champaca: couldn't copy the bundle's cache to" (str root) (str "(" (ex-message e) ")")))
-            nil))))))
+  (if (contains? @state :user-copy)
+    (:user-copy @state)
+    (let [r (when-let [base (user-cache-root)]
+              (let [h #(format "%08x" (bit-and (hash %) 0xffffffff))
+                    root (io/file (.getAbsoluteFile base) (str (h @bundle-root) (h (str/reverse @bundle-root))))
+                    sid (seed-id d)
+                    u (io/file root (str (.getName d) "-" (if sid (h sid) "0")))]
+                (if-not (writable-root? root)
+                  (binding [*out* *err*]
+                    (println (str "champaca: the bundle's cache can't be written, nor its user cache at " root
+                                  "; this run keeps nothing it compiles"))
+                    nil)
+                  (let [tmp (io/file root (str (.getName u) ".tmp-" (System/nanoTime)))]
+                    (try
+                      (when (and sid (not (.isDirectory u)))
+                        (.mkdirs root)
+                        (copy-tree! d tmp)
+                        (if (.renameTo tmp u)
+                          ;; a new version of the bundle's cache: older copies
+                          ;; go by the usual rules (a week unused, 16 at most)
+                          (prune-cache-root! u)
+                          (when-not (.isDirectory u)
+                            (throw (ex-info "rename failed" {})))))
+                      u
+                      (catch Exception e
+                        (binding [*out* *err*]
+                          (println "champaca: couldn't copy the bundle's cache to" (str root) (str "(" (ex-message e) ")")))
+                        nil)
+                      (finally (when (.exists tmp) (delete-tree! tmp))))))))]
+      (swap! state assoc :user-copy r)
+      r)))
 
 (defn- cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
@@ -2088,7 +2101,8 @@
 (defn- prune-cache-root! [keep]
   (let [cutoff (- (System/currentTimeMillis) stale-ms)
         sibs (filter #(and (.isDirectory %)
-                           (re-matches #"[0-9a-f]{1,8}(\.tmp-\d+)?" (.getName %))
+                           ;; a key, a user copy's <key>-<seed hash>, their temp dirs
+                           (re-matches #"[0-9a-f]{1,8}(-[0-9a-f]{1,8})?(\.tmp-\d+)?" (.getName %))
                            (not= (.getName %) (.getName keep)))
                      (.listFiles (.getParentFile keep)))
         keys-newest-first (sort-by (juxt #(- (.lastModified %)) #(.getName %))
