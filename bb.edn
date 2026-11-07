@@ -499,6 +499,7 @@
                             _ (fs/delete-tree bc)]
                         (try
                           (let [a (str bc "/a") b (str bc "/b") c (str bc "/c") e (str bc "/e") g (str bc "/g")
+                                h (str bc "/h") k (str bc "/k")
                                 jh (System/getenv "JAVA_HOME")
                                 _ (shell (str jh "/bin/jlink") "--add-modules" "java.base" "--strip-debug" "--no-header-files"
                                          "--no-man-pages" "--output" (str a "/runtime"))
@@ -506,11 +507,15 @@
                                 _ (shell "javac" "-d" (str bc "/classes") "test/bundlecache/BundleMain.java" "test/bundlecache/BundleOther.java")
                                 _ (fs/create-dirs (str a "/app"))
                                 _ (shell "jar" "cf" (str a "/app/bc.jar") "-C" (str bc "/classes") ".")
-                                run (fn [dir main]
-                                      (run-limited 300 {:label (str "bundlecache-" main) :err :string
-                                                        :extra-env {"JAVA_HOME" (str dir "/runtime") "CHAMPACA_BUNDLE" dir
-                                                                    "CHAMPACA_CACHE_DIR" (str dir "/cache") "CHAMPACA_STATS" "1"}}
-                                                   (jolt-bin) "-M" "-m" "champaca.main" "-cp" (str dir "/app/bc.jar") main))
+                                ;; no user cache unless a row gives one (never the real ~/.cache)
+                                run (fn run
+                                      ([dir main] (run dir main "off"))
+                                      ([dir main user]
+                                       (run-limited 300 {:label (str "bundlecache-" main) :err :string
+                                                         :extra-env {"JAVA_HOME" (str dir "/runtime") "CHAMPACA_BUNDLE" dir
+                                                                     "CHAMPACA_CACHE_DIR" (str dir "/cache") "CHAMPACA_STATS" "1"
+                                                                     "CHAMPACA_USER_CACHE_DIR" user}}
+                                                    (jolt-bin) "-M" "-m" "champaca.main" "-cp" (str dir "/app/bc.jar") main)))
                                 want (fn [main] (slurp (str "test/bundlecache/" main ".expected")))
                                 good (fn [r main] (and (zero? (:exit r)) (= (want main) (:out r))))
                                 stats (fn [r] (last (filter (fn [l] (str/includes? l "methods compiled")) (str/split-lines (:err r)))))
@@ -533,13 +538,20 @@
                                 ;; writable: nothing may go in it either (it once got
                                 ;; a partial state.img, and the next run crashed)
                                 _ (fs/copy-tree c g)
+                                ;; read-only seeds over a user cache of their own
+                                ;; (CHAMPACA_USER_CACHE_DIR): an intact one and a
+                                ;; damaged one
+                                _ (fs/copy-tree a h)
+                                _ (fs/copy-tree c k)
                                 _ (fs/copy-tree (str a "/runtime") (str e "/runtime"))
                                 _ (fs/copy-tree (str a "/app") (str e "/app"))
                                 _ (fs/create-dirs (str e "/cache"))
                                 before (files b)
                                 damaged-before (files c)
                                 g-before (into {} (for [f (files g)] [f (fs/size f)]))
-                                _ (doseq [d [b c e]] (read-only! (str d "/cache")))
+                                _ (doseq [d [b c e h k]] (read-only! (str d "/cache")))
+                                h-before (files h)
+                                k-before (files k)
                                 _ (fs/set-posix-file-permissions (str g "/cache") "r-xr-xr-x")
                                 enforced (not (fs/writable? (str b "/cache")))
                                 r3 (when enforced (run b "BundleOther"))
@@ -548,7 +560,17 @@
                                 r6 (when enforced (run g "BundleMain"))
                                 r7 (when enforced (run g "BundleMain"))
                                 g-after (into {} (for [f (files g)] [f (fs/size f)]))
-                                _ (doseq [d [b c e g]] (writable! (str d "/cache")))
+                                u1 (when enforced (run h "BundleOther" (str bc "/user-h")))
+                                u2 (when enforced (run h "BundleOther" (str bc "/user-h")))
+                                u3 (when enforced (run k "BundleMain" (str bc "/user-k")))
+                                u4 (when enforced (run k "BundleMain" (str bc "/user-k")))
+                                none-compiled (fn [r] (some->> (stats r) (re-find (re-pattern ", 0 methods compiled"))))
+                                user-ok (or (not enforced)
+                                            (and (good u1 "BundleOther") (good u2 "BundleOther") (none-compiled u2)
+                                                 (= h-before (files h))
+                                                 (good u3 "BundleMain") (good u4 "BundleMain") (none-compiled u4)
+                                                 (= k-before (files k))))
+                                _ (doseq [d [b c e g h k]] (writable! (str d "/cache")))
                                 said (fn [r] (str/includes? (str (:err r)) "can't be written"))
                                 ro-ok (or (not enforced)
                                           (and (good r3 "BundleOther") (= before (files b)) (not (said r3))
@@ -561,7 +583,14 @@
                                        (str/join "\n  " (cons "" (for [[l r] [["new class" r3] ["damaged" r4] ["empty root" r5] ["root only, first" r6] ["root only, second" r7]]]
                                                                    (str l ": " (:exit r) " " (first (str/split-lines (str (:err r))))))))
                                        ""))
-                            (concat (when-not moved-ok ["bundle cache moved"]) (when-not ro-ok ["bundle cache read-only"])))
+                            (println (cond (not enforced) "SKIP" user-ok "PASS" :else "FAIL")
+                                     "a read-only bundle keeps what a run compiles in a user cache, a damaged one rebuilt there once (test/bundlecache)"
+                                     (if (and enforced (not user-ok))
+                                       (str/join "\n  " (cons "" (for [[l r] [["first" u1] ["second" u2] ["damaged first" u3] ["damaged second" u4]]]
+                                                                   (str l ": " (:exit r) " " (stats r)))))
+                                       ""))
+                            (concat (when-not moved-ok ["bundle cache moved"]) (when-not ro-ok ["bundle cache read-only"])
+                                    (when-not user-ok ["bundle user cache"])))
                           (finally (writable! bc) (fs/delete-tree bc)))))
                     ;; the library cache (test/libcache): the same program over
                     ;; changing jars, each run checked against the JVM's output.

@@ -1904,7 +1904,7 @@
   "Whether the cache key directory d can't be written: its root can't, or d
   is there and can't."
   [^java.io.File d]
-  (not (and (writable-root? (cache-root)) (or (not (.exists d)) (.canWrite d)))))
+  (not (and (writable-root? (.getParentFile (.getAbsoluteFile d))) (or (not (.exists d)) (.canWrite d)))))
 
 (defn- cache-unusable!
   "This run goes without a cache: d can't be written and has none, or none
@@ -1916,6 +1916,68 @@
       (println (str "champaca: the startup cache at " (.getParent (io/file d)) " can't be written and " why
                     ", so this run uses none"))))
   nil)
+
+(declare delete-tree!)
+
+(defn- user-cache-root
+  "Where a bundle whose own cache can't be written keeps a writable one:
+  CHAMPACA_USER_CACHE_DIR (off for none), else ~/.cache/champaca/bundles, one
+  directory per bundle path below it."
+  []
+  (let [v (env "CHAMPACA_USER_CACHE_DIR")]
+    (cond (= v "off") nil
+          (seq v) (io/file v)
+          (seq (env "HOME")) (io/file (env "HOME") ".cache" "champaca" "bundles")
+          :else nil)))
+
+(defn- seed-id
+  "What a bundle's key directory d holds, as far as a user copy of it needs to
+  know: the sizes and mtimes of state.img and boot.so (both written only by a
+  build or a save), nil when d has no cache."
+  [^java.io.File d]
+  (let [img (io/file d "state.img") so (io/file d "boot.so")]
+    (when (and (.isFile img) (.isFile so))
+      (str (.length img) ":" (.lastModified img) ":" (.length so) ":" (.lastModified so)))))
+
+(defn- copy-tree! [^java.io.File from ^java.io.File to]
+  (doseq [^java.io.File f (file-seq from)
+          :let [rel (subs (.getPath f) (count (.getPath from)))
+                t (io/file (str (.getPath to) rel))]]
+    (if (.isDirectory f) (.mkdirs t) (io/copy f t))))
+
+(defn- user-copy
+  "For a bundle's key directory d that can't be written, the same key under
+  the user's cache for this bundle (user-cache-root, then a hash of the
+  bundle's path), which runs then read and write as any cache. A copy of d's
+  cache is made there when d has one the user's doesn't come from yet: the
+  first run, or a new install (seed-id, kept beside it as <key>.seed, so a
+  copy that later fails to load and is dropped isn't copied again until the
+  bundle changes). nil when there's no writable user cache root, and the
+  bundle's own cache is then read alone."
+  [^java.io.File d]
+  (when-let [base (user-cache-root)]
+    (let [h #(format "%08x" (bit-and (hash %) 0xffffffff))
+          root (io/file base (str (h @bundle-root) (h (str/reverse @bundle-root))))
+          u (io/file root (.getName d))
+          marker (io/file root (str (.getName d) ".seed"))
+          sid (seed-id d)]
+      (when (writable-root? root)
+        (try
+          (when (and sid (not= sid (when (.isFile marker) (slurp marker))))
+            (.mkdirs root)
+            ;; into a temp dir prune-cache-root! knows, then renamed in place
+            (let [tmp (io/file root (str (.getName d) ".tmp-" (System/nanoTime)))]
+              (copy-tree! d tmp)
+              (delete-tree! u)
+              (when-not (.renameTo tmp u)
+                (delete-tree! tmp)
+                (throw (ex-info "rename failed" {})))
+              (spit marker sid)))
+          u
+          (catch Exception e
+            (binding [*out* *err*]
+              (println "champaca: couldn't copy the bundle's cache to" (str root) (str "(" (ex-message e) ")")))
+            nil))))))
 
 (defn- cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
@@ -1933,7 +1995,10 @@
           key (hash [(when (.exists release) (slurp release)) (.length modules)
                      (if @bundle-root (image-index-crc) (.lastModified modules))
                      (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])
-          d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))]
+          d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))
+          ;; a bundle whose own cache can't be written runs on a copy in the
+          ;; user's (user-copy)
+          d (or (when (and @bundle-root (cache-read-only? d)) (user-copy d)) d)]
       ;; a cache that can't be written (an installed bundle's) is read when
       ;; it's there and loads; with none for this key, or one that failed to
       ;; load (cache-unusable!), the run has no cache rather than failing the
