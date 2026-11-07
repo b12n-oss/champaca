@@ -489,51 +489,70 @@
                     (if-not (not= "off" (System/getenv "CHAMPACA_CACHE"))
                       (do (println "SKIP the bundle cache rows (CHAMPACA_CACHE=off)") [])
                       (let [bc (str (fs/absolutize "target/bundlecache"))
-                            a (str bc "/a") b (str bc "/b")
-                            jh (System/getenv "JAVA_HOME")
-                            _ (fs/delete-tree bc)
-                            _ (shell (str jh "/bin/jlink") "--add-modules" "java.base" "--strip-debug" "--no-header-files"
-                                     "--no-man-pages" "--output" (str a "/runtime"))
-                            _ (fs/delete-tree (str a "/runtime/bin"))
-                            _ (shell "javac" "-d" (str bc "/classes") "test/bundlecache/BundleMain.java" "test/bundlecache/BundleOther.java")
-                            _ (fs/create-dirs (str a "/app"))
-                            _ (shell "jar" "cf" (str a "/app/bc.jar") "-C" (str bc "/classes") ".")
-                            run (fn [dir main]
-                                  (run-limited 300 {:label (str "bundlecache-" main) :err :string
-                                                    :extra-env {"JAVA_HOME" (str dir "/runtime") "CHAMPACA_BUNDLE" dir
-                                                                "CHAMPACA_CACHE_DIR" (str dir "/cache") "CHAMPACA_STATS" "1"}}
-                                               (jolt-bin) "-M" "-m" "champaca.main" "-cp" (str dir "/app/bc.jar") main))
-                            want (fn [main] (slurp (str "test/bundlecache/" main ".expected")))
-                            stats (fn [r] (last (filter (fn [l] (str/includes? l "methods compiled")) (str/split-lines (:err r)))))
-                            r1 (run a "BundleMain")
-                            _ (fs/copy-tree a b)
-                            ;; whatever copy-tree keeps, the copy's image is newer
-                            _ (fs/set-last-modified-time (str b "/runtime/lib/modules")
-                                                         (fs/millis->file-time (+ (System/currentTimeMillis) 60000)))
-                            r2 (run b "BundleMain")
-                            moved-ok (and (zero? (:exit r1)) (= (want "BundleMain") (:out r1))
-                                          (zero? (:exit r2)) (= (want "BundleMain") (:out r2))
-                                          (some->> (stats r2) (re-find (re-pattern "\\((\\d+) from the library cache\\), 0 methods compiled")) second parse-long pos?))
-                            _ (println (if moved-ok "PASS" "FAIL") "a copied bundle's cache answers: nothing compiled (test/bundlecache)"
-                                       (if moved-ok "" (str "\n  first: " (stats r1) "\n  copy: " (stats r2))))
-                            files (fn [] (set (map str (fs/glob (str b "/cache") "**"))))
-                            ro! (fn [mode] (doseq [f (cons (str b "/cache") (fs/glob (str b "/cache") "**"))]
-                                             (fs/set-posix-file-permissions f (if (fs/directory? f) (str "r-x" mode) (str "r--" mode)))))
-                            before (files)
-                            _ (ro! "r-xr-x")
-                            enforced (not (fs/writable? (str b "/cache")))
-                            r3 (when enforced (run b "BundleOther"))
-                            _ (doseq [f (cons (str b "/cache") (fs/glob (str b "/cache") "**"))]
-                                (fs/set-posix-file-permissions f (if (fs/directory? f) "rwxr-xr-x" "rw-r--r--")))
-                            ro-ok (or (not enforced)
-                                      (and (zero? (:exit r3)) (= (want "BundleOther") (:out r3)) (= before (files))))
-                            _ (println (cond (not enforced) "SKIP"
-                                             ro-ok "PASS"
-                                             :else "FAIL")
-                                       "a read-only bundle cache runs a class it never saw and writes nothing (test/bundlecache)"
-                                       (if (and enforced (not ro-ok)) (str "\n  " (:exit r3) " " (:err r3)) ""))]
-                        (fs/delete-tree bc)
-                        (concat (when-not moved-ok ["bundle cache moved"]) (when-not ro-ok ["bundle cache read-only"]))))
+                            ;; a tree a killed run left read-only can't be deleted
+                            writable! (fn [d] (when (fs/exists? d)
+                                                (doseq [f (cons d (fs/glob d "**"))]
+                                                  (fs/set-posix-file-permissions f (if (fs/directory? f) "rwxr-xr-x" "rw-r--r--")))))
+                            read-only! (fn [d] (doseq [f (cons d (fs/glob d "**"))]
+                                                 (fs/set-posix-file-permissions f (if (fs/directory? f) "r-xr-xr-x" "r--r--r--"))))
+                            _ (writable! bc)
+                            _ (fs/delete-tree bc)]
+                        (try
+                          (let [a (str bc "/a") b (str bc "/b") c (str bc "/c") e (str bc "/e")
+                                jh (System/getenv "JAVA_HOME")
+                                _ (shell (str jh "/bin/jlink") "--add-modules" "java.base" "--strip-debug" "--no-header-files"
+                                         "--no-man-pages" "--output" (str a "/runtime"))
+                                _ (fs/delete-tree (str a "/runtime/bin"))
+                                _ (shell "javac" "-d" (str bc "/classes") "test/bundlecache/BundleMain.java" "test/bundlecache/BundleOther.java")
+                                _ (fs/create-dirs (str a "/app"))
+                                _ (shell "jar" "cf" (str a "/app/bc.jar") "-C" (str bc "/classes") ".")
+                                run (fn [dir main]
+                                      (run-limited 300 {:label (str "bundlecache-" main) :err :string
+                                                        :extra-env {"JAVA_HOME" (str dir "/runtime") "CHAMPACA_BUNDLE" dir
+                                                                    "CHAMPACA_CACHE_DIR" (str dir "/cache") "CHAMPACA_STATS" "1"}}
+                                                   (jolt-bin) "-M" "-m" "champaca.main" "-cp" (str dir "/app/bc.jar") main))
+                                want (fn [main] (slurp (str "test/bundlecache/" main ".expected")))
+                                good (fn [r main] (and (zero? (:exit r)) (= (want main) (:out r))))
+                                stats (fn [r] (last (filter (fn [l] (str/includes? l "methods compiled")) (str/split-lines (:err r)))))
+                                files (fn [d] (set (map str (fs/glob (str d "/cache") "**"))))
+                                r1 (run a "BundleMain")
+                                _ (fs/copy-tree a b)
+                                ;; whatever copy-tree keeps, the copy's image is newer
+                                _ (fs/set-last-modified-time (str b "/runtime/lib/modules")
+                                                             (fs/millis->file-time (+ (System/currentTimeMillis) 60000)))
+                                r2 (run b "BundleMain")
+                                moved-ok (and (good r1 "BundleMain") (good r2 "BundleMain")
+                                              (some->> (stats r2) (re-find (re-pattern "\\((\\d+) from the library cache\\), 0 methods compiled")) second parse-long pos?))
+                                _ (println (if moved-ok "PASS" "FAIL") "a copied bundle's cache answers: nothing compiled (test/bundlecache)"
+                                           (if moved-ok "" (str "\n  first: " (stats r1) "\n  copy: " (stats r2))))
+                                ;; a copy whose state.img is damaged, and an empty cache root
+                                _ (fs/copy-tree a c)
+                                _ (doseq [k (fs/list-dir (str c "/cache")) :when (fs/directory? k)]
+                                    (spit (str k "/state.img") "damaged"))
+                                _ (fs/copy-tree (str a "/runtime") (str e "/runtime"))
+                                _ (fs/copy-tree (str a "/app") (str e "/app"))
+                                _ (fs/create-dirs (str e "/cache"))
+                                before (files b)
+                                damaged-before (files c)
+                                _ (doseq [d [b c e]] (read-only! (str d "/cache")))
+                                enforced (not (fs/writable? (str b "/cache")))
+                                r3 (when enforced (run b "BundleOther"))
+                                r4 (when enforced (run c "BundleMain"))
+                                r5 (when enforced (run e "BundleMain"))
+                                _ (doseq [d [b c e]] (writable! (str d "/cache")))
+                                said (fn [r] (str/includes? (str (:err r)) "can't be written"))
+                                ro-ok (or (not enforced)
+                                          (and (good r3 "BundleOther") (= before (files b)) (not (said r3))
+                                               (good r4 "BundleMain") (= damaged-before (files c)) (said r4)
+                                               (good r5 "BundleMain") (empty? (files e)) (said r5)))]
+                            (println (cond (not enforced) "SKIP" ro-ok "PASS" :else "FAIL")
+                                     "a read-only bundle cache runs, writes nothing, and says why when it can't use what it holds (test/bundlecache)"
+                                     (if (and enforced (not ro-ok))
+                                       (str/join "\n  " (cons "" (for [[l r] [["new class" r3] ["damaged" r4] ["empty root" r5]]]
+                                                                   (str l ": " (:exit r) " " (first (str/split-lines (str (:err r))))))))
+                                       ""))
+                            (concat (when-not moved-ok ["bundle cache moved"]) (when-not ro-ok ["bundle cache read-only"])))
+                          (finally (writable! bc) (fs/delete-tree bc)))))
                     ;; the library cache (test/libcache): the same program over
                     ;; changing jars, each run checked against the JVM's output.
                     ;; Base changes between base-v1.jar and base-v2.jar, Sub's bytes

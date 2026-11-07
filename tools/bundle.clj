@@ -11,6 +11,13 @@
 ;;   --name NAME            the launcher's name (default: the main class's or
 ;;                          namespace's last part, lower-cased)
 ;;   --add-modules M,N      modules beyond what jdeps finds the classpath needs
+;;                          and the two always added (jdk.charsets, and
+;;                          jdk.localedata unless --locales none): jdeps can't
+;;                          see what a program reaches by name (a charset, a
+;;                          locale's data, a ServiceLoader provider)
+;;   --locales LIST         keep only these locales' data (en,de: jlink's
+;;                          --include-locales), or none for no jdk.localedata
+;;                          (27 MB): numbers and dates then format as en does
 ;;   --signable             build the binaries with jolt build --signable, so
 ;;                          they can be code-signed afterwards (codesign on
 ;;                          macOS); it needs a C compiler. macOS refuses to start
@@ -39,9 +46,10 @@
             [babashka.process :as p]
             [clojure.string :as str]))
 
-(defn- die [& msg]
-  (binding [*out* *err*] (apply println "bundle:" msg))
-  (System/exit 2))
+(defn- die
+  "Stops the build: -main cleans up what it made and exits 2."
+  [& msg]
+  (throw (ex-info (str/join " " msg) {::die true})))
 
 (defn- parse [args]
   (loop [[a & more :as args] args, opts {}]
@@ -49,10 +57,11 @@
       (empty? args) opts
       (= a "--train") (assoc opts :train (vec more))
       (= a "--signable") (recur more (assoc opts :signable true))
-      (#{"-o" "-cp" "--class-path" "-m" "--jolt" "--project" "--name" "--add-modules"} a)
+      (#{"-o" "-cp" "--class-path" "-m" "--jolt" "--project" "--name" "--add-modules" "--locales"} a)
       (if (seq more)
         (recur (rest more) (assoc opts (case a "-o" :out ("-cp" "--class-path") :cp "-m" :main "--jolt" :jolt
-                                             "--project" :project "--name" :name "--add-modules" :add-modules)
+                                             "--project" :project "--name" :name "--add-modules" :add-modules
+                                             "--locales" :locales)
                                   (first more)))
         (die a "needs a value"))
       :else (die "unknown argument" a))))
@@ -69,17 +78,25 @@
   (let [{:keys [exit]} (apply p/shell {:continue true} cmd)]
     (when-not (zero? exit) (die "failed:" (str/join " " cmd)))))
 
-(defn- cp-entries [cp]
+(defn- cp-entries
+  "The class path's entries, canonical; dir/* is the directory's jars, sorted,
+  as champaca.main and java read it."
+  [cp]
   (when cp
     (vec (for [e (str/split cp (re-pattern (java.util.regex.Pattern/quote java.io.File/pathSeparator)))
-               :when (seq e)]
+               :when (seq e)
+               e (if (str/ends-with? e "/*")
+                   (let [d (subs e 0 (- (count e) 2))]
+                     (when-not (fs/directory? d) (die "classpath entry not found:" e))
+                     (sort (map str (filter #(re-find #"(?i)\.jar$" (str %)) (fs/list-dir d)))))
+                   [e])]
            (do (when-not (fs/exists? e) (die "classpath entry not found:" e))
                (str (fs/canonicalize e)))))))
 
 (defn- modules
   "The JDK modules the classpath needs, by jdeps, plus extra (comma
   separated); java.base alone when the classpath is empty."
-  [entries extra]
+  [entries extra locales]
   (let [found (when (seq entries)
                 (let [{:keys [out exit err]}
                       (apply p/shell {:out :string :err :string :continue true}
@@ -94,12 +111,15 @@
                   ;; the module list is its last line
                   (some-> (->> (str/split-lines out) (remove #(or (str/blank? %) (str/starts-with? % "Warning"))) last)
                           str/trim (str/split #","))))]
-    (vec (distinct (remove str/blank? (concat ["java.base"] found (some-> extra (str/split #","))))))))
+    (vec (distinct (remove str/blank? (concat ["java.base" "jdk.charsets"]
+                                              (when-not (= locales "none") ["jdk.localedata"])
+                                              found (some-> extra (str/split #","))))))))
 
-(defn- jlink! [out mods]
+(defn- jlink! [out mods locales]
   (let [rt (fs/path out "runtime")]
-    (sh! (tool "jlink") "--add-modules" (str/join "," mods) "--strip-debug" "--no-header-files"
-          "--no-man-pages" "--output" (str rt))
+    (apply sh! (tool "jlink") "--add-modules" (str/join "," mods) "--strip-debug" "--no-header-files"
+           "--no-man-pages" "--output" (str rt)
+           (when (and locales (not= locales "none")) [(str "--include-locales=" locales)]))
     ;; champaca never starts a JVM or loads a JDK native library: the launchers,
     ;; the VM and every shared library go; legal/ stays (the licenses travel
     ;; with the binaries)
@@ -126,6 +146,8 @@
         (recur more (conj used name) (conj rel (str "app/" name)))))))
 
 (defn- jolt-build! [jolt project ns out-bin signable]
+  (when-not (or (fs/executable? jolt) (fs/which jolt))
+    (die "no jolt at" jolt "(bb jolt builds the pinned one; $JOLT names another)"))
   (fs/create-dirs (fs/parent out-bin))
   (let [{:keys [exit]} (apply p/shell {:dir (str project) :continue true} jolt "build" "-m" ns "-o" (str out-bin)
                               (when signable ["--signable"]))]
@@ -160,23 +182,31 @@
 
 (defn- mb [n] (format "%.1f MB" (/ n 1048576.0)))
 
-(defn -main [repo jolt & args]
-  (let [{:keys [out cp main project name add-modules train signable] jolt-ns :jolt} (parse args)]
+(defn- build! [repo jolt made args]
+  (let [{:keys [out cp main project name add-modules train signable locales] jolt-ns :jolt} (parse args)]
     (when-not out (die "-o OUT is required"))
     (when-not (or main jolt-ns) (die "give -m MAIN (a Java program) or --jolt NS (a jolt program)"))
     (when (and main jolt-ns) (die "-m and --jolt don't go together"))
     (when (and jolt-ns (not project)) (die "--jolt NS needs --project DIR, the jolt project holding NS"))
+    (when (and jolt-ns (= "champaca" (or name (str/lower-case (last (str/split jolt-ns #"[.$]"))))))
+      (die "--jolt NS's binary would be named champaca, which lib/ keeps for champaca.main; give --name"))
     (when (fs/exists? out) (die out "exists; give a new directory"))
     (let [entries (cp-entries cp)
           name (or name (str/lower-case (last (str/split (or main jolt-ns) #"[.$]"))))
-          mods (modules entries add-modules)
+          mods (modules entries add-modules locales)
           _ (println "bundle: modules" (str/join "," mods))
+          _ (let [o (str (fs/absolutize out))]
+              (doseq [e entries :when (fs/directory? e)]
+                (when (or (= o e) (str/starts-with? o (str e "/")))
+                  (die "-o" out "is inside the class path directory" e))))
           _ (fs/create-dirs out)
+          _ (vreset! made {:out (str (fs/canonicalize out))})
           out (str (fs/canonicalize out))
-          rt (jlink! out mods)
+          rt (jlink! out mods locales)
           rel (copy-app! out entries)
           champaca-bin (fs/path out "lib" "champaca")
-          scratch (champaca-project repo)]
+          scratch (champaca-project repo)
+          _ (vswap! made assoc :scratch scratch)]
       (println "bundle: building champaca.main with" jolt)
       (jolt-build! jolt scratch "champaca.main" champaca-bin signable)
       (when jolt-ns
@@ -195,19 +225,37 @@
         (fs/set-posix-file-permissions bin "rwxr-xr-x")
         ;; the cache: the JDK's boot always, then the program's own run when
         ;; asked; the same environment the launcher sets
-        (let [env (merge (into {} (System/getenv))
+        ;; (the builder's own CHAMPACA_* settings stay out: CHAMPACA_BT or
+        ;; CHAMPACA_LINES would warm a cache under another key than the
+        ;; users' runs look for)
+        (let [env (merge (into {} (remove (fn [[k _]] (str/starts-with? k "CHAMPACA_"))) (System/getenv))
                          {"JAVA_HOME" rt "CHAMPACA_BUNDLE" out "CHAMPACA_CACHE_DIR" (str (fs/path out "cache"))})]
           (println "bundle: warming the cache (the JDK's boot)")
-          (let [{:keys [exit]} (p/shell {:extra-env env :out :string :err :string :continue true} (str champaca-bin) "-version")]
+          (let [{:keys [exit]} (p/shell {:env env :out :string :err :string :continue true} (str champaca-bin) "-version")]
             (when-not (zero? exit) (die "the boot failed in the bundle's runtime")))
           (when train
             (println "bundle: training run:" name (str/join " " train))
-            (let [{:keys [exit]} (apply p/shell {:continue true} (str bin) train)]
+            (let [{:keys [exit]} (apply p/shell {:continue true :env env} (str bin) train)]
               (println "bundle: training run exited" exit))))
-        (fs/delete-tree scratch)
         (println (str "bundle: wrote " out "/bin/" name))
         (doseq [[label d] [["runtime" "runtime"] ["lib" "lib"] ["app" "app"] ["cache" "cache"]]]
           (println (format "  %-8s %s" label (mb (du (fs/path out d))))))
         (println (format "  %-8s %s" "total" (mb (du out))))
         (when-not train
           (println "bundle: only the boot is cached; --train ARGS caches what a run of the program compiles"))))))
+
+(defn -main [repo jolt & args]
+  (let [made (volatile! nil)]
+    (try
+      (build! repo jolt made args)
+      (catch clojure.lang.ExceptionInfo e
+        (when-not (::die (ex-data e)) (throw e))
+        (binding [*out* *err*] (println "bundle:" (ex-message e)))
+        (when-let [o (:out @made)]
+          (binding [*out* *err*] (println "bundle: removing the partial" o))
+          (fs/delete-tree o))
+        ;; System/exit skips the finally below
+        (some-> (:scratch @made) fs/delete-tree)
+        (System/exit 2))
+      (finally
+        (some-> (:scratch @made) fs/delete-tree)))))

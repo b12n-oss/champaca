@@ -25,7 +25,7 @@ What lands in the directory:
 |---|---|
 | `bin/NAME` | the launcher, a shell script; call it from anywhere, through a symlink too |
 | `lib/` | `champaca`, champaca's own `jolt build` binary, and for `--jolt` the program's binary |
-| `runtime/` | a `jlink` image of the modules `jdeps` says the class path needs (plus `--add-modules`), with `bin/`, the VM and every native library removed, since champaca loads none of them; `legal/` stays |
+| `runtime/` | a `jlink` image of the modules `jdeps` says the class path needs, plus `jdk.charsets` and `jdk.localedata` (see below) and any `--add-modules`, with `bin/`, the VM and every native library removed, since champaca loads none of them; `legal/` stays |
 | `app/` | the class path's jars and directories, copied |
 | `cache/` | the startup cache, warmed at build time |
 
@@ -33,28 +33,32 @@ The launcher sets `JAVA_HOME` to `runtime/`, `CHAMPACA_CACHE_DIR` to `cache/` an
 
 ## The training run
 
-Without `--train`, the build boots the JDK once (through `champaca -version`) and caches that boot. The program's own code, and whatever JDK code it reaches beyond the boot, still compiles on its first real run. `--train ARGS...` runs the program once at build time with those arguments, through the launcher, so the cache holds what that run compiled. It's the same idea as a training run for the JDK's own AOT cache. Everything after `--train` goes to the program, so put it last, and pick arguments that exercise the paths you care about without side effects you don't want at build time.
+The build leaves the builder's own `CHAMPACA_*` settings out of these runs, since `CHAMPACA_BT` or `CHAMPACA_LINES` would warm a cache under a key the launcher's runs never look for. Without `--train`, the build boots the JDK once (through `champaca -version`) and caches that boot. The program's own code, and whatever JDK code it reaches beyond the boot, still compiles on its first real run. `--train ARGS...` runs the program once at build time with those arguments, through the launcher, so the cache holds what that run compiled. It's the same idea as a training run for the JDK's own AOT cache. Everything after `--train` goes to the program, so put it last, and pick arguments that exercise the paths you care about without side effects you don't want at build time.
 
 ## Moving it
 
 The bundle keeps its cache wherever it goes. Two things make that work:
 
-- **The cache key hashes the runtime image's index** (a CRC-32 of every resource's name, offset and sizes), not the file's modification time, which a copy changes. Hashing the 1.5 MB index of a full JDK takes about 2 ms.
+- **Inside a bundle, the cache key hashes the runtime image's index** (a CRC-32 of every resource's name, offset and sizes) instead of the file's modification time, which a copy changes. The index doesn't cover the class bytes themselves, which is fine for the image a bundle ships with. Outside a bundle the key keeps the modification time, so a rewritten `lib/modules` still gets a fresh cache.
 - **A class path entry inside `CHAMPACA_BUNDLE` is named relative to it** in the library cache, so the cache's entries for `app/x.jar` answer whether the bundle sits in `/opt` or in a home directory.
 
-Measured on an M1 Pro on 2026-11-07, with the bundle moved after it was built and run with `env -i`, so no `JAVA_HOME` and no JDK on the `PATH`:
+Measured on an M1 Pro on 2026-11-07 (load average about 5), with the bundle moved after it was built and run with `env -i`, so no `JAVA_HOME` and no JDK on the `PATH`, three runs each:
 
 | Program | Bundle size | Warm run, moved | Compiled in that run |
 |---|---|---|---|
-| Hello (TreeMap, `String.format`, `java.time`), `java.base` only | 61 MB | 0.44 s | nothing |
-| Jackson's probe (`test/libs/Jack.java`), three jars, `java.desktop` and `java.sql` | 100 MB | 0.82 to 0.85 s | nothing, 449 classes from the library cache |
-| a jolt program serializing a map with Jackson | 121 MB | 0.71 to 0.73 s | nothing |
+| Hello (TreeMap, `String.format`, `java.time`) | 89 MB | 0.49 to 0.52 s | nothing |
+| Jackson's probe (`test/libs/Jack.java`), three jars, `java.desktop` and `java.sql` | 128 MB | 0.87 to 0.92 s | nothing, output the same as HotSpot's |
+| a jolt program serializing a map with Jackson | 150 MB | 0.76 s | nothing |
+
+About 28 MB of each is `jdk.localedata` and `jdk.charsets`; `--locales none` drops the 27 MB of locale data (Hello with `java.base` alone was 61 MB).
 
 On macOS the first launch of a freshly copied binary costs about 0.4 s more while the system checks it (0.57 s against 0.15 s for a binary that does nothing). That happens once per copy and isn't champaca's time.
 
 ## Read-only bundles
 
-An installed bundle often can't write its own directory. Champaca reads a cache it can't write and skips the save: whatever a run compiles beyond the cache isn't kept, and the run doesn't fail for it. Code the training run didn't reach then compiles on every run, so train the paths that matter. A cache root that can't be written and holds no cache for this key (a bundle built by another jolt, say) means a run without a cache, as `CHAMPACA_CACHE=off` gives.
+An installed bundle often can't write its own directory. Champaca reads a cache it can't write and skips the save: whatever a run compiles beyond the cache isn't kept, and the run doesn't fail for it. Code the training run didn't reach then compiles on every run, so train the paths that matter.
+
+When such a cache has nothing for this run, or holds something that doesn't load (a damaged `state.img`, a missing `runtime.so`, a cache built for another key), the run goes without a cache, as `CHAMPACA_CACHE=off` gives, and says so once on stderr: `champaca: the startup cache at <dir> can't be written and has none for this run, so this run uses none`. A writable cache drops a damaged copy and builds a new one, as before. The one case that still fails is damage found inside a class entry after the boot, which a writable cache survives by failing that one run; a read-only one fails each run until it's rebuilt or reinstalled.
 
 ## Signing
 
@@ -65,4 +69,4 @@ A `jolt build` binary is unsigned, and macOS refuses to start an unsigned binary
 - A bundle runs on the OS and architecture it was built on, since its compiled code is Chez machine code, so build one on each platform you ship to.
 - Its size is mostly the runtime and the binaries. `java.desktop`, which Jackson needs for `java.beans`, takes the runtime from 24 MB to 51 MB.
 - The class path is fixed when the bundle is built. A program that loads plugins from elsewhere still can, but their classes cache under their real paths.
-- `jdeps` decides the modules. A program that reaches a module only by reflection or `ServiceLoader` needs it named in `--add-modules`.
+- `jdeps` decides the modules, and it can't see what a program reaches by name: a charset, a locale's data, a `ServiceLoader` provider, `jdk.zipfs`, `jdk.crypto.ec`. So `jdk.charsets` (3 MB) and `jdk.localedata` (27 MB) always go in, and a bundle formats `NumberFormat.getInstance(Locale.GERMANY)` and French dates as HotSpot does. `--locales en,de` keeps only those locales' data (jlink's `--include-locales`), and `--locales none` leaves it out, after which numbers and dates format as English. Anything else reached by name goes in `--add-modules`.

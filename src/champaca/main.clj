@@ -131,6 +131,8 @@
       (:deps m) (update :deps intern-keys false)
       (:cached-methods m) (update :cached-methods intern-keys false))))
 
+(declare cache-read-only?)
+
 (defn- parse-entry
   "thaw-entry for one packed class entry. Damage inside an entry of an
   otherwise readable state.img surfaces here, mid-run, where booting cold is
@@ -142,7 +144,11 @@
          (binding [*out* *err*]
            (println "champaca: discarding a damaged startup cache (bad entry for"
                     (str cname "):") (ex-message ex)))
-         (when-let [dir (:cache-dir @state)] (delete-tree! dir))
+         (when-let [dir (:cache-dir @state)]
+           (if (cache-read-only? dir)
+             (binding [*out* *err*]
+               (println "champaca: the cache can't be written, so it can't be dropped either: rebuild or reinstall it (" (str dir) ")"))
+             (delete-tree! dir)))
          (throw ex))))
 
 (def ^:private layer-modules
@@ -1859,7 +1865,10 @@
   `jolt build` binary, which carries no source of a namespace compiled into
   it, keys its cache with."
   []
-  (hash (apply str (map #(some-> (io/resource %) slurp) translator-sources))))
+  ;; a source missing where the binary is built would leave the key blind to
+  ;; it: fail the build instead
+  (hash (apply str (map #(slurp (or (io/resource %) (throw (ex-info (str "built-sources-hash: no " %) {}))))
+                        translator-sources))))
 
 (defn- translator-fingerprint []
   (let [rt (apply str (map #(slurp (io/resource %)) runtime-files))]
@@ -1891,6 +1900,23 @@
           (.exists f) (.canWrite f)
           :else (recur (.getParentFile f)))))
 
+(defn- cache-read-only?
+  "Whether the cache key directory d can't be written: its root can't, or d
+  is there and can't."
+  [^java.io.File d]
+  (not (and (writable-root? (cache-root)) (or (not (.exists d)) (.canWrite d)))))
+
+(defn- cache-unusable!
+  "This run goes without a cache: d can't be written and has none, or none
+  that loads. Said once, on stderr. Answers nil."
+  [d why]
+  (when-not (:cache-unusable @state)
+    (swap! state assoc :cache-unusable true)
+    (binding [*out* *err*]
+      (println (str "champaca: the startup cache at " (.getParent (io/file d)) " can't be written and " why
+                    ", so this run uses none"))))
+  nil)
+
 (defn- cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
     (let [modules (io/file (java-home) "lib" "modules")
@@ -1898,17 +1924,23 @@
           ;; CHAMPACA_BT changes the generated code (shadow-stack wrappers that
           ;; hide frame names from getCallerClass), so it gets its own cache;
           ;; CHAMPACA_LINES decides which code carries inspector information
-          ;; the image's index (every resource's name, offset and sizes) by
-          ;; CRC-32, not the file's mtime, so a runtime copied elsewhere with
-          ;; its cache (an app bundle) keeps the key
-          key (hash [(when (.exists release) (slurp release)) (.length modules) (image-index-crc)
+          ;; outside a bundle the image's mtime, as before: any rewrite of the
+          ;; file, a same-size change to one class included, gives a fresh
+          ;; cache. In a bundle (CHAMPACA_BUNDLE) its index by CRC-32 (every
+          ;; resource's name, offset and sizes, not their bytes), since a copy
+          ;; of the bundle has new mtimes and must keep its cache; the image
+          ;; there is the one the bundle shipped with
+          key (hash [(when (.exists release) (slurp release)) (.length modules)
+                     (if @bundle-root (image-index-crc) (.lastModified modules))
                      (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])
           d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))]
-      ;; a cache root that can't be written (an installed bundle's) gives no
-      ;; cache when it has none for this key, rather than failing the boot
-      ;; that would write one; a key directory that is there is read
-      (when (or (.isDirectory d) (writable-root? (cache-root)))
-        d))))
+      ;; a cache that can't be written (an installed bundle's) is read when
+      ;; it's there and loads; with none for this key, or one that failed to
+      ;; load (cache-unusable!), the run has no cache rather than failing the
+      ;; boot that would write one
+      (cond (:cache-unusable @state) nil
+            (or (.isDirectory d) (not (cache-read-only? d))) d
+            :else (cache-unusable! d "has none for this run")))))
 
 (defn- packed-entry
   "A class map as edn text in UTF-8 bytes (pack), without bytecode: methods
@@ -2053,9 +2085,11 @@
         ;; a damaged cache would fail every run the same way: drop it, boot
         ;; cold, and the cold boot writes a new one
         (catch Exception e
-          (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
-          (delete-tree! dir)
           (swap! state assoc :classes {} :lazy #{} :boot-classes #{})
+          (if (cache-read-only? dir)
+            (cache-unusable! dir (str "its copy doesn't load (" (ex-message e) ")"))
+            (do (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
+                (delete-tree! dir)))
           nil)))))
 
 (defn- prune-library!
@@ -2153,16 +2187,21 @@
       (binding [*out* *err*]
         (println (str "champaca: CHAMPACA_LINES=" v " isn't all or off; using the default, lines for classes from class directories")))))
   (let [dir (cache-dir)
-        so (when dir (io/file dir "runtime.so"))]
+        so (when dir (io/file dir "runtime.so"))
+        ro (and dir (cache-read-only? dir))]
     ;; the cache key covers the runtime's source, so a cached runtime.so is
     ;; always this source compiled
     (when-not (and so (.exists so)
                    (try (timed :cache-load-runtime #(s/call "load" (str so))) true
                         (catch Exception e
-                          (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
-                          (delete-tree! dir)
+                          (if ro
+                            (cache-unusable! dir (str "its runtime doesn't load (" (ex-message e) ")"))
+                            (do (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
+                                (delete-tree! dir)))
                           false)))
-      (if dir
+      (when (and ro (not (.exists so)))
+        (cache-unusable! dir "its runtime is missing"))
+      (if (and dir (not ro))
         ;; a cold start writes runtime.so into the cache anyway, so compile it
         ;; first and load it, rather than evaluating the source and compiling
         ;; it again for the cache (write-cache! moves this file into place)
@@ -2243,7 +2282,11 @@
   (s/call "set-frame-hook!" (fn [cname mname desc pc]
                               (let [[f l m h] (frame-info cname mname desc pc)] (s/call "vector" f l m h))))
   (let [dir (cache-dir)
-        hit? (load-cache! dir)]
+        hit? (load-cache! dir)
+        ;; a miss over a cache that can't be written (a file of it gone): no
+        ;; cold write there
+        _ (when (and dir (not hit?) (cache-read-only? dir))
+            (cache-unusable! dir "holds no boot for this run"))]
     (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))
     (run! ensure-loaded! ["java/lang/Object" "java/lang/String" "java/lang/Class"])
     (let [status (s/eval-string
@@ -2287,10 +2330,11 @@
         ;; maps in state.img with no code behind them, so a later run took
         ;; them for registered and failed with "class not registered"
         (when-not hit?
-          (when (zero? status)
+          ;; not over a cache that can't be written and didn't load
+          (when (and (zero? status) (not (:cache-unusable @state)))
             (timed :cache-write #(write-cache! dir @rec)))
           (vreset! rec [])))
-      (swap! state assoc :cache (cond hit? :hit dir :miss :else :off))
+      (swap! state assoc :cache (cond hit? :hit (and dir (not (:cache-unusable @state))) :miss :else :off))
       status)))
 
 (defn- percent-decode
