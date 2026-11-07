@@ -11,3 +11,4 @@ lambda: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFound
 invoke array: java.lang.NoClassDefFoundError: [LSiteGone; | cause java.lang.ClassNotFoundException: SiteGone
 invoke 2d array: java.lang.NoClassDefFoundError: [[LSiteGone; | cause java.lang.ClassNotFoundException: SiteGone
 concat: xnull
+plain invoke: plain true true

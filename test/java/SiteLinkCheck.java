@@ -27,6 +27,8 @@ public class SiteLinkCheck {
     static Object lambda() { SiteGone g = null; Runnable r = () -> System.out.println(g); return "made"; }
     static Object invokeArray() throws Throwable { take.invoke((SiteGone[]) null); return "ran"; }
     static Object invokeArray2() throws Throwable { take.invoke((SiteGone[][]) null); return "ran"; }
+    static String plain(SiteGone g, SiteGone2[] h) { return "plain " + (g == null) + " " + (h == null); }
+    static Object plainCall() { return plain(null, null); }
     static Object concat2(SiteGone g) { return "x" + g; }
     static Object concat() { return concat2(null); }
     static Object notTaken(boolean b) throws Throwable { if (b) take.invoke((SiteGone) null); return "skipped"; }
@@ -50,6 +52,7 @@ public class SiteLinkCheck {
         t("invoke array", SiteLinkCheck::invokeArray);
         t("invoke 2d array", SiteLinkCheck::invokeArray2);
         t("concat", SiteLinkCheck::concat);
+        t("plain invoke", SiteLinkCheck::plainCall);
     }
 }
 class SiteGone {}
