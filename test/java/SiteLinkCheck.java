@@ -4,8 +4,10 @@ import java.util.function.*;
 // A signature-polymorphic call (MethodHandle invoke and invokeExact, a
 // VarHandle access mode) or an invokedynamic resolves the classes its
 // descriptor names when it links, so a missing one is NoClassDefFoundError at
-// that instruction, whatever the receiver; an array names the array. The two
-// classes at the end are deleted before anything uses them.
+// that instruction, whatever the receiver; an array names the array. An
+// invokedynamic's bootstrap static arguments (a lambda's types and method, a
+// record's getters, a switch's class labels) resolve after the site's type. The
+// two classes at the end are deleted before anything uses them.
 public class SiteLinkCheck {
     interface Callable { Object call() throws Throwable; }
     static void t(String label, Callable r) {
@@ -31,6 +33,19 @@ public class SiteLinkCheck {
     static Object plainCall() { return plain(null, null); }
     static Object concat2(SiteGone g) { return "x" + g; }
     static Object concat() { return concat2(null); }
+    // a bootstrap's static arguments resolve too, after the site's type
+    interface SiteF { String f(SiteGone g); }
+    static Object order(SiteGone2 c) { SiteF fn = g -> "" + c; return "made"; }
+    static Object bothLambda(SiteGone2 c) { Function<SiteGone, String> f = g -> "" + c; return "made"; }
+    static Object instOnly() { Function<SiteGone, String> f = g -> "x"; return "made"; }
+    static Object samRet() { Supplier<SiteGone> s = () -> null; return "made " + s.get(); }
+    static Object methodRef() { Function<Object, SiteGone> f = SiteLinkCheck::conv; return "made"; }
+    static SiteGone conv(Object o) { return null; }
+    record SiteRec(SiteGone g, int x) {}
+    static Object recString() { return new SiteRec(null, 1).toString(); }
+    static Object recEquals() { SiteRec r = new SiteRec(null, 1); return r.equals(r); }
+    static Object sw(Object o) { return switch (o) { case SiteGone g -> "gone"; case String s -> "str"; default -> "other"; }; }
+    static Object swArr(Object o) { return switch (o) { case SiteGone[] g -> "gone"; case String s -> "str"; default -> "other"; }; }
     static Object notTaken(boolean b) throws Throwable { if (b) take.invoke((SiteGone) null); return "skipped"; }
     public static void main(String[] a) throws Throwable {
         var L = MethodHandles.lookup();
@@ -53,6 +68,15 @@ public class SiteLinkCheck {
         t("invoke 2d array", SiteLinkCheck::invokeArray2);
         t("concat", SiteLinkCheck::concat);
         t("plain invoke", SiteLinkCheck::plainCall);
+        t("site before static args", () -> order(null));
+        t("lambda captured and arg", () -> bothLambda(null));
+        t("lambda arg type", SiteLinkCheck::instOnly);
+        t("lambda result type", SiteLinkCheck::samRet);
+        t("method reference", SiteLinkCheck::methodRef);
+        t("record toString", SiteLinkCheck::recString);
+        t("record equals", SiteLinkCheck::recEquals);
+        t("type switch", () -> sw("q"));
+        t("type switch array", () -> swArr("q"));
     }
 }
 class SiteGone {}

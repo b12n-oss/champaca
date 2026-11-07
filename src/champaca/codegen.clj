@@ -493,13 +493,35 @@
   resolves the call site's MethodType when it links the instruction: a
   missing one makes the instruction throw NoClassDefFoundError (an array's
   names the array), whatever the receiver. A plain invoke's descriptor isn't
-  resolved, there or here."
+  resolved, there or here. A bootstrap's static arguments are
+  resolve-bsm-args!'s."
   [resolve desc]
   (let [{:keys [args ret]} (parse-desc desc)]
     (doseq [t (conj args ret)]
       (case (first t)
         \L (resolve-type! resolve (subs t 1 (dec (count t))))
         \[ (resolve-type! resolve t)
+        nil))))
+
+(defn- resolve-bsm-args!
+  "Resolves the classes the static arguments of a bootstrap codegen compiles
+  directly name (a lambda's method types and implementation handle, a record's
+  getters, a pattern switch's class labels), in order, as HotSpot resolves
+  them when it links the invokedynamic, after the call site's type
+  (resolve-site!). A Class constant is the class, a MethodType its
+  descriptor's classes, a MethodHandle its member's class then descriptor (a
+  field's type). Dynamic constants resolve when they run (handles.ss)."
+  [cls resolve arg-idxs]
+  (let [cp (:cp cls)]
+    (doseq [i arg-idxs :let [e (cp i)]]
+      (case (:tag e)
+        :class (resolve-type! resolve (:name e))
+        :methodtype (resolve-site! resolve (:desc e))
+        :methodhandle (let [{:keys [class desc]} (cp (:ref-idx e))]
+                        (resolve-type! resolve class)
+                        ;; kinds 1-4 are field accessors: the descriptor is the
+                        ;; field's type, read as a method returning it
+                        (resolve-site! resolve (if (<= 1 (:kind e) 4) (str "()" desc) desc)))
         nil))))
 
 (defn- bad-class
@@ -965,7 +987,8 @@
                 argv (popn! (count args))]
             (case bsm-name
               "makeConcatWithConstants"
-              (let [recipe (:value (cp (first (:args bsm))))
+              (let [_ (resolve-bsm-args! cls resolve (:args bsm))
+                    recipe (:value (cp (first (:args bsm))))
                     ;; a code-unit vector (a lone surrogate) is quoted, being evaluated
                     lit #(if (vector? %) (str "'" (str-lit %)) (str-lit (str %)))
                     consts (map #(lit (:value (cp %))) (rest (:args bsm)))
@@ -982,7 +1005,8 @@
                               args argv)]
                 (push! (sx "jconcat" (lit recipe) (apply sx "list" conv) (apply sx "list" consts)) "A"))
               "bootstrap" ; java.lang.runtime.ObjectMethods: record toString/equals/hashCode
-              (let [[_rec names-idx & getters] (:args bsm)
+              (let [_ (resolve-bsm-args! cls resolve (:args bsm))
+                    [_rec names-idx & getters] (:args bsm)
                     fields (for [g getters :let [{:keys [class name desc]} (cp (:ref-idx (cp g)))]]
                              (sx "list" (str-lit name) (str ((:field-index resolve) class name)) (str-lit desc)))
                     rec-class (:name (cp (first (:args bsm))))
@@ -991,13 +1015,15 @@
                               (str "(list " (str/join " " fields) ")") argv)
                        (desc->t ret)))
               ("metafactory" "altMetafactory")
-              (push! (lambda-expr ctx name ret args argv bsm) "A")
+              (do (resolve-bsm-args! cls resolve (:args bsm))
+                  (push! (lambda-expr ctx name ret args argv bsm) "A"))
               ;; java.lang.runtime.SwitchBootstraps: pattern switches on a
               ;; reference (an object or an array) whose labels handles.ss
               ;; matches; a primitive selector or label runs for real
               ("typeSwitch" "enumSwitch")
               (if-let [labels (when (#{\L \[} (first (first args))) (switch-labels cls (= bsm-name "enumSwitch") (:args bsm)))]
-                (push! (sx "jswitch-index" (first argv) (second argv) labels) "I")
+                (do (resolve-bsm-args! cls resolve (:args bsm))
+                    (push! (sx "jswitch-index" (first argv) (second argv) labels) "I"))
                 (push! (apply sx (at pc "indy-call") (str "'" (sym (str *method-tag* "@" pc))) (str-lit this-class)
                               (str "'" (sx (const-datum cls (:ref-idx bsm))
                                            (apply sx (map #(const-datum cls %) (:args bsm)))))
