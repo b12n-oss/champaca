@@ -6,6 +6,8 @@
 - **JDK 25, with `JAVA_HOME` set.** Champaca doesn't run a JVM. It reads the JDK's classes out of its runtime image, `$JAVA_HOME/lib/modules`, and compiles them itself, so it needs only that, plus `javac` if you want to compile Java of your own. It's tested with OpenJDK 25.0.2 (the build from jdk.java.net) on macOS and Linux. GraalVM CE 25.0.1, Temurin 25.0.4.1 on macOS and a `jlink`-built runtime compressed with `--compress zip-6` passed earlier, smaller versions of the suite and haven't been run against today's.
 - **babashka**, for the `bb` tasks in this repo.
 
+The JDK is needed where a program is built and developed. A machine that only runs it can do without one: `bb bundle` packs the slice of the JDK a program needs, champaca built into a native binary and a warmed cache into a directory that runs anywhere on the same OS and architecture ([app-bundles](app-bundles.md)).
+
 Inside this repo, `bb jolt` builds the jolt commit pinned in `deps.edn` and `bb test` prefers it. That's optional; [performance](performance.md#the-pinned-jolt) explains why the pin exists.
 
 ## The first call

@@ -13,6 +13,9 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
 | `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `bb test` and `bb libs` set it |
 | `CHAMPACA_CACHE=off` | ignores the startup cache ([performance](performance.md)) |
+| `CHAMPACA_CACHE_DIR=<dir>` | puts the startup cache there instead of `~/.cache/champaca` ([performance](performance.md)) |
+| `CHAMPACA_BUNDLE=<dir>` | marks a run as an app bundle's: the cache key hashes the runtime image's index instead of its mtime, and class path entries inside the directory are named relative to it, so a moved bundle keeps its cache; the bundle's launcher sets it ([app-bundles](app-bundles.md)) |
+| `CHAMPACA_CLASSPATH=<entries>` | the class path `init!` uses when it's given no `:classpath`, separated as a class path is; a `--jolt` bundle's launcher sets it ([app-bundles](app-bundles.md)) |
 | `CHAMPACA_LINES=all` | keeps line numbers for the frames of classes from jars and of classes a loader of the program's own defines, not just for classes from a class directory, at about the memory their code takes ([performance](performance.md#memory)); `off` drops them for your directory classes too. Part of the cache key |
 | `CHAMPACA_CALL_CACHE=off` | chooses the overload again on every call ([performance](performance.md#the-call-site-cache)) |
 
