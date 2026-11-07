@@ -904,6 +904,10 @@
                        ;; is read from
                        _ (doseq [d (fs/list-dir dir)
                                  :let [n (fs/file-name d)]]
+                           ;; a run killed in bb test's test/bundlecache rows leaves
+                           ;; read-only directories (r-x), which no delete gets through
+                           (when (or (str/starts-with? n "wt-") (str/starts-with? n "cache-"))
+                             (shell {:continue true :out :string :err :string} "chmod" "-R" "u+w" (str d)))
                            (when (str/starts-with? n "wt-")
                              (shell {:continue true :out :string :err :string} "git" "worktree" "remove" "--force" (str d)))
                            (when (or (str/starts-with? n "wt-") (str/starts-with? n "cache-"))
