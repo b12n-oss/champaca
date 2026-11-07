@@ -1,0 +1,7 @@
+exit 1
+calling
+--- stderr
+java.lang.IllegalStateException: boom 1
+	at UpcallThrow.target(UpcallThrow.java:11)
+	at UpcallThrow.main(UpcallThrow.java:21)
+Unrecoverable uncaught exception encountered. The VM will now exit

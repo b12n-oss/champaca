@@ -1943,14 +1943,17 @@
 (defn- frame-info
   "[file line module hidden] for cname.mname desc at bytecode pc, with \"\"
   and -1 where unknown (pc -1 is a frame whose pc wasn't recorded), hidden
-  1 for a method the JVM leaves out of traces."
+  1 for a method the JVM leaves out of traces: one marked @Hidden, or any
+  method of a hidden class (ClassFileParser marks them all), whose name is
+  Name/0x<n> here (no identifier starts with a digit)."
   [cname mname desc pc]
   (let [{:keys [source module lines hidden]} (frame-class cname)
         table (get lines (str mname desc))
         line (if (and (seq table) (>= pc 0))
                (or (some (fn [[start l]] (when (<= start pc) l)) (rseq table)) -1)
                -1)]
-    [(or source "") line (or module "") (if (contains? hidden (str mname desc)) 1 0)]))
+    [(or source "") line (or module "")
+     (if (or (contains? hidden (str mname desc)) (str/includes? cname "/0x")) 1 0)]))
 
 (def ^:private translator-sources
   ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"])

@@ -208,43 +208,58 @@
 
 (define (varargs-flag? meta) (fxpositive? (fxlogand (caddr meta) #x80)))
 
+;; the member a direct handle (a find*/unreflect* result) was made from:
+;; (declaring class . method entry), or 'field; VarHandles.exceptionTypes
+;; reads it, as the JDK's reads a DirectMethodHandle's MemberName
+(define mh-members (make-weak-eq-hashtable))
+(define (member-mh mh member) (eq-hashtable-set! mh-members mh member) mh)
+
 (define (static-mh c name desc)
   (let ([hit (find-method c name desc)])
     (unless (and hit (static-flag? (caddr (cdr hit)))) (no-such-method c name desc "invokeStatic"))
     (let* ([dc (jclass-cname (car hit))] [key (string-append name desc)])
       (let ([sym (method-sym dc key)])
-        (make-mh desc (lambda xs (jinit dc) (apply (top-level-value sym) xs)) #f (varargs-flag? (cdr hit)))))))
+        (member-mh (make-mh desc (lambda xs (jinit dc) (apply (top-level-value sym) xs)) #f (varargs-flag? (cdr hit)))
+                   hit)))))
 
 (define (virtual-mh c name desc)
   (let ([hit (find-method c name desc)])
     (unless (and hit (not (static-flag? (caddr (cdr hit))))) (no-such-method c name desc "invokeVirtual"))
     (let ([key (string-append name desc)] [dc (jclass-cname (car hit))] [flags (caddr (cdr hit))])
-      (make-mh (string-append "(" (cname->desc (jclass-cname c)) (substring desc 1 (string-length desc)))
-               ;; findVirtual on a private method is its own, as on the JVM,
-               ;; and a package-private one is selected by run-time package
-               (lambda (o . xs) (apply (virtual-target o dc key flags) o xs)) #f (varargs-flag? (cdr hit))))))
+      (member-mh
+       (make-mh (string-append "(" (cname->desc (jclass-cname c)) (substring desc 1 (string-length desc)))
+                ;; findVirtual on a private method is its own, as on the JVM,
+                ;; and a package-private one is selected by run-time package
+                (lambda (o . xs) (apply (virtual-target o dc key flags) o xs)) #f (varargs-flag? (cdr hit)))
+       hit))))
 
 (define (special-mh c name desc caller)
   (let ([hit (find-method c name desc)])
     (unless hit (no-such-method c name desc "invokeSpecial"))
     (let ([dc (jclass-cname (car hit))] [key (string-append name desc)])
-      (make-mh (string-append "(" (cname->desc (jclass-cname caller)) (substring desc 1 (string-length desc)))
-               (let ([sym (method-sym dc key)]) (lambda xs (apply (top-level-value sym) xs)))
-               #f (varargs-flag? (cdr hit))))))
+      (member-mh
+       (make-mh (string-append "(" (cname->desc (jclass-cname caller)) (substring desc 1 (string-length desc)))
+                (let ([sym (method-sym dc key)]) (lambda xs (apply (top-level-value sym) xs)))
+                #f (varargs-flag? (cdr hit)))
+       hit))))
 
 (define (constructor-mh c desc)
   (let* ([cname (jclass-cname c)]
          [m (find (lambda (m) (and (string=? (car m) "<init>") (string=? (cadr m) desc))) (meta-methods c))])
     (unless m (no-such-method c "<init>" desc "newInvokeSpecial"))
     (let ([sym (method-sym cname (string-append "<init>" desc))])
-      (make-mh (args->desc (desc-args desc) (cname->desc cname))
-               (lambda xs (jinit cname) (let ([o (jnew cname)]) (apply (top-level-value sym) o xs) o))
-               #f (varargs-flag? m)))))
+      (member-mh
+       (make-mh (args->desc (desc-args desc) (cname->desc cname))
+                (lambda xs (jinit cname) (let ([o (jnew cname)]) (apply (top-level-value sym) o xs) o))
+                #f (varargs-flag? m))
+       (cons c m)))))
 
 ;; getter or setter on field fname of c; static? from the lookup kind
 ;; lookup: the Lookup asking (find*Getter/Setter), whose setters refuse a
 ;; final field, or #f (unreflect, a method handle constant)
 (define (field-mh c fname type static? setter? . lookup)
+  (member-mh (field-mh* c fname type static? setter? lookup) 'field))
+(define (field-mh* c fname type static? setter? lookup)
   (let ([hit (resolve-field c fname type static? setter? (pair? lookup) (and (pair? lookup) (car lookup)))])
     (let* ([dc (jclass-cname (car hit))] [desc (cadr (cdr hit))]
            [recv (cname->desc (jclass-cname c))])
@@ -260,6 +275,17 @@
                          (lambda (o v) (vector-set! (jobj-slots (nn (jcheckcast o cn))) i v)) #f)
                 (make-mh (args->desc (list recv) desc)
                          (lambda (o) (vector-ref (jobj-slots (nn (jcheckcast o cn))) i)) #f)))))))
+
+;; a handle's checked exceptions as VarHandles.exceptionTypes answers them:
+;; a direct handle's member's Exceptions (none for a field), null for any
+;; other handle (unknown), so Linker.upcallStub refuses a target declaring
+;; one and a VarHandle filter adapts only when it can't tell
+(define-override! "java/lang/invoke/VarHandles.exceptionTypes(Ljava/lang/invoke/MethodHandle;)[Ljava/lang/Class;"
+  (lambda (mh)
+    (let ([m (eq-hashtable-ref mh-members (nn mh) #f)])
+      (cond [(not m) #f]
+            [(eq? m 'field) (make-jarr "Ljava/lang/Class;" (vector))]
+            [else (with-loader-of (jmirror (car m)) (lambda () (exception-mirrors (cdr m))))]))))
 
 (define mh-lookup-class "java/lang/invoke/MethodHandles$Lookup")
 (define (def-lookup name desc proc) (define-override! (string-append mh-lookup-class "." name desc) proc))
@@ -383,6 +409,14 @@
 (def-mhs "dropArguments" (string-append "(Ljava/lang/invoke/MethodHandle;ILjava/util/List;)" mh-ret)
   (lambda (mh pos lst)
     (drop-arguments mh pos (map mirror->desc (vector->list (jarr-vec ((jvirt (nn lst) "toArray()[Ljava/lang/Object;") lst)))))))
+;; the same handle when it returns void already, as the JDK's
+(def-mhs "dropReturn" (string-append "(Ljava/lang/invoke/MethodHandle;)" mh-ret)
+  (lambda (mh)
+    (let ([info (mh-info-of mh)])
+      (if (string=? (mh-info-ret info) "V")
+          mh
+          (let ([p (mh-info-proc info)])
+            (make-mh (args->desc (mh-info-args info) "V") (lambda xs (apply p xs) (void)) #f))))))
 (def-mhs "filterReturnValue" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)" mh-ret)
   (lambda (target filter)
     (let* ([ti (mh-info-of target)] [fi (mh-info-of filter)] [tp (mh-info-proc ti)] [fp (mh-info-proc fi)])

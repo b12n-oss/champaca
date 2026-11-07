@@ -1,0 +1,29 @@
+int: 42
+long: 10000000005
+double: 5.0
+float: 2.5
+boolean: false
+byte: 98
+short: -300
+address: true
+void: 1
+called in a loop: 285
+mixed: 6
+qsort: [1, 2, 3, 5, 7, 9]
+reentrant: 10
+lambda target: 101
+stub is native, size 0: true 0 true
+wrong type: java.lang.IllegalArgumentException: Wrong method handle type: (int)int
+checked exception: java.lang.IllegalArgumentException: Target handle may throw exceptions: [class java.lang.Exception]
+struct argument, 8 bytes: 34
+struct argument, four doubles: 30.0
+struct argument, 24 bytes: 1605
+struct result, 8 bytes: 708
+struct result, two longs: 8991
+struct result, three floats: 376.5
+struct result, four doubles: 20.0
+struct result, char and double: 65.5
+struct result, 24 bytes: 33
+upcalls from four threads: 998000 4000
+upcalls from a C thread: 7 17 [Thread-0 main daemon=true listed=true, Thread-1 main daemon=true listed=true, Thread-1 main daemon=true listed=true] one Thread per C thread true, alive once it ends falsefalse
+closed arena: false

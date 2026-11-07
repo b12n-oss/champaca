@@ -455,7 +455,10 @@
                                (if cap (cons r (errno)) r)))]
                      ;; the GIL is handed off only when another Java thread
                      ;; could want it while the call runs in C
-                     [r+e (if (or critical? (null? java-live-threads)) (call) (ffi-released call))]
+                     ;; (or a thread C started, through an upcall stub)
+                     [r+e (if (or critical? (and (null? java-live-threads) (fx= (hashtable-size upcall-codes) 0)))
+                              (call)
+                              (ffi-released call))]
                      [r (if cap (car r+e) r+e)])
                 (when cap (set-int cap (cdr r+e)))
                 (for-each (lambda (s+t)
@@ -489,3 +492,188 @@
   '("jdk/internal/foreign/abi/aarch64/macos/MacOsAArch64Linker"
     "jdk/internal/foreign/abi/aarch64/linux/LinuxAArch64Linker"
     "jdk/internal/foreign/abi/x64/sysv/SysVx64Linker"))
+
+;; --- upcalls ------------------------------------------------------------------------
+;; Linker.upcallStub runs the JDK's own Java: the checks, then the platform
+;; linker's arrangeUpcall and UpcallLinker.makeFactory, which wrap the target
+;; in the bindings for the calling sequence (a segment from an address, a
+;; struct from its registers, an escaping exception through
+;; SharedUtils.handleUncaughtException, which ends the VM) and leave a handle
+;; that takes and returns primitives in the order the ABI passes them, an
+;; address as a long. makeUpcallStub turns that handle into a C function: a
+;; Chez foreign-callable of the same primitive types, its code object locked
+;; so the collector neither moves nor frees it, its entry point the stub.
+;; UpcallStubs.makeUpcall ties the stub to the arena, whose close frees it
+;; (freeUpcallStub0). __collect_safe, since a downcall that may upcall runs
+;; collect-safe too (ffi-maker), and the callable reactivates the thread.
+(define upcall-codes (make-eqv-hashtable))   ; entry point -> locked code
+(define upcall-makers (make-hashtable equal-hash equal?))
+(define (upcall-maker types ret)
+  (let ([key (cons types ret)])
+    (or (hashtable-ref upcall-makers key #f)
+        (let ([m (ffi-eval `(lambda (p) (foreign-callable __collect_safe p ,types ,ret)))])
+          (hashtable-set! upcall-makers key m)
+          m))))
+;; Java code needs the GIL. An upcall on the thread that holds it (the
+;; downcall kept it) runs as it is; one from inside a downcall that gave it up
+;; takes it back for the call and gives it up after, as the downcall left it.
+(define (upcall-take! s)
+  (jthread-state-tid-set! s (get-thread-id))
+  (self s)
+  (with-mutex gil (gil-wait! s (lambda () #t) #f))
+  (gil-restore! s))
+(define (upcall-give! s)
+  (gil-save! s)
+  (with-mutex gil
+    (set! gil-owner #f)
+    (condition-broadcast gil-cv)))
+
+;; A thread C started gets one java.lang.Thread for its life, as HotSpot
+;; attaches it (AttachCurrentThreadAsDaemon): Thread-N in group main, a
+;; daemon, live and listed until the C thread ends, when a pthread key's
+;; destructor ends it through Thread.exit. Chez makes each upcall from such a
+;; thread a new Chez thread, so its state is found by pthread_self; the table
+;; is read and written under the gil mutex.
+(define upcall-threads (make-eqv-hashtable))   ; pthread_self -> jthread-state
+(define upcall-key #f)
+(define upcall-key-code #f)
+(define (upcall-thread-ended! value)
+  (let* ([p (thread-pthread-self)]
+         [s (with-mutex gil
+              (let ([s (hashtable-ref upcall-threads p #f)])
+                (hashtable-delete! upcall-threads p)
+                s))])
+    (when s
+      (upcall-take! s)
+      (let ([t (jthread-state-jthread s)])
+        (guard (e [(java-halt? e) (exit-process (java-halt-status e))])
+          (thread-terminated! t (lambda () (set! java-live-threads (remq t java-live-threads))))))
+      (upcall-give! s))))
+;; the key, made once; pthread_key_t is an unsigned long on macOS, an
+;; unsigned int on glibc
+(define (upcall-key!)
+  (or upcall-key
+      (let ([code (foreign-callable __collect_safe upcall-thread-ended! (uptr) void)]
+            [buf (foreign-alloc 8)])
+        (lock-object code)
+        (foreign-set! 'unsigned-64 buf 0 0)
+        (unless (fx= ((foreign-procedure "pthread_key_create" (uptr uptr) int) buf (foreign-callable-entry-point code)) 0)
+          (foreign-free buf)
+          (jthrow "java/lang/InternalError" "champaca: pthread_key_create failed for an upcall thread"))
+        (set! upcall-key-code code)
+        (set! upcall-key (foreign-ref (if natives-macos? 'unsigned-64 'unsigned-32) buf 0))
+        (foreign-free buf)
+        upcall-key)))
+(define (upcall-attach! p)
+  (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id) 0)])
+    (upcall-take! s)   ; the GIL serializes making the key
+    (let ([t (jnew "java/lang/Thread")])
+      (jthread-state-jthread-set! s t)
+      (set! current-jthread t)
+      (eq-hashtable-set! jthread-states t s)
+      ;; this == currentThread(): the constructor's attaching case, so no
+      ;; parent; a null name is Thread-N
+      ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;)V") t main-group #f)
+      ((jvirt t "setDaemon(Z)V") t 1)
+      (note-native-thread! t)
+      (thread-alive! t #t)
+      (set! java-live-threads (cons t java-live-threads))
+      (set! threads-started (fx+ threads-started 1))
+      (set! threads-peak (fxmax threads-peak (fx+ 1 (length java-live-threads)))))
+    (with-mutex gil (hashtable-set! upcall-threads p s))
+    ((foreign-procedure "pthread_setspecific" (uptr uptr) int) (upcall-key!) 1)
+    s))
+(define (upcall-run thunk)
+  (let* ([s0 (self)] [known (and s0 (eqv? (jthread-state-tid s0) (get-thread-id)))])
+    (cond
+     [(and known (eq? gil-owner s0)) (thunk)]
+     [known
+      ;; a raise (System.exit's java-halt) leaves with the GIL held, back
+      ;; into the Java code below the downcall
+      (upcall-take! s0)
+      (let ([r (thunk)]) (upcall-give! s0) r)]
+     [else
+      (let* ([p (thread-pthread-self)]
+             [s (with-mutex gil (hashtable-ref upcall-threads p #f))]
+             [s (if s (begin (upcall-take! s) s) (upcall-attach! p))])
+        ;; nothing Java runs below: System.exit ends the process here, as on
+        ;; a thread Java started
+        (let ([r (guard (e [(java-halt? e) (exit-process (java-halt-status e))]) (thunk))])
+          (upcall-give! s)
+          r))])))
+(defnative "jdk/internal/foreign/abi/UpcallLinker.registerNatives()V" () (void))
+(defnative "jdk/internal/foreign/abi/UpcallStubs.registerNatives()V" () (void))
+;; A struct result: the bindings hand the stub the address to put it at as
+;; the handle's first argument. When the struct comes back in registers
+;; (needs-return-buffer), that is a buffer holding each return register's
+;; value in CallRegs.retRegs order, an integer register's slot 8 bytes and a
+;; vector register's 16 (BindingSpecializer, typeSize); the callable's result
+;; is then a struct of one 8-byte field per register, integer-64 or double,
+;; which Chez classifies to the same registers on both ABIs (a float is a
+;; double's low bits, as an s register is a d register's), and each slot's
+;; first 8 bytes are copied into it. A struct returned in memory comes in x8
+;; on arm64, which only a (& ftype) result reads: Chez passes that pointer on
+;; as the callable's first argument (s/arm64.ss indirect-result?), so any
+;; ftype too big for registers stands in for the real one. On x86_64 the
+;; pointer is the first argument in rdi, an ordinary uptr.
+(define (vm-storage-type st) (jslot st (jfield-index "jdk/internal/foreign/abi/VMStorage" "type")))
+(define (vm-storage-index st) (jslot st (jfield-index "jdk/internal/foreign/abi/VMStorage" "indexOrOffset")))
+(define (call-regs conv field)
+  (vector->list (jarr-vec (jslot conv (jfield-index "jdk/internal/foreign/abi/UpcallLinker$CallRegs" field)))))
+(define upcall-reg-ftypes (make-hashtable equal-hash equal?))
+(define (upcall-reg-ftype kinds)   ; kinds: 'int or 'vec per return register
+  (or (hashtable-ref upcall-reg-ftypes kinds #f)
+      (let ([name (string->symbol (format "champaca-ffi-regs-~a" (hashtable-size upcall-reg-ftypes)))])
+        (ffi-eval `(define-ftype ,name
+                     (struct ,@(map (lambda (k i) `[,(string->symbol (format "r~a" i)) ,(if (eq? k 'int) 'integer-64 'double)])
+                                    kinds (iota (length kinds))))))
+        (hashtable-set! upcall-reg-ftypes kinds name)
+        name)))
+(define upcall-memory-ftype #f)
+(define (upcall-memory-ftype!)
+  (or upcall-memory-ftype
+      (begin
+        (ffi-eval '(define-ftype champaca-ffi-in-memory (struct [a integer-64] [b integer-64] [c integer-64])))
+        (set! upcall-memory-ftype 'champaca-ffi-in-memory)
+        upcall-memory-ftype)))
+;; StorageType.INTEGER and VECTOR are 0 and 1 on both architectures
+(define (upcall-stub-proc info conv needs-return-buffer return-buffer-size)
+  (let* ([proc (mh-info-proc info)] [args (mh-info-args info)] [ret (mh-info-ret info)]
+         [arg-regs (call-regs conv "argRegs")]
+         [run (lambda (p) (lambda xs (upcall-run (lambda () (apply p xs)))))])
+    (cond
+     [(eqv? needs-return-buffer 1)
+      (let* ([kinds (map (lambda (st) (if (fx= (vm-storage-type st) 0) 'int 'vec)) (call-regs conv "retRegs"))]
+             [offsets (let loop ([ks kinds] [off 0] [acc '()])
+                        (if (null? ks) (reverse acc) (loop (cdr ks) (+ off (if (eq? (car ks) 'int) 8 16)) (cons off acc))))]
+             [size return-buffer-size])
+        (unless (and (pair? kinds) (= (+ (car (last-pair offsets)) (if (eq? (car (last-pair kinds)) 'int) 8 16)) size)
+                     (for-all (lambda (st) (memv (vm-storage-type st) '(0 1))) (call-regs conv "retRegs")))
+          (jthrow "java/lang/UnsupportedOperationException"
+                  (format "champaca: an upcall's return registers don't match its ~a-byte return buffer" size)))
+        (values (map ffi-type (cdr args)) `(& ,(upcall-reg-ftype kinds))
+                (run (lambda (rp . xs)
+                       (let ([buf (foreign-alloc size)] [to (ftype-pointer-address rp)])
+                         (do ([i 0 (fx+ i 8)]) ((>= i size)) (foreign-set! 'integer-64 buf i 0))
+                         (apply proc buf xs)
+                         (for-each (lambda (off i) (foreign-set! 'integer-64 to (fx* i 8) (foreign-ref 'integer-64 buf off)))
+                                   offsets (iota (length offsets)))
+                         (foreign-free buf))))))]
+     [(and (memq (machine-type) '(arm64osx tarm64osx arm64le tarm64le)) (pair? arg-regs)
+           (fx= (vm-storage-type (car arg-regs)) 0) (fx= (vm-storage-index (car arg-regs)) 8))
+      (values (map ffi-type (cdr args)) `(& ,(upcall-memory-ftype!))
+              (run (lambda (rp . xs) (apply proc (ftype-pointer-address rp) xs) (void))))]
+     [else (values (map ffi-type args) (ffi-type ret) (run proc))])))
+(defnative "jdk/internal/foreign/abi/UpcallLinker.makeUpcallStub(Ljava/lang/invoke/MethodHandle;Ljdk/internal/foreign/abi/ABIDescriptor;Ljdk/internal/foreign/abi/UpcallLinker$CallRegs;ZJ)J"
+  (mh abi conv needs-return-buffer return-buffer-size)
+  (let-values ([(types ret p) (upcall-stub-proc (mh-info-of mh) conv needs-return-buffer return-buffer-size)])
+    (let ([code ((upcall-maker types ret) p)])
+      (lock-object code)
+      (let ([entry (foreign-callable-entry-point code)])
+        (hashtable-set! upcall-codes entry code)
+        entry))))
+(defnative "jdk/internal/foreign/abi/UpcallStubs.freeUpcallStub0(J)Z" (addr)
+  (let ([code (hashtable-ref upcall-codes addr #f)])
+    (if code
+        (begin (unlock-object code) (hashtable-delete! upcall-codes addr) 1)
+        0)))

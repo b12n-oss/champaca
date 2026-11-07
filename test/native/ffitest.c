@@ -2,7 +2,10 @@
 // (cc -shared). Structs of each kind the ABIs pass differently by value:
 // in integer registers, as floats or doubles (HFAs), through memory when
 // larger than 16 bytes, padded, nested, unions, and on the stack after the
-// registers run out.
+// registers run out. The ffi_apply_* functions call a function pointer
+// they're given: UpcallCheck's upcalls.
+#include <stdbool.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <string.h>
@@ -53,3 +56,44 @@ float f1_mix(int a, int b, int c, int d, int e, int f, int g, int h, double i, d
 int chars_short(int a, int b, int c, int d, int e, int f, int g, int h, char p, char q, char r, short s) { return p * 1000 + q * 100 + r * 10 + s; }
 void *minus_one(void) { return (void *) -1; }
 float h3_pair(int a, int b, int c, int d, int e, int f, int g, int h, double i, double j, double k, double l, double m, double n, double o, double p, F3 x, F3 y) { return x.a + x.b + x.c + y.a * 100 + y.b * 10 + y.c; }
+
+/* upcalls: C calling a function pointer it was given (UpcallCheck) */
+int ffi_apply_int(int (*f)(int), int x) { return f(x); }
+long long ffi_apply_long(long long (*f)(long long), long long x) { return f(x); }
+double ffi_apply_double2(double (*f)(double, double), double a, double b) { return f(a, b); }
+float ffi_apply_float(float (*f)(float), float x) { return f(x); }
+bool ffi_apply_bool(bool (*f)(bool), bool x) { return f(x); }
+char ffi_apply_char(char (*f)(char), char x) { return f(x); }
+short ffi_apply_short(short (*f)(short), short x) { return f(x); }
+void *ffi_apply_ptr(void *(*f)(void *), void *p) { return f(p); }
+void ffi_call_void(void (*f)(void)) { f(); }
+int ffi_call_n(int (*f)(int), int n) { int s = 0; for (int i = 0; i < n; i++) s += f(i); return s; }
+long long ffi_apply_mixed(long long (*f)(int, double, long long), int a, double b, long long c) { return f(a, b, c); }
+
+/* struct arguments and results through upcalls */
+int ffi_apply_p2(int (*f)(P2), int x, int y) { P2 p = { x, y }; return f(p); }
+double ffi_apply_d4(double (*f)(D4), double a) { D4 d = { a, a + 1, a + 2, a + 3 }; return f(d); }
+int ffi_apply_l3(int64_t (*f)(L3), int64_t a) { L3 l = { a, a * 2, a * 3 }; return (int) f(l); }
+int ffi_make_p2(P2 (*f)(int), int x) { P2 p = f(x); return p.x * 100 + p.y; }
+double ffi_make_d4(D4 (*f)(double), double a) { D4 d = f(a); return d.a + d.b + d.c + d.d; }
+int64_t ffi_make_l3(L3 (*f)(int64_t), int64_t a) { L3 l = f(a); return l.a + l.b + l.c; }
+typedef struct { int64_t a, b; } L2;
+double ffi_make_f3(F3 (*f)(float), float a) { F3 r = f(a); return r.a + r.b * 10 + r.c * 100; }
+double ffi_make_cd(CD (*f)(char), char c) { CD r = f(c); return r.c + r.d; }
+int64_t ffi_make_l2(L2 (*f)(int64_t), int64_t a) { L2 r = f(a); return r.a * 1000 + r.b; }
+
+/* an upcall from a thread C made, not Java */
+struct ffi_thread_call { int (*f)(int); int x; int times; int r; };
+static void *ffi_thread_main(void *p) {
+  struct ffi_thread_call *c = p;
+  for (int i = 0; i < c->times; i++) c->r += c->f(c->x + i);
+  return NULL;
+}
+/* f called times times, with x, x+1, ..., on one new thread: the sum */
+int ffi_apply_in_thread(int (*f)(int), int x, int times) {
+  struct ffi_thread_call c = { f, x, times, 0 };
+  pthread_t t;
+  if (pthread_create(&t, NULL, ffi_thread_main, &c) != 0) return -1;
+  pthread_join(t, NULL);
+  return c.r;
+}

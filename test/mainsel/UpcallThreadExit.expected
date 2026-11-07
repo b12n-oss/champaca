@@ -1,0 +1,5 @@
+exit 4
+calling
+exiting from Thread-1
+hook ran
+--- stderr
