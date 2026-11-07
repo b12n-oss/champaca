@@ -191,14 +191,18 @@
     (when (and jolt-ns (= "champaca" (or name (str/lower-case (last (str/split jolt-ns #"[.$]"))))))
       (die "--jolt NS's binary would be named champaca, which lib/ keeps for champaca.main; give --name"))
     (when (fs/exists? out) (die out "exists; give a new directory"))
+    (when-not (or (fs/executable? jolt) (fs/which jolt))
+      (die "no jolt at" jolt "(bb jolt builds the pinned one; $JOLT names another)"))
     (let [entries (cp-entries cp)
-          name (or name (str/lower-case (last (str/split (or main jolt-ns) #"[.$]"))))
-          mods (modules entries add-modules locales)
-          _ (println "bundle: modules" (str/join "," mods))
-          _ (let [o (str (fs/absolutize out))]
+          ;; -o inside a class path directory would copy itself; canonical
+          ;; paths, so a symlink to the directory doesn't slip past
+          _ (let [o (str (fs/path (fs/canonicalize (fs/parent (fs/absolutize out))) (fs/file-name out)))]
               (doseq [e entries :when (fs/directory? e)]
                 (when (or (= o e) (str/starts-with? o (str e "/")))
                   (die "-o" out "is inside the class path directory" e))))
+          name (or name (str/lower-case (last (str/split (or main jolt-ns) #"[.$]"))))
+          mods (modules entries add-modules locales)
+          _ (println "bundle: modules" (str/join "," mods))
           _ (fs/create-dirs out)
           _ (vreset! made {:out (str (fs/canonicalize out))})
           out (str (fs/canonicalize out))
@@ -248,12 +252,15 @@
   (let [made (volatile! nil)]
     (try
       (build! repo jolt made args)
-      (catch clojure.lang.ExceptionInfo e
-        (when-not (::die (ex-data e)) (throw e))
-        (binding [*out* *err*] (println "bundle:" (ex-message e)))
+      (catch Throwable e
+        ;; any failure: the partial OUT goes, so a rerun with the same -o works
         (when-let [o (:out @made)]
           (binding [*out* *err*] (println "bundle: removing the partial" o))
           (fs/delete-tree o))
+        (when-not (::die (ex-data e))
+          (some-> (:scratch @made) fs/delete-tree)
+          (throw e))
+        (binding [*out* *err*] (println "bundle:" (ex-message e)))
         ;; System/exit skips the finally below
         (some-> (:scratch @made) fs/delete-tree)
         (System/exit 2))

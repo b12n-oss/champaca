@@ -95,7 +95,7 @@ The compiled JDK code leaves out Chez's inspector information, which halves `boo
 
 ## Ship it without a JDK
 
-`bb bundle` makes a directory that runs a Java program, or a jolt program that calls Java, on a machine with no JDK: a `jlink` image of the modules the class path needs with the VM and native libraries removed, champaca built into a native binary by `jolt build`, the class path, a launcher and a startup cache warmed at build time (`--train` runs the program once for it). The charset and locale modules go in whatever `jdeps` says, so output matches HotSpot's. The cache moves with the directory. Jackson's probe makes a 128 MB bundle that, copied elsewhere and run with no `JAVA_HOME`, takes about 0.9 s and compiles nothing ([app-bundles](docs/guide/app-bundles.md)).
+`bb bundle` makes a directory that runs a Java program, or a jolt program that calls Java, on a machine with no JDK: a `jlink` image of the modules the class path needs with the VM and native libraries removed, champaca built into a native binary by `jolt build`, the class path, a launcher and a startup cache warmed at build time (`--train` runs the program once for it). The charset and locale modules always go in, since `jdeps` can't see them, so formatted output matches HotSpot's. The cache moves with the directory. Jackson's probe makes a 128 MB bundle that, copied elsewhere and run with no `JAVA_HOME`, takes about 0.9 s and compiles nothing ([app-bundles](docs/guide/app-bundles.md)).
 
 ```sh
 bb bundle -o out/jack -cp target/classes:lib/jackson-databind.jar:lib/jackson-core.jar:lib/jackson-annotations.jar -m Jack --train

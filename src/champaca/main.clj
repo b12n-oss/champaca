@@ -2114,7 +2114,7 @@
   (let [dir (:cache-dir @state)
         ;; a cache that can't be written (an installed bundle's) is read
         ;; only: this run's code isn't kept, and the run doesn't fail for it
-        dir (when (and dir (.canWrite dir)) dir)
+        dir (when (and dir (not (:cache-unusable @state)) (not (cache-read-only? dir))) dir)
         units (some-> (:recording @state) deref)]
     (when (and dir (.isDirectory dir) (seq units))
       (vreset! (:recording @state) [])
@@ -2287,7 +2287,11 @@
         ;; cold write there
         _ (when (and dir (not hit?) (cache-read-only? dir))
             (cache-unusable! dir "holds no boot for this run"))]
-    (when dir (swap! state assoc :recording (volatile! []) :cache-dir dir))
+    ;; nothing is recorded for a cache this run doesn't use (it can't be
+    ;; written and didn't load): its save would write into it anyway when
+    ;; only the root is read-only
+    (when (and dir (not (:cache-unusable @state)))
+      (swap! state assoc :recording (volatile! []) :cache-dir dir))
     (run! ensure-loaded! ["java/lang/Object" "java/lang/String" "java/lang/Class"])
     (let [status (s/eval-string
                   "(run-guarded (lambda ()

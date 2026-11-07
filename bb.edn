@@ -498,7 +498,7 @@
                             _ (writable! bc)
                             _ (fs/delete-tree bc)]
                         (try
-                          (let [a (str bc "/a") b (str bc "/b") c (str bc "/c") e (str bc "/e")
+                          (let [a (str bc "/a") b (str bc "/b") c (str bc "/c") e (str bc "/e") g (str bc "/g")
                                 jh (System/getenv "JAVA_HOME")
                                 _ (shell (str jh "/bin/jlink") "--add-modules" "java.base" "--strip-debug" "--no-header-files"
                                          "--no-man-pages" "--output" (str a "/runtime"))
@@ -529,26 +529,36 @@
                                 _ (fs/copy-tree a c)
                                 _ (doseq [k (fs/list-dir (str c "/cache")) :when (fs/directory? k)]
                                     (spit (str k "/state.img") "damaged"))
+                                ;; and one whose root alone is read-only, its key dir
+                                ;; writable: nothing may go in it either (it once got
+                                ;; a partial state.img, and the next run crashed)
+                                _ (fs/copy-tree c g)
                                 _ (fs/copy-tree (str a "/runtime") (str e "/runtime"))
                                 _ (fs/copy-tree (str a "/app") (str e "/app"))
                                 _ (fs/create-dirs (str e "/cache"))
                                 before (files b)
                                 damaged-before (files c)
+                                g-before (into {} (for [f (files g)] [f (fs/size f)]))
                                 _ (doseq [d [b c e]] (read-only! (str d "/cache")))
+                                _ (fs/set-posix-file-permissions (str g "/cache") "r-xr-xr-x")
                                 enforced (not (fs/writable? (str b "/cache")))
                                 r3 (when enforced (run b "BundleOther"))
                                 r4 (when enforced (run c "BundleMain"))
                                 r5 (when enforced (run e "BundleMain"))
-                                _ (doseq [d [b c e]] (writable! (str d "/cache")))
+                                r6 (when enforced (run g "BundleMain"))
+                                r7 (when enforced (run g "BundleMain"))
+                                g-after (into {} (for [f (files g)] [f (fs/size f)]))
+                                _ (doseq [d [b c e g]] (writable! (str d "/cache")))
                                 said (fn [r] (str/includes? (str (:err r)) "can't be written"))
                                 ro-ok (or (not enforced)
                                           (and (good r3 "BundleOther") (= before (files b)) (not (said r3))
                                                (good r4 "BundleMain") (= damaged-before (files c)) (said r4)
-                                               (good r5 "BundleMain") (empty? (files e)) (said r5)))]
+                                               (good r5 "BundleMain") (empty? (files e)) (said r5)
+                                               (good r6 "BundleMain") (good r7 "BundleMain") (said r7) (= g-before g-after)))]
                             (println (cond (not enforced) "SKIP" ro-ok "PASS" :else "FAIL")
                                      "a read-only bundle cache runs, writes nothing, and says why when it can't use what it holds (test/bundlecache)"
                                      (if (and enforced (not ro-ok))
-                                       (str/join "\n  " (cons "" (for [[l r] [["new class" r3] ["damaged" r4] ["empty root" r5]]]
+                                       (str/join "\n  " (cons "" (for [[l r] [["new class" r3] ["damaged" r4] ["empty root" r5] ["root only, first" r6] ["root only, second" r7]]]
                                                                    (str l ": " (:exit r) " " (first (str/split-lines (str (:err r))))))))
                                        ""))
                             (concat (when-not moved-ok ["bundle cache moved"]) (when-not ro-ok ["bundle cache read-only"])))
