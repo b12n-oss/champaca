@@ -381,12 +381,24 @@
     (.update c bs 0 (count bs))
     [(.getValue c) (count bs)]))
 
+(def ^:private bundle-root
+  "CHAMPACA_BUNDLE's canonical path: the directory an app bundle ships in,
+  whose classpath entries the library cache names relative to it, so the
+  bundle's cache still answers once the directory is copied elsewhere."
+  (delay (some-> (env "CHAMPACA_BUNDLE") not-empty io/file .getCanonicalPath)))
+
 (defn- jar-path
   "A classpath entry's canonical path, a jar's or a directory's, which names
-  its file in the library cache. Asked once per entry."
+  its file in the library cache, or for an entry inside the bundle
+  (bundle-root) bundle:<path relative to it>. Asked once per entry."
   [entry]
   (or (get-in @state [:jar-paths entry])
-      (let [p (.getCanonicalPath (io/file (str entry)))]
+      (let [c (.getCanonicalPath (io/file (str entry)))
+            root @bundle-root
+            p (cond (nil? root) c
+                    (= c root) "bundle:"
+                    (str/starts-with? c (str root "/")) (str "bundle:" (subs c (inc (count root))))
+                    :else c)]
         (swap! state assoc-in [:jar-paths entry] p)
         p)))
 
@@ -1839,10 +1851,45 @@
                -1)]
     [(or source "") line (or module "") (if (contains? hidden (str mname desc)) 1 0)]))
 
+(def ^:private translator-sources
+  ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"])
+
+(defmacro ^:private built-sources-hash
+  "The translator sources' hash where this namespace is compiled: what a
+  `jolt build` binary, which carries no source of a namespace compiled into
+  it, keys its cache with."
+  []
+  (hash (apply str (map #(some-> (io/resource %) slurp) translator-sources))))
+
 (defn- translator-fingerprint []
-  (hash (apply str (map #(slurp (io/resource %))
-                        (concat runtime-files
-                                ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"])))))
+  (let [rt (apply str (map #(slurp (io/resource %)) runtime-files))]
+    ;; a built binary carries the runtime files and not the translator's
+    ;; sources, which io/resource could still find in a checkout beside it
+    ;; (a deps.edn in the current directory): the hash taken at build time.
+    ;; Elsewhere the sources themselves, since jolt caches a compiled
+    ;; namespace by its own text, so main.clj's macro alone could miss a
+    ;; codegen change
+    (if (jolt.host/embedded-resource? "champaca/runtime.ss")
+      (hash [rt (built-sources-hash)])
+      (hash (apply str rt (map #(slurp (io/resource %)) translator-sources))))))
+
+(defn- image-index-crc
+  "CRC-32 of the runtime image's index: it changes with any resource added,
+  removed, moved or resized, which a JDK build of another version or a
+  different jlink selection does."
+  []
+  (let [idx ^bytes (:index (jdk-image)) c (java.util.zip.CRC32.)]
+    (.update c idx 0 (count idx))
+    (.getValue c)))
+
+(defn- writable-root?
+  "Whether the cache root can be written: it does, or the nearest directory
+  above it that exists does (mkdirs makes the rest)."
+  [^java.io.File f]
+  (loop [f (.getAbsoluteFile f)]
+    (cond (nil? f) false
+          (.exists f) (.canWrite f)
+          :else (recur (.getParentFile f)))))
 
 (defn- cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
@@ -1851,9 +1898,17 @@
           ;; CHAMPACA_BT changes the generated code (shadow-stack wrappers that
           ;; hide frame names from getCallerClass), so it gets its own cache;
           ;; CHAMPACA_LINES decides which code carries inspector information
-          key (hash [(when (.exists release) (slurp release)) (.length modules) (.lastModified modules)
-                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])]
-      (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff))))))
+          ;; the image's index (every resource's name, offset and sizes) by
+          ;; CRC-32, not the file's mtime, so a runtime copied elsewhere with
+          ;; its cache (an app bundle) keeps the key
+          key (hash [(when (.exists release) (slurp release)) (.length modules) (image-index-crc)
+                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])
+          d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))]
+      ;; a cache root that can't be written (an installed bundle's) gives no
+      ;; cache when it has none for this key, rather than failing the boot
+      ;; that would write one; a key directory that is there is read
+      (when (or (.isDirectory d) (writable-root? (cache-root)))
+        d))))
 
 (defn- packed-entry
   "A class map as edn text in UTF-8 bytes (pack), without bytecode: methods
@@ -2023,6 +2078,9 @@
   later save, and the code already ran, so only cache coverage is lost."
   []
   (let [dir (:cache-dir @state)
+        ;; a cache that can't be written (an installed bundle's) is read
+        ;; only: this run's code isn't kept, and the run doesn't fail for it
+        dir (when (and dir (.canWrite dir)) dir)
         units (some-> (:recording @state) deref)]
     (when (and dir (.isDirectory dir) (seq units))
       (vreset! (:recording @state) [])
