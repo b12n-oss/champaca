@@ -474,7 +474,8 @@
     (when (str/starts-with? e "L") (subs e 1 (dec (count e))))))
 
 (defn- resolve-type!
-  "Loads the class a checkcast or instanceof names: an array's element class
+  "Loads the class a checkcast or instanceof names, or a call site's
+  descriptor (resolve-site!): an array's element class
   (JVMS 5.4.3.1), whose absence is the array's (NoClassDefFoundError names the
   array, as HotSpot's). A class the element needs, such as its superclass,
   stays the one named."
@@ -485,6 +486,21 @@
            (catch Exception e
              (if (= el (missing-class e)) (throw (ex-info (str "class not found: " c) {:class c})) (throw e)))))
     ((:ensure-loaded resolve) c)))
+
+(defn- resolve-site!
+  "Resolves the classes a signature-polymorphic call's or an invokedynamic's
+  descriptor names, parameters in order then the return type, as HotSpot
+  resolves the call site's MethodType when it links the instruction: a
+  missing one makes the instruction throw NoClassDefFoundError (an array's
+  names the array), whatever the receiver. A plain invoke's descriptor isn't
+  resolved, there or here."
+  [resolve desc]
+  (let [{:keys [args ret]} (parse-desc desc)]
+    (doseq [t (conj args ret)]
+      (case (first t)
+        \L (resolve-type! resolve (subs t 1 (dec (count t))))
+        \[ (resolve-type! resolve t)
+        nil))))
 
 (defn- bad-class
   "[class message] of a class whose file isn't a class file (main.clj's
@@ -894,10 +910,12 @@
                          (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
                          ;; signature-polymorphic: the runtime adapts the call site's
                          ;; types to the access mode's, as asType would
-                         (apply sx (at pc "vh-call") (sx "nn-at" recv (site pc)) (str-lit name) (str-lit desc) argv)
+                         (do (resolve-site! resolve desc)
+                             (apply sx (at pc "vh-call") (sx "nn-at" recv (site pc)) (str-lit name) (str-lit desc) argv))
                          (and (= class "java/lang/invoke/MethodHandle") (#{"invokeExact" "invoke"} name))
-                         (apply sx (at pc (if (= name "invokeExact") "mh-call-exact" "mh-call"))
-                                (sx "nn-at" recv (site pc)) (str-lit desc) argv)
+                         (do (resolve-site! resolve desc)
+                             (apply sx (at pc (if (= name "invokeExact") "mh-call-exact" "mh-call"))
+                                    (sx "nn-at" recv (site pc)) (str-lit desc) argv))
                          :else
                          (do (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
                              ;; a method nothing declares is NoSuchMethodError
@@ -934,6 +952,7 @@
                   :else (push! call (desc->t ret))))
           :invokedynamic
           (let [{:keys [bsm-idx name desc]} (cp a0)
+                _ (resolve-site! resolve desc)
                 {:keys [args ret]} (parse-desc desc)
                 bsm (nth (:bootstrap-methods cls) bsm-idx)
                 bsm-ref (cp (:ref-idx (cp (:ref-idx bsm))))
