@@ -344,19 +344,63 @@
 
 (declare bytes-fp jar-path)
 
+(defn- app-roots
+  "The application loader's resolved modules from files (java -p), as
+  {name jar-or-directory}, read from the boot layer once it exists
+  (natives.ss app-module-roots); {} before."
+  []
+  (cond
+    (:app-roots @state) (:app-roots @state)
+    ;; no module path: none, and no Java asked (a class path program pays
+    ;; nothing)
+    (not (some (fn [[sfx _]] (= sfx "path")) (:module-options @state))) {}
+    ;; reading the layer loads JDK classes, whose lookups land back here:
+    ;; they need no module roots
+    (:app-roots-busy @state) {}
+    :else
+    (let [r (try (swap! state assoc :app-roots-busy true)
+                 (s/call "app-module-roots")
+                 (finally (swap! state dissoc :app-roots-busy)))]
+      (if (true? r)
+        {}
+        (let [m (into {} (for [l (str/split-lines (str r)) :when (seq l)
+                               :let [[n path] (str/split l #"\t" 2)]]
+                           [n (str/replace path #"/$" "")]))]
+          (swap! state assoc :app-roots m)
+          m)))))
+
 (defn- lookup-entries
-  "The entries a class is looked for in: the class path, then the module
-  path's roots (module-path-roots), which hold only a class whose package a
-  boot layer module holds, as the JVM resolves the module path's modules into
-  the layer only as roots (-m, --add-modules) or their dependences."
+  "Where a class is looked for, as the JVM's application loader does: a
+  class in a package of one of its named modules (java -p) only in that
+  module's jar or directory, so the class path can't add to the module's
+  packages; any other class on the class path. A module the boot layer
+  didn't resolve is never looked in."
   [cname]
-  (let [n (count (:module-path-root-set @state))
-        cp (:classpath @state)]
-    ;; the roots are the lookup's tail: dropping them leaves the class path,
-    ;; which may name the same directory (java -cp mods/app -p mods)
-    (if (and (pos? n) (outside-boot-layer? cname))
-      (take (- (count cp) (:module-path-root-count @state)) cp)
-      cp)))
+  (let [m (layer-module cname)
+        root (when (string? m) (get (app-roots) m))]
+    (if root [root] (:classpath @state))))
+
+(defn- resource-entries
+  "Where a resource is looked for, as BuiltinClassLoader.findResource: in a
+  named application module's package, that module alone (natives.ss hides it
+  unless the package is open); in a JDK module's package, the class path
+  after the image; any other (a root resource, META-INF/...) in the resolved
+  modules, then the class path."
+  [path]
+  (let [m (layer-module path)
+        roots (app-roots)]
+    (cond (and (string? m) (get roots m)) [(get roots m)]
+          (string? m) (:classpath @state)
+          :else (concat (map roots (sort (keys roots))) (:classpath @state)))))
+
+(defn- entry-bytes
+  "path's bytes in one class path entry or module root, or nil."
+  [entry path]
+  (if (jar-entry? entry)
+    (read-entry (jar entry) path)
+    (let [f (io/file entry path)]
+      (when (.isFile f)
+        (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String [])))))))
 
 (defn- find-user-class
   "[entry bytes held?] from the first classpath entry that has cname, the
@@ -464,13 +508,27 @@
       (jdk-class-bytes cname)))
 
 (defn- user-resource-bytes [path]
-  (some (fn [entry]
-          (if (jar-entry? entry)
-            (read-entry (jar entry) path)
-            (let [f (io/file entry path)]
-              (when (.isFile f)
-                (java.nio.file.Files/readAllBytes (java.nio.file.Paths/get (str f) (into-array String [])))))))
-        (:classpath @state)))
+  (some #(entry-bytes % path) (resource-entries path)))
+
+(declare plain-resource-path? entry-url encode-path)
+
+(defn- module-resource-bytes
+  "A named application module's resource from its own jar or directory, any
+  path (Module.getResourceAsStream, Class.getResource* of its classes), or
+  nil for any other module."
+  [mn path]
+  (when-let [root (get (app-roots) mn)]
+    (when (plain-resource-path? path) (entry-bytes root path))))
+
+(defn- module-resource-url
+  "The URL of a named application module's resource in its own jar or
+  directory, as module-resource-bytes finds it, or nil."
+  [mn path]
+  (when (module-resource-bytes mn path)
+    (let [root (get (app-roots) mn)]
+      (if (jar-entry? root)
+        (str "jar:" (entry-url root) "!/" (encode-path path))
+        (str (entry-url root) (encode-path path))))))
 
 (defn- jdk-resource-bytes
   "path from the module holding its directory. The image counts a directory
@@ -615,7 +673,7 @@
   loader answers. JDK resources have none: their jrt: URLs need the runtime
   image."
   [path]
-  (for [entry (when (or (= path "") (plain-resource-path? path)) (:classpath @state))
+  (for [entry (when (or (= path "") (plain-resource-path? path)) (resource-entries path))
         :let [jar? (jar-entry? entry)]
         :when (if jar?
                 (and (not= path "") (some? (.getEntry (jar entry) path)))
@@ -2342,6 +2400,9 @@
   (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false))
           ;; URLs as one string, one per line
           (fn [path] (str/join "\n" (resource-urls path))))
+  ;; java -p's named modules, each from its own jar or directory
+  (s/call "set-module-resource-hook!" (fn [mn path] (or (module-resource-bytes mn path) false)))
+  (s/call "set-module-resource-url-hook!" (fn [mn path] (or (module-resource-url mn path) false)))
   (s/call "set-jpackage-hook!" package-info)
   ;; the JDK's resources alone, for the platform loader
   (s/call "set-jdk-resource-hook!" (fn [path] (or (when (plain-resource-path? path) (jdk-resource-bytes path)) false)))
@@ -2495,35 +2556,6 @@
                  (conj seen k) (conj out e))))
       out)))
 
-(defn- module-path-value
-  "The module path given (-p, --module-path), the last one, or nil."
-  []
-  (some (fn [[sfx v]] (when (= sfx "path") v)) (rseq (vec (:module-options @state)))))
-
-(defn- module-path-roots
-  "Where the module path's classes are, as ModulePath finds modules: an
-  entry that is a jar or an exploded module (a directory with
-  module-info.class) is one, and a directory of them gives each jar and
-  exploded module in it, by name. They join the class lookup after the class
-  path, never java.class.path; a class from one is in its named module when
-  the boot layer resolved it (named-app-module), and outside the layer is
-  not found (refuse-outside-layer!)."
-  [mp]
-  (if-not mp
-    []
-    (vec (for [e (str/split mp (re-pattern (java.util.regex.Pattern/quote java.io.File/pathSeparator)))
-               :when (seq e)
-               :let [f (io/file e)]
-               r (cond (.isFile f) [(.getPath f)]
-                       (.isFile (io/file f "module-info.class")) [(.getPath f)]
-                       (.isDirectory f)
-                       (for [c (sort-by #(.getName ^java.io.File %) (.listFiles f))
-                             :when (or (and (.isFile c) (str/ends-with? (.getName c) ".jar"))
-                                       (.isFile (io/file c "module-info.class")))]
-                         (.getPath c))
-                       :else [])]
-           r))))
-
 (defn init!
   "Boot the JDK once (System.initPhase1 and what precedes it) with the given
   user classpath dirs. Returns 0 on success; a second call is a no-op.
@@ -2539,10 +2571,7 @@
            (when (seq add-modules)
              (swap! state update :module-options (fnil conj [])
                     ["addmods" (if (string? add-modules) add-modules (str/join "," add-modules))]))
-           (let [roots (module-path-roots (module-path-value))]
-             (swap! state assoc :module-path-root-set (set roots) :module-path-root-count (count roots)
-                    :classpath (into (with-manifest-class-paths (vec classpath)) roots)))
-           (swap! state assoc
+           (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
                   ;; java.class.path is what was given, as the JVM's launcher has it
                   :classpath-given (vec classpath))
            (let [status (boot!)] (swap! state assoc :boot-status status) status)))))
@@ -2689,7 +2718,9 @@
               (recur (nnext argv) (update opts :module-options conj ["path" mp]))
               (launcher-error (str "Error: " a " requires module path specification")))
             (str/starts-with? a "--module-path=")
-            (recur (rest argv) (update opts :module-options conj ["path" (subs a 14)]))
+            (if (= "" (subs a 14))
+              (launcher-error "Error: --module-path= requires modules to be specified")
+              (recur (rest argv) (update opts :module-options conj ["path" (subs a 14)])))
             ;; -m module[/class] ends the options, as -jar does: what follows
             ;; is the program's; jdk.module.main makes the module a root
             (#{"-m" "--module"} a)
@@ -2697,7 +2728,9 @@
               (assoc opts :module m :argv (nnext argv))
               (launcher-error (str "Error: " a " requires module name")))
             (str/starts-with? a "--module=")
-            (assoc opts :module (subs a 9) :argv (rest argv))
+            (if (= "" (subs a 9))
+              (launcher-error "Error: --module= requires module name")
+              (assoc opts :module (subs a 9) :argv (rest argv)))
             (assertion-directive a) (recur (rest argv) (update opts :assertions conj (assertion-directive a)))
             (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
             (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))

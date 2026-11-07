@@ -11,5 +11,6 @@ args []
 class resource null | module resource null | loader resource null | loader url false
 own class a resource in com.greet | own module a resource in com.greet | own root top-level, not in a package | own loader null
 app top top-level, not in a package | loader top top-level, not in a package
+greet module top top-level, not in a package | META-INF META-INF of com.greet | app's own /top.txt null
 service hi from a provider in com.greet
 --- stderr

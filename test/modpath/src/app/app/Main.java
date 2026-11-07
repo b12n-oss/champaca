@@ -24,6 +24,12 @@ public class Main {
         System.out.println(com.greet.Hi.own());
         System.out.println("app top " + read(com.greet.Hi.class.getResourceAsStream("/top.txt"))
             + " | loader top " + read(ClassLoader.getSystemClassLoader().getResourceAsStream("top.txt")));
+        // a module's resources in no package are its own to read through it;
+        // a class of app looks in app alone, which has neither
+        Module g = com.greet.Hi.class.getModule();
+        System.out.println("greet module top " + read(g.getResourceAsStream("top.txt"))
+            + " | META-INF " + read(g.getResourceAsStream("META-INF/greet.txt"))
+            + " | app's own /top.txt " + read(Main.class.getResourceAsStream("/top.txt")));
         for (Object s : java.util.ServiceLoader.load(java.util.function.Supplier.class))
             System.out.println("service " + ((java.util.function.Supplier<?>) s).get());
     }

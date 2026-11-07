@@ -1,0 +1,4 @@
+exit 0
+Plain named false
+java.lang.NoClassDefFoundError: com/greet/Greeter cause java.lang.ClassNotFoundException: com.greet.Greeter
+--- stderr

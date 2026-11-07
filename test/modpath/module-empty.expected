@@ -1,0 +1,3 @@
+exit 1
+--- stderr
+Error: --module= requires module name
