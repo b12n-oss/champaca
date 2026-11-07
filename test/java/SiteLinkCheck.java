@@ -7,7 +7,7 @@ import java.util.function.*;
 // that instruction, whatever the receiver; an array names the array. An
 // invokedynamic's bootstrap static arguments (a lambda's types and method, a
 // record's getters, a switch's class labels) resolve after the site's type. The
-// two classes at the end are deleted before anything uses them.
+// classes at the end are deleted before anything uses them.
 public class SiteLinkCheck {
     interface Callable { Object call() throws Throwable; }
     static void t(String label, Callable r) {
@@ -47,13 +47,20 @@ public class SiteLinkCheck {
     static Object recEquals() { SiteRec r = new SiteRec(null, 1); return r.equals(r); }
     static Object sw(Object o) { return switch (o) { case SiteGone g -> "gone"; case String s -> "str"; default -> "other"; }; }
     static Object swArr(Object o) { return switch (o) { case SiteGone[] g -> "gone"; case String s -> "str"; default -> "other"; }; }
+    // SiteMemberLambda (test/gen/SiteMemberGen.java): the implementation
+    // method doesn't exist, and its descriptor names SiteGone
+    static Object absentMember() throws Throwable {
+        try { return Class.forName("SiteMemberLambda").getMethod("make").invoke(null); }
+        catch (java.lang.reflect.InvocationTargetException e) { throw e.getCause(); }
+    }
+    static Object marker() { Runnable r = (Runnable & SiteMarker) () -> {}; return "made"; }
     static Object notTaken(boolean b) throws Throwable { if (b) take.invoke((SiteGone) null); return "skipped"; }
     public static void main(String[] a) throws Throwable {
         var L = MethodHandles.lookup();
         take = L.findStatic(SiteLinkCheck.class, "take", MethodType.methodType(void.class, Object.class));
         give = L.findStatic(SiteLinkCheck.class, "give", MethodType.methodType(Object.class));
         vh = L.findStaticVarHandle(SiteLinkCheck.class, "fld", Object.class);
-        for (String n : new String[] {"SiteGone", "SiteGone2"})
+        for (String n : new String[] {"SiteGone", "SiteGone2", "SiteMarker"})
             new java.io.File(SiteLinkCheck.class.getResource(n + ".class").toURI()).delete();
         t("not taken", () -> notTaken(false));
         t("invoke arg", SiteLinkCheck::invokeArg);
@@ -75,6 +82,8 @@ public class SiteLinkCheck {
         t("lambda result type", SiteLinkCheck::samRet);
         t("method reference", SiteLinkCheck::methodRef);
         t("instantiated type only", SiteLinkCheck::instantiated);
+        t("absent implementation method", SiteLinkCheck::absentMember);
+        t("marker interface", SiteLinkCheck::marker);
         t("record toString", SiteLinkCheck::recString);
         t("record equals", SiteLinkCheck::recEquals);
         t("type switch", () -> sw("q"));
@@ -83,3 +92,4 @@ public class SiteLinkCheck {
 }
 class SiteGone {}
 class SiteGone2 {}
+interface SiteMarker {}

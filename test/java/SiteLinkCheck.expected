@@ -18,6 +18,8 @@ lambda arg type: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.Clas
 lambda result type: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 method reference: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 instantiated type only: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
+absent implementation method: java.lang.NoSuchMethodError: 'java.lang.Object SiteMemberLambda.absent(SiteGone)'
+marker interface: java.lang.NoClassDefFoundError: SiteMarker | cause java.lang.ClassNotFoundException: SiteMarker
 record toString: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 record equals: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 type switch: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone

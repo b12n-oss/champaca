@@ -210,6 +210,8 @@
                     _ (shell "java test/gen/SealedGen.java target/classes")
                     ;; CondyCheck's CondyUser: entries ldc'd from several methods, bootstraps that fail
                     _ (shell "java test/gen/CondyGen.java target/classes")
+                    ;; SiteLinkCheck's SiteMemberLambda: a lambda whose implementation method doesn't exist
+                    _ (shell "java test/gen/SiteMemberGen.java target/classes")
                     ;; LongOpsCheck's LongCmp: lcmp returned, kept in a local, branched on in another block
                     _ (shell "java test/gen/LongCmpGen.java target/classes")
                     ;; ArrayLoopCheck's ArrayLoopShapes: arrays moved by dup_x1 and swap in a loop

@@ -509,19 +509,28 @@
   getters, a pattern switch's class labels), in order, as HotSpot resolves
   them when it links the invokedynamic, after the call site's type
   (resolve-site!). A Class constant is the class, a MethodType its
-  descriptor's classes, a MethodHandle its member's class then descriptor (a
-  field's type). Dynamic constants resolve when they run (handles.ss)."
+  descriptor's classes, a MethodHandle its member's class, the method itself,
+  then its descriptor (a field's type; a missing field isn't checked). Dynamic
+  constants resolve when they run (handles.ss)."
   [cls resolve arg-idxs]
   (let [cp (:cp cls)]
     (doseq [i arg-idxs :let [e (cp i)]]
       (case (:tag e)
         :class (resolve-type! resolve (:name e))
         :methodtype (resolve-site! resolve (:desc e))
-        :methodhandle (let [{:keys [class desc]} (cp (:ref-idx e))]
+        :methodhandle (let [{:keys [class name desc]} (cp (:ref-idx e))
+                            kind (int (:kind e))]
                         (resolve-type! resolve class)
+                        ;; the member before its descriptor (JVMS 5.4.3.5): a
+                        ;; method that isn't there is NoSuchMethodError, whatever
+                        ;; its descriptor names
+                        (case kind
+                          (5 9) ((:check-virtual resolve) class name desc)
+                          (6 7 8) ((:resolve-method resolve) class name desc)
+                          nil)
                         ;; kinds 1-4 are field accessors: the descriptor is the
                         ;; field's type, read as a method returning it
-                        (resolve-site! resolve (if (<= 1 (:kind e) 4) (str "()" desc) desc)))
+                        (resolve-site! resolve (if (<= 1 kind 4) (str "()" desc) desc)))
         nil))))
 
 (defn- bad-class
