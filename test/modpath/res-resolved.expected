@@ -1,7 +1,12 @@
 exit 0
 com/greet/msg.txt: stream null | url false | all 0 | system false | systems 0 | class false
 com/greet/open/o.txt: stream an opened resource | url true | all 1 | system true | systems 1 | class true
+com/greet/open/extra.txt: stream null | url false | all 0 | system false | systems 0 | class false
 top.txt: stream top-level, not in a package | url true | all 1 | system true | systems 1 | class true
 META-INF/greet.txt: stream META-INF of com.greet | url true | all 1 | system true | systems 1 | class true
 com/greet/Greeter.class: stream true | url true | all 1 | system true | systems 1 | class true
+com/greet/: stream true | url true | all 1 | system true | systems 1 | class true
+com/greet/open: stream true | url true | all 1 | system true | systems 1 | class true
+platform forName com.greet
+boot forName ClassNotFoundException
 --- stderr

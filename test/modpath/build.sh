@@ -5,6 +5,7 @@
 #   mods2/greet.jar, mods2/app.jar (app with ModuleMainClass app.Main)
 #   cp/ (cp.Probe naming com.greet.Greeter, cp.Res asking for its resources)
 #   split/ (com.greet.Extra on the class path, in com.greet's package)
+#   mods3/ (eight modules with META-INF/x, and om requiring them)
 # Used by bb test and record.sh. JAVA_HOME's javac and jar, else PATH's.
 set -e
 src="$(cd "$(dirname "$0")" && pwd)/src"
@@ -23,4 +24,16 @@ cp "$out/mods/greet.jar" "$out/mods2/greet.jar"
 "${bin}javac" -cp "$out/tmp/com.greet" -d "$out/cp" "$src/cp/cp/Probe.java" "$src/cp/cp/Res.java"
 # split/: com.greet.Extra, a class path class in com.greet's package
 "${bin}javac" -d "$out/split" "$src/split/com/greet/Extra.java"
+mkdir -p "$out/split/com/greet/open" && cp "$src/split/com/greet/open/extra.txt" "$out/split/com/greet/open/"
+# mods3/: eight modules each with META-INF/x holding its name, and om, which
+# requires them all
+mkdir -p "$out/mods3"
+for m in alpha zeta mid bb.cc q1 r2 omega kappa; do
+  mkdir -p "$out/tmp/$m/META-INF" && printf 'module %s { }\n' "$m" > "$out/tmp/$m.java.src"
+  mkdir -p "$out/tmp/src-$m" && cp "$out/tmp/$m.java.src" "$out/tmp/src-$m/module-info.java"
+  "${bin}javac" -Xlint:-module -d "$out/tmp/$m" "$out/tmp/src-$m/module-info.java"
+  printf '%s\n' "$m" > "$out/tmp/$m/META-INF/x"
+  "${bin}jar" cf "$out/mods3/$m.jar" -C "$out/tmp/$m" .
+done
+"${bin}javac" -p "$out/mods3" -d "$out/mods3/om" "$src/om/module-info.java" "$src/om/om/Main.java"
 rm -rf "$out/tmp"

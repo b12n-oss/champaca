@@ -1,7 +1,12 @@
 exit 0
 com/greet/msg.txt: stream null | url false | all 0 | system false | systems 0 | class false
 com/greet/open/o.txt: stream null | url false | all 0 | system false | systems 0 | class false
+com/greet/open/extra.txt: stream null | url false | all 0 | system false | systems 0 | class false
 top.txt: stream null | url false | all 0 | system false | systems 0 | class false
 META-INF/greet.txt: stream null | url false | all 0 | system false | systems 0 | class false
 com/greet/Greeter.class: stream false | url false | all 0 | system false | systems 0 | class false
+com/greet/: stream false | url false | all 0 | system false | systems 0 | class false
+com/greet/open: stream false | url false | all 0 | system false | systems 0 | class false
+platform forName ClassNotFoundException
+boot forName ClassNotFoundException
 --- stderr

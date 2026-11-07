@@ -2159,24 +2159,14 @@
        (let* ([bv (host-bytevector found)] [n (bytevector-length bv)] [v (make-vector n)])
          (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v i (bytevector-s8-ref bv i)))
          (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v)))))
-;; A resource in a package of a named module the application loader holds
-;; (java -p) is encapsulated, as Resources.canEncapsulate has it: not a
-;; .class file, and in one of the module's packages. The loader finds it only
-;; when the module opens that package to everyone (ClassLoader.getResource
-;; hides it even from the module's own code); a class of the module finds it
-;; through the module, which lets its own code and the modules it's opened to
-;; (Module.getResourceAsStream, caller-sensitive: an override has no frame, so
-;; its caller is the Java code that asked).
-(define (resource-app-module path)
-  (let ([slash (let loop ([i (fx- (string-length path) 1)])
-                 (cond [(fx< i 0) #f] [(char=? (string-ref path i) #\/) i] [else (loop (fx- i 1))]))])
-    (and slash
-         (not (let ([n (string-length path)]) (and (fx>= n 6) (string=? (substring path (fx- n 6) n) ".class"))))
-         (let ([m (hashtable-ref package-modules (substring path 0 slash) #f)])
-           (and m (app-loader) (eq? (module-loader m) (app-loader)) (cons m (slashes->dots (substring path 0 slash))))))))
-(define (loader-hides? path)
-  (let ([mp (resource-app-module path)])
-    (and mp (not (eqv? 1 ((jvirt (car mp) "isOpen(Ljava/lang/String;)Z") (car mp) (jstring (cdr mp))))))))
+;; whether a named application module (java -p) opens slashed package dir to
+;; everyone: the application loader finds a resource of such a package in the
+;; module only then, else on the class path alone (main.clj resource-entries,
+;; as BuiltinClassLoader.findResource); #f for any other package
+(define (app-package-open? dir)
+  (let ([m (hashtable-ref package-modules dir #f)])
+    (and m (app-loader) (eq? (module-loader m) (app-loader))
+         (eqv? 1 ((jvirt m "isOpen(Ljava/lang/String;)Z") m (jstring (slashes->dots dir)))))))
 ;; a class of a named application module looks in its own module alone, as
 ;; Class.getResource* does for a named module: the module answers, for its
 ;; caller (Module.getResourceAsStream: its own code, or a package opened to
@@ -2193,7 +2183,6 @@
 (define (builtin-resource-stream l path)
   (cond
    [(platform-loader? l) (bytes-stream (jdk-resource-hook path))]
-   [(loader-hides? path) #f]
    [else
       (or (resource-stream path)
           (let ([u (first-resource-url path)])
@@ -2265,20 +2254,19 @@
                (and in (begin ((jvirt in "close()V") in)
                               (let ([u (module-resource-url-hook (jstring->scheme (jslot m (jfield-index "java/lang/Module" "name"))) p)])
                                 (and u (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring u))))))))]
-       [else (and (not (loader-hides? p)) (first-resource-url p))]))))
+       [else (first-resource-url p)]))))
 (define-override! "java/lang/ClassLoader.getResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resource this (nn name))
-        (and (not (platform-loader? this)) (not (loader-hides? (jstring->scheme (nn name))))
-             (first-resource-url (jstring->scheme (nn name)))))))
+        (and (not (platform-loader? this)) (first-resource-url (jstring->scheme (nn name)))))))
 (define-override! "java/lang/ClassLoader.getSystemResource(Ljava/lang/String;)Ljava/net/URL;"
-  (lambda (name) (let ([p (jstring->scheme (nn name))]) (and (not (loader-hides? p)) (first-resource-url p)))))
+  (lambda (name) (first-resource-url (jstring->scheme (nn name)))))
 (define-override! "java/lang/ClassLoader.getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
   (lambda (this name)
     (if (own-loader? this)
         (own-get-resources this (nn name))
-        (if (or (platform-loader? this) (loader-hides? (jstring->scheme (nn name))))
+        (if (platform-loader? this)
             (resource-enumeration-of '())
             (resource-enumeration (jstring->scheme (nn name)))))))
 
@@ -2309,7 +2297,7 @@
 (define-override! "java/lang/ClassLoader.getSystemResources(Ljava/lang/String;)Ljava/util/Enumeration;"
   (lambda (name)
     (let ([p (jstring->scheme (nn name))])
-      (if (loader-hides? p) (resource-enumeration-of '()) (resource-enumeration p)))))
+      (resource-enumeration p))))
 
 ;; Class.getPackage: every class here belongs to the boot loader, whose
 ;; packages the JDK finds through a runtime image this runtime doesn't have,
@@ -2492,7 +2480,10 @@
 (define (builtin-loader-sees? this c)
   (let* ([e (element-name c)] [dl (hashtable-ref class-loaders e #f)])
     (cond [dl (eq? dl this)]
-          [(user-class? e) (let ([a (app-loader)]) (and a (eq? this a)))]
+          ;; a class of a named application module (java -p) is the app
+          ;; loader's, and every built-in loader finds it there, as they
+          ;; delegate by package (the boot loader proper doesn't)
+          [(user-class? e) (let ([a (app-loader)]) (and a (or (eq? this a) (and this (named-app-module c) #t))))]
           [(not (in-boot-layer? c)) #f]
           [this #t]
           [else (not (module-loader (class-module c)))])))
@@ -2524,28 +2515,26 @@
       (let ([m (hashtable-ref package-modules (package-dir n) #f)])
         ;; not a module of the application loader's (java -p)
         (and m (not (and (app-loader) (eq? (module-loader m) (app-loader)))) #t))))
-;; the application loader's modules in the boot layer that came from files
-;; (java -p's module path), as main.clj's lookups need them: name, a tab, the
-;; module's jar or exploded directory, a line each, from the layer's own
-;; Configuration, so a module the path held twice is the copy it resolved;
-;; #t before the layer exists
+;; the application loader's modules from files (java -p's module path), as
+;; main.clj's lookups need them: name, a tab, the module's jar or exploded
+;; directory, a line each, in the order the loader itself searches them for
+;; a resource in no package (its nameToModule map's, which
+;; BuiltinClassLoader.findMiscResource walks), so a module the path held twice
+;; is the copy it resolved; #t before the boot layer exists
 (define (app-module-roots)
   (if (not boot-layer-complete)
       #t
-      (let* ([_ (jinit "java/lang/ModuleLayer")]
-             [layer ((method-proc "java/lang/ModuleLayer" "boot()Ljava/lang/ModuleLayer;"))]
-             [cfg ((jvirt layer "configuration()Ljava/lang/module/Configuration;") layer)]
-             [mods ((jvirt cfg "modules()Ljava/util/Set;") cfg)]
-             [arr ((jvirt mods "toArray()[Ljava/lang/Object;") mods)])
+      (let* ([ld (app-loader)]
+             [ntm (jslot ld (jfield-index "jdk/internal/loader/BuiltinClassLoader" "nameToModule"))]
+             [vals ((jvirt ntm "values()Ljava/util/Collection;") ntm)]
+             [arr ((jvirt vals "toArray()[Ljava/lang/Object;") vals)])
         (apply string-append
                (filter values
-                       (map (lambda (rm)
-                              (let* ([name ((jvirt rm "name()Ljava/lang/String;") rm)]
-                                     [ld ((jvirt layer "findLoader(Ljava/lang/String;)Ljava/lang/ClassLoader;") layer name)]
-                                     [ref ((jvirt rm "reference()Ljava/lang/module/ModuleReference;") rm)]
-                                     [loc ((jvirt ref "location()Ljava/util/Optional;") ref)])
-                                (and (eq? ld (app-loader))
-                                     (eqv? 1 ((jvirt loc "isPresent()Z") loc))
+                       (map (lambda (mref)
+                              (let* ([d ((jvirt mref "descriptor()Ljava/lang/module/ModuleDescriptor;") mref)]
+                                     [name ((jvirt d "name()Ljava/lang/String;") d)]
+                                     [loc ((jvirt mref "location()Ljava/util/Optional;") mref)])
+                                (and (eqv? 1 ((jvirt loc "isPresent()Z") loc))
                                      (let ([uri ((jvirt loc "get()Ljava/lang/Object;") loc)])
                                        (and (equal? "file" (jstring->scheme ((jvirt uri "getScheme()Ljava/lang/String;") uri)))
                                             (string-append (jstring->scheme name) "\t"

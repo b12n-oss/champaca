@@ -363,10 +363,12 @@
                  (finally (swap! state dissoc :app-roots-busy)))]
       (if (true? r)
         {}
-        (let [m (into {} (for [l (str/split-lines (str r)) :when (seq l)
+        (let [pairs (vec (for [l (str/split-lines (str r)) :when (seq l)
                                :let [[n path] (str/split l #"\t" 2)]]
-                           [n (str/replace path #"/$" "")]))]
-          (swap! state assoc :app-roots m)
+                           [n (str/replace path #"/$" "")]))
+              m (into {} pairs)]
+          ;; the loader's own order, for resources in no package
+          (swap! state assoc :app-roots m :app-root-order (mapv second pairs))
           m)))))
 
 (defn- lookup-entries
@@ -380,18 +382,39 @@
         root (when (string? m) (get (app-roots) m))]
     (if root [root] (:classpath @state))))
 
+(declare root-directory?)
+
 (defn- resource-entries
   "Where a resource is looked for, as BuiltinClassLoader.findResource: in a
-  named application module's package, that module alone (natives.ss hides it
-  unless the package is open); in a JDK module's package, the class path
-  after the image; any other (a root resource, META-INF/...) in the resolved
-  modules, then the class path."
+  named application module's package, that module when it opens the package
+  or the resource is a class file, then the class path (a closed package's
+  resource is the module's own: the loader goes straight to the class path);
+  in a JDK module's package, the class path after the image; any other (a
+  root resource, META-INF/...) in the resolved modules, then the class path."
   [path]
   (let [m (layer-module path)
-        roots (app-roots)]
-    (cond (and (string? m) (get roots m)) [(get roots m)]
-          (string? m) (:classpath @state)
-          :else (concat (map roots (sort (keys roots))) (:classpath @state)))))
+        roots (app-roots)
+        cp (:classpath @state)]
+    (cond (and (string? m) (get roots m))
+          ;; a class file, a directory, or an opened package's resource is the
+          ;; module's for anyone; a closed package's isn't (findResource's
+          ;; name.endsWith(\".class\") || url ends with / || isOpen)
+          (let [root (get roots m)]
+            (if (or (str/ends-with? path ".class")
+                    (str/ends-with? path "/")
+                    (root-directory? root path)
+                    (true? (s/call "app-package-open?" (subs path 0 (str/last-index-of path "/")))))
+              (cons root cp)
+              cp))
+          (string? m) cp
+          :else (concat (:app-root-order @state) cp))))
+
+(defn- root-directory?
+  "Whether path names a directory in a module's jar or exploded directory."
+  [root path]
+  (if (jar-entry? root)
+      (some? (.getEntry (jar root) (str path "/")))
+      (.isDirectory (io/file root path))))
 
 (defn- entry-bytes
   "path's bytes in one class path entry or module root, or nil."

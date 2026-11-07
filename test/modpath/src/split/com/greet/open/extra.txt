@@ -1,0 +1,1 @@
+class path copy in an opened module package
