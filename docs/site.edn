@@ -7,4 +7,8 @@
  :base-path   "/champaca"
 
  :title       "champaca"
- :description "Java bytecode run natively inside a jolt process, so jolt code can call Java libraries in-process."}
+ :description "Java bytecode run natively inside a jolt process, so jolt code can call Java libraries in-process."
+
+ ;; docs/images, copied to the site's images/; the README's docs/images/...
+ ;; links (right on GitHub) are rewritten to them
+ :asset-dirs ["images"]}
