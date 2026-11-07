@@ -3,7 +3,7 @@ package om;
 import java.io.*;
 import java.net.URL;
 
-// eight resolved modules each holding META-INF/x (its own name): the loader
+// seven resolved modules each holding META-INF/x (its own name): the loader
 // searches them in its own order (BuiltinClassLoader.nameToModule's), so the
 // first match and the list's order are HotSpot's
 public class Main {

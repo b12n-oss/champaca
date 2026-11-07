@@ -1,4 +1,4 @@
 exit 0
 getResource r2
-getResources r2 mid alpha kappa bb.cc zeta q1 omega
+getResources r2 mid alpha kappa bb.cc zeta omega
 --- stderr
