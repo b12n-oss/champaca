@@ -80,7 +80,8 @@
                          ["proxy" "java.lang.reflect.Proxy from jolt, and jolt errors through Java"]
                          ["classes" "real Java classes defined from jolt"]
                          ["preview" "class files compiled with --enable-preview, from jolt"]
-                         ["vector" "the Vector API, with :add-modules, from jolt"]])
+                         ["vector" "the Vector API, with :add-modules, from jolt"]
+                         ["upcalls" "C calling jolt fns through upcall stubs"]])
           ;; test/jar packed into target/lib.jar, which jars, fields,
           ;; serialization and classes put on their classpath
           (defn lib-jar! []

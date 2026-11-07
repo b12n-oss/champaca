@@ -15,6 +15,8 @@ lambda target: 101
 stub is native, size 0: true 0 true
 wrong type: java.lang.IllegalArgumentException: Wrong method handle type: (int)int
 checked exception: java.lang.IllegalArgumentException: Target handle may throw exceptions: [class java.lang.Exception]
+checked exception, through asType to the same type: java.lang.IllegalArgumentException: Target handle may throw exceptions: [class java.lang.Exception]
+dropReturn: (int)void true
 struct argument, 8 bytes: 34
 struct argument, four doubles: 30.0
 struct argument, 24 bytes: 1605

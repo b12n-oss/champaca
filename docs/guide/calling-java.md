@@ -148,6 +148,25 @@ A method without a fn runs its own body when it has one. That covers default met
 
 The proxy belongs to the application class loader, so it can implement interfaces from your classpath as well as the JDK's.
 
+### C calling a jolt fn
+
+`java.lang.foreign` works from jolt, upcalls included. So a C function that takes a function pointer can be handed a jolt fn: wrap the fn as a functional interface, take a method handle on its method, and turn that into a stub with `Linker.upcallStub` (`examples/upcalls.clj`):
+
+```clojure
+(def op (ldk/proxy ["java.util.function.IntUnaryOperator"] {"applyAsInt" (fn [x] (* 2 x))}))
+(def int-t (ldk/get-static "java.lang.Integer" "TYPE"))
+(def mh (-> (ldk/invoke-static "java.lang.invoke.MethodHandles" "publicLookup")
+            (ldk/invoke "findVirtual" (ldk/invoke-static "java.lang.Class" "forName" "java.util.function.IntUnaryOperator")
+                        "applyAsInt" (ldk/invoke-static "java.lang.invoke.MethodType" "methodType" int-t int-t))
+            (ldk/invoke "bindTo" op)))
+(def int-layout (ldk/get-static "java.lang.foreign.ValueLayout" "JAVA_INT"))
+(def stub (ldk/invoke (ldk/invoke-static "java.lang.foreign.Linker" "nativeLinker") "upcallStub"
+                      mh (ldk/invoke-static "java.lang.foreign.FunctionDescriptor" "of" int-layout [int-layout])
+                      (ldk/invoke-static "java.lang.foreign.Arena" "global") []))
+```
+
+`stub` is a `MemorySegment` whose address C can call. Use `publicLookup` here, because `MethodHandles.lookup()` needs a Java caller and throws `IllegalCallerException` when jolt calls it, as it does for a JNI caller on HotSpot. The fn can call Java again, and it can run on a thread C started, which gets a `java.lang.Thread` of its own. Java prints the restricted-method warning for code in the unnamed module, since jolt can't pass `--enable-native-access`.
+
 ## Classes defined from jolt
 
 `define-class` makes a real Java class out of jolt fns. It can extend a class, implement any number of interfaces and have fields, and Java code, reflection and `Class.forName` see an ordinary class of the application loader (`examples/classes.clj`):

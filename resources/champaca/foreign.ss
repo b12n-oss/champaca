@@ -565,7 +565,9 @@
         (foreign-free buf)
         upcall-key)))
 (define (upcall-attach! p)
-  (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id) 0)])
+  ;; depth 1, as any Java thread's: a jolt fn the upcall reaches enters and
+  ;; leaves the GIL re-entrantly (with-gil), which must not give it up
+  (let ([s (make-jthread-state #f '() #f #f 1 (get-thread-id) 0)])
     (upcall-take! s)   ; the GIL serializes making the key
     (let ([t (jnew "java/lang/Thread")])
       (jthread-state-jthread-set! s t)
@@ -593,14 +595,26 @@
       (upcall-take! s0)
       (let ([r (thunk)]) (upcall-give! s0) r)]
      [else
-      (let* ([p (thread-pthread-self)]
-             [s (with-mutex gil (hashtable-ref upcall-threads p #f))]
-             [s (if s (begin (upcall-take! s) s) (upcall-attach! p))])
-        ;; nothing Java runs below: System.exit ends the process here, as on
-        ;; a thread Java started
-        (let ([r (guard (e [(java-halt? e) (exit-process (java-halt-status e))]) (thunk))])
+      ;; nothing Java runs below: System.exit ends the process here, as on
+      ;; a thread Java started; anything else escaping (the JDK's wrapper
+      ;; catches every Throwable, so a champaca error) can't go back to C
+      ;; either, and would leave the GIL with a thread that's gone: report it
+      ;; and end the process
+      (guard (e [(java-halt? e) (exit-process (java-halt-status e))]
+                [#t (upcall-failed e)])
+        (let* ([p (thread-pthread-self)]
+               [s (with-mutex gil (hashtable-ref upcall-threads p #f))]
+               [s (if s (begin (upcall-take! s) s) (upcall-attach! p))]
+               [r (thunk)])
           (upcall-give! s)
           r))])))
+(define (upcall-failed e)
+  (let ([p (current-error-port)])
+    (display "champaca: an upcall on a thread C started failed: " p)
+    (if (condition? e) (display-condition e p) (write e p))
+    (newline p)
+    (flush-output-port p)
+    (exit-process 1)))
 (defnative "jdk/internal/foreign/abi/UpcallLinker.registerNatives()V" () (void))
 (defnative "jdk/internal/foreign/abi/UpcallStubs.registerNatives()V" () (void))
 ;; A struct result: the bindings hand the stub the address to put it at as
@@ -655,7 +669,7 @@
                 (run (lambda (rp . xs)
                        (let ([buf (foreign-alloc size)] [to (ftype-pointer-address rp)])
                          (do ([i 0 (fx+ i 8)]) ((>= i size)) (foreign-set! 'integer-64 buf i 0))
-                         (apply proc buf xs)
+                         (guard (e [#t (foreign-free buf) (raise e)]) (apply proc buf xs))
                          (for-each (lambda (off i) (foreign-set! 'integer-64 to (fx* i 8) (foreign-ref 'integer-64 buf off)))
                                    offsets (iota (length offsets)))
                          (foreign-free buf))))))]

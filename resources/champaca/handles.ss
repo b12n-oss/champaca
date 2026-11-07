@@ -336,6 +336,11 @@
 
 (define (as-type mh mt . loose?)
   (let* ([info (mh-info-of mh)] [desc (mt-desc mt)] [args (desc-args desc)])
+    (if (string=? desc (mh-info-desc info))
+        mh   ; the same type: the handle itself, as the JDK's (a direct one keeps its member)
+        (as-type* mh mt info desc args loose?))))
+(define (as-type* mh mt info desc args loose?)
+  (begin
     (unless (fx= (length args) (length (mh-info-args info))) (wrong-type info (length args)))
     (unless (or (pair? loose?)
                 (and (for-all as-type-ok? args (mh-info-args info))

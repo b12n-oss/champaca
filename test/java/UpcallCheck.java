@@ -131,6 +131,16 @@ public class UpcallCheck {
             });
             row("wrong type", () -> L.upcallStub(mh("twice", MethodType.methodType(int.class, int.class)), FunctionDescriptor.of(JAVA_LONG, JAVA_INT), a));
             row("checked exception", () -> L.upcallStub(mh("throwsChecked", MethodType.methodType(int.class, int.class)), FunctionDescriptor.of(JAVA_INT, JAVA_INT), a));
+            row("checked exception, through asType to the same type", () -> {
+                MethodHandle h = mh("throwsChecked", MethodType.methodType(int.class, int.class));
+                return L.upcallStub(h.asType(h.type()), FunctionDescriptor.of(JAVA_INT, JAVA_INT), a);
+            });
+            row("dropReturn", () -> {
+                MethodHandle d = MethodHandles.dropReturn(mh("twice", MethodType.methodType(int.class, int.class)));
+                d.invokeExact(5);
+                MethodHandle v = mh("bump", MethodType.methodType(void.class));
+                return d.type() + " " + (MethodHandles.dropReturn(v) == v);
+            });
             row("struct argument, 8 bytes", () -> (int) down("ffi_apply_p2", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT))
                 .invokeExact(L.upcallStub(mh1("sumP2", int.class, MemorySegment.class), FunctionDescriptor.of(JAVA_INT, P2), a), 3, 4));
             row("struct argument, four doubles", () -> (double) down("ffi_apply_d4", FunctionDescriptor.of(JAVA_DOUBLE, ADDRESS, JAVA_DOUBLE))
