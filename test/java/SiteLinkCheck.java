@@ -41,6 +41,7 @@ public class SiteLinkCheck {
     static Object samRet() { Supplier<SiteGone> s = () -> null; return "made " + s.get(); }
     static Object methodRef() { Function<Object, SiteGone> f = SiteLinkCheck::conv; return "made"; }
     static SiteGone conv(Object o) { return null; }
+    static Object instantiated() { Function<SiteGone, String> f = Object::toString; return "made"; }
     record SiteRec(SiteGone g, int x) {}
     static Object recString() { return new SiteRec(null, 1).toString(); }
     static Object recEquals() { SiteRec r = new SiteRec(null, 1); return r.equals(r); }
@@ -73,6 +74,7 @@ public class SiteLinkCheck {
         t("lambda arg type", SiteLinkCheck::instOnly);
         t("lambda result type", SiteLinkCheck::samRet);
         t("method reference", SiteLinkCheck::methodRef);
+        t("instantiated type only", SiteLinkCheck::instantiated);
         t("record toString", SiteLinkCheck::recString);
         t("record equals", SiteLinkCheck::recEquals);
         t("type switch", () -> sw("q"));

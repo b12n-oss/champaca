@@ -17,6 +17,7 @@ lambda captured and arg: java.lang.NoClassDefFoundError: SiteGone2 | cause java.
 lambda arg type: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 lambda result type: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 method reference: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
+instantiated type only: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 record toString: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 record equals: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
 type switch: java.lang.NoClassDefFoundError: SiteGone | cause java.lang.ClassNotFoundException: SiteGone
