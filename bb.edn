@@ -499,7 +499,7 @@
                             _ (fs/delete-tree bc)]
                         (try
                           (let [a (str bc "/a") b (str bc "/b") c (str bc "/c") e (str bc "/e") g (str bc "/g")
-                                h (str bc "/h") k (str bc "/k") z (str bc "/z")
+                                h (str bc "/h") k (str bc "/k") z (str bc "/z") q (str bc "/q")
                                 jh (System/getenv "JAVA_HOME")
                                 _ (shell (str jh "/bin/jlink") "--add-modules" "java.base" "--strip-debug" "--no-header-files"
                                          "--no-man-pages" "--output" (str a "/runtime"))
@@ -545,6 +545,9 @@
                                 _ (fs/copy-tree c k)
                                 ;; and one whose cache can't be copied (a file it can't read)
                                 _ (fs/copy-tree a z)
+                                ;; and one whose state.img can't be read: no copy, the
+                                ;; run as the bundle's cache allows (it once crashed)
+                                _ (fs/copy-tree a q)
                                 _ (fs/copy-tree (str a "/runtime") (str e "/runtime"))
                                 _ (fs/copy-tree (str a "/app") (str e "/app"))
                                 _ (fs/create-dirs (str e "/cache"))
@@ -552,8 +555,9 @@
                                 damaged-before (files c)
                                 g-before (into {} (for [f (files g)] [f (fs/size f)]))
                                 _ (doseq [f (fs/glob (str z "/cache") "*/lib/*.img")] (fs/set-posix-file-permissions f "---------"))
-                                _ (doseq [d [b c e h k z]] (read-only! (str d "/cache")))
+                                _ (doseq [d [b c e h k z q]] (read-only! (str d "/cache")))
                                 _ (doseq [f (fs/glob (str z "/cache") "*/lib/*.img")] (fs/set-posix-file-permissions f "---------"))
+                                _ (doseq [f (fs/glob (str q "/cache") "*/state.img")] (fs/set-posix-file-permissions f "---------"))
                                 h-before (files h)
                                 k-before (files k)
                                 _ (fs/set-posix-file-permissions (str g "/cache") "r-xr-xr-x")
@@ -582,6 +586,7 @@
                                 u6 (when enforced (run h "BundleMain" (str bc "/user-h")))
                                 ;; a copy that fails: one line, no temp dir left
                                 u7 (when enforced (run z "BundleMain" (str bc "/user-z")))
+                                u8 (when enforced (run q "BundleMain" (str bc "/user-q")))
                                 copy-lines (fn [r] (count (filter (fn [l] (str/includes? l "couldn't copy")) (str/split-lines (str (:err r))))))
                                 tmps (fn [u] (filter (fn [f] (str/includes? (str f) ".tmp-")) (fs/glob u "**")))
                                 none-compiled (fn [r] (some->> (stats r) (re-find (re-pattern ", 0 methods compiled"))))
@@ -592,8 +597,9 @@
                                                  (= k-before (files k))
                                                  (good u5 "BundleMain") (none-compiled u5)
                                                  (good u6 "BundleMain") (= 2 (count (copies (str bc "/user-h"))))
-                                                 (good u7 "BundleMain") (= 1 (copy-lines u7)) (empty? (tmps (str bc "/user-z")))))
-                                _ (doseq [d [b c e g h k z]] (writable! (str d "/cache")))
+                                                 (good u7 "BundleMain") (= 1 (copy-lines u7)) (empty? (tmps (str bc "/user-z")))
+                                                 (good u8 "BundleMain")))
+                                _ (doseq [d [b c e g h k z q]] (writable! (str d "/cache")))
                                 said (fn [r] (str/includes? (str (:err r)) "can't be written"))
                                 ro-ok (or (not enforced)
                                           (and (good r3 "BundleOther") (= before (files b)) (not (said r3))
@@ -609,7 +615,7 @@
                             (println (cond (not enforced) "SKIP" user-ok "PASS" :else "FAIL")
                                      "a read-only bundle keeps what a run compiles in a user cache: damaged rebuilt once, removed copied again, a reinstall copied apart, a failed copy cleaned up (test/bundlecache)"
                                      (if (and enforced (not user-ok))
-                                       (str/join "\n  " (cons "" (for [[l r] [["first" u1] ["second" u2] ["damaged first" u3] ["damaged second" u4] ["removed" u5] ["reinstall" u6] ["copy fails" u7]]]
+                                       (str/join "\n  " (cons "" (for [[l r] [["first" u1] ["second" u2] ["damaged first" u3] ["damaged second" u4] ["removed" u5] ["reinstall" u6] ["copy fails" u7] ["unreadable seed" u8]]]
                                                                    (str l ": " (:exit r) " " (stats r)))))
                                        ""))
                             (concat (when-not moved-ok ["bundle cache moved"]) (when-not ro-ok ["bundle cache read-only"])

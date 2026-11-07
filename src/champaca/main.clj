@@ -1912,9 +1912,10 @@
   [d why]
   (when-not (:cache-unusable @state)
     (swap! state assoc :cache-unusable true)
-    (binding [*out* *err*]
+    (when-not (:cache-unusable-said @state)
+     (binding [*out* *err*]
       (println (str "champaca: the startup cache at " (.getParent (io/file d)) " can't be written and " why
-                    ", so this run uses none"))))
+                    ", so this run uses none")))))
   nil)
 
 (declare delete-tree! prune-cache-root!)
@@ -1965,13 +1966,18 @@
     (let [r (when-let [base (user-cache-root)]
               (let [h #(format "%08x" (bit-and (hash %) 0xffffffff))
                     root (io/file (.getAbsoluteFile base) (str (h @bundle-root) (h (str/reverse @bundle-root))))
-                    sid (seed-id d)
+                    ;; a seed it can't read (an install's permissions, an I/O
+                    ;; error) has no id: no copy, and the run goes on as the
+                    ;; bundle's own cache allows
+                    sid (try (seed-id d) (catch Exception _ nil))
                     u (io/file root (str (.getName d) "-" (if sid (h sid) "0")))]
                 (if-not (writable-root? root)
-                  (binding [*out* *err*]
-                    (println (str "champaca: the bundle's cache can't be written, nor its user cache at " root
-                                  "; this run keeps nothing it compiles"))
-                    nil)
+                  (do (binding [*out* *err*]
+                        (println (str "champaca: the bundle's cache can't be written, nor its user cache at " root
+                                      "; this run keeps nothing it compiles")))
+                      ;; said: cache-unusable! needn't say it again
+                      (swap! state assoc :cache-unusable-said true)
+                      nil)
                   (let [tmp (io/file root (str (.getName u) ".tmp-" (System/nanoTime)))]
                     (try
                       (when (and sid (not (.isDirectory u)))
