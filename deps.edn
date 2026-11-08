@@ -4,4 +4,10 @@
  ;; source by `bb jolt`. A local `make build` of it ran a warm Hello in 0.42 s where
  ;; the release binary of the same version took 0.59 s (2026-11-06).
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                 :git/sha "a9b24d4c9dd57e3615d68975eb457e7b16554da9"}}
+                 :git/sha "a9b24d4c9dd57e3615d68975eb457e7b16554da9"}
+ :aliases
+ {;; Code metrics report (bb metrics): jolt-metrics' CLI. Report only.
+  :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
+                         {:git/url "https://github.com/jlt-commons/jolt-metrics"
+                          :git/tag "v0.1.2" :git/sha "c23aec7"}}
+            :main-opts ["-m" "metrics.cli"]}}}

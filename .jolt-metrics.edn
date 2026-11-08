@@ -1,0 +1,8 @@
+;; jolt-metrics config for `bb metrics` (report only, never a gate).
+;; test and examples (each examples/*.clj is a clojure.test namespace) are
+;; measured but kept out of the refactoring queue. Left out: build output
+;; (target, the benchmark apps' target dirs, where CHAMPACA_TRACE writes
+;; trace.ss), jolt's caches, the docs site and ci/linux's JDK download.
+{:exclude ["target/**" "bench/*/target/**" ".cpcache/**" "_site/**"
+           "ci/linux/cache/**" "test/srclaunch/.jolt/**" ".clj-kondo/**"]
+ :test-paths ["test" "examples"]}
