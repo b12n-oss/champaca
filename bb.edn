@@ -1087,10 +1087,18 @@
                    ((resolve (symbol "bench" "main")) (jolt-bin) *command-line-args*))}
   ;; Report only: findings never fail these. metrics.cli exits non-zero
   ;; only on bad usage or a missing directory, and that exit passes through.
-  metrics {:doc "jolt-metrics report over the repo (Markdown; findings never fail it). Extra args go to metrics.cli: an output file, --top N, --no-git, --exclude GLOB"
+  metrics {:doc "jolt-metrics report over the repo (Markdown; findings never fail it). Extra args go to metrics.cli: an output file (its extension picks the format), --top N, --no-git, --exclude GLOB"
            :task (apply shell (jolt-bin) "-M:metrics" "." *command-line-args*)}
   metrics:edn {:doc "jolt-metrics findings as EDN (findings never fail it). Extra args as for metrics"
                :task (apply shell (jolt-bin) "-M:metrics" "." "--format" "edn" *command-line-args*)}
+  metrics:json {:doc "jolt-metrics' lean JSON report, for tools (findings never fail it). Extra args as for metrics"
+                :task (apply shell (jolt-bin) "-M:metrics" "." "--format" "json" *command-line-args*)}
+  metrics:html {:doc "jolt-metrics as one self-contained HTML page, target/metrics.html unless a file comes first (findings never fail it). Extra args as for metrics"
+                :task (let [args *command-line-args*
+                            out? (and (seq args) (not (str/starts-with? (first args) "-")))]
+                        (fs/create-dirs "target")
+                        (apply shell (jolt-bin) "-M:metrics" "." "--format" "html"
+                               (if out? args (cons "target/metrics.html" args))))}
   examples {:doc "List the examples/*.clj programs that bb example runs"
             :task (doseq [[n what] examples]
                     (println (format "  %-16s %s" n what)))}

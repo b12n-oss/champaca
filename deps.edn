@@ -9,5 +9,5 @@
  {;; Code metrics report (bb metrics): jolt-metrics' CLI. Report only.
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
                          {:git/url "https://github.com/jlt-commons/jolt-metrics"
-                          :git/tag "v0.1.2" :git/sha "c23aec7"}}
+                          :git/tag "v0.2.2" :git/sha "8568d4c"}}
             :main-opts ["-m" "metrics.cli"]}}}
