@@ -1642,7 +1642,9 @@
   [{:keys [split live]} dep]
   (concat (mapcat #(local-names split %) live) (map #(str "s" %) (range (count dep)))))
 
-(defn- block-defs [plan emitted]
+(defn- block-defs
+  "Each emitted block as a letrec binding: a lambda over its block-args."
+  [plan emitted]
   (for [[pc [dep code]] (sort-by key emitted)]
     (sx (label pc) (sx "lambda" (apply sx (block-args plan dep)) code))))
 
@@ -1673,7 +1675,10 @@
                           (apply sx (fast-label h) as)))
                   (apply sx (label h) as)))))))
 
-(defn- version-defs [{:keys [loops] :as plan} emitted]
+(defn- version-defs
+  "The #V binding of each versioned loop whose header was emitted, in pc
+  order. Lazy: its copies are emitted when blocks-body realizes it."
+  [{:keys [loops] :as plan} emitted]
   (for [[h lp] (sort-by key loops) :when (emitted h)]
     (version-def plan emitted h lp)))
 
