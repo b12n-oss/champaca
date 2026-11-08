@@ -1060,15 +1060,15 @@
   from its run-time package (JVMS 5.4.5), which the vtable's keys can't say."
   [e op pc {:keys [class name desc]} recv argv]
   (let [resolve (:resolve e)
-        key (str "'" (sym (str name desc)))]
+        key #(str "'" (sym (str name desc)))]
     (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
     ((:check-virtual resolve) class name desc)
     ((:check-kind resolve) (if (= op :invokeinterface) :interface :virtual) class name desc)
     (if-let [decl ((:direct-target resolve) class name desc)]
       (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv)
       (if-let [pp (and (= op :invokevirtual) ((:package-private-decl resolve) class name desc))]
-        (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! e)) recv key (str "'" (sym pp)) (site pc))) recv argv)
-        (apply sx (at pc (sx "jvirt-ic" ((:ic! e)) recv key (site pc))) recv argv)))))
+        (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! e)) recv (key) (str "'" (sym pp)) (site pc))) recv argv)
+        (apply sx (at pc (sx "jvirt-ic" ((:ic! e)) recv (key) (site pc))) recv argv)))))
 
 (defn- virtual-call
   "invokevirtual or invokeinterface. A VarHandle access mode and
