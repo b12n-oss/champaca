@@ -1523,192 +1523,267 @@
                     :when (and (seq locals) (some #(array-ops (:op %)) insns))]
                 [h {:body body :locals locals}]))))))
 
-(defn- compile-method*
-  "The method as a lambda. ic! names a fresh inline-cache cell, inline! the
-  inlined procedure for a direct callee or nil."
+(defn- param-slots
+  "The local slot of each parameter, a long or double taking two."
+  [arg-types]
+  (loop [ts arg-types slot 0 out []]
+    (if-let [t (first ts)]
+      (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
+      out)))
+
+(def ^:private long-makers
+  "The operations whose long result, stored straight away, marks a local as
+  worth keeping in halves."
+  #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lconst_0 :lconst_1 :ldc2_w :i2l})
+
+(defn- split-locals
+  "The long locals kept as halves (emit-block): loaded and stored as longs
+  only, not method-wide, and given a long operation's result somewhere,
+  which is what would otherwise box."
+  [insns boxed param-set param-types]
+  (let [uses (group-by #(first (:args %)) (filter #(or (load-ops (:op %)) (store-ops (:op %))) insns))
+        made (set (for [[p i] (map vector insns (rest insns))
+                        :when (and (= :lstore (:op i)) (long-makers (:op p)))]
+                    (first (:args i))))]
+    (set (for [[i us] uses
+               :when (and (made i) (not (boxed i))
+                          (every? #(#{:lload :lstore} (:op %)) us)
+                          (or (not (param-set i)) (= "J" (param-types i))))]
+           i))))
+
+(defn- live-locals
+  "The locals a jump has to carry: the parameters and every slot the method
+  loads or stores, less the boxed ones, which stay method-wide."
+  [insns param-set boxed]
+  (vec (sort (remove boxed
+                     (into param-set
+                           (for [{:keys [op args]} insns
+                                 :when (or (load-ops op) (store-ops op))]
+                             (first args)))))))
+
+(defn- method-plan
+  "What translating the method needs to know before any block is emitted:
+  its blocks, the handler regions covering each, the locals boxed, split
+  and carried, the array loops to version. :entered collects the covered
+  blocks a jump enters from outside their region."
   [cls method resolve ic! inline!]
   (let [{:keys [code handlers]} (:code method)
         insns (decode code)
         blks (blocks insns handlers)
-        next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
         {:keys [args]} (parse-desc (:desc method))
         arg-types (if (pos? (bit-and (:flags method) 0x0008)) args (cons "L" args))
-        params (loop [ts arg-types slot 0 out []]
-                 (if-let [t (first ts)]
-                   (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
-                   out))
+        params (param-slots arg-types)
         param-set (set params)
         cover (into {} (map (fn [pc] [pc (covering handlers pc)]) (keys blks)))
-        boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})
-        ;; the long locals kept as halves (emit-block): loaded and stored as
-        ;; longs only, not method-wide, and given a long operation's result
-        ;; somewhere, which is what would otherwise box
-        param-types (into {} (map vector params arg-types))
-        made-by #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lconst_0 :lconst_1 :ldc2_w :i2l}
-        split (let [uses (group-by #(first (:args %)) (filter #(or (load-ops (:op %)) (store-ops (:op %))) insns))
-                    made (set (for [[p i] (map vector insns (rest insns))
-                                    :when (and (= :lstore (:op i)) (made-by (:op p)))]
-                                (first (:args i))))]
-                (set (for [[i us] uses
-                           :when (and (made i) (not (boxed i))
-                                      (every? #(#{:lload :lstore} (:op %)) us)
-                                      (or (not (param-set i)) (= "J" (param-types i))))]
-                       i)))
-        ;; the locals a jump has to carry: the parameters and every slot the
-        ;; method loads or stores, less the boxed ones, which stay method-wide
-        live (vec (sort (remove boxed
-                                (into param-set
-                                      (for [{:keys [op args]} insns
-                                            :when (or (load-ops op) (store-ops op))]
-                                        (first args))))))
-        ;; array loops to version (handler-free methods of a size whose
-        ;; blocks' dominators are cheap to find)
-        loops (or (when (and (empty? handlers) (<= (count code) ic-vector-limit))
-                    (array-loops blks))
-                  {})
-        vlabel (fn [pc] (sym (str *method-tag* "#V" pc)))
-        flabel (fn [pc] (sym (str *method-tag* "#F" pc)))
-        ;; a jump into a versioned loop's header from outside the loop goes
-        ;; through its #V
-        into-loop (fn [from pc] (if (and (loops pc) (not ((:body (loops pc)) from))) (vlabel pc) (label pc)))
-        ;; covered blocks entered from outside their region, each needing a
-        ;; guarded entry (entry-label)
-        entered (volatile! (sorted-set))
-        enter (fn [pc] (if (seq (cover pc))
-                         (do (vswap! entered conj pc) (entry-label pc))
-                         (label pc)))
-        ;; a jump inside a region is a tail call. One out of an uncovered
-        ;; block is a tail call too, into the target's guarded entry when it
-        ;; has one; one out of a covered region has to leave its guard first,
-        ;; so it returns a thunk to the trampoline
-        jump (fn [from]
-               (fn [pc args]
-                 (cond (= (cover from) (cover pc)) (apply sx (into-loop from pc) args)
-                       (empty? (cover from)) (apply sx (enter pc) args)
-                       :else (sx "lambda" "()" (apply sx (enter pc) args)))))
-        ;; worklist over blocks: each is emitted once, at the stack depth its
-        ;; first predecessor established (verified bytecode guarantees agreement)
-        emitted (loop [work (into [[0 []]] (map (fn [h] [(:handler h) ["A"]]) handlers))
-                       done {}]
-                  (if-let [[pc dep] (first work)]
-                    (if (contains? done pc)
-                      (recur (rest work) done)
-                      (let [{:keys [code succ]} (emit-block {:cls cls :resolve resolve :next-pc (next-pc pc)
-                                                             :live live :boxed boxed :split split :jump (jump pc) :ic! ic! :inline! inline!}
-                                                            (blks pc) dep)]
-                        (recur (concat (rest work) succ) (assoc done pc [dep code]))))
-                    done))
-        args-of (fn [dep] (concat (mapcat #(local-names split %) live) (map #(str "s" %) (range (count dep)))))
-        ;; each block takes the live locals and its entry stack
-        block-defs (for [[pc [dep code]] (sort-by key emitted)]
-                     (sx (label pc) (sx "lambda" (apply sx (args-of dep)) code)))
-        ;; each versioned loop's #V: its blocks copied with the hoisted
-        ;; locals' vectors and lengths, entered when every local the copy
-        ;; used holds an array, else the loop as it was. The copy's jumps stay
-        ;; in the copy or leave it as the loop's would.
-        version-defs (for [[h {:keys [body locals]}] (sort-by key loops)
-                           :when (emitted h)
-                           :let [hoist (into {} (map (fn [k] [k [(str "l" k "v") (str "l" k "n")]]) locals))
-                                 fast (for [pc (sort body) :when (emitted pc)
-                                            :let [dep (first (emitted pc))]]
-                                        [pc dep (emit-block {:cls cls :resolve resolve :next-pc (next-pc pc)
-                                                             :live live :boxed boxed :split split :ic! ic! :inline! inline!
-                                                             :hoist hoist
-                                                             :jump (fn [to args] (apply sx (if (body to) (flabel to) (into-loop pc to)) args))}
-                                                            (blks pc) dep)])
-                                 ks (sort (distinct (mapcat (comp :used #(nth % 2)) fast)))
-                                 as (args-of (first (emitted h)))]]
-                       (sx (vlabel h)
-                           (sx "lambda" (apply sx as)
-                               (if (empty? ks)
-                                 (apply sx (label h) as)
-                                 (sx "if" (apply sx "and" (map #(sx "jarr?" (str "l" %)) ks))
-                                     (sx "let*" (apply sx (mapcat (fn [k] (let [[v n] (hoist k)]
-                                                                            [(sx v (sx "jarr-vec" (str "l" k)))
-                                                                             (sx n (sx "#3%vector-length" v))]))
-                                                                  ks))
-                                         (sx "letrec" (apply sx (for [[pc dep {:keys [code]}] fast]
-                                                                  (sx (flabel pc) (sx "lambda" (apply sx (args-of dep)) code))))
-                                             (apply sx (flabel h) as)))
-                                     (apply sx (label h) as))))))
-        ;; the first block, called with the parameters, a long one kept as
-        ;; halves split first
-        start (let [split-params (filter #(and (param-set %) (split %)) live)
-                    call (apply sx (if (loops 0) (vlabel 0) (enter 0)) (mapcat #(cond (split %) (if (param-set %) (local-names split %) ["0" "0"])
-                                                            (param-set %) [(str "l" %)]
-                                                            :else ["0"])
-                                                     live))]
-                (if (seq split-params)
-                  (sx "let*" (apply sx (mapcat (fn [i] [(sx (str "l" i "h") (sx "lh-split-h" (str "l" i)))
-                                                        (sx (str "l" i "l") (sx "lh-split-l" (str "l" i)))])
-                                               split-params))
-                      call)
-                  call))
-        ;; a guarded entry: one handler for the region (jtry), whose clauses
-        ;; follow the exception table order and pass the handler the exception
-        ;; and the locals as the region got them. Building one can enter a
-        ;; handler's region, so this runs until no new entry turns up.
-        entry-defs (loop [out [] done #{}]
-                     (if-let [pc (first (remove done @entered))]
-                       (let [as (args-of (first (emitted pc)))
-                             clauses (doall
-                                      (for [i (cover pc)
-                                            :let [{:keys [type handler]} (nth handlers i)]]
-                                        (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
-                                            (apply sx (enter handler) (concat (mapcat #(local-names split %) live) ["e"])))))]
-                         (recur (conj out (sx (entry-label pc)
-                                              (sx "lambda" (apply sx as)
-                                                  (sx "jtry" "e" (apply sx clauses)
-                                                      (apply sx (label pc) as)))))
-                                (conj done pc)))
-                       out))]
-    (let [body* (if (seq handlers)
-                  (sx "let" (apply sx (for [i (sort boxed) :when (not (param-set i))] (sx (str "l" i) "0")))
-                      (sx "letrec" (apply sx (concat block-defs entry-defs))
-                          ;; an inline named loop rather than a shared helper,
-                          ;; so a frame named for this method stays on the stack
-                          ;; while a block runs under its region's handler (getCallerClass)
-                          (let [t (sym (str *method-tag* "#T"))]
-                            (sx "let" t (sx (sx "r" start))
-                                (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))))
-                  (sx "letrec" (apply sx (concat block-defs version-defs)) start))
-          ;; ACC_SYNCHRONIZED: the monitor of this, or of the class for a
-          ;; static method, held for the call and released however it ends.
-          ;; dynamic-wind rather than guard: an exception leaves through a
-          ;; handler further out, whose escape runs the exit before that
-          ;; handler's clauses, and installing a guard costs about four times
-          ;; as much. jframe below keeps a frame named after the method.
-          sync? (pos? (bit-and (:flags method) 0x0020))
-          bt? (System/getenv "CHAMPACA_BT")
-          body (if sync?
-                 (let [lock (if (pos? (bit-and (:flags method) 0x0008))
-                              ;; the class mirror, found once: a cell like the
-                              ;; inline caches, since cached code loads before
-                              ;; any class exists
-                              (let [c (ic!)]
-                                (sx "or" (sx "car" c)
-                                    (sx "let" (sx (sx "m" (sx "jmirror-of" (str-lit (:name cls)))))
-                                        (sx "set-car!" c "m") "m")))
-                              "l0")]
-                   (sx "let" (sx (sx "lock" lock))
-                       (sx "dynamic-wind"
-                           (sx "lambda" "()" (sx "jmonitor-enter" "lock"))
-                           (sx "lambda" "()" body*)
-                           (sx "lambda" "()" (sx "jmonitor-exit" "lock")))))
-                 body*)
-          ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
-          body (if bt?
-                 (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
-                     body)
-                 body)
-          ;; a synchronized method's dynamic-wind and BT's fluid-let would be
-          ;; tail calls out of the method's own lambda, leaving it no frame of
-          ;; its own; jframe, an identity the optimizer can't see through,
-          ;; makes the one call a non-tail call, and the stack walk then finds
-          ;; the method's frame with the pending pc of the unnamed thunk inside
-          body (if (or sync? bt?) (sx "jframe" body) body)]
-      (sx "lambda" (apply sx (map #(str "l" %) params))
-          ;; npe-tag, a constant Chez folds into each site that uses it,
-          ;; inside the lambda so the method stays a plain lambda to Chez
-          (sx "let" (sx (sx "npe-tag" (str "'" (sym *method-tag*))))
-              body)))))
+        boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})]
+    {:cls cls :resolve resolve :ic! ic! :inline! inline!
+     :handlers handlers :blks blks :cover cover :boxed boxed
+     :params params :param-set param-set
+     :next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
+     :split (split-locals insns boxed param-set (zipmap params arg-types))
+     :live (live-locals insns param-set boxed)
+     ;; array loops to version (handler-free methods of a size whose
+     ;; blocks' dominators are cheap to find)
+     :loops (or (when (and (empty? handlers) (<= (count code) ic-vector-limit))
+                  (array-loops blks))
+                {})
+     :entered (volatile! (sorted-set))}))
+
+(defn- version-label [pc] (sym (str *method-tag* "#V" pc)))
+(defn- fast-label [pc] (sym (str *method-tag* "#F" pc)))
+
+(defn- loop-target
+  "A jump into a versioned loop's header from outside the loop goes through
+  its #V."
+  [{:keys [loops]} from pc]
+  (if (and (loops pc) (not ((:body (loops pc)) from))) (version-label pc) (label pc)))
+
+(defn- enter-label
+  "A covered block entered from outside its region goes through its guarded
+  entry (entry-label), noted in :entered so one is built."
+  [{:keys [cover entered]} pc]
+  (if (seq (cover pc))
+    (do (vswap! entered conj pc) (entry-label pc))
+    (label pc)))
+
+(defn- block-jump
+  "A jump inside a region is a tail call. One out of an uncovered block is a
+  tail call too, into the target's guarded entry when it has one; one out of
+  a covered region has to leave its guard first, so it returns a thunk to the
+  trampoline."
+  [{:keys [cover] :as plan} from]
+  (fn [pc args]
+    (cond (= (cover from) (cover pc)) (apply sx (loop-target plan from pc) args)
+          (empty? (cover from)) (apply sx (enter-label plan pc) args)
+          :else (sx "lambda" "()" (apply sx (enter-label plan pc) args)))))
+
+(defn- block-ctx
+  "emit-block's context for the block at pc, jumping through jump."
+  [{:keys [cls resolve next-pc live boxed split ic! inline!]} pc jump]
+  {:cls cls :resolve resolve :next-pc (next-pc pc)
+   :live live :boxed boxed :split split :jump jump :ic! ic! :inline! inline!})
+
+(defn- emit-blocks
+  "Worklist over blocks: each is emitted once, at the stack depth its first
+  predecessor established (verified bytecode guarantees agreement). A map of
+  pc to [depth code]."
+  [{:keys [blks handlers] :as plan}]
+  (loop [work (into [[0 []]] (map (fn [h] [(:handler h) ["A"]]) handlers))
+         done {}]
+    (if-let [[pc dep] (first work)]
+      (if (contains? done pc)
+        (recur (rest work) done)
+        (let [{:keys [code succ]} (emit-block (block-ctx plan pc (block-jump plan pc)) (blks pc) dep)]
+          (recur (concat (rest work) succ) (assoc done pc [dep code]))))
+      done)))
+
+(defn- block-args
+  "A block's parameters: the live locals, then its entry stack."
+  [{:keys [split live]} dep]
+  (concat (mapcat #(local-names split %) live) (map #(str "s" %) (range (count dep)))))
+
+(defn- block-defs [plan emitted]
+  (for [[pc [dep code]] (sort-by key emitted)]
+    (sx (label pc) (sx "lambda" (apply sx (block-args plan dep)) code))))
+
+(defn- version-def
+  "A versioned loop's #V: its blocks copied with the hoisted locals' vectors
+  and lengths, entered when every local the copy used holds an array, else
+  the loop as it was. The copy's jumps stay in the copy or leave it as the
+  loop's would."
+  [{:keys [blks] :as plan} emitted h {:keys [body locals]}]
+  (let [hoist (into {} (map (fn [k] [k [(str "l" k "v") (str "l" k "n")]]) locals))
+        fast (for [pc (sort body) :when (emitted pc)
+                   :let [dep (first (emitted pc))
+                         jump (fn [to args] (apply sx (if (body to) (fast-label to) (loop-target plan pc to)) args))]]
+               [pc dep (emit-block (assoc (block-ctx plan pc jump) :hoist hoist) (blks pc) dep)])
+        ks (sort (distinct (mapcat (comp :used #(nth % 2)) fast)))
+        as (block-args plan (first (emitted h)))]
+    (sx (version-label h)
+        (sx "lambda" (apply sx as)
+            (if (empty? ks)
+              (apply sx (label h) as)
+              (sx "if" (apply sx "and" (map #(sx "jarr?" (str "l" %)) ks))
+                  (sx "let*" (apply sx (mapcat (fn [k] (let [[v n] (hoist k)]
+                                                         [(sx v (sx "jarr-vec" (str "l" k)))
+                                                          (sx n (sx "#3%vector-length" v))]))
+                                               ks))
+                      (sx "letrec" (apply sx (for [[pc dep {:keys [code]}] fast]
+                                               (sx (fast-label pc) (sx "lambda" (apply sx (block-args plan dep)) code))))
+                          (apply sx (fast-label h) as)))
+                  (apply sx (label h) as)))))))
+
+(defn- version-defs [{:keys [loops] :as plan} emitted]
+  (for [[h lp] (sort-by key loops) :when (emitted h)]
+    (version-def plan emitted h lp)))
+
+(defn- start-call
+  "The first block, called with the parameters, a long one kept as halves
+  split first."
+  [{:keys [live split param-set loops] :as plan}]
+  (let [split-params (filter #(and (param-set %) (split %)) live)
+        call (apply sx (if (loops 0) (version-label 0) (enter-label plan 0))
+                    (mapcat #(cond (split %) (if (param-set %) (local-names split %) ["0" "0"])
+                                   (param-set %) [(str "l" %)]
+                                   :else ["0"])
+                            live))]
+    (if (seq split-params)
+      (sx "let*" (apply sx (mapcat (fn [i] [(sx (str "l" i "h") (sx "lh-split-h" (str "l" i)))
+                                            (sx (str "l" i "l") (sx "lh-split-l" (str "l" i)))])
+                                   split-params))
+          call)
+      call)))
+
+(defn- entry-defs
+  "Each guarded entry: one handler for the region (jtry), whose clauses
+  follow the exception table order and pass the handler the exception and
+  the locals as the region got them. Building one can enter a handler's
+  region, so this runs until no new entry turns up."
+  [{:keys [entered cover handlers split live] :as plan} emitted]
+  (loop [out [] done #{}]
+    (if-let [pc (first (remove done @entered))]
+      (let [as (block-args plan (first (emitted pc)))
+            clauses (doall
+                     (for [i (cover pc)
+                           :let [{:keys [type handler]} (nth handlers i)]]
+                       (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
+                           (apply sx (enter-label plan handler) (concat (mapcat #(local-names split %) live) ["e"])))))]
+        (recur (conj out (sx (entry-label pc)
+                             (sx "lambda" (apply sx as)
+                                 (sx "jtry" "e" (apply sx clauses)
+                                     (apply sx (label pc) as)))))
+               (conj done pc)))
+      out)))
+
+(defn- blocks-body
+  "The method's blocks around the call of the first. With handlers the
+  boxed locals are method-wide and a block's result may be a thunk to call
+  outside its region's guard."
+  [{:keys [handlers boxed param-set]} block-fns entries versions start]
+  (if (seq handlers)
+    (sx "let" (apply sx (for [i (sort boxed) :when (not (param-set i))] (sx (str "l" i) "0")))
+        (sx "letrec" (apply sx (concat block-fns entries))
+            ;; an inline named loop rather than a shared helper,
+            ;; so a frame named for this method stays on the stack
+            ;; while a block runs under its region's handler (getCallerClass)
+            (let [t (sym (str *method-tag* "#T"))]
+              (sx "let" t (sx (sx "r" start))
+                  (sx "if" (sx "procedure?" "r") (sx t (sx "r")) "r")))))
+    (sx "letrec" (apply sx (concat block-fns versions)) start)))
+
+(defn- synchronized-body
+  "ACC_SYNCHRONIZED: the monitor of this, or of the class for a static
+  method, held for the call and released however it ends. dynamic-wind
+  rather than guard: an exception leaves through a handler further out,
+  whose escape runs the exit before that handler's clauses, and installing a
+  guard costs about four times as much. jframe in compile-method* keeps a
+  frame named after the method."
+  [cls method ic! body]
+  (let [lock (if (pos? (bit-and (:flags method) 0x0008))
+               ;; the class mirror, found once: a cell like the
+               ;; inline caches, since cached code loads before
+               ;; any class exists
+               (let [c (ic!)]
+                 (sx "or" (sx "car" c)
+                     (sx "let" (sx (sx "m" (sx "jmirror-of" (str-lit (:name cls)))))
+                         (sx "set-car!" c "m") "m")))
+               "l0")]
+    (sx "let" (sx (sx "lock" lock))
+        (sx "dynamic-wind"
+            (sx "lambda" "()" (sx "jmonitor-enter" "lock"))
+            (sx "lambda" "()" body)
+            (sx "lambda" "()" (sx "jmonitor-exit" "lock"))))))
+
+(defn- compile-method*
+  "The method as a lambda. ic! names a fresh inline-cache cell, inline! the
+  inlined procedure for a direct callee or nil."
+  [cls method resolve ic! inline!]
+  ;; the order matters: ic! cells are numbered as they're asked for, and
+  ;; the guarded entries are known only once the blocks and the start are
+  ;; emitted. version-defs is lazy and emits its copies inside blocks-body.
+  (let [plan (method-plan cls method resolve ic! inline!)
+        emitted (emit-blocks plan)
+        block-fns (block-defs plan emitted)
+        versions (version-defs plan emitted)
+        start (start-call plan)
+        entries (entry-defs plan emitted)
+        body* (blocks-body plan block-fns entries versions start)
+        sync? (pos? (bit-and (:flags method) 0x0020))
+        bt? (System/getenv "CHAMPACA_BT")
+        body (if sync? (synchronized-body cls method ic! body*) body*)
+        ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
+        body (if bt?
+               (sx "fluid-let" (sx (sx "jstack" (sx "cons" (str-lit (str (:name cls) "." (:name method) (:desc method))) "jstack")))
+                   body)
+               body)
+        ;; a synchronized method's dynamic-wind and BT's fluid-let would be
+        ;; tail calls out of the method's own lambda, leaving it no frame of
+        ;; its own; jframe, an identity the optimizer can't see through,
+        ;; makes the one call a non-tail call, and the stack walk then finds
+        ;; the method's frame with the pending pc of the unnamed thunk inside
+        body (if (or sync? bt?) (sx "jframe" body) body)]
+    (sx "lambda" (apply sx (map #(str "l" %) (:params plan)))
+        ;; npe-tag, a constant Chez folds into each site that uses it,
+        ;; inside the lambda so the method stays a plain lambda to Chez
+        (sx "let" (sx (sx "npe-tag" (str "'" (sym *method-tag*))))
+            body))))
