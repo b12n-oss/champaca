@@ -379,6 +379,44 @@
                     (values cpc #f)
                     (values spc (and callee (list (car callee) (cadr callee) (caddr callee) cpc)))))]))
 
+;; whether frames a and b, each (cname mname desc ...), are the same method's
+(define (same-frame-method? a b)
+  (and (string=? (car a) (car b)) (string=? (cadr a) (cadr b)) (string=? (caddr a) (caddr b))))
+
+;; an accumulated frame for method m: (cname mname desc pc block?)
+(define (frame-entry m pc block)
+  (list (car m) (cadr m) (caddr m) pc block))
+
+;; entry on top of rest, with the inlined callee's activation, if any,
+;; between them
+(define (cons-frame callee entry rest)
+  (cons entry (if callee (cons (append callee (list #f)) rest) rest)))
+
+;; whether method m's frame merges into the block frame on top of acc: m's
+;; own frame (not a block) right below a block frame of the same method
+(define (block-frame-merges? m acc)
+  (and (not (cadddr m)) (pair? acc)
+       (let ([last (car acc)])
+         (and (car (cddddr last)) (same-frame-method? last m)))))
+
+;; acc and n after m's frame merges into the block frame on top of acc: the
+;; block's pc and any callee above it stay as they are, unless the block
+;; recorded no pc, when the marker dp decides
+(define (merge-block-frame m dp acc n)
+  (let ([last (car acc)])
+    (if (fx>= (cadddr last) 0)
+        (values (cons (frame-entry m (cadddr last) #f) (cdr acc)) n)
+        (let-values ([(pc callee) (marker-pcs dp m)])
+          (values (cons-frame callee (frame-entry m pc #f) (cdr acc))
+                  (if callee (fx+ n 1) n))))))
+
+;; acc and n with method m's frame on top, the marker dp giving its pc and
+;; any inlined callee above it
+(define (add-method-frame m dp acc n)
+  (let-values ([(pc callee) (marker-pcs dp m)])
+    (values (cons-frame callee (frame-entry m pc (cadddr m)) acc)
+            (fx+ n (if callee 2 1)))))
+
 ;; the Java stack of raw frames, innermost first: (cname mname desc pc) per
 ;; activation, pc -1 for a frame that recorded none (getOurStackTrace keeps
 ;; 1024 of them, as HotSpot does). A method with handlers runs its blocks through a
@@ -395,27 +433,12 @@
                [name (#%$code-name code)]
                [m (and (string? name) (frame-method name))]
                [d (frame-marker (return-sexpr code (cdar fs)))])
-          (cond
-            [(not m) (loop (cdr fs) (or pending d) acc n)]
-            [(and (not (cadddr m)) (pair? acc)
-                  (let ([last (car acc)])
-                    (and (car (cddddr last))   ; a block frame of this same method
-                         (string=? (car last) (car m)) (string=? (cadr last) (cadr m)) (string=? (caddr last) (caddr m)))))
-             ;; the block's pc and any callee above it stay as they are
-             (let ([last (car acc)])
-               (if (fx>= (cadddr last) 0)
-                   (loop (cdr fs) #f (cons (list (car m) (cadr m) (caddr m) (cadddr last) #f) (cdr acc)) n)
-                   (let-values ([(pc callee) (marker-pcs (or d pending) m)])
-                     (loop (cdr fs) #f
-                           (cons (list (car m) (cadr m) (caddr m) pc #f)
-                                 (if callee (cons (append callee (list #f)) (cdr acc)) (cdr acc)))
-                           (if callee (fx+ n 1) n)))))]
-            [else
-             (let-values ([(pc callee) (marker-pcs (or d pending) m)])
-               (loop (cdr fs) #f
-                     (cons (list (car m) (cadr m) (caddr m) pc (cadddr m))
-                           (if callee (cons (append callee (list #f)) acc) acc))
-                     (fx+ n (if callee 2 1))))])))))
+          (if (not m)
+              (loop (cdr fs) (or pending d) acc n)
+              (let-values ([(acc n) (if (block-frame-merges? m acc)
+                                        (merge-block-frame m (or d pending) acc n)
+                                        (add-method-frame m (or d pending) acc n))])
+                (loop (cdr fs) #f acc n)))))))
 
 (define (java-frame-class name)
   ;; "pkg/Cls.meth(desc)#B4" -> "pkg/Cls"
