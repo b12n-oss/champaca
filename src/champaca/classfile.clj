@@ -309,6 +309,34 @@
                                               (reflection-attrs (read-attributes r cp) cp))))))))
         attrs))
 
+(defn- attr-value
+  "(f attr) for the first attribute named aname in attrs that gives a truthy
+  answer, or nil."
+  [attrs aname f]
+  (some #(when (= aname (:name %)) (f %)) attrs))
+
+(defn- own-inner-entry
+  "This class's entry in an InnerClasses attribute, {:outer :simple-name
+  :flags}, or nil when it lists the class nowhere."
+  [attr cp this]
+  (some (fn [[ci oi ni fl]]
+          (when (= this (:name (cp ci)))
+            {:outer (when (pos? oi) (:name (cp oi)))
+             :simple-name (when (pos? ni) (:value (cp ni)))
+             :flags fl}))
+        (partition 4 (rest (u2s (:info attr))))))
+
+(defn- enclosing-method-of
+  "An EnclosingMethod attribute as {:class :name :desc}."
+  [attr cp]
+  (let [[ci mi] (u2s (:info attr)) nat (when (pos? mi) (cp mi))]
+    {:class (:name (cp ci)) :name (:name nat) :desc (:desc nat)}))
+
+(defn- class-names
+  "The class names a NestMembers or PermittedSubclasses attribute lists."
+  [attr cp]
+  (mapv (fn [i] (:name (cp i))) (rest (u2s (:info attr)))))
+
 (defn- nesting
   "This class's own InnerClasses entry, {:outer :simple-name :flags} (outer and
   simple name nil for local and anonymous classes), and its EnclosingMethod,
@@ -317,21 +345,11 @@
   and a sealed class's PermittedSubclasses, an empty vector when it lists
   none (sealed all the same)."
   [attrs cp this]
-  (let [inner (some #(when (= "InnerClasses" (:name %))
-                       (some (fn [[ci oi ni fl]]
-                               (when (= this (:name (cp ci)))
-                                 {:outer (when (pos? oi) (:name (cp oi)))
-                                  :simple-name (when (pos? ni) (:value (cp ni)))
-                                  :flags fl}))
-                             (partition 4 (rest (u2s (:info %))))))
-                    attrs)
-        encl (some #(when (= "EnclosingMethod" (:name %))
-                      (let [[ci mi] (u2s (:info %)) nat (when (pos? mi) (cp mi))]
-                        {:class (:name (cp ci)) :name (:name nat) :desc (:desc nat)}))
-                   attrs)
-        host (some #(when (= "NestHost" (:name %)) (:name (cp (first (u2s (:info %)))))) attrs)
-        members (some #(when (= "NestMembers" (:name %)) (mapv (fn [i] (:name (cp i))) (rest (u2s (:info %))))) attrs)
-        permitted (some #(when (= "PermittedSubclasses" (:name %)) (mapv (fn [i] (:name (cp i))) (rest (u2s (:info %))))) attrs)]
+  (let [inner (attr-value attrs "InnerClasses" #(own-inner-entry % cp this))
+        encl (attr-value attrs "EnclosingMethod" #(enclosing-method-of % cp))
+        host (attr-value attrs "NestHost" #(:name (cp (first (u2s (:info %))))))
+        members (attr-value attrs "NestMembers" #(class-names % cp))
+        permitted (attr-value attrs "PermittedSubclasses" #(class-names % cp))]
     (cond-> {} inner (assoc :inner inner) encl (assoc :enclosing-method encl)
             host (assoc :nest-host host) members (assoc :nest-members members)
             permitted (assoc :permitted-subclasses permitted))))
