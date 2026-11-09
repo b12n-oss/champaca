@@ -296,6 +296,71 @@
                             {:annotation t})))))
       c)))
 
+(defn- element-error
+  "who's value v refused: \"<who> is <v>, not <what>\"."
+  [who v what]
+  (throw (ex-info (str who " is " (pr-str v) ", not " what) {:value v})))
+
+(defn- integer-element
+  "An integral element of tag in [lo, hi] (what names its type)."
+  [tag lo hi what who v]
+  (cond (and (integer? v) (<= lo v hi)) [tag v]
+        (integer? v) (throw (ex-info (str who " is " v ", out of range for " what) {:value v}))
+        :else (element-error who v (str "an integer (" what ")"))))
+
+(defn- float-element
+  "As javac: a value that rounds to infinity is too large, one that rounds
+  to zero too small (the bounds are half an ulp past the largest and
+  smallest floats)."
+  [who v]
+  (let [d (when (number? v) (double v))]
+    (cond (nil? d) (element-error who v "a float")
+          (and (not (infinite? d)) (>= (abs d) 3.4028235677973366E38))
+          (throw (ex-info (str who " is " v ", out of range for float") {:value v}))
+          (and (not (zero? d)) (<= (abs d) 7.006492321624085E-46))
+          (throw (ex-info (str who " is " v ", too small for float") {:value v}))
+          :else ["F" d])))
+
+(defn- string-element
+  "A class file's strings are at most 65535 bytes of modified UTF-8."
+  [who v]
+  (cond (not (string? v)) (element-error who v "a string")
+        (> (reduce + (map #(let [c (int %)] (cond (<= 1 c 0x7f) 1 (<= c 0x7ff) 2 (<= c 0xffff) 3 :else 6)) v)) 65535)
+        (throw (ex-info (str who " is a string of more than 65535 bytes in a class file's UTF-8") {:value (subs v 0 20)}))
+        :else ["s" v]))
+
+(defn- class-element
+  "A Class, or a type name (\"void\" too) whose class exists."
+  [who v]
+  (cond (with-gil #(s/call "dyn-instance?" v "java/lang/Class")) ["c" (invoke v "descriptorString")]
+        (string? v) (let [d (if (= v "void") "V" (type-desc v))
+                          e (str/replace d #"^\[+" "")]
+                      (when (and (str/starts-with? e "L") (not (class-exists? (subs e 1 (dec (count e))))))
+                        (throw (ex-info (str who " is " (pr-str v) ", which isn't a class") {:value v})))
+                      ["c" d])
+        :else (element-error who v "a type name or a Class")))
+
+(def ^:private named-elements
+  "The element types annotation-value knows by name: a fn of who and v."
+  {"boolean" (fn [who v] (if (boolean? v) ["Z" (if v 1 0)] (element-error who v "a boolean")))
+   "byte" (partial integer-element "B" -128 127 "byte")
+   "short" (partial integer-element "S" -32768 32767 "short")
+   "int" (partial integer-element "I" -2147483648 2147483647 "int")
+   "long" (partial integer-element "J" -9223372036854775808 9223372036854775807 "long")
+   "char" (fn [who v] (if (char? v) ["C" (int v)] (integer-element "C" 0 65535 "char" who v)))
+   "float" float-element
+   "double" (fn [who v] (if (number? v) ["D" (double v)] (element-error who v "a double")))
+   "java.lang.String" string-element
+   "java.lang.Class" class-element})
+
+(defn- enum-element [who rt v]
+  (let [rname (invoke rt "getName")
+        n (if (keyword? v) (name v) v)
+        names (mapv #(invoke % "name") (->clj (invoke rt "getEnumConstants")))]
+    (if (and (string? n) (some #{n} names))
+      ["e" (invoke rt "descriptorString") n]
+      (element-error who v (str "a constant of " rname " (" (str/join ", " names) ")")))))
+
 (declare annotation-of)
 
 (defn- annotation-value
@@ -303,57 +368,16 @@
   class-file-bytes encodes: [tag & payload]. A single value for an array
   element is an array of one, as in Java source."
   [who rt v]
-  (let [rname (invoke rt "getName")
-        bad (fn [what] (throw (ex-info (str who " is " (pr-str v) ", not " what) {:value v})))
-        whole (fn [tag lo hi what]
-                (cond (and (integer? v) (<= lo v hi)) [tag v]
-                      (integer? v) (throw (ex-info (str who " is " v ", out of range for " what) {:value v}))
-                      :else (bad (str "an integer (" what ")"))))]
+  (let [rname (invoke rt "getName")]
     (cond
       (invoke rt "isArray")
       (let [ct (invoke rt "getComponentType")]
         (into ["["] (map-indexed (fn [i x] (annotation-value (str who "[" i "]") ct x)) (if (sequential? v) v [v]))))
-      (= rname "boolean") (if (boolean? v) ["Z" (if v 1 0)] (bad "a boolean"))
-      (= rname "byte") (whole "B" -128 127 "byte")
-      (= rname "short") (whole "S" -32768 32767 "short")
-      (= rname "int") (whole "I" -2147483648 2147483647 "int")
-      (= rname "long") (whole "J" -9223372036854775808 9223372036854775807 "long")
-      (= rname "char") (if (char? v) ["C" (int v)] (whole "C" 0 65535 "char"))
-      (= rname "float")
-      ;; as javac: a value that rounds to infinity is too large, one that
-      ;; rounds to zero too small (the bounds are half an ulp past the
-      ;; largest and smallest floats)
-      (let [d (when (number? v) (double v))]
-        (cond (nil? d) (bad "a float")
-              (and (not (infinite? d)) (>= (abs d) 3.4028235677973366E38))
-              (throw (ex-info (str who " is " v ", out of range for float") {:value v}))
-              (and (not (zero? d)) (<= (abs d) 7.006492321624085E-46))
-              (throw (ex-info (str who " is " v ", too small for float") {:value v}))
-              :else ["F" d]))
-      (= rname "double") (if (number? v) ["D" (double v)] (bad "a double"))
-      (= rname "java.lang.String")
-      (cond (not (string? v)) (bad "a string")
-            ;; a class file's strings are at most 65535 bytes of modified UTF-8
-            (> (reduce + (map #(let [c (int %)] (cond (<= 1 c 0x7f) 1 (<= c 0x7ff) 2 (<= c 0xffff) 3 :else 6)) v)) 65535)
-            (throw (ex-info (str who " is a string of more than 65535 bytes in a class file's UTF-8") {:value (subs v 0 20)}))
-            :else ["s" v])
-      (= rname "java.lang.Class")
-      (cond (with-gil #(s/call "dyn-instance?" v "java/lang/Class")) ["c" (invoke v "descriptorString")]
-            (string? v) (let [d (if (= v "void") "V" (type-desc v))
-                              e (str/replace d #"^\[+" "")]
-                          (when (and (str/starts-with? e "L") (not (class-exists? (subs e 1 (dec (count e))))))
-                            (throw (ex-info (str who " is " (pr-str v) ", which isn't a class") {:value v})))
-                          ["c" d])
-            :else (bad "a type name or a Class"))
-      (invoke rt "isEnum")
-      (let [n (if (keyword? v) (name v) v)
-            names (mapv #(invoke % "name") (->clj (invoke rt "getEnumConstants")))]
-        (if (and (string? n) (some #{n} names))
-          ["e" (invoke rt "descriptorString") n]
-          (bad (str "a constant of " rname " (" (str/join ", " names) ")"))))
+      (named-elements rname) ((named-elements rname) who v)
+      (invoke rt "isEnum") (enum-element who rt v)
       (invoke rt "isAnnotation")
-      (if (map? v) ["@" (annotation-of who rt v)] (bad (str "a map of " rname "'s elements")))
-      :else (bad rname))))
+      (if (map? v) ["@" (annotation-of who rt v)] (element-error who v (str "a map of " rname "'s elements")))
+      :else (element-error who v rname))))
 
 (defn- annotation-of
   "The annotation of type c (a Class) with the elements in m, as
