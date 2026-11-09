@@ -110,20 +110,28 @@
                  (list->string (let collect ([k 0]) (if (fx= k len) '() (cons (integer->char (foreign-ref 'unsigned-8 p (+ n 1 k))) (collect (fx+ k 1)))))))]
               [else (loop (fx+ i 1))])))))
 
+;; dir/prog, prog itself (the working directory's) for an empty dir
+(define (path-candidate dir prog)
+  (if (fx= (string-length dir) 0)
+      prog
+      (string-append dir (if (char=? (string-ref dir (fx- (string-length dir) 1)) #\/) "" "/") prog)))
+
+;; the entries of a colon-separated path, in order, empty ones kept
+(define (path-entries path)
+  (let split ([path path] [acc '()])
+    (let ([colon (char-index-of path #\:)])
+      (if colon
+          (split (substring path (fx+ colon 1) (string-length path)) (cons (substring path 0 colon) acc))
+          (reverse (cons path acc))))))
+
 ;; the candidates JDK_execvpe tries for prog: prog itself when it has a
 ;; slash, else each directory of this process's PATH (an empty entry is the
 ;; working directory)
 (define (spawn-candidates prog)
-  (if (or (fx= (string-length prog) 0)
-          (let loop ([i 0]) (and (fx< i (string-length prog)) (or (char=? (string-ref prog i) #\/) (loop (fx+ i 1))))))
+  (if (or (fx= (string-length prog) 0) (char-index-of prog #\/))
       (list prog)
-      (let split ([path (or (environ-bytes "PATH") ":/bin:/usr/bin")] [acc '()])
-        (let ([colon (let loop ([i 0]) (cond [(fx= i (string-length path)) #f] [(char=? (string-ref path i) #\:) i] [else (loop (fx+ i 1))]))])
-          (let* ([dir (if colon (substring path 0 colon) path)]
-                 [full (if (fx= (string-length dir) 0) prog (string-append dir (if (char=? (string-ref dir (fx- (string-length dir) 1)) #\/) "" "/") prog))])
-            (if colon
-                (split (substring path (fx+ colon 1) (string-length path)) (cons full acc))
-                (reverse (cons full acc))))))))
+      (map (lambda (dir) (path-candidate dir prog))
+           (path-entries (or (environ-bytes "PATH") ":/bin:/usr/bin")))))
 
 ;; spawn path with argv0 and the other arguments (argv0 is the program as
 ;; the caller named it, never the path found, as JDK_execvpe keeps it) and
