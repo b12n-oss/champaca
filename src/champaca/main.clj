@@ -1328,6 +1328,29 @@
       (static-globals name fields)
       [(define-methods-form name methods)]))))
 
+(defn- class-origin
+  "The origin of n's class table entry (:jdk, :user, :defined), :jdk for an
+  entry still packed, nil when the table has none."
+  [n]
+  (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))
+
+(defn- dep-value
+  "What user-deps records for the class n: its fingerprint, :present (a
+  synthetic class), :layer (a JDK class outside java.base), nil for a JDK
+  class that needs nothing, or ::unchecked for one that can't be checked
+  later."
+  [n defined?]
+  (case (if (:preview (get-in @state [:classes n])) :preview (class-origin n))
+    ;; a class outside java.base is :layer, there only when the boot layer
+    ;; holds its module (--limit-modules may leave it out of a later run,
+    ;; outside-boot-layer?)
+    :jdk (cond (str/starts-with? n "champaca/") :present
+               (not= "java.base" (layer-module n)) :layer
+               :else nil)
+    :user (or (:fp (class-source n)) ::unchecked)
+    :defined (or (when defined? (get-in @state [:classes n :src-fp])) ::unchecked)
+    ::unchecked))
+
 (defn- user-deps
   "The dependencies of a library cache entry whose link or compile read the
   classes in names: each classpath class among them and among everything
@@ -1343,20 +1366,13 @@
   --enable-preview reaches it and refuses it), which keeps the entry out of
   the cache."
   [names & [defined?]]
-  (let [origin (fn [n] (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))]
-    (when (every? origin names)
-      (reduce (fn [acc n]
-                (case (if (:preview (get-in @state [:classes n])) :preview (origin n))
-                  ;; a class outside java.base is :layer, there only when the
-                  ;; boot layer holds its module (--limit-modules may leave
-                  ;; it out of a later run, outside-boot-layer?)
-                  :jdk (cond (str/starts-with? n "champaca/") (assoc acc n :present)
-                             (not= "java.base" (layer-module n)) (assoc acc n :layer)
-                             :else acc)
-                  :user (if-let [fp (:fp (class-source n))] (assoc acc n fp) (reduced nil))
-                  :defined (if-let [fp (when defined? (get-in @state [:classes n :src-fp]))] (assoc acc n fp) (reduced nil))
-                  (reduced nil)))
-              {} (distinct (mapcat ancestry names))))))
+  (when (every? class-origin names)
+    (reduce (fn [acc n]
+              (let [v (dep-value n defined?)]
+                (cond (= v ::unchecked) (reduced nil)
+                      (nil? v) acc
+                      :else (assoc acc n v))))
+            {} (distinct (mapcat ancestry names)))))
 
 (defn- uncheckable-dep
   "The first of names, or of their ancestry, that user-deps can't record a
