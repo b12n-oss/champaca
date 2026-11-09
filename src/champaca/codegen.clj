@@ -449,6 +449,58 @@
     (when (every? some? labels)
       (str "'" (apply sx labels)))))
 
+;; render-steps' scopes: [slot binding-text children] each, innermost
+;; last, the root [-1 nil children]
+
+(defn- step-slot
+  "The stack slot a variable named sN binds, or -1 for any other (a local)."
+  [v]
+  (if (str/starts-with? v "s") (parse-long (re-find #"\d+" v)) -1))
+
+(defn- begin-form
+  "xs as one statement: the one form, or a begin of them."
+  [xs]
+  (if (= 1 (count xs)) (first xs) (apply sx "begin" xs)))
+
+(defn- close-scope
+  "A scope as its let, (void) for a body when it has no children."
+  [[_ head children]]
+  (sx "let" head (begin-form (if (seq children) children ["(void)"]))))
+
+(defn- add-to-scope
+  "scopes with x as the innermost scope's last child."
+  [scopes x]
+  (update scopes (dec (count scopes)) update 2 conj x))
+
+(defn- close-dead-scopes
+  "scopes with each innermost scope binding a stack slot at or above depth
+  closed into its parent, down to the first slot still live."
+  [scopes depth]
+  (let [[s :as top] (peek scopes)]
+    (if (and (> (count scopes) 1) (>= s depth))
+      (recur (add-to-scope (pop scopes) (close-scope top)) depth)
+      scopes)))
+
+(defn- step-scopes
+  "The scopes after steps, from the root alone."
+  [steps]
+  (reduce (fn [scopes [k a b]]
+            (case k
+              :bind (conj scopes [(step-slot a) (sx (sx a b)) []])
+              :pbind (conj scopes [(reduce min (map (comp step-slot first) a)) (apply sx (map (fn [[v e]] (sx v e)) a)) []])
+              :set (add-to-scope scopes (sx "set!" a b))
+              :do (add-to-scope scopes a)
+              :depth (close-dead-scopes scopes a)))
+          [[-1 nil []]] steps))
+
+(defn- close-scopes
+  "Every scope closed into its parent, innermost first, the root's children
+  as one statement."
+  [scopes]
+  (if (= 1 (count scopes))
+    (begin-form (nth (first scopes) 2))
+    (recur (add-to-scope (pop scopes) (close-scope (peek scopes))))))
+
 (defn- render-steps
   "A block's steps and its terminal expression as nested lets: every store or
   push binds a fresh variable, shadowing the old one, so Chez can keep values
@@ -466,30 +518,7 @@
   straight-line method of thousands of pushes quadratic to compile:
   SystemModules' 21 KB module-descriptor builder took 4.6 s as one nest."
   [steps term]
-  (let [slot (fn [v] (if (str/starts-with? v "s") (parse-long (re-find #"\d+" v)) -1))
-        seq-form (fn [xs] (if (= 1 (count xs)) (first xs) (apply sx "begin" xs)))
-        ;; a scope: [slot binding-text children], the root [-1 nil children]
-        close (fn [[_ head children]] (sx "let" head (seq-form (if (seq children) children ["(void)"]))))
-        add-child (fn [scopes x] (update scopes (dec (count scopes)) update 2 conj x))]
-    (loop [steps steps scopes [[-1 nil []]]]
-      (if-let [[k a b] (first steps)]
-        (recur (rest steps)
-               (case k
-                 :bind (conj scopes [(slot a) (sx (sx a b)) []])
-                 :pbind (conj scopes [(reduce min (map (comp slot first) a)) (apply sx (map (fn [[v e]] (sx v e)) a)) []])
-                 :set (add-child scopes (sx "set!" a b))
-                 :do (add-child scopes a)
-                 :depth (loop [scopes scopes]
-                          (let [[s :as top] (peek scopes)]
-                            (if (and (> (count scopes) 1) (>= s a))
-                              (recur (add-child (pop scopes) (close top)))
-                              scopes)))))
-        ;; the terminal expression is the last statement of the innermost
-        ;; scope, which reads what the last instruction popped
-        (loop [scopes (add-child scopes term)]
-          (if (= 1 (count scopes))
-            (seq-form (nth (first scopes) 2))
-            (recur (add-child (pop scopes) (close (peek scopes))))))))))
+  (close-scopes (add-to-scope (step-scopes steps) term)))
 
 (defn- missing-class
   "The class a resolution failure says isn't there, or nil for any other
