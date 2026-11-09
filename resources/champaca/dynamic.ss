@@ -838,49 +838,57 @@
 ;; primitive is a NullPointerException, a value of the wrong kind a
 ;; ClassCastException and a number out of the type's range an
 ;; IllegalArgumentException, as Clojure's casts throw.
+(define (result-type-error where v type-text)
+  (jthrow "java/lang/ClassCastException" (string-append where " returned " (value-kind v) ", not " type-text)))
+
+;; r as an integral primitive c between lo and hi: a char by its code, a
+;; non-integer a ClassCastException, out of range an IllegalArgumentException
+(define (result-in-range where c r lo hi)
+  (cond [(char? r) (let ([n (char->integer r)]) (if (<= lo n hi) n (result-type-error where r (prim-type-name c))))]
+        [(not (exact-int? r)) (result-type-error where r (prim-type-name c))]
+        [(<= lo r hi) r]
+        [else (jthrow "java/lang/IllegalArgumentException"
+                      (string-append where " returned " (number->string r) ", out of range for " (prim-type-name c)))]))
+
+;; r for a reference or array return type d (first char c)
+(define (defined-ref-result where d c r)
+  (let* ([r (jolt-data r)]
+         [t (ref-class d)]
+         [box (assoc t boxes)]
+         [v (cond
+              [(eq? r jolt-nil) #f]
+              ;; a vector for an array: each element as the component
+              ;; type takes a result, so a string can't land in an int[]
+              [(and (char=? c #\[) (seq-arg? r))
+               (let ([e (array-elem d)])
+                 (make-jarr e (list->vector (map (lambda (x) (defined-result where e x)) r))))]
+              ;; a number or char for a box: boxed for its declared type
+              [(and box (not (java-value? r)) (not (string=? (cdr box) "Z")))
+               (jbox (cdr box) (defined-result where (cdr box) r))]
+              ;; a fn only for an interface with one abstract method
+              [(and (procedure? r) (not (sam-of t))) (result-type-error where r (dotted t))]
+              [else (convert-arg r d)])])
+    (if (or (not v) (jinstance? v t)) v (result-type-error where v (dotted t)))))
+
+;; r (not nil) for a primitive return type c other than V and Z
+(define (defined-prim-result where c r)
+  (case c
+    [(#\I) (result-in-range where c r -2147483648 2147483647)]
+    [(#\J) (result-in-range where c r -9223372036854775808 9223372036854775807)]
+    [(#\S) (result-in-range where c r -32768 32767)]
+    [(#\B) (result-in-range where c r -128 127)]
+    [(#\C) (if (char? r) (char->integer r) (result-in-range where c r 0 65535))]
+    [(#\D) (if (and (number? r) (real? r)) (inexact r) (result-type-error where r (prim-type-name c)))]
+    [else (if (and (number? r) (real? r)) (f32 (inexact r)) (result-type-error where r (prim-type-name c)))]))
+
 (define (defined-result where d r)
   (let ([c (string-ref d 0)])
-    (define (wrong-ref v t)
-      (jthrow "java/lang/ClassCastException" (string-append where " returned " (value-kind v) ", not " (dotted t))))
-    (define (wrong) (jthrow "java/lang/ClassCastException"
-                            (string-append where " returned " (value-kind r) ", not " (prim-type-name c))))
-    (define (range lo hi)
-      (cond [(char? r) (let ([n (char->integer r)]) (if (<= lo n hi) n (wrong)))]
-            [(not (exact-int? r)) (wrong)]
-            [(<= lo r hi) r]
-            [else (jthrow "java/lang/IllegalArgumentException"
-                          (string-append where " returned " (number->string r) ", out of range for " (prim-type-name c)))]))
     (cond
       [(char=? c #\V) (void)]
       [(char=? c #\Z) (if (jolt-true? r) 1 0)]
-      [(memv c '(#\L #\[))
-       (let* ([r (jolt-data r)]
-              [t (ref-class d)]
-              [box (assoc t boxes)]
-              [v (cond
-                   [(eq? r jolt-nil) #f]
-                   ;; a vector for an array: each element as the component
-                   ;; type takes a result, so a string can't land in an int[]
-                   [(and (char=? c #\[) (seq-arg? r))
-                    (let ([e (array-elem d)])
-                      (make-jarr e (list->vector (map (lambda (x) (defined-result where e x)) r))))]
-                   ;; a number or char for a box: boxed for its declared type
-                   [(and box (not (java-value? r)) (not (string=? (cdr box) "Z")))
-                    (jbox (cdr box) (defined-result where (cdr box) r))]
-                   ;; a fn only for an interface with one abstract method
-                   [(and (procedure? r) (not (sam-of t))) (wrong-ref r t)]
-                   [else (convert-arg r d)])])
-         (if (or (not v) (jinstance? v t)) v (wrong-ref v t)))]
+      [(memv c '(#\L #\[)) (defined-ref-result where d c r)]
       [(eq? r jolt-nil) (jthrow "java/lang/NullPointerException" (string-append where " returned nil, not " (prim-type-name c)))]
-      [else
-       (case c
-         [(#\I) (range -2147483648 2147483647)]
-         [(#\J) (range -9223372036854775808 9223372036854775807)]
-         [(#\S) (range -32768 32767)]
-         [(#\B) (range -128 127)]
-         [(#\C) (if (char? r) (char->integer r) (range 0 65535))]
-         [(#\D) (if (and (number? r) (real? r)) (inexact r) (wrong))]
-         [else (if (and (number? r) (real? r)) (f32 (inexact r)) (wrong))])])))
+      [else (defined-prim-result where c r)])))
 
 (define (defined-method-proc where desc cell)
   (let ([pds (desc-args desc)] [rd (desc-ret desc)])
