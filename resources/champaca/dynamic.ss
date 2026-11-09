@@ -913,142 +913,180 @@
         (when post-init (call-from-java (unbox post-init) (cons this jargs)))
         (void)))))
 
-(define (define-jolt-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init anns)
-  (define (fail . parts) (api-fail (apply string-append "define-class: " parts)))
-  (define (anns-of key alist) (cond [(assoc key alist) => cdr] [else '()]))
-  (define (bad-name? n)   ; not a JVM unqualified name
-    (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
-  (when (exists bad-name?
-                (let split ([cs (string->list name)] [cur '()] [acc '()])   ; its package parts and simple name
-                  (cond [(null? cs) (cons (list->string (reverse cur)) acc)]
-                        [(char=? (car cs) #\/) (split (cdr cs) '() (cons (list->string (reverse cur)) acc))]
-                        [else (split (cdr cs) (cons (car cs) cur) acc)])))
-    (fail (dotted name) " isn't a class name"))
-  (when (hashtable-ref classes name #f) (fail (dotted name) " is already a class"))
-  (let loop ([fs (append fields sfields)] [seen '()])
+;; define-jolt-class's steps. Each refusal is define-class's api-fail, tried
+;; in this order: the name, the fields, :implements, the package, the
+;; superclass and interfaces, the methods, the constructors, the annotations,
+;; the static methods.
+(define (jolt-class-fail . parts) (api-fail (apply string-append "define-class: " parts)))
+(define (jolt-class-anns key alist) (cond [(assoc key alist) => cdr] [else '()]))
+(define (jolt-class-bad-name? n)   ; not a JVM unqualified name
+  (or (fxzero? (string-length n)) (exists (lambda (ch) (memv ch '(#\. #\; #\[ #\/ #\< #\>))) (string->list n))))
+(define (jolt-class-name-parts name)   ; its package parts and simple name
+  (let split ([cs (string->list name)] [cur '()] [acc '()])
+    (cond [(null? cs) (cons (list->string (reverse cur)) acc)]
+          [(char=? (car cs) #\/) (split (cdr cs) '() (cons (list->string (reverse cur)) acc))]
+          [else (split (cdr cs) (cons (car cs) cur) acc)])))
+(define (jolt-class-check-name! name)
+  (when (exists jolt-class-bad-name? (jolt-class-name-parts name))
+    (jolt-class-fail (dotted name) " isn't a class name"))
+  (when (hashtable-ref classes name #f) (jolt-class-fail (dotted name) " is already a class")))
+;; each field's name once, a valid one, its type a class that exists (or the
+;; class itself)
+(define (jolt-class-check-fields! name fs)
+  (let loop ([fs fs] [seen '()])
     (unless (null? fs)
       (let ([n (caar fs)] [d (cdar fs)])
-        (when (bad-name? n) (fail (format "~s isn't a field name" n)))
-        (when (member n seen) (fail "field " n " is named twice"))
+        (when (jolt-class-bad-name? n) (jolt-class-fail (format "~s isn't a field name" n)))
+        (when (member n seen) (jolt-class-fail "field " n " is named twice"))
         (let ([t (let strip ([d d]) (if (char=? (string-ref d 0) #\[) (strip (array-elem d)) d))])
           (when (and (char=? (string-ref t 0) #\L) (not (string=? (ref-class t) name)) (not (class-exists? (ref-class t))))
-            (fail "field " n "'s type " (dotted (ref-class t)) " isn't a class (a nested class is Outer$Inner)")))
-        (loop (cdr fs) (cons n seen)))))
+            (jolt-class-fail "field " n "'s type " (dotted (ref-class t)) " isn't a class (a nested class is Outer$Inner)")))
+        (loop (cdr fs) (cons n seen))))))
+(define (jolt-class-check-implements! ifaces)
   (let loop ([is ifaces])
     (when (pair? is)
-      (when (member (car is) (cdr is)) (fail (dotted (car is)) " is in :implements twice"))
-      (loop (cdr is))))
-  (when (jdk-package? name) (fail (dotted name) " is in a package of the JDK's"))
+      (when (member (car is) (cdr is)) (jolt-class-fail (dotted (car is)) " is in :implements twice"))
+      (loop (cdr is)))))
+(define (jolt-class-check-supertypes! s super ifaces)
+  (when (eq? (jclass-kind s) 'interface) (jolt-class-fail (dotted super) " is an interface; name it in :implements"))
+  (when (class-flag? s #x10) (jolt-class-fail (dotted super) " is final"))
+  (for-each (lambda (i) (unless (eq? (jclass-kind (find-class i)) 'interface) (jolt-class-fail (dotted i) " is not an interface")))
+            ifaces))
+;; (desc . flags) of the superclass's public or protected constructors
+(define (jolt-class-super-ctors s)
+  (filter (lambda (c) (fxpositive? (fxlogand (cdr c) 5)))
+          (map (lambda (m) (cons (cadr m) (caddr m)))
+               (filter (lambda (m) (string=? (car m) "<init>")) (meta-methods s)))))
+(define (jolt-class-full-key? k) (memv #\( (string->list k)))
+;; (name desc cell anns) for a :methods entry keyed by a full JVM name,
+;; refused when it overrides a final method
+(define (jolt-class-exact-method f ms super manns)
+  (let* ([k (car f)] [p (string-split-paren k)] [n (car p)] [d (substring k (string-length n) (string-length k))])
+    (when (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d) (not (caddr m)))) ms)
+      (jolt-class-fail k " is final in " (dotted super)))
+    (list n d (cdr f) (jolt-class-anns k manns))))
+;; (name desc cell anns) for each method a :methods entry keyed by a name
+;; implements, those without a full key of their own; refused when the name
+;; has no overridable method
+(define (jolt-class-named-methods f ms exact super ifaces manns)
+  (let* ([n (car f)]
+         [own (filter (lambda (m) (string=? (car m) n)) ms)]
+         [open (filter caddr own)])
+    (when (null? open)
+      (jolt-class-fail (if (null? own) (string-append "no method " n " to implement in ")
+                           (string-append n " is final in "))
+                       (dotted super)
+                       (apply string-append (map (lambda (i) (string-append ", " (dotted i))) ifaces))))
+    (map (lambda (m) (list n (cadr m) (cdr f) (jolt-class-anns n manns)))
+         (filter (lambda (m) (not (exists (lambda (e) (string=? (car e) (string-append n (cadr m)))) exact)))
+                 open))))
+;; (name desc cell anns) for every instance native (not the natives table)
+(define (jolt-class-instance-methods fns exact ms super ifaces manns)
+  (append
+   (map (lambda (f) (jolt-class-exact-method f ms super manns)) exact)
+   (apply append
+          (map (lambda (f) (jolt-class-named-methods f ms exact super ifaces manns))
+               (filter (lambda (f) (not (jolt-class-full-key? (car f)))) fns)))))
+(define (jolt-class-check-ctors! super ctors own-ctors ctor-init)
+  (when (null? ctors) (jolt-class-fail (dotted super) " has no public or protected constructor"))
+  (when own-ctors
+    (when (null? own-ctors) (jolt-class-fail ":constructors names no constructor"))
+    (for-each (lambda (c)
+                (unless (assoc (cdr c) ctors)
+                  (jolt-class-fail (dotted super) " has no public or protected constructor " (cdr c)))
+                (when (and (not ctor-init) (not (string=? (cdr c) "()V")))
+                  (jolt-class-fail "the constructor " (car c) " passes arguments to " (dotted super) ".<init>" (cdr c)
+                                   ", so it needs :init")))
+              own-ctors)))
+(define (jolt-class-check-annotation-targets! anns own exact own-ctors ctors)
+  (for-each (lambda (c)
+              (unless (assoc (car c) (or own-ctors ctors))
+                (jolt-class-fail ":constructor-annotations names the constructor " (car c) ", which the class doesn't have")))
+            (cadddr anns))
+  ;; a method name annotates the methods it implements, so it must
+  ;; implement one that has no key of its own
+  (for-each (lambda (a)
+              (let ([k (car a)])
+                (unless (or (jolt-class-full-key? k)
+                            (exists (lambda (m) (and (string=? (car m) k) (not (assoc (string-append k (cadr m)) exact)))) own))
+                  (jolt-class-fail ":method-annotations names " k ", but every method of that name has a key of its own"))))
+            (caddr anns)))
+;; (name desc cell anns) for every static native; a static method can't
+;; share a signature with an instance method, inherited or the class's
+(define (jolt-class-static-methods sfns own ms manns)
+  (map (lambda (f)
+         (let* ([k (car f)] [n (car (string-split-paren k))] [d (substring k (string-length n) (string-length k))])
+           (when (or (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) own)
+                     (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) ms))
+             (jolt-class-fail "static " k " has an instance method's name and descriptor"))
+           (list n d (cdr f) (jolt-class-anns k manns))))
+       sfns))
+(define (jolt-class-ctor-natives name super own-ctors ctor-init post-init)
+  (map (lambda (c)
+         (list "<init>" (car c)
+               (defined-ctor-proc (string-append (dotted name) ".<init>" (car c)) super (car c) (cdr c)
+                                  ctor-init post-init)))
+       (or own-ctors '())))
+;; the static initializer: a static native <clinit>, which jinit calls on the
+;; class's first active use as any class's, so a failure is an
+;; ExceptionInInitializerError, then NoClassDefFoundError (a class file only
+;; champaca loads: HotSpot wants code in a <clinit>)
+(define (jolt-class-clinit init)
+  (if init
+      (list (list "<clinit>" "()V" (lambda () (call-from-java (unbox init) '()) (void))))
+      '()))
+(define (jolt-class-define-natives! name clinit natives-ctors own statics)
+  (for-each (lambda (m) (define-native! (string-append name "." (car m) (cadr m)) (caddr m)))
+            (append clinit natives-ctors))
+  (for-each (lambda (m)
+              (define-native! (string-append name "." (car m) (cadr m))
+                (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
+            own)
+  (for-each (lambda (m)
+              (define-native! (string-append name "." (car m) (cadr m))
+                (defined-static-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
+            statics))
+(define (jolt-class-bytes name super ifaces fields sfields ctors own-ctors own statics clinit natives-ctors anns)
+  (list->vector (class-file-bytes name super ifaces
+                                  (append (map (lambda (f) (list (car f) (cdr f) 1 (jolt-class-anns (car f) (cadr anns)))) fields)
+                                          (map (lambda (f) (list (car f) (cdr f) 9 (jolt-class-anns (car f) (cadr anns)))) sfields))
+                                  (if own-ctors '() ctors)
+                                  (append (map (lambda (m) (list (car m) (cadr m) #x0101 (cadddr m))) own)
+                                          (map (lambda (m) (list (car m) (cadr m) #x0109 (cadddr m))) statics)
+                                          (map (lambda (m) (list (car m) (cadr m) #x0108 '())) clinit)
+                                          (map (lambda (m) (list (car m) (cadr m) #x0101 (jolt-class-anns (cadr m) (cadddr anns))))
+                                               natives-ctors))
+                                  (car anns) (cadddr anns))))
+;; the natives must be there when the class registers; a definition that
+;; fails takes them back, so a later class of the name can't pick them up
+(define (jolt-class-register! name super ifaces bytes natives-defined)
+  (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
+                                   natives-defined)
+                         (raise e)])
+             (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
+    (hashtable-set! defined-supers name (cons super ifaces))
+    m))
+
+(define (define-jolt-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init anns)
+  (jolt-class-check-name! name)
+  (jolt-class-check-fields! name (append fields sfields))
+  (jolt-class-check-implements! ifaces)
+  (when (jdk-package? name) (jolt-class-fail (dotted name) " is in a package of the JDK's"))
   (let ([s (find-class super)])
-    (when (eq? (jclass-kind s) 'interface) (fail (dotted super) " is an interface; name it in :implements"))
-    (when (class-flag? s #x10) (fail (dotted super) " is final"))
-    (for-each (lambda (i) (unless (eq? (jclass-kind (find-class i)) 'interface) (fail (dotted i) " is not an interface")))
-              ifaces)
+    (jolt-class-check-supertypes! s super ifaces)
     (let* ([ms (overridable-methods super ifaces)]
-           [ctors (filter (lambda (c) (fxpositive? (fxlogand (cdr c) 5)))
-                          (map (lambda (m) (cons (cadr m) (caddr m)))
-                               (filter (lambda (m) (string=? (car m) "<init>")) (meta-methods s))))]
-           [exact (filter (lambda (f) (memv #\( (string->list (car f)))) fns)]
-           ;; (name desc cell anns) for every instance native (not the
-           ;; natives table)
-           [own
-            (append
-             (map (lambda (f)
-                    (let* ([k (car f)] [p (string-split-paren k)] [n (car p)] [d (substring k (string-length n) (string-length k))])
-                      (when (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d) (not (caddr m)))) ms)
-                        (fail k " is final in " (dotted super)))
-                      (list n d (cdr f) (anns-of k (caddr anns)))))
-                  exact)
-             (apply append
-                    (map (lambda (f)
-                           (let* ([n (car f)]
-                                  [own (filter (lambda (m) (string=? (car m) n)) ms)]
-                                  [open (filter caddr own)])
-                             (when (null? open)
-                               (fail (if (null? own) (string-append "no method " n " to implement in ")
-                                         (string-append n " is final in "))
-                                     (dotted super)
-                                     (apply string-append (map (lambda (i) (string-append ", " (dotted i))) ifaces))))
-                             (map (lambda (m) (list n (cadr m) (cdr f) (anns-of n (caddr anns))))
-                                  (filter (lambda (m) (not (exists (lambda (e) (string=? (car e) (string-append n (cadr m)))) exact)))
-                                          open))))
-                         (filter (lambda (f) (not (memv #\( (string->list (car f))))) fns))))])
-      (when (null? ctors) (fail (dotted super) " has no public or protected constructor"))
-      (when own-ctors
-        (when (null? own-ctors) (fail ":constructors names no constructor"))
-        (for-each (lambda (c)
-                    (unless (assoc (cdr c) ctors)
-                      (fail (dotted super) " has no public or protected constructor " (cdr c)))
-                    (when (and (not ctor-init) (not (string=? (cdr c) "()V")))
-                      (fail "the constructor " (car c) " passes arguments to " (dotted super) ".<init>" (cdr c)
-                            ", so it needs :init")))
-                  own-ctors))
-      (for-each (lambda (c)
-                  (unless (assoc (car c) (or own-ctors ctors))
-                    (fail ":constructor-annotations names the constructor " (car c) ", which the class doesn't have")))
-                (cadddr anns))
-      ;; a method name annotates the methods it implements, so it must
-      ;; implement one that has no key of its own
-      (for-each (lambda (a)
-                  (let ([k (car a)])
-                    (unless (or (memv #\( (string->list k))
-                                (exists (lambda (m) (and (string=? (car m) k) (not (assoc (string-append k (cadr m)) exact)))) own))
-                      (fail ":method-annotations names " k ", but every method of that name has a key of its own"))))
-                (caddr anns))
-      ;; (name desc cell anns) for every static native; a static method can't
-      ;; share a signature with an instance method, inherited or the class's
-      (let ([statics
-             (map (lambda (f)
-                    (let* ([k (car f)] [n (car (string-split-paren k))] [d (substring k (string-length n) (string-length k))])
-                      (when (or (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) own)
-                                (exists (lambda (m) (and (string=? (car m) n) (string=? (cadr m) d))) ms))
-                        (fail "static " k " has an instance method's name and descriptor"))
-                      (list n d (cdr f) (anns-of k (caddr anns)))))
-                  sfns)]
-            ;; the static initializer: a static native <clinit>, which jinit
-            ;; calls on the class's first active use as any class's, so a
-            ;; failure is an ExceptionInInitializerError, then
-            ;; NoClassDefFoundError (a class file only champaca loads: HotSpot
-            ;; wants code in a <clinit>)
-            [natives-ctors
-             (map (lambda (c)
-                    (list "<init>" (car c)
-                          (defined-ctor-proc (string-append (dotted name) ".<init>" (car c)) super (car c) (cdr c)
-                                             ctor-init post-init)))
-                  (or own-ctors '()))]
-            [clinit (if init
-                        (list (list "<clinit>" "()V"
-                                    (lambda () (call-from-java (unbox init) '()) (void))))
-                        '())])
-        (for-each (lambda (m) (define-native! (string-append name "." (car m) (cadr m)) (caddr m)))
-                  (append clinit natives-ctors))
-        (for-each (lambda (m)
-                    (define-native! (string-append name "." (car m) (cadr m))
-                      (defined-method-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
-                  own)
-        (for-each (lambda (m)
-                    (define-native! (string-append name "." (car m) (cadr m))
-                      (defined-static-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
-                  statics)
-        (let ([bytes (list->vector (class-file-bytes name super ifaces
-                                                     (append (map (lambda (f) (list (car f) (cdr f) 1 (anns-of (car f) (cadr anns)))) fields)
-                                                             (map (lambda (f) (list (car f) (cdr f) 9 (anns-of (car f) (cadr anns)))) sfields))
-                                                     (if own-ctors '() ctors)
-                                                     (append (map (lambda (m) (list (car m) (cadr m) #x0101 (cadddr m))) own)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0109 (cadddr m))) statics)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0108 '())) clinit)
-                                                             (map (lambda (m) (list (car m) (cadr m) #x0101 (anns-of (cadr m) (cadddr anns))))
-                                                                  natives-ctors))
-                                                     (car anns) (cadddr anns)))])
-          ;; the natives must be there when the class registers; a definition
-          ;; that fails takes them back, so a later class of the name can't
-          ;; pick them up
-          (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
-                                           (append own statics clinit natives-ctors))
-                                 (raise e)])
-                     (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
-            (hashtable-set! defined-supers name (cons super ifaces))
-            m))))))
+           [ctors (jolt-class-super-ctors s)]
+           [exact (filter (lambda (f) (jolt-class-full-key? (car f))) fns)]
+           [own (jolt-class-instance-methods fns exact ms super ifaces (caddr anns))])
+      (jolt-class-check-ctors! super ctors own-ctors ctor-init)
+      (jolt-class-check-annotation-targets! anns own exact own-ctors ctors)
+      (let* ([statics (jolt-class-static-methods sfns own ms (caddr anns))]
+             [natives-ctors (jolt-class-ctor-natives name super own-ctors ctor-init post-init)]
+             [clinit (jolt-class-clinit init)])
+        (jolt-class-define-natives! name clinit natives-ctors own statics)
+        (jolt-class-register! name super ifaces
+                              (jolt-class-bytes name super ifaces fields sfields ctors own-ctors own statics clinit natives-ctors anns)
+                              (append own statics clinit natives-ctors))))))
 
 ;; obj's superclass's method name (public or protected) that fits args,
 ;; called on obj without virtual dispatch, as super.name(args) in Java; an
