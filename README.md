@@ -195,4 +195,4 @@ The logo in `docs/images/logo.svg` was drawn for this project.
 
 ## License
 
-GPLv3 with the Classpath Exception, inherited from OpenLDK. See `COPYING` and `COPYING.CLASSPATH-EXCEPTION`. The test programs in `test/aaa` are OpenLDK's own, under the same license (`test/aaa/README.md`).
+GPLv3 or later with the Classpath Exception, inherited from OpenLDK. See `COPYING` and `COPYING.CLASSPATH-EXCEPTION`. Each source file, task file and script but `src/champaca/npe.clj` (its first comment says why) starts with the SPDX line `GPL-3.0-or-later WITH Classpath-exception-2.0` and a copyright line crediting OpenLDK, as OpenLDK's own files do. The Java test programs carry no header, since their recorded output has line numbers in it. The test programs in `test/aaa` are OpenLDK's own, under the same license (`test/aaa/README.md`).

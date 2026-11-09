@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Descriptor-free calls from jolt: find the method by name and argument
 ;; count, then pick the overload whose parameter types best fit the actual
 ;; jolt arguments, the way javac picks among overloads for a call site.

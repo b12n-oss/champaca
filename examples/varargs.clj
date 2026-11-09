@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Varargs and vector-to-array calls from jolt. Trailing arguments are packed
 ;; into the varargs array; a jolt vector passed for an array parameter
 ;; becomes a Java array of the parameter's element type. The expected values

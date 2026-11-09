@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 (ns champaca.api
   "Call Java from jolt, in-process. Same surface as jolt-openldk's
   net.b12n.jolt.openldk (init!, call-static, new-object, call, implement),

@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; jolt reading and writing Java fields, and ->clj's :key-fn.
 ;; target/lib.jar is built from test/jar by bb test and bb example.
 ;;   bb example fields

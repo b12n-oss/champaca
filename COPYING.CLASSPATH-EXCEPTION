@@ -1,8 +1,8 @@
 GNU Classpath exception
 
 The text below is the exception that accompanies the GNU General Public
-License (COPYING) for bridge/bridge.lisp. It is quoted verbatim from
-OpenLDK's source headers, which carry the same exception.
+License (COPYING) for champaca. It is quoted verbatim from OpenLDK's
+source headers, which carry the same exception.
 
 Linking this library statically or dynamically with other modules is
 making a combined work based on this library.  Thus, the terms and

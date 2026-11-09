@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; The Vector API from jolt: init! with :add-modules puts jdk.incubator.vector
 ;; in the boot layer, as java --add-modules jdk.incubator.vector does (the
 ;; JDK warns that an incubator module is in use). champaca runs every vector

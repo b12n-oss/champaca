@@ -1,3 +1,7 @@
+;; No license header yet. This file follows HotSpot's bytecodeUtils.cpp,
+;; which is GPL version 2 only, so it can't carry champaca's GPLv3 one; it
+;; is due a rewrite from JEP 358 and the JVM's observed messages first.
+
 (ns champaca.npe
   "The JVM's helpful NullPointerException messages (JEP 358), from the
   failing method's bytecode, ported from HotSpot's ExceptionMessageBuilder

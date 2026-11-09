@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; bb test's failed-save row, on a cache of its own: a JDK class outside the
 ;; boot set loads, and InflaterInputStream, the first save-cache! fails
 ;; (begin-units! made to throw), ZipInputStream (an InflaterInputStream) and

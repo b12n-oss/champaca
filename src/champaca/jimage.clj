@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 (ns champaca.jimage
   "The JDK's runtime image, $JAVA_HOME/lib/modules, read the way
   jdk.internal.jimage.BasicImageReader reads it (JDK 25's java.base, which

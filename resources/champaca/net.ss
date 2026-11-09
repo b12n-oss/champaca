@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Sockets: the natives of java.net (InetAddress and Inet4AddressImpl) and of
 ;; sun.nio.ch's Net, SocketDispatcher, UnixDispatcher and IOUtil's blocking
 ;; mode, through libc as files.ss does files (its deflibc bindings, errno and

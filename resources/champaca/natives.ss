@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Native method implementations, keyed by the same global name the
 ;; translator uses: "Class.name(desc)". Instance natives take `this` first.
 ;; This is the spike's equivalent of OpenLDK's src/native/*.lisp.

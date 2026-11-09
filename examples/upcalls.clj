@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; A C function calling back into jolt: an upcall stub over a method handle
 ;; bound to a jolt fn, called by C from the calling thread and from a thread
 ;; C starts, while a Java thread runs beside it. The fn calls Java itself, so

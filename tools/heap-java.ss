@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; (java-heap-report), for tools/heap.clj java: the Java object graph from
 ;; every top-level symbol bound to a Java object, array or bignum (the static
 ;; fields), plus the intern table: objects, arrays by element, bignums in slots

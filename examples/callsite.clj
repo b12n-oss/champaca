@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; The call-site cache: a call remembers which overload it chose for the kinds
 ;; of arguments it saw. Each test reuses a site with arguments that need a
 ;; different choice, so a cache keyed too coarsely answers something else.

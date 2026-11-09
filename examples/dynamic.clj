@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Calling Java from jolt without JVM descriptors. Overloads are chosen from
 ;; the argument values, the way javac chooses at a call site. The expected
 ;; values are what test/java/DynamicCheck.java, which makes the same calls,

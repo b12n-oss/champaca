@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Java object serialization driven from jolt: a class of the program's own
 ;; (champaca.lib.Note, in target/lib.jar) and JDK classes, written and read
 ;; back through ObjectOutputStream and ObjectInputStream. ObjectInputStream

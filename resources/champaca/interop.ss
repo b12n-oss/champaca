@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Calls from jolt into Java. jolt and Java share one Chez heap, so there is
 ;; no wire format: arguments and results are converted by descriptor, and any
 ;; Java object crosses as itself (an opaque jobj/jarr on the jolt side).

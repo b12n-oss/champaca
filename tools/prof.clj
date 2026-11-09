@@ -1,3 +1,10 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 ;; Where a champaca process's time goes. Boots, runs a main class with the
 ;; profiler of tools/prof.ss sampling the thread, then prints three tables
 ;; to stderr: the innermost Java frame of each sample (self), every Java

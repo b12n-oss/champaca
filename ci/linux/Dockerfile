@@ -1,3 +1,10 @@
+# Copyright (C) 2026  champaca contributors
+# Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+#   Anthony Green <green@moxielogic.com>
+#
+# SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+# See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
 # Linux for champaca: OpenJDK 25.0.2 (the build this repo's .expected files
 # come from), babashka, and what building jolt from source
 # needs (jolt's own make provisions its Chez Scheme). Every download is pinned
