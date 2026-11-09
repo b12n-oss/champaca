@@ -1098,50 +1098,96 @@
   [cname m]
   (boolean (s/call "native-override" (str cname "." (:name m) (:desc m)))))
 
+(defn- field-layout
+  "[layout template] for info's instance fields after its superclass sup's:
+  each own field's slot follows the inherited ones, its default value
+  appended to the slot template."
+  [info sup]
+  (let [own (remove :static (:fields info))
+        base (count (:template sup []))]
+    [(into (or (:layout sup) {})
+           (map-indexed (fn [i f] [(str (:name info) "." (:name f)) (+ base i)]) own))
+     (into (or (:template sup) []) (map #(cg/default-value (:desc %)) own))]))
+
+(defn- inherited-vtable
+  "The superclass's entries for methods some class declares; the defaults it
+  picked are picked again by link, since this class may implement a more
+  specific interface."
+  [sup]
+  (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
+                                   (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
+                   (vtable-of sup))))
+
+(defn- own-vtable-methods
+  "[private? key global] for each virtual method info declares with code, a
+  native or a runtime override."
+  [info]
+  (for [m (:methods info)
+        :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
+    [(pos? (bit-and (:flags m) 0x0002)) (str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))]))
+
+(defn- interface-ancestors
+  "The interfaces among info's ancestors, info itself left out."
+  [info]
+  (filter #(cf/interface? (class-info %)) (rest (ancestry-of-unlinked info))))
+
+(defn- picked-defaults
+  "[key defaults] for each interface method key vtable lacks that has
+  maximally specific defaults."
+  [info vtable]
+  (for [[k cands] (iface-methods (interface-ancestors info))
+        :when (not (contains? vtable k))
+        :let [ds (specific-defaults cands)]
+        :when (seq ds)]
+    [k ds]))
+
+(defn- default-entries
+  "The vtable entries for picked defaults: two or more maximally specific
+  defaults conflict, and the entry is a stub that throws, defined by cname's
+  registration."
+  [cname picked]
+  (for [[k ds] picked]
+    [k (if (next ds) (str "icce:" cname "." k) (str (ffirst ds) "." k))]))
+
+(defn- default-conflicts
+  "key -> the interfaces whose defaults conflict, for registration's stubs."
+  [picked]
+  (into {} (for [[k ds] picked :when (next ds)] [k (mapv first ds)])))
+
+(defn- interface-privates
+  "[key global] for the private methods of info's interface ancestors: they
+  aren't inherited and pick no default, but javac calls them with
+  invokeinterface on the receiver, which dispatches through the vtable."
+  [info]
+  (for [i (interface-ancestors info)
+        m (class-methods i)
+        :when (and (:virtual m) (:code m) (pos? (bit-and (:flags m) 0x0002)))]
+    [(str (:name m) (:desc m)) (str i "." (:name m) (:desc m))]))
+
+(defn- add-absent
+  "vtable with each [key global] of entries added under a key it lacks, the
+  first entry for a key winning."
+  [vtable entries]
+  (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable entries))
+
 (defn- link
   "Compute field layout, slot template and vtable from the (already linked)
   superclass, then fill vtable gaps with interface default methods."
   [info]
   (let [sup (when (:super info) (class-info (:super info)))
-        own (remove :static (:fields info))
-        base (count (:template sup []))
-        layout (into (or (:layout sup) {})
-                     (map-indexed (fn [i f] [(str (:name info) "." (:name f)) (+ base i)]) own))
-        template (into (or (:template sup) []) (map #(cg/default-value (:desc %)) own))
-        ;; the superclass's entries for methods some class declares; the
-        ;; defaults it picked are picked again below, since this class may
-        ;; implement a more specific interface
-        sup-vt (into {} (remove (fn [[_ g]] (or (str/starts-with? g "icce:")
-                                                (cf/interface? (class-info (subs g 0 (str/index-of g "."))))))
-                                (vtable-of sup)))
-        own-methods (for [m (:methods info)
-                          :when (and (:virtual m) (or (:code m) (:native m) (overridden? (:name info) m)))]
-                      [(pos? (bit-and (:flags m) 0x0002)) (str (:name m) (:desc m)) (str (:name info) "." (:name m) (:desc m))])
+        [layout template] (field-layout info sup)
+        sup-vt (inherited-vtable sup)
+        own-methods (own-vtable-methods info)
         ;; a private method overrides nothing: it neither replaces an
         ;; inherited entry nor keeps a default from being picked (JVMS
         ;; 5.4.6), so it goes in last, under a key nothing else has
         own-privates (for [[p? k g] own-methods :when p?] [k g])
         vtable (into sup-vt (for [[p? k g] own-methods :when (not p?)] [k g]))
-        picked (for [[k cands] (iface-methods (filter #(cf/interface? (class-info %))
-                                                      (rest (ancestry-of-unlinked info))))
-                     :when (not (contains? vtable k))
-                     :let [ds (specific-defaults cands)]
-                     :when (seq ds)]
-                 [k ds])
-        ;; two or more maximally specific defaults conflict: the vtable entry
-        ;; is a stub that throws, defined by this class's registration
-        defaults (for [[k ds] picked]
-                   [k (if (next ds) (str "icce:" (:name info) "." k) (str (ffirst ds) "." k))])
-        conflicts (into {} (for [[k ds] picked :when (next ds)] [k (mapv first ds)]))
+        picked (picked-defaults info vtable)
+        defaults (default-entries (:name info) picked)
+        conflicts (default-conflicts picked)
         vtable (into vtable defaults)
-        ;; an interface's private methods aren't inherited and pick no
-        ;; default, but javac calls them with invokeinterface on the
-        ;; receiver, which dispatches through this vtable
-        privates (for [i (filter #(cf/interface? (class-info %)) (rest (ancestry-of-unlinked info)))
-                       m (class-methods i)
-                       :when (and (:virtual m) (:code m) (pos? (bit-and (:flags m) 0x0002)))]
-                   [(str (:name m) (:desc m)) (str i "." (:name m) (:desc m))])
-        vtable (reduce (fn [vt [k g]] (if (contains? vt k) vt (assoc vt k g))) vtable (concat own-privates privates))]
+        vtable (add-absent vtable (concat own-privates (interface-privates info)))]
     (assoc info :layout layout :template template :vtable vtable :conflicts conflicts)))
 
 (defn- ancestry-of-unlinked
