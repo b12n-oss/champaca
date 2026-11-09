@@ -2682,6 +2682,153 @@
   [v empty?]
   (when (and v (not (str/starts-with? v "-")) (or empty? (not= "" v))) v))
 
+(defn- vm-error
+  "The launcher's refusal of an option the VM itself judges: lines, then
+  HotSpot's two closing lines, status 1."
+  [& lines]
+  (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
+                                       "Error: A fatal exception has occurred. Program will exit."])))
+
+(defn- separate-value
+  "The value after the option starting argv, or the launcher's \"Error: <option>
+  requires <what>\". As the launcher, a separate value can't start with
+  \"-\" (it's the next option), and only empty? lets it be empty."
+  [argv empty? what]
+  (or (option-value (second argv) empty?)
+      (launcher-error (str "Error: " (first argv) " requires " what))))
+
+(defn- joined-value
+  "The value after an option's =, or \"Error: <option>= requires <what>\"
+  when it's empty."
+  [a what]
+  (let [i (str/index-of a "=") v (subs a (inc i))]
+    (if (= "" v) (launcher-error (str "Error: " (subs a 0 (inc i)) " requires " what)) v)))
+
+(defn- add-module-option [opts suffix v]
+  (update opts :module-options conj [suffix v]))
+
+;; HotSpot refuses the extension and endorsed directories of Java 8
+(def ^:private removed-dir-properties
+  {"java.endorsed.dirs" (str " is not supported. Endorsed standards and standalone APIs\n"
+                             "in modular form will be supported via the concept of upgradeable modules.")
+   "java.ext.dirs" " is not supported.  Use -classpath instead."})
+
+(defn- define-option
+  "-Dkey=value, -Dkey an empty value, a bare -D nothing. A non-empty
+  removed directory property is refused as HotSpot parses it: the text on
+  stdout, the launcher's lines on stderr. One of the module system's own
+  properties (reserved-module-property?) is dropped and noted."
+  [opts argv]
+  (let [a (first argv) kv (subs a 2) i (str/index-of kv "=")
+        k (if i (subs kv 0 i) kv)
+        v (if i (subs kv (inc i)) "")]
+    (when-let [why (and (not= "" v) (removed-dir-properties k))]
+      (println (str a why))
+      (flush)
+      (vm-error))
+    [(cond (= "" k) opts
+           (reserved-module-property? k) (assoc opts :module-props-ignored true)
+           :else (update opts :props conj [k v]))
+     (rest argv)]))
+
+(defn- joined-module-option?
+  "--add-modules=M and the other module options joined to their value."
+  [a]
+  (when-let [i (str/index-of a "=")] (module-options (subs a 0 i))))
+
+(defn- joined-module-option
+  "A module option joined to its value; only --add-opens= may be empty."
+  [opts argv]
+  (let [a (first argv) i (str/index-of a "=") o (subs a 0 i)
+        v (if (= "--add-opens" o) (subs a (inc i)) (joined-value a "modules to be specified"))]
+    [(add-module-option opts (first (module-options o)) v) (rest argv)]))
+
+(defn- version-option
+  "As java.c: a -- form sends the version to stdout from then on, and
+  -version or --version ends the parsing there, whatever follows it (a bad
+  option, -showversion) left unread."
+  [opts argv]
+  (let [a (first argv)
+        opts (update opts :version (fn [v] {:err? (and (get v :err? true) (not (str/starts-with? a "--")))}))]
+    (if (#{"-version" "--version"} a)
+      (reduced (assoc opts :argv [] :version (assoc (:version opts) :exit? true)))
+      [opts (rest argv)])))
+
+(defn- stack-option
+  "-Xss with HotSpot's checks: 0 is the default, 208k the least, 1g the most."
+  [opts argv]
+  (let [a (first argv)
+        n (when (re-matches #"[0-9]+[kKmMgGtT]?" (subs a 4)) (size-bytes (subs a 4)))]
+    (cond (nil? n) (vm-error (str "Invalid thread stack size: " a))
+          (> n 1073741824) (vm-error (str "Invalid thread stack size: " a) "The specified size exceeds the maximum representable size.")
+          (zero? n) [(dissoc opts :stack) (rest argv)]
+          (< n (* 208 1024)) (vm-error "" "The Java thread stack size specified is too small. Specify at least 208k")
+          :else [(assoc opts :stack n) (rest argv)])))
+
+(defn- ignore-option [opts argv]
+  (binding [*out* *err*] (println (str "champaca: ignoring option " (first argv) "; it has no counterpart here")))
+  [opts (rest argv)])
+
+(defn- option-flag
+  "A handler for an option taking no separate value: (f opts option)."
+  [f]
+  (fn [opts argv] [(f opts (first argv)) (rest argv)]))
+
+(defn- prefix [p] (fn [a] (str/starts-with? a p)))
+
+(def ^:private option-handlers
+  "[test handler] for each option jvm-options knows, tried in order on the
+  option. A handler takes the options so far and the argv starting at the
+  option, and answers [options argv-after] to go on or a reduced options
+  map to stop (with :argv set)."
+  [[(prefix "-D") define-option]
+   [#{"-cp" "-classpath" "--class-path"}
+    (fn [opts argv] [(assoc opts :classpath (separate-value argv true "class path specification")) (nnext argv)])]
+   [(prefix "--class-path=") (option-flag (fn [opts a] (assoc opts :classpath (subs a 13))))]
+   ;; the module path, as the launcher passes it: jdk.module.path
+   [#{"-p" "--module-path"}
+    (fn [opts argv] [(add-module-option opts "path" (separate-value argv false "module path specification")) (nnext argv)])]
+   [(prefix "--module-path=")
+    (option-flag (fn [opts a] (add-module-option opts "path" (joined-value a "modules to be specified"))))]
+   ;; -m module[/class] ends the options, as -jar does: what follows is
+   ;; the program's; jdk.module.main makes the module a root
+   [#{"-m" "--module"}
+    (fn [opts argv] (reduced (assoc opts :module (separate-value argv false "module name") :argv (nnext argv))))]
+   [(prefix "--module=")
+    (fn [opts argv] (reduced (assoc opts :module (joined-value (first argv) "module name") :argv (rest argv))))]
+   [assertion-directive (option-flag (fn [opts a] (update opts :assertions conj (assertion-directive a))))]
+   [#{"-esa" "-enablesystemassertions"} (option-flag (fn [opts _] (update opts :assertions conj "s+")))]
+   [#{"-dsa" "-disablesystemassertions"} (option-flag (fn [opts _] (update opts :assertions conj "s-")))]
+   ;; -Xdiag only makes the launcher's own errors longer
+   [#{"-server" "-client" "-Xdiag"} (option-flag (fn [opts _] opts))]
+   [#{"--enable-preview"} (option-flag (fn [opts _] (assoc opts :preview true)))]
+   [#{"--source"} (fn [opts argv] [(assoc opts :source (separate-value argv false "source version")) (nnext argv)])]
+   [(prefix "--source=") (option-flag (fn [opts a] (assoc opts :source (subs a 9))))]
+   [module-options
+    (fn [opts argv]
+      [(add-module-option opts (first (module-options (first argv))) (separate-value argv false "modules to be specified"))
+       (nnext argv)])]
+   [joined-module-option? joined-module-option]
+   ;; only the joined form: the launcher doesn't know this one, and
+   ;; ModuleBootstrap judges the value, an empty one too
+   [(prefix "--illegal-native-access=")
+    (option-flag (fn [opts a] (add-module-option opts "illegal.native.access" (subs a 24))))]
+   [#{"-version" "--version" "-showversion" "--show-version"} version-option]
+   [(prefix "-Xss") stack-option]
+   [ignored-option? ignore-option]])
+
+(defn- option-step
+  "One step of jvm-options: the end of the options (the main class, -jar or
+  nothing left), a known option's handler, or the launcher's Unrecognized
+  option."
+  [opts argv]
+  (let [a (first argv)]
+    (if (or (nil? a) (= a "-jar") (not (str/starts-with? a "-")))
+      (reduced (assoc opts :argv argv))
+      (if-let [handle (some (fn [[test handle]] (when (test a) handle)) option-handlers)]
+        (handle opts argv)
+        (vm-error (str "Unrecognized option: " a))))))
+
 (defn- jvm-options
   "The options before the main class or -jar, as the java launcher reads
   them, as {:props [[k v]...] :classpath s-or-nil :assertions [...] :argv rest}:
@@ -2707,104 +2854,14 @@
   -Xms, -Xmn), -Xshare:, any -XX: flag, -verbose[:...], -Xlog[:...] and the
   execution-mode and diagnostic -X options (ignored-option?) are ignored
   with a warning, since start scripts pass them and they tune or trace only
-  the VM; any other option is the launcher's Unrecognized option."
+  the VM; any other option is the launcher's Unrecognized option. Each
+  option is one of option-handlers."
   [argv]
   (loop [argv argv opts {:props [] :classpath nil :assertions [] :module-options []}]
-    (let [a (first argv)]
-      (cond (or (nil? a) (= a "-jar") (not (str/starts-with? a "-"))) (assoc opts :argv argv)
-            (str/starts-with? a "-D")
-            (let [kv (subs a 2) i (str/index-of kv "=")
-                  k (if i (subs kv 0 i) kv)
-                  v (if i (subs kv (inc i)) "")]
-              ;; HotSpot refuses the extension and endorsed directories of
-              ;; Java 8, the first one given with a value, as it parses it:
-              ;; the text on stdout, the launcher's lines on stderr
-              (when-let [why (and (not= "" v)
-                                  ({"java.endorsed.dirs" (str " is not supported. Endorsed standards and standalone APIs\n"
-                                                              "in modular form will be supported via the concept of upgradeable modules.")
-                                    "java.ext.dirs" " is not supported.  Use -classpath instead."} k))]
-                (println (str a why))
-                (flush)
-                (launcher-error "Error: Could not create the Java Virtual Machine."
-                                "Error: A fatal exception has occurred. Program will exit."))
-              (recur (rest argv) (cond (= "" k) opts
-                                       (reserved-module-property? k) (assoc opts :module-props-ignored true)
-                                       :else (update opts :props conj [k v]))))
-            ;; as the launcher, an option's separate value can't start with
-            ;; "-" (it's the next option); -cp takes an empty one, --source
-            ;; and --add-modules don't
-            (#{"-cp" "-classpath" "--class-path"} a)
-            (if-let [cp (option-value (second argv) true)]
-              (recur (nnext argv) (assoc opts :classpath cp))
-              (launcher-error (str "Error: " a " requires class path specification")))
-            (str/starts-with? a "--class-path=") (recur (rest argv) (assoc opts :classpath (subs a 13)))
-            ;; the module path, as the launcher passes it: jdk.module.path
-            (#{"-p" "--module-path"} a)
-            (if-let [mp (option-value (second argv) false)]
-              (recur (nnext argv) (update opts :module-options conj ["path" mp]))
-              (launcher-error (str "Error: " a " requires module path specification")))
-            (str/starts-with? a "--module-path=")
-            (if (= "" (subs a 14))
-              (launcher-error "Error: --module-path= requires modules to be specified")
-              (recur (rest argv) (update opts :module-options conj ["path" (subs a 14)])))
-            ;; -m module[/class] ends the options, as -jar does: what follows
-            ;; is the program's; jdk.module.main makes the module a root
-            (#{"-m" "--module"} a)
-            (if-let [m (option-value (second argv) false)]
-              (assoc opts :module m :argv (nnext argv))
-              (launcher-error (str "Error: " a " requires module name")))
-            (str/starts-with? a "--module=")
-            (if (= "" (subs a 9))
-              (launcher-error "Error: --module= requires module name")
-              (assoc opts :module (subs a 9) :argv (rest argv)))
-            (assertion-directive a) (recur (rest argv) (update opts :assertions conj (assertion-directive a)))
-            (#{"-esa" "-enablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s+"))
-            (#{"-dsa" "-disablesystemassertions"} a) (recur (rest argv) (update opts :assertions conj "s-"))
-            ;; -Xdiag only makes the launcher's own errors longer
-            (#{"-server" "-client" "-Xdiag"} a) (recur (rest argv) opts)
-            (= "--enable-preview" a) (recur (rest argv) (assoc opts :preview true))
-            (= "--source" a) (if-let [v (option-value (second argv) false)]
-                               (recur (nnext argv) (assoc opts :source v))
-                               (launcher-error "Error: --source requires source version"))
-            (str/starts-with? a "--source=") (recur (rest argv) (assoc opts :source (subs a 9)))
-            (module-options a)
-            (if-let [ms (option-value (second argv) false)]
-              (recur (nnext argv) (update opts :module-options conj [(first (module-options a)) ms]))
-              (launcher-error (str "Error: " a " requires modules to be specified")))
-            (some-> (str/index-of a "=") (#(module-options (subs a 0 %))))
-            (let [i (str/index-of a "=") o (subs a 0 i) v (subs a (inc i))]
-              (if (and (= "" v) (not= "--add-opens" o))
-                (launcher-error (str "Error: " o "= requires modules to be specified"))
-                (recur (rest argv) (update opts :module-options conj [(first (module-options o)) v]))))
-            ;; only the joined form: the launcher doesn't know this one, and
-            ;; ModuleBootstrap judges the value, an empty one too
-            (str/starts-with? a "--illegal-native-access=")
-            (recur (rest argv) (update opts :module-options conj ["illegal.native.access" (subs a 24)]))
-            ;; as java.c: a -- form sends the version to stdout from then on,
-            ;; and -version or --version ends the parsing there, whatever
-            ;; follows it (a bad option, -showversion) left unread
-            (#{"-version" "--version" "-showversion" "--show-version"} a)
-            (let [opts (update opts :version (fn [v] {:err? (and (get v :err? true) (not (str/starts-with? a "--")))}))]
-              (if (#{"-version" "--version"} a)
-                (assoc opts :argv [] :version (assoc (:version opts) :exit? true))
-                (recur (rest argv) opts)))
-            (str/starts-with? a "-Xss")
-            (let [fail (fn [& lines] (apply launcher-error (concat lines ["Error: Could not create the Java Virtual Machine."
-                                                                          "Error: A fatal exception has occurred. Program will exit."])))
-                  n (when (re-matches #"[0-9]+[kKmMgGtT]?" (subs a 4)) (size-bytes (subs a 4)))]
-              ;; HotSpot's checks: 0 is the default, 208k the least, 1g the most
-              (cond (nil? n) (fail (str "Invalid thread stack size: " a))
-                    (> n 1073741824) (fail (str "Invalid thread stack size: " a) "The specified size exceeds the maximum representable size.")
-                    (zero? n) (recur (rest argv) (dissoc opts :stack))
-                    (< n (* 208 1024)) (fail "" "The Java thread stack size specified is too small. Specify at least 208k")
-                    :else (recur (rest argv) (assoc opts :stack n))))
-            (ignored-option? a)
-            (do (binding [*out* *err*] (println (str "champaca: ignoring option " a "; it has no counterpart here")))
-                (recur (rest argv) opts))
-            :else
-            (launcher-error (str "Unrecognized option: " a)
-                            "Error: Could not create the Java Virtual Machine."
-                            "Error: A fatal exception has occurred. Program will exit.")))))
+    (let [r (option-step opts argv)]
+      (if (reduced? r)
+        @r
+        (let [[opts argv] r] (recur argv opts))))))
 
 (defn- runtime-arguments
   "The VM options HotSpot reports (VM.getRuntimeArguments) for the options
