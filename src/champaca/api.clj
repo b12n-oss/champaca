@@ -297,7 +297,7 @@
       c)))
 
 (defn- element-error
-  "who's value v refused: \"<who> is <v>, not <what>\"."
+  "Throws \"<who> is <v>, not <what>\" with {:value v}."
   [who v what]
   (throw (ex-info (str who " is " (pr-str v) ", not " what) {:value v})))
 
@@ -353,9 +353,8 @@
    "java.lang.String" string-element
    "java.lang.Class" class-element})
 
-(defn- enum-element [who rt v]
-  (let [rname (invoke rt "getName")
-        n (if (keyword? v) (name v) v)
+(defn- enum-element [who rt rname v]
+  (let [n (if (keyword? v) (name v) v)
         names (mapv #(invoke % "name") (->clj (invoke rt "getEnumConstants")))]
     (if (and (string? n) (some #{n} names))
       ["e" (invoke rt "descriptorString") n]
@@ -374,7 +373,7 @@
       (let [ct (invoke rt "getComponentType")]
         (into ["["] (map-indexed (fn [i x] (annotation-value (str who "[" i "]") ct x)) (if (sequential? v) v [v]))))
       (named-elements rname) ((named-elements rname) who v)
-      (invoke rt "isEnum") (enum-element who rt v)
+      (invoke rt "isEnum") (enum-element who rt rname v)
       (invoke rt "isAnnotation")
       (if (map? v) ["@" (annotation-of who rt v)] (element-error who v (str "a map of " rname "'s elements")))
       :else (element-error who v rname))))
