@@ -1537,7 +1537,7 @@
 
 (defn- dominator-sets
   "pc -> the set of blocks dominating it, by iterating to a fixed point in
-  reverse postorder."
+  reverse postorder; an unreachable block has no entry."
   [rpo preds]
   (let [reach (set rpo)
         meet (fn [sets] (reduce (fn [a b] (into #{} (filter b) a)) sets))]
@@ -1546,8 +1546,8 @@
         (if (= d dom) dom (recur d))))))
 
 (defn- natural-loop
-  "Body b of header h grown by the back edge p -> h: the blocks that reach
-  p without passing h."
+  "Body b of header h (nil for h's first back edge) grown by the back edge
+  p -> h: the blocks that reach p without passing h."
   [preds b p h]
   (loop [b (conj (or b #{h}) p) work [p]]
     (if-let [x (peek work)]
@@ -1564,8 +1564,9 @@
           (for [p rpo h (succs p) :when ((dom p) h)] [p h])))
 
 (defn- versionable-loops
-  "The innermost of bodies that do something to an array, each with the
-  locals it aloads and never stores."
+  "The bodies holding no other loop's header that do something to an array,
+  each with the locals it aloads and never stores; a body with no such
+  local is dropped."
   [blks bodies]
   (into {}
         (for [[h body] bodies
