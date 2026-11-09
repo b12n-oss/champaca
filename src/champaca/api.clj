@@ -490,6 +490,7 @@
   [cname {:keys [extends implements fields methods static-fields static-methods static-init
                  constructors init post-init] :as opts}]
   (let [extends (or extends "java.lang.Object")
+        dotted (str/replace cname "/" ".")
         slashed #(str/replace % "." "/")
         fields (field-descs fields)
         sfields (field-descs static-fields)
@@ -502,7 +503,7 @@
         cinit (optional-fn :init init)
         post (optional-fn :post-init post-init)
         anns (class-annotations opts fields sfields fns sfns)]
-    {:dotted (str/replace cname "/" ".") :extends extends :implements implements
+    {:dotted dotted :extends extends :implements implements
      :fields fields :sfields sfields :fns fns :sfns sfns :sinit sinit :ctors ctors :cinit cinit :post post
      :anns anns
      :shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
