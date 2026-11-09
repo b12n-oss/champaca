@@ -114,27 +114,6 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 
 | File | Job |
 |---|---|
-| `src/champaca/classfile.clj` | parses `.class` files |
-| `src/champaca/codegen.clj` | one method's bytecode to a Scheme `define` |
-| `src/champaca/main.clj` | class loading, layout, vtables, boot, the startup cache, `champaca.main` |
-| `src/champaca/api.clj` | the jolt-facing API |
-| `src/champaca/jimage.clj` | the JDK's runtime image, `lib/modules` |
-| `src/champaca/npe.clj` | helpful `NullPointerException` messages |
-| `resources/champaca/runtime.ss` | objects, arrays, exceptions, strings, `Class` mirrors, lambdas, records |
-| `resources/champaca/natives.ss` | JDK native methods and a few overrides |
-| `resources/champaca/reflect.ss` | reflection natives, `getCallerClass` and the frame walk behind stack traces |
-| `resources/champaca/handles.ss` | method handles, bootstraps run for real, pattern switches |
-| `resources/champaca/files.ss` | file, channel and zlib natives through libc |
-| `resources/champaca/net.ss` | socket, datagram, interface and selector natives through libc |
-| `resources/champaca/spawn.ss` | child processes through `posix_spawn` |
-| `resources/champaca/foreign.ss` | `java.lang.foreign` downcalls and upcalls, library loading and symbol lookup |
-| `resources/champaca/interop.ss` | conversions behind the descriptor-based API |
-| `resources/champaca/dynamic.ss` | descriptor-free calls, overload choice, the call-site cache |
-
-## Where the code is
-
-| File | Job |
-|---|---|
 | `src/champaca/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
 | `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
 | `src/champaca/main.clj` | loads classes from the classpath (directories and jars), the JDK's runtime image or a loader's `defineClass`, lays out fields, builds vtables (interface defaults included), boots the JDK, keeps the startup and library caches, and is the `java`-like launcher |

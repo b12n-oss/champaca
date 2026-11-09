@@ -28,15 +28,15 @@ The classes are the JDK's own, read from `$JAVA_HOME/lib/modules`, and the JDK b
 (ldk/->clj (ldk/invoke "a,b,c" "split" ","))                     ;=> ["a" "b" "c"]
 ```
 
-Methods are found by name, and the overload is picked from the arguments the way `javac` picks one. A jolt fn goes wherever Java wants a single-method interface, jolt collections become Java ones on the way in, and results come back as jolt values where they can. [calling-java](docs/guide/calling-java.md) and [data-conversion](docs/guide/data-conversion.md) have the details, proxies and real Java classes defined from jolt among them.
+Methods are found by name, and the overload is picked from the arguments the way `javac` picks one. A jolt fn goes wherever Java wants a single-method interface, jolt collections become Java ones on the way in, and results come back as jolt values where they can. [calling-java](docs/guide/calling-java.md) and [data-conversion](docs/guide/data-conversion.md) have the details, including proxies and real Java classes defined from jolt.
 
 ## What it runs
 
 - **Eight common libraries** (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML) give the same output as on HotSpot, which `bb libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
 - **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
 - **Compiled Java programs** run from the command line as with `java`: `-cp`, `-jar`, `-D` options, `-p` and `-m` for modules, source files, and the JDK's own rules for finding `main` ([running-java-programs](docs/guide/running-java-programs.md)).
-- **Most of the JDK**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each area checked against HotSpot ([compatibility](docs/guide/compatibility.md)).
-- **A startup cache** keeps what a run compiled, so a warm `Hello` takes 0.39 s from exec to exit where the first run took 6.5 s ([performance](docs/guide/performance.md)).
+- **Many JDK areas**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each checked against HotSpot ([compatibility](docs/guide/compatibility.md)).
+- **A startup cache** keeps what a run compiled, so a warm `Hello` takes 0.39 s from exec to exit on an M1 Pro, where the first run took 6.5 s ([performance](docs/guide/performance.md#the-startup-cache)).
 - **App bundles**: `bb bundle` makes a directory that runs a program on a machine with no JDK ([app-bundles](docs/guide/app-bundles.md)).
 
 ## Getting started

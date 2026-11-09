@@ -37,11 +37,11 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 
 ## Before a merge
 
-`bb test` must pass, and so must the battery and the Linux run. The battery runs the whole suite four ways on a worktree of the ref: cold, warm, with the cache off and with `CHAMPACA_BT=1`. Then it runs the eight libraries. It removes earlier refs' caches and worktrees under `target/battery` when it starts, so never run a second one while one is running, even a `BATTERY_MODES` subset.
+A change merges once `bb test`, the battery and the Linux run all pass. The battery runs the whole suite four ways on a worktree of the ref: cold, warm, with the cache off and with `CHAMPACA_BT=1`. Then it runs the eight libraries. It deletes every battery worktree and cache under `target/battery` when it starts, so each run starts cold, and a second battery started while one runs (even a `BATTERY_MODES` subset) pulls the first one's tree out from under it. `bb linux` needs Docker: it builds the `ci/linux` image, fetches the library jars into `~/.m2` on this machine (`bb libs:fetch`, which needs the network), then runs `bb jolt`, `bb test` and `bb libs` in a container that mounts them read-only.
 
 ```sh
 bb battery <ref>
-bb linux arm64          # with HTTPS_PROXY and friends unset if your shell sets them
+bb linux arm64          # or amd64
 ```
 
 ## Which jolt
