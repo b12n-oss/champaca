@@ -448,11 +448,13 @@
                             [(eq? k 'seg) (ffi-segment-arg st a heap? unbox)]
                             [else (ffi-struct-arg st a k unbox)])
                       acc))))))
-;; the procedure for addr, kept in last (addr . proc) for the next call
+;; the procedure for addr, kept in the box last as a fresh (addr . proc) for
+;; the next call, so no reader sees one half updated
 (define (ffi-proc-for! last maker addr)
-  (if (eqv? (car last) addr)
-      (cdr last)
-      (let ([f (maker addr)]) (set-car! last addr) (set-cdr! last f) f)))
+  (let ([p (unbox last)])
+    (if (eqv? (car p) addr)
+        (cdr p)
+        (let ([f (maker addr)]) (set-box! last (cons addr f)) f))))
 ;; the GIL is handed off only when another Java thread could want it while
 ;; the call runs in C (or a thread C started, through an upcall stub)
 (define (ffi-run call critical?)
@@ -501,7 +503,7 @@
          [maker (ffi-maker types (if ret-struct `(& ,(struct-ftype ret-struct)) (ffi-type ret)) variadic (not critical?))]
          [ret-address (ffi-return-address ret ret-struct ret-layout)]
          [unbox (ffi-unboxer)]
-         [last (cons #f #f)]
+         [last (box (cons #f #f))]
          [desc (string-append "(" ms-desc "Ljava/lang/foreign/SegmentAllocator;"
                               (if capture? ms-desc "") (apply string-append params) ")" ret)])
     (make-mh desc
