@@ -132,52 +132,76 @@
 (defn- s32 [a b c d] (let [v (+ (* a 16777216) (* b 65536) (* c 256) d)]
                        (if (>= v 2147483648) (- v 4294967296) v)))
 
+(defn- u1-at [code i] (nth code i))
+(defn- s1-at [code i] (let [v (nth code i)] (if (>= v 128) (- v 256) v)))
+(defn- s2-at [code i] (s16 (nth code i) (nth code (inc i))))
+(defn- u2-at [code i] (+ (* (nth code i) 256) (nth code (inc i))))
+(defn- s4-at [code i] (s32 (nth code i) (nth code (+ i 1)) (nth code (+ i 2)) (nth code (+ i 3))))
+
+(defn- switch-base
+  "Where a switch's operands start: after the opcode and the padding that
+  aligns them to four bytes from the start of the code."
+  [pc]
+  (+ pc 1 (mod (- 3 (mod pc 4)) 4)))
+
+(defn- tableswitch-operands [code pc]
+  (let [p (switch-base pc)
+        dflt (+ pc (s4-at code p)) lo (s4-at code (+ p 4)) hi (s4-at code (+ p 8))
+        cnt (inc (- hi lo))
+        targets (vec (for [k (range cnt)] [(+ lo k) (+ pc (s4-at code (+ p 12 (* 4 k))))]))]
+    [[dflt targets] (- (+ p 12 (* 4 cnt)) pc)]))
+
+(defn- lookupswitch-operands [code pc]
+  (let [p (switch-base pc)
+        dflt (+ pc (s4-at code p)) cnt (s4-at code (+ p 4))
+        targets (vec (for [k (range cnt)]
+                       [(s4-at code (+ p 8 (* 8 k))) (+ pc (s4-at code (+ p 12 (* 8 k))))]))]
+    [[dflt targets] (- (+ p 8 (* 8 cnt)) pc)]))
+
+(defn- wide-operands
+  "wide's: the slot index, and iinc's 16-bit increment."
+  [code pc]
+  (let [[op2] (opcodes (u1-at code (inc pc))) idx (u2-at code (+ pc 2))]
+    (if (= op2 :iinc)
+      [[idx (s2-at code (+ pc 4))] 6]
+      [[idx] 4])))
+
+(def ^:private operand-readers
+  ;; operand format -> (fn [code pc] [args len])
+  {:none (fn [_ _] [[] 1])
+   :u1 (fn [code pc] [[(u1-at code (inc pc))] 2])
+   :s1 (fn [code pc] [[(s1-at code (inc pc))] 2])
+   :s2 (fn [code pc] [[(s2-at code (inc pc))] 3])
+   :u2 (fn [code pc] [[(u2-at code (inc pc))] 3])
+   :iinc (fn [code pc] [[(u1-at code (+ pc 1)) (s1-at code (+ pc 2))] 3])
+   :branch (fn [code pc] [[(+ pc (s2-at code (inc pc)))] 3])
+   :branch4 (fn [code pc] [[(+ pc (s4-at code (inc pc)))] 5])
+   :iface (fn [code pc] [[(u2-at code (inc pc))] 5])
+   :indy (fn [code pc] [[(u2-at code (inc pc))] 5])
+   :multi (fn [code pc] [[(u2-at code (inc pc)) (u1-at code (+ pc 3))] 4])
+   :wide wide-operands
+   :tableswitch tableswitch-operands
+   :lookupswitch lookupswitch-operands})
+
+(defn- operands
+  "[args len] of the instruction at pc, whose operand format is fmt; an
+  xload_n/xstore_n's [:implicit n] has its slot as its one argument."
+  [code pc fmt]
+  (if (vector? fmt)
+    [[(second fmt)] 1]
+    ((operand-readers fmt) code pc)))
+
 (defn decode
   "Code bytes -> vector of {:pc :op :args :len}."
   [code]
-  (let [n (count code)
-        b (fn [i] (nth code i))
-        sb (fn [i] (let [v (b i)] (if (>= v 128) (- v 256) v)))
-        u2 (fn [i] (+ (* (b i) 256) (b (inc i))))
-        i32 (fn [i] (s32 (b i) (b (+ i 1)) (b (+ i 2)) (b (+ i 3))))]
+  (let [n (count code)]
     (loop [pc 0 out []]
       (if (>= pc n)
         out
-        (let [[op fmt] (or (opcodes (b pc)) (throw (ex-info "unknown opcode" {:pc pc :byte (b pc)})))
-              [args len]
-              (cond
-                (vector? fmt) [[(second fmt)] 1]
-                :else
-                (case fmt
-                  :none [[] 1]
-                  :u1 [[(b (inc pc))] 2]
-                  :s1 [[(sb (inc pc))] 2]
-                  :s2 [[(s16 (b (+ pc 1)) (b (+ pc 2)))] 3]
-                  :u2 [[(u2 (inc pc))] 3]
-                  :iinc [[(b (+ pc 1)) (sb (+ pc 2))] 3]
-                  :branch [[(+ pc (s16 (b (+ pc 1)) (b (+ pc 2))))] 3]
-                  :branch4 [[(+ pc (i32 (inc pc)))] 5]
-                  :iface [[(u2 (inc pc))] 5]
-                  :indy [[(u2 (inc pc))] 5]
-                  :multi [[(u2 (inc pc)) (b (+ pc 3))] 4]
-                  :wide (let [[op2] (opcodes (b (inc pc))) idx (u2 (+ pc 2))]
-                          (if (= op2 :iinc)
-                            [[idx (s16 (b (+ pc 4)) (b (+ pc 5)))] 6]
-                            [[idx] 4]))
-                  :tableswitch
-                  (let [p (+ pc 1 (mod (- 3 (mod pc 4)) 4))
-                        dflt (+ pc (i32 p)) lo (i32 (+ p 4)) hi (i32 (+ p 8))
-                        cnt (inc (- hi lo))
-                        targets (vec (for [k (range cnt)] [(+ lo k) (+ pc (i32 (+ p 12 (* 4 k))))]))]
-                    [[dflt targets] (- (+ p 12 (* 4 cnt)) pc)])
-                  :lookupswitch
-                  (let [p (+ pc 1 (mod (- 3 (mod pc 4)) 4))
-                        dflt (+ pc (i32 p)) cnt (i32 (+ p 4))
-                        targets (vec (for [k (range cnt)]
-                                       [(i32 (+ p 8 (* 8 k))) (+ pc (i32 (+ p 12 (* 8 k))))]))]
-                    [[dflt targets] (- (+ p 8 (* 8 cnt)) pc)])))]
-          (recur (+ pc len) (conj out {:pc pc :op (if (= op :wide) (first (opcodes (b (inc pc)))) op)
-                                       :args args :len len})))))))
+        (let [[op fmt] (or (opcodes (u1-at code pc)) (throw (ex-info "unknown opcode" {:pc pc :byte (u1-at code pc)})))
+              [args len] (operands code pc fmt)
+              op (if (= op :wide) (first (opcodes (u1-at code (inc pc)))) op)]
+          (recur (+ pc len) (conj out {:pc pc :op op :args args :len len})))))))
 
 ;; --- control flow ------------------------------------------------------------
 
