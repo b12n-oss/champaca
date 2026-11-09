@@ -415,6 +415,144 @@
       (throw (ex-info (str "define-class: " (pr-str k) " is neither a method name nor name(descriptor)return") {:method k})))
     k))
 
+(defn- field-descs
+  "[[name desc] ...] of :fields or :static-fields: a vector of names (each an
+  Object) or a map from name to type."
+  [fs]
+  (mapv (fn [[n t]] [(name n) (type-desc t)])
+        (if (map? fs) fs (map vector fs (repeat "java.lang.Object")))))
+
+(defn- method-fns
+  "{method-key fn} of :methods, or of :static-methods when static?, whose
+  keys must be full JVM names; a key named twice is refused."
+  [ms static?]
+  (reduce (fn [m [k f]]
+            (let [mk (method-key k)]
+              (when (and static? (not (str/includes? mk "(")))
+                (throw (ex-info (str "define-class: static method " (pr-str mk)
+                                     " needs its full JVM name, name(descriptor)return")
+                                {:method k})))
+              (when (contains? m mk)
+                (throw (ex-info (str "define-class: method " (pr-str mk) " is named twice") {:method k})))
+              (assoc m mk (as-fn "define-class" k f))))
+          {} ms))
+
+(defn- optional-fn
+  "f as a Scheme procedure for option k, or nil when f is nil or false."
+  [k f]
+  (when f (as-fn "define-class" k f)))
+
+(defn- ctor-desc [ts] (str "(" (apply str (map type-desc ts)) ")V"))
+
+(defn- constructor-descs
+  "{own-desc super-desc} of :constructors, sorted, or nil without them."
+  [constructors]
+  (when (some? constructors)
+    (into (sorted-map) (map (fn [[own sup]] [(ctor-desc own) (ctor-desc sup)])) constructors)))
+
+(defn- member-annotations
+  "{target [annotation ...]} of one of the :*-annotations options (what), a
+  target named once whatever its spelling: norm spells it, known? says the
+  class has it, kind is the annotation target and where names a target
+  (or :missing, for the refusal)."
+  [what m norm known? kind where]
+  (when-not (or (nil? m) (map? m))
+    (throw (ex-info (str "define-class: " what " is " (pr-str m) ", not a map") {})))
+  (reduce (fn [acc [k anns]]
+            (let [t (norm k)]
+              (when-not (known? t)
+                (throw (ex-info (str "define-class: " what " names " (pr-str k) ", " (where :missing))
+                                {:target k})))
+              (when (contains? acc t)
+                (throw (ex-info (str "define-class: " what " names " (pr-str t) " twice") {:target k})))
+              (assoc acc t (annotations-for (str "on " (where t)) kind anns))))
+          (sorted-map) m))
+
+(defn- class-annotations
+  "[class fields methods constructors] annotations, checked in that order."
+  [{:keys [annotations field-annotations method-annotations constructor-annotations]} fields sfields fns sfns]
+  (let [field-names (set (map first (concat fields sfields)))]
+    [(annotations-for "on the class" "TYPE" annotations)
+     (member-annotations ":field-annotations" field-annotations #(when (or (string? %) (keyword? %)) (name %))
+                         field-names "FIELD"
+                         #(if (= % :missing) "which isn't in :fields or :static-fields" (str "field " %)))
+     (member-annotations ":method-annotations" method-annotations method-key #(or (contains? fns %) (contains? sfns %))
+                         "METHOD" #(if (= % :missing) "which isn't a key of :methods or :static-methods" (str "method " %)))
+     (member-annotations ":constructor-annotations" constructor-annotations
+                         #(when (sequential? %) (ctor-desc %)) some? "CONSTRUCTOR"
+                         #(if (= % :missing) "which isn't a vector of parameter types" (str "constructor " %)))]))
+
+(defn- class-plan
+  "define-class's options checked and converted, in the order their
+  refusals are tried: fields, methods, the static initializer,
+  constructors, :init and :post-init, annotations. :shape is what a second
+  definition of the name must match."
+  [cname {:keys [extends implements fields methods static-fields static-methods static-init
+                 constructors init post-init] :as opts}]
+  (let [extends (or extends "java.lang.Object")
+        slashed #(str/replace % "." "/")
+        fields (field-descs fields)
+        sfields (field-descs static-fields)
+        fns (method-fns methods false)
+        sfns (method-fns static-methods true)
+        sinit (optional-fn :static-init static-init)
+        ctors (constructor-descs constructors)
+        _ (when (and (nil? constructors) (or init post-init))
+            (throw (ex-info "define-class: :init and :post-init are for :constructors, and there are none" {:class cname})))
+        cinit (optional-fn :init init)
+        post (optional-fn :post-init post-init)
+        anns (class-annotations opts fields sfields fns sfns)]
+    {:dotted (str/replace cname "/" ".") :extends extends :implements implements
+     :fields fields :sfields sfields :fns fns :sfns sfns :sinit sinit :ctors ctors :cinit cinit :post post
+     :anns anns
+     :shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
+             ;; printed, so a NaN element compares equal to itself
+             (some? sinit) ctors (some? cinit) (some? post) (pr-str anns)]}))
+
+(defn- scm-list [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))
+
+(defn- redefine-class!
+  "The same shape again swaps in the plan's fns and answers the class;
+  any other shape is refused."
+  [{old :shape cells :cells scells :scells icell :icell ccell :ccell pcell :pcell c :class}
+   {:keys [dotted shape fns sfns sinit cinit post]}]
+  (if (= old shape)
+    (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f))
+        (doseq [[k f] sfns] (s/call "set-box!" (get scells k) f))
+        (when sinit (s/call "set-box!" icell sinit))
+        (when cinit (s/call "set-box!" ccell cinit))
+        (when post (s/call "set-box!" pcell post))
+        c)
+    (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
+                         " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
+                    {:class dotted}))))
+
+(defn- scm-annotations
+  "The class's annotations as dyn-define-class takes them: a list of the
+  class's, then an alist for each of fields, methods and constructors."
+  [[canns fanns manns cnanns]]
+  (let [alist (fn [m] (scm-list (map (fn [[k v]] [k (apply s/call "list" (map scm-annotation v))]) m)))]
+    (s/call "list" (apply s/call "list" (map scm-annotation canns))
+            (alist fanns) (alist manns) (alist cnanns))))
+
+(defn- define-new-class!
+  "The class of the plan defined for the first time, each fn in a box so a
+  second definition can swap it, and noted in jolt-classes."
+  [cname {:keys [dotted extends implements fields sfields fns sfns sinit ctors cinit post anns shape]}]
+  (let [boxes (fn [m] (into {} (map (fn [[k f]] [k (s/call "box" f)])) m))
+        cells (boxes fns)
+        scells (boxes sfns)
+        icell (when sinit (s/call "box" sinit))
+        ccell (when cinit (s/call "box" cinit))
+        pcell (when post (s/call "box" post))
+        c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
+                  (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
+                  (if ctors (scm-list ctors) false) (or ccell false) (or pcell false)
+                  (scm-annotations anns))]
+    (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell
+                                      :ccell ccell :pcell pcell :class c})
+    c))
+
 (defn define-class
   "Define cname (a binary name, dots or slashes) as a real Java class, final,
   extending :extends (default java.lang.Object) and implementing the
@@ -442,93 +580,12 @@
   object and the arguments. Defining the same name again with
   the same superclass, interfaces, fields and method keys swaps in the new
   fns; anything else is refused, since a class is defined once per process."
-  [cname {:keys [extends implements fields methods static-fields static-methods static-init
-                 constructors init post-init annotations field-annotations method-annotations
-                 constructor-annotations]}]
-  (let [extends (or extends "java.lang.Object")
-        dotted (str/replace cname "/" ".")
-        slashed #(str/replace % "." "/")
-        field-descs (fn [fs] (mapv (fn [[n t]] [(name n) (type-desc t)])
-                                   (if (map? fs) fs (map vector fs (repeat "java.lang.Object")))))
-        fields (field-descs fields)
-        sfields (field-descs static-fields)
-        fn-map (fn [ms static?]
-                 (reduce (fn [m [k f]]
-                           (let [mk (method-key k)]
-                             (when (and static? (not (str/includes? mk "(")))
-                               (throw (ex-info (str "define-class: static method " (pr-str mk)
-                                                    " needs its full JVM name, name(descriptor)return")
-                                               {:method k})))
-                             (when (contains? m mk)
-                               (throw (ex-info (str "define-class: method " (pr-str mk) " is named twice") {:method k})))
-                             (assoc m mk (as-fn "define-class" k f))))
-                         {} ms))
-        fns (fn-map methods false)
-        sfns (fn-map static-methods true)
-        sinit (when static-init (as-fn "define-class" :static-init static-init))
-        ctor-desc (fn [ts] (str "(" (apply str (map type-desc ts)) ")V"))
-        ctors (when (some? constructors)
-                (into (sorted-map) (map (fn [[own sup]] [(ctor-desc own) (ctor-desc sup)])) constructors))
-        _ (when (and (nil? constructors) (or init post-init))
-            (throw (ex-info "define-class: :init and :post-init are for :constructors, and there are none" {:class cname})))
-        cinit (when init (as-fn "define-class" :init init))
-        post (when post-init (as-fn "define-class" :post-init post-init))
-        ;; {target [annotation ...]}, a target named once whatever its spelling
-        member-anns (fn [what m norm known? kind where]
-                      (when-not (or (nil? m) (map? m))
-                        (throw (ex-info (str "define-class: " what " is " (pr-str m) ", not a map") {})))
-                      (reduce (fn [acc [k anns]]
-                                (let [t (norm k)]
-                                  (when-not (known? t)
-                                    (throw (ex-info (str "define-class: " what " names " (pr-str k) ", " (where :missing))
-                                                    {:target k})))
-                                  (when (contains? acc t)
-                                    (throw (ex-info (str "define-class: " what " names " (pr-str t) " twice") {:target k})))
-                                  (assoc acc t (annotations-for (str "on " (where t)) kind anns))))
-                              (sorted-map) m))
-        field-names (set (map first (concat fields sfields)))
-        anns [(annotations-for "on the class" "TYPE" annotations)
-              (member-anns ":field-annotations" field-annotations #(when (or (string? %) (keyword? %)) (name %))
-                           field-names "FIELD"
-                           #(if (= % :missing) "which isn't in :fields or :static-fields" (str "field " %)))
-              (member-anns ":method-annotations" method-annotations method-key #(or (contains? fns %) (contains? sfns %))
-                           "METHOD" #(if (= % :missing) "which isn't a key of :methods or :static-methods" (str "method " %)))
-              (member-anns ":constructor-annotations" constructor-annotations
-                           #(when (sequential? %) (ctor-desc %)) some? "CONSTRUCTOR"
-                           #(if (= % :missing) "which isn't a vector of parameter types" (str "constructor " %)))]
-        shape [(slashed extends) (mapv slashed implements) fields (sort (keys fns)) sfields (sort (keys sfns))
-               ;; printed, so a NaN element compares equal to itself
-               (some? sinit) ctors (some? cinit) (some? post) (pr-str anns)]
-        scm-list (fn [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))]
+  [cname opts]
+  (let [plan (class-plan cname opts)]
     (rethrow
-     #(if-let [{old :shape cells :cells scells :scells icell :icell ccell :ccell pcell :pcell c :class}
-               (get @jolt-classes dotted)]
-        (if (= old shape)
-          (do (doseq [[k f] fns] (s/call "set-box!" (get cells k) f))
-              (doseq [[k f] sfns] (s/call "set-box!" (get scells k) f))
-              (when sinit (s/call "set-box!" icell sinit))
-              (when cinit (s/call "set-box!" ccell cinit))
-              (when post (s/call "set-box!" pcell post))
-              c)
-          (throw (ex-info (str "define-class: " dotted " is already defined with another superclass, interfaces,"
-                               " fields, method keys, static initializer, constructors or annotations; a class is defined once per process")
-                          {:class dotted})))
-        (let [boxes (fn [m] (into {} (map (fn [[k f]] [k (s/call "box" f)])) m))
-              cells (boxes fns)
-              scells (boxes sfns)
-              icell (when sinit (s/call "box" sinit))
-              ccell (when cinit (s/call "box" cinit))
-              pcell (when post (s/call "box" post))
-              c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
-                        (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
-                        (if ctors (scm-list ctors) false) (or ccell false) (or pcell false)
-                        (let [[canns fanns manns cnanns] anns
-                              alist (fn [m] (scm-list (map (fn [[k v]] [k (apply s/call "list" (map scm-annotation v))]) m)))]
-                          (s/call "list" (apply s/call "list" (map scm-annotation canns))
-                                  (alist fanns) (alist manns) (alist cnanns))))]
-          (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell
-                                            :ccell ccell :pcell pcell :class c})
-          c)))))
+     #(if-let [entry (get @jolt-classes (:dotted plan))]
+        (redefine-class! entry plan)
+        (define-new-class! cname plan)))))
 
 (defn invoke-super
   "From a fn of a class define-class made: call its superclass's method
