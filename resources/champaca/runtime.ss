@@ -1585,6 +1585,35 @@
                        (string-append fe " and " te " are in " (class-place-of tc))
                        (string-append fe " is in " (class-place-of fc) "; " te " is in " (class-place-of tc)))
                    ")")))
+;; a class name with dots, a hidden class keeping the slash before /0x<n>
+;; (it isn't marked hidden until its definition ends)
+(define (sealed-dotted-name n)
+  (let ([i (let loop ([i (fx- (string-length n) 1)])
+             (cond [(fx< i 0) #f] [(char=? (string-ref n i) #\/) i] [else (loop (fx- i 1))]))])
+    (if (and i (fx< (fx+ i 2) (string-length n))
+             (char=? (string-ref n (fx+ i 1)) #\0) (char=? (string-ref n (fx+ i 2)) #\x))
+        (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
+        (slashes->dots n))))
+(define (sealed-package-text n)
+  (let ([d (package-dir n)]) (if (string=? d "") "unnamed" d)))
+;; the module the class name being defined will be in, ld its loader
+(define (sealed-subclass-module name defined? ld)
+  (cond [(not defined?) (or (app-unnamed-module) unnamed-module)]
+        [(hashtable-ref package-modules (package-dir name) #f)]
+        [ld ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld)]
+        [else unnamed-module]))   ; a null loader (Unsafe.defineClass0): the boot loader's
+(define (same-module-refusal name mod sup smod)
+  (string-append "Failed same module check: subclass " (sealed-dotted-name name) " is in module '"
+                 (or (module-name-of mod) "unnamed module") "' with loader " (loader-text (module-loader mod))
+                 ", and sealed class " (sealed-dotted-name sup) " is in module '"
+                 (or (module-name-of smod) "unnamed module") "' with loader " (loader-text (module-loader smod))))
+(define (same-package-refusal name ld sup sld)
+  (string-append "Failed same package check: non-public subclass " (sealed-dotted-name name) " is in package '"
+                 (sealed-package-text name) "' with classloader " (loader-text ld) ", and sealed class " (sealed-dotted-name sup)
+                 " is in package '" (sealed-package-text sup) "' with classloader " (loader-text sld)))
+(define (listed-refusal name sup)
+  (string-append "Failed listed permitted subclass check: class " (sealed-dotted-name name)
+                 " is not a permitted subclass of " (sealed-dotted-name sup)))
 ;; Why a sealed class or interface sup (JVMS 5.3.5) refuses the class name
 ;; being defined, in HotSpot's texts (InstanceKlass::has_as_permitted_subclass),
 ;; or #f when it permits it or isn't sealed: the two must share a module, a
@@ -1599,34 +1628,14 @@
          [permitted (class-permitted-subclasses s)])
     (and permitted
          (let* ([ld (if defined? (resolving-loader) (app-loader))]
-                [mod (cond [(not defined?) (or (app-unnamed-module) unnamed-module)]
-                           [(hashtable-ref package-modules (package-dir name) #f)]
-                           [ld ((method-proc "java/lang/ClassLoader" "getUnnamedModule()Ljava/lang/Module;") ld)]
-                           [else unnamed-module])]   ; a null loader (Unsafe.defineClass0): the boot loader's
+                [mod (sealed-subclass-module name defined? ld)]
                 [smod (class-module s)]
-                [sld (class-loader-of s)]
-                ;; a hidden class keeps the slash before /0x<n> (it isn't
-                ;; marked hidden until its definition ends)
-                [dotted (lambda (n)
-                          (let ([i (let loop ([i (fx- (string-length n) 1)])
-                                     (cond [(fx< i 0) #f] [(char=? (string-ref n i) #\/) i] [else (loop (fx- i 1))]))])
-                            (if (and i (fx< (fx+ i 2) (string-length n))
-                                     (char=? (string-ref n (fx+ i 1)) #\0) (char=? (string-ref n (fx+ i 2)) #\x))
-                                (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
-                                (slashes->dots n))))]
-                [pkg (lambda (n) (let ([d (package-dir n)]) (if (string=? d "") "unnamed" d)))])
-           (cond [(not (eq? mod smod))
-                  (string-append "Failed same module check: subclass " (dotted name) " is in module '"
-                                 (or (module-name-of mod) "unnamed module") "' with loader " (loader-text (module-loader mod))
-                                 ", and sealed class " (dotted sup) " is in module '"
-                                 (or (module-name-of smod) "unnamed module") "' with loader " (loader-text (module-loader smod)))]
+                [sld (class-loader-of s)])
+           (cond [(not (eq? mod smod)) (same-module-refusal name mod sup smod)]
                  [(and (not public?) (not (string=? (package-dir name) (package-dir sup))))
-                  (string-append "Failed same package check: non-public subclass " (dotted name) " is in package '"
-                                 (pkg name) "' with classloader " (loader-text ld) ", and sealed class " (dotted sup)
-                                 " is in package '" (pkg sup) "' with classloader " (loader-text sld))]
+                  (same-package-refusal name ld sup sld)]
                  [(member name permitted) #f]
-                 [else (string-append "Failed listed permitted subclass check: class " (dotted name)
-                                      " is not a permitted subclass of " (dotted sup))])))))
+                 [else (listed-refusal name sup)])))))
 (define (set-mirror-loader! m c)
   (let ([ld (class-loader-of c)])
     (when ld (vector-set! (jobj-slots m) (jfield-index "java/lang/Class" "classLoader") ld))))
