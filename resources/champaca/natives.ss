@@ -443,7 +443,7 @@
             [(and (fx= i (fx- len 1)) (memv (string-ref s i) '(#\B #\C #\D #\F #\I #\J #\S #\Z))) 'prim]
             [else #f]))))
 ;; (Follows JDK code that is GPL version 2 only; due a rewrite from behavior
-;; before release, as src/champaca/npe.clj.)
+;; before release.)
 ;; Class.c's check before the VM looks for a name, on its slashed form
 ;; (check_classname.c VerifyClassname): a class name is segments of JVM
 ;; identifier characters, anything but . ; [ / (and NUL, which modified

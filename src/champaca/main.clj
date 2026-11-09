@@ -675,7 +675,7 @@
   (str (.toURI (.getCanonicalFile (io/file entry)))))
 
 ;; Follows JDK code that is GPL version 2 only (ParseUtil.encodePath); due a
-;; rewrite from behavior before release, as src/champaca/npe.clj.
+;; rewrite from behavior before release.
 (defn- encode-path
   "A resource name in a URL as the JDK's ParseUtil.encodePath writes it for
   its class path's loaders: ASCII kept except controls, space and

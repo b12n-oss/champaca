@@ -1588,7 +1588,7 @@
           (loop (fx- i 1))))]
    [else (slashes->dots n)]))
 ;; (Follows JDK code that is GPL version 2 only; due a rewrite from behavior
-;; before release, as src/champaca/npe.clj.)
+;; before release.)
 ;; A failed checkcast's message, HotSpot's SharedRuntime::
 ;; generate_class_cast_message: both classes, then one place when they share
 ;; a module ("X and Y are in module java.base of loader 'bootstrap'"), else
