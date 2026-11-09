@@ -580,43 +580,36 @@
 ;; nowhere, else the one a "class not found: X" from the linker names
 (define (missing-class-of e name)
   (if (not (class-exists? name)) name (class-not-found-in e)))
-;; the X of a linker's "class not found: X" in a failure's text, or #f
-(define (class-not-found-in e)
-  (let* ([t (condition-text e)] [k "class not found: "] [n (string-length t)] [m (string-length k)])
+;; the rest of t after the first k in it, or #f
+(define (text-after t k)
+  (let ([n (string-length t)] [m (string-length k)])
     (let loop ([i 0])
       (cond [(fx> (fx+ i m) n) #f]
             [(string=? (substring t i (fx+ i m)) k) (substring t (fx+ i m) n)]
             [else (loop (fx+ i 1))]))))
+;; the index of the first c in s, or #f
+(define (char-index-of s c)
+  (let ([n (string-length s)])
+    (let find ([k 0])
+      (cond [(fx= k n) #f] [(char=? (string-ref s k) c) k] [else (find (fx+ k 1))]))))
+;; the X of a linker's "class not found: X" in a failure's text, or #f
+(define (class-not-found-in e)
+  (text-after (condition-text e) "class not found: "))
 ;; HotSpot's ClassFormatError text from a load whose class file (the class
 ;; named or one it needs) isn't one: main.clj normalize's "class format
 ;; error in X: <text>", or #f
 (define (class-format-of e)
-  (let* ([t (condition-text e)] [k "class format error in "] [n (string-length t)] [m (string-length k)])
-    (let loop ([i 0])
-      (cond [(fx> (fx+ i m) n) #f]
-            [(string=? (substring t i (fx+ i m)) k)
-             (let skip ([j (fx+ i m)])
-               (cond [(fx>= (fx+ j 1) n) #f]
-                     [(and (char=? (string-ref t j) #\:) (char=? (string-ref t (fx+ j 1)) #\space)) (substring t (fx+ j 2) n)]
-                     [else (skip (fx+ j 1))]))]
-            [else (loop (fx+ i 1))]))))
+  (let ([r (text-after (condition-text e) "class format error in ")])
+    (and r (text-after r ": "))))
 ;; the same from generated code: an instruction naming such a class (codegen)
 (define (jthrow-class-format name msg) (jthrow "java/lang/ClassFormatError" msg))
 ;; a class the JVM refuses to define (main.clj check-definition!): "linkage
 ;; error in X: <error class>|<text>" -> (error-class . text), or #f
 (define (linkage-error-of e)
-  (let* ([t (condition-text e)] [k "linkage error in "] [n (string-length t)] [m (string-length k)])
-    (let loop ([i 0])
-      (cond [(fx> (fx+ i m) n) #f]
-            [(string=? (substring t i (fx+ i m)) k)
-             (let skip ([j (fx+ i m)])
-               (cond [(fx>= (fx+ j 1) n) #f]
-                     [(and (char=? (string-ref t j) #\:) (char=? (string-ref t (fx+ j 1)) #\space))
-                      (let* ([rest (substring t (fx+ j 2) n)]
-                             [bar (let find ([k 0]) (cond [(fx= k (string-length rest)) #f] [(char=? (string-ref rest k) #\|) k] [else (find (fx+ k 1))]))])
-                        (and bar (cons (substring rest 0 bar) (substring rest (fx+ bar 1) (string-length rest)))))]
-                     [else (skip (fx+ j 1))]))]
-            [else (loop (fx+ i 1))]))))
+  (let* ([r (text-after (condition-text e) "linkage error in ")]
+         [rest (and r (text-after r ": "))]
+         [bar (and rest (char-index-of rest #\|))])
+    (and bar (cons (substring rest 0 bar) (substring rest (fx+ bar 1) (string-length rest))))))
 (define (jthrow-linkage name err msg) (jthrow err msg))
 ;; the JVM's error for a class nothing has: the slashed name, caused by a
 ;; ClassNotFoundException with the dotted one; or the error the class's
