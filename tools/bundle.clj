@@ -189,24 +189,81 @@
 
 (defn- mb [n] (format "%.1f MB" (/ n 1048576.0)))
 
+(defn- check-args!
+  "Dies on options that can't make a bundle, in the order build! checks them."
+  [{:keys [out main project name] jolt-ns :jolt} jolt]
+  (when-not out (die "-o OUT is required"))
+  (when-not (or main jolt-ns) (die "give -m MAIN (a Java program) or --jolt NS (a jolt program)"))
+  (when (and main jolt-ns) (die "-m and --jolt don't go together"))
+  (when (and jolt-ns (not project)) (die "--jolt NS needs --project DIR, the jolt project holding NS"))
+  (when (and jolt-ns (= "champaca" (or name (str/lower-case (last (str/split jolt-ns #"[.$]"))))))
+    (die "--jolt NS's binary would be named champaca, which lib/ keeps for champaca.main; give --name"))
+  (when (fs/exists? out) (die out "exists; give a new directory"))
+  (when-not (or (fs/executable? jolt) (fs/which jolt))
+    (die "no jolt at" jolt "(bb jolt builds the pinned one; $JOLT names another)")))
+
+(defn- check-out-outside!
+  "Dies when -o is inside a class path directory, which would copy itself;
+  canonical paths, so a symlink to the directory doesn't slip past."
+  [out entries]
+  (let [o (str (fs/path (fs/canonicalize (fs/parent (fs/absolutize out))) (fs/file-name out)))]
+    (doseq [e entries :when (fs/directory? e)]
+      (when (or (= o e) (str/starts-with? o (str e "/")))
+        (die "-o" out "is inside the class path directory" e)))))
+
+(defn- launcher-exec
+  "The launcher's last line: champaca.main on MAIN, or the jolt program's
+  binary with the class path in CHAMPACA_CLASSPATH; rel are the class path
+  entries relative to the bundle."
+  [main name rel]
+  (let [cp-line (str/join ":" (map #(str "$B/" %) rel))]
+    (if main
+      (str "exec \"$B/lib/champaca\""
+           (when (seq rel) (str " -cp \"" cp-line "\""))
+           " " main " \"$@\"")
+      (str (when (seq rel) (str "CHAMPACA_CLASSPATH=\"" cp-line "\" export CHAMPACA_CLASSPATH\n"))
+           "exec \"$B/lib/" name "\" \"$@\""))))
+
+(defn- write-launcher!
+  "Writes bin/NAME running exec, and answers its path."
+  [out name exec]
+  (let [bin (fs/path out "bin" name)]
+    (fs/create-dirs (fs/parent bin))
+    (spit (str bin) (launcher name exec))
+    (fs/set-posix-file-permissions bin "rwxr-xr-x")
+    bin))
+
+(defn- warm-cache!
+  "The cache: the JDK's boot always, then the program's own run when asked;
+  the same environment the launcher sets (the builder's own CHAMPACA_*
+  settings stay out: CHAMPACA_BT or CHAMPACA_LINES would warm a cache under
+  another key than the users' runs look for)."
+  [out rt champaca-bin bin name train]
+  (let [env (merge (into {} (remove (fn [[k _]] (str/starts-with? k "CHAMPACA_"))) (System/getenv))
+                   {"JAVA_HOME" rt "CHAMPACA_BUNDLE" out "CHAMPACA_CACHE_DIR" (str (fs/path out "cache"))})]
+    (println "bundle: warming the cache (the JDK's boot)")
+    (let [{:keys [exit]} (p/shell {:env env :out :string :err :string :continue true} (str champaca-bin) "-version")]
+      (when-not (zero? exit) (die "the boot failed in the bundle's runtime")))
+    (when train
+      (println "bundle: training run:" name (str/join " " train))
+      (let [{:keys [exit]} (apply p/shell {:continue true :env env} (str bin) train)]
+        (println "bundle: training run exited" exit)))))
+
+(defn- print-sizes!
+  "What build! wrote and how big each part is."
+  [out name train]
+  (println (str "bundle: wrote " out "/bin/" name))
+  (doseq [[label d] [["runtime" "runtime"] ["lib" "lib"] ["app" "app"] ["cache" "cache"]]]
+    (println (format "  %-8s %s" label (mb (du (fs/path out d))))))
+  (println (format "  %-8s %s" "total" (mb (du out))))
+  (when-not train
+    (println "bundle: only the boot is cached; --train ARGS caches what a run of the program compiles")))
+
 (defn- build! [repo jolt made args]
-  (let [{:keys [out cp main project name add-modules train signable locales] jolt-ns :jolt} (parse args)]
-    (when-not out (die "-o OUT is required"))
-    (when-not (or main jolt-ns) (die "give -m MAIN (a Java program) or --jolt NS (a jolt program)"))
-    (when (and main jolt-ns) (die "-m and --jolt don't go together"))
-    (when (and jolt-ns (not project)) (die "--jolt NS needs --project DIR, the jolt project holding NS"))
-    (when (and jolt-ns (= "champaca" (or name (str/lower-case (last (str/split jolt-ns #"[.$]"))))))
-      (die "--jolt NS's binary would be named champaca, which lib/ keeps for champaca.main; give --name"))
-    (when (fs/exists? out) (die out "exists; give a new directory"))
-    (when-not (or (fs/executable? jolt) (fs/which jolt))
-      (die "no jolt at" jolt "(bb jolt builds the pinned one; $JOLT names another)"))
+  (let [{:keys [out cp main project name add-modules train signable locales] jolt-ns :jolt :as opts} (parse args)]
+    (check-args! opts jolt)
     (let [entries (cp-entries cp)
-          ;; -o inside a class path directory would copy itself; canonical
-          ;; paths, so a symlink to the directory doesn't slip past
-          _ (let [o (str (fs/path (fs/canonicalize (fs/parent (fs/absolutize out))) (fs/file-name out)))]
-              (doseq [e entries :when (fs/directory? e)]
-                (when (or (= o e) (str/starts-with? o (str e "/")))
-                  (die "-o" out "is inside the class path directory" e))))
+          _ (check-out-outside! out entries)
           name (or name (str/lower-case (last (str/split (or main jolt-ns) #"[.$]"))))
           mods (modules entries add-modules locales)
           _ (println "bundle: modules" (str/join "," mods))
@@ -223,37 +280,9 @@
       (when jolt-ns
         (println "bundle: building" jolt-ns "in" project)
         (jolt-build! jolt (fs/canonicalize project) jolt-ns (fs/path out "lib" name) signable))
-      (let [cp-line (str/join ":" (map #(str "$B/" %) rel))
-            exec-line (if main
-                        (str "exec \"$B/lib/champaca\""
-                             (when (seq rel) (str " -cp \"" cp-line "\""))
-                             " " main " \"$@\"")
-                        (str (when (seq rel) (str "CHAMPACA_CLASSPATH=\"" cp-line "\" export CHAMPACA_CLASSPATH\n"))
-                             "exec \"$B/lib/" name "\" \"$@\""))
-            bin (fs/path out "bin" name)]
-        (fs/create-dirs (fs/parent bin))
-        (spit (str bin) (launcher name exec-line))
-        (fs/set-posix-file-permissions bin "rwxr-xr-x")
-        ;; the cache: the JDK's boot always, then the program's own run when
-        ;; asked; the same environment the launcher sets
-        ;; (the builder's own CHAMPACA_* settings stay out: CHAMPACA_BT or
-        ;; CHAMPACA_LINES would warm a cache under another key than the
-        ;; users' runs look for)
-        (let [env (merge (into {} (remove (fn [[k _]] (str/starts-with? k "CHAMPACA_"))) (System/getenv))
-                         {"JAVA_HOME" rt "CHAMPACA_BUNDLE" out "CHAMPACA_CACHE_DIR" (str (fs/path out "cache"))})]
-          (println "bundle: warming the cache (the JDK's boot)")
-          (let [{:keys [exit]} (p/shell {:env env :out :string :err :string :continue true} (str champaca-bin) "-version")]
-            (when-not (zero? exit) (die "the boot failed in the bundle's runtime")))
-          (when train
-            (println "bundle: training run:" name (str/join " " train))
-            (let [{:keys [exit]} (apply p/shell {:continue true :env env} (str bin) train)]
-              (println "bundle: training run exited" exit))))
-        (println (str "bundle: wrote " out "/bin/" name))
-        (doseq [[label d] [["runtime" "runtime"] ["lib" "lib"] ["app" "app"] ["cache" "cache"]]]
-          (println (format "  %-8s %s" label (mb (du (fs/path out d))))))
-        (println (format "  %-8s %s" "total" (mb (du out))))
-        (when-not train
-          (println "bundle: only the boot is cached; --train ARGS caches what a run of the program compiles"))))))
+      (let [bin (write-launcher! out name (launcher-exec main name rel))]
+        (warm-cache! out rt champaca-bin bin name train)
+        (print-sizes! out name train)))))
 
 (defn -main [repo jolt & args]
   (let [made (volatile! nil)]
