@@ -1514,47 +1514,80 @@
   #{:iaload :laload :faload :daload :aaload :baload :caload :saload
     :iastore :lastore :fastore :dastore :bastore :castore :sastore :arraylength})
 
+(defn- block-succs
+  "pc -> the blocks a block can go to next."
+  [blks]
+  (into {} (for [[pc blk] blks] [pc (filter blks (successors (peek blk)))])))
+
+(defn- reverse-postorder
+  "The blocks reachable from pc 0 in reverse postorder, found iteratively."
+  [succs]
+  (loop [stack [[0 (succs 0)]] seen #{0} out ()]
+    (if-let [[pc ss] (peek stack)]
+      (let [ss (drop-while seen ss)]
+        (if-let [n (first ss)]
+          (recur (conj (pop stack) [pc (rest ss)] [n (succs n)]) (conj seen n) out)
+          (recur (pop stack) seen (conj out pc))))
+      out)))
+
+(defn- predecessors
+  "pc -> the reachable blocks that can go to it."
+  [succs reach]
+  (reduce (fn [m [p ss]] (if (reach p) (reduce #(update %1 %2 (fnil conj []) p) m ss) m)) {} succs))
+
+(defn- dominator-sets
+  "pc -> the set of blocks dominating it, by iterating to a fixed point in
+  reverse postorder."
+  [rpo preds]
+  (let [reach (set rpo)
+        meet (fn [sets] (reduce (fn [a b] (into #{} (filter b) a)) sets))]
+    (loop [dom (into {0 #{0}} (map (fn [pc] [pc reach]) (rest rpo)))]
+      (let [d (reduce (fn [d pc] (assoc d pc (conj (meet (map d (preds pc))) pc))) dom (rest rpo))]
+        (if (= d dom) dom (recur d))))))
+
+(defn- natural-loop
+  "Body b of header h grown by the back edge p -> h: the blocks that reach
+  p without passing h."
+  [preds b p h]
+  (loop [b (conj (or b #{h}) p) work [p]]
+    (if-let [x (peek work)]
+      (let [new (remove b (when (not= x h) (preds x)))]
+        (recur (into b new) (into (pop work) new)))
+      b)))
+
+(defn- loop-bodies
+  "header pc -> the union of the natural loops of its back edges p -> h,
+  h dominating p."
+  [rpo succs preds dom]
+  (reduce (fn [m [p h]] (update m h #(natural-loop preds % p h)))
+          {}
+          (for [p rpo h (succs p) :when ((dom p) h)] [p h])))
+
+(defn- versionable-loops
+  "The innermost of bodies that do something to an array, each with the
+  locals it aloads and never stores."
+  [blks bodies]
+  (into {}
+        (for [[h body] bodies
+              :when (not-any? #(and (not= % h) (bodies %)) body)
+              :let [insns (mapcat blks body)
+                    stored (set (keep #(when (store-ops (:op %)) (first (:args %))) insns))
+                    locals (set (keep #(when (= :aload (:op %)) (first (:args %))) insns))
+                    locals (into #{} (remove stored) locals)]
+              :when (and (seq locals) (some #(array-ops (:op %)) insns))]
+          [h {:body body :locals locals}])))
+
 (defn- array-loops
   "header pc -> {:body #{pc} :locals #{slot}}: the innermost natural loops of
   blks that do something to an array and aload a local they never store."
   [blks]
-  (let [succs (into {} (for [[pc blk] blks] [pc (filter blks (successors (peek blk)))]))]
+  (let [succs (block-succs blks)]
     (when (and (some (fn [[_ blk]] (some #(array-ops (:op %)) blk)) blks)
                (some (fn [[pc ss]] (some #(<= % pc) ss)) succs))
-      (let [;; reachable blocks in reverse postorder, iteratively
-            rpo (loop [stack [[0 (succs 0)]] seen #{0} out ()]
-                  (if-let [[pc ss] (peek stack)]
-                    (let [ss (drop-while seen ss)]
-                      (if-let [n (first ss)]
-                        (recur (conj (pop stack) [pc (rest ss)] [n (succs n)]) (conj seen n) out)
-                        (recur (pop stack) seen (conj out pc))))
-                    out))
-            reach (set rpo)
-            preds (reduce (fn [m [p ss]] (if (reach p) (reduce #(update %1 %2 (fnil conj []) p) m ss) m)) {} succs)
-            meet (fn [sets] (reduce (fn [a b] (into #{} (filter b) a)) sets))
-            dom (loop [dom (into {0 #{0}} (map (fn [pc] [pc reach]) (rest rpo)))]
-                  (let [d (reduce (fn [d pc] (assoc d pc (conj (meet (map d (preds pc))) pc))) dom (rest rpo))]
-                    (if (= d dom) dom (recur d))))
-            ;; a back edge p -> h, h dominating p, and the blocks that reach
-            ;; p without passing h
-            bodies (reduce (fn [m [p h]]
-                             (update m h (fn [b]
-                                           (loop [b (conj (or b #{h}) p) work [p]]
-                                             (if-let [x (peek work)]
-                                               (let [new (remove b (when (not= x h) (preds x)))]
-                                                 (recur (into b new) (into (pop work) new)))
-                                               b)))))
-                           {}
-                           (for [p rpo h (succs p) :when ((dom p) h)] [p h]))]
-        (into {}
-              (for [[h body] bodies
-                    :when (not-any? #(and (not= % h) (bodies %)) body)
-                    :let [insns (mapcat blks body)
-                          stored (set (keep #(when (store-ops (:op %)) (first (:args %))) insns))
-                          locals (set (keep #(when (= :aload (:op %)) (first (:args %))) insns))
-                          locals (into #{} (remove stored) locals)]
-                    :when (and (seq locals) (some #(array-ops (:op %)) insns))]
-                [h {:body body :locals locals}]))))))
+      (let [rpo (reverse-postorder succs)
+            preds (predecessors succs (set rpo))
+            dom (dominator-sets rpo preds)]
+        (versionable-loops blks (loop-bodies rpo succs preds dom))))))
 
 (defn- param-slots
   "The local slot of each parameter, a long or double taking two."
