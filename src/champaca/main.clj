@@ -2715,8 +2715,8 @@
 
 (defn- define-option
   "-Dkey=value, -Dkey an empty value, a bare -D nothing. A non-empty
-  removed directory property is refused as HotSpot parses it: the text on
-  stdout, the launcher's lines on stderr. One of the module system's own
+  removed directory property is refused, the first one given, as HotSpot
+  parses it: the text on stdout, the launcher's lines on stderr. One of the module system's own
   properties (reserved-module-property?) is dropped and noted."
   [opts argv]
   (let [a (first argv) kv (subs a 2) i (str/index-of kv "=")
