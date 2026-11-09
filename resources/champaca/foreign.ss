@@ -364,43 +364,143 @@
 ;; an address as the signed long Java sees (a uptr result is unsigned)
 (define (signed-address a) (if (> a #x7fffffffffffffff) (- a (expt 2 64)) a))
 
+;; One downcall's state while it runs: the memory sessions it acquired, the
+;; native buffers to free when it ends, and (segment . temp) pairs whose
+;; temps are copied back to heap segments after the call.
+(define-record-type ffi-call
+  (fields (mutable sessions) (mutable temps) (mutable heap-copies))
+  (sealed #t))
+(define (ffi-acquire! st s)
+  (let ([ss (seg-session s)])
+    (unless (or (global-session? ss) (memq ss (ffi-call-sessions st)))
+      ((jvirt ss "acquire0()V") ss)
+      (ffi-call-sessions-set! st (cons ss (ffi-call-sessions st))))))
+(define (ffi-temp! st n)
+  (let ([p (native-temp n)])
+    (ffi-call-temps-set! st (cons p (ffi-call-temps st)))
+    p))
+;; when the call ends, however: temps freed, then sessions released, each
+;; list emptied so a re-entry frees nothing twice
+(define (ffi-release! st)
+  (for-each foreign-free (ffi-call-temps st))
+  (ffi-call-temps-set! st '())
+  (for-each (lambda (ss) ((jvirt ss "release0()V") ss)) (ffi-call-sessions st))
+  (ffi-call-sessions-set! st '()))
+
+(define (ffi-option? options key) (not (eqv? ((jvirt options key) options) 0)))
+(define (ffi-argument-layouts fd)
+  (let ([l ((jvirt fd "argumentLayouts()Ljava/util/List;") fd)])
+    (vector->list (jarr-vec ((jvirt l "toArray()[Ljava/lang/Object;") l)))))
+(define (ffi-return-layout fd)
+  (let ([o ((jvirt fd "returnLayout()Ljava/util/Optional;") fd)])
+    (and (eqv? ((jvirt o "isPresent()Z") o) 1) ((jvirt o "get()Ljava/lang/Object;") o))))
+;; each argument: val, seg (an address), or a group layout's size
+(define (ffi-arg-kinds params layouts)
+  (list->vector (map (lambda (p l) (cond [(layout-group? l) (layout-size l)]
+                                         [(string=? p ms-desc) 'seg]
+                                         [else 'val]))
+                     params layouts)))
+(define (ffi-arg-types params layouts)
+  (map (lambda (p l) (if (layout-group? l) `(& ,(struct-ftype l)) (ffi-type p))) params layouts))
+;; an address result as the MemorySegment Java sees, or #f for another result
+(define (ffi-return-address ret ret-struct ret-layout)
+  (and (not ret-struct) (string=? ret ms-desc)
+       (let ([f (ffi-static "jdk/internal/foreign/Utils"
+                            "longToAddress(JLjava/lang/foreign/AddressLayout;)Ljava/lang/foreign/MemorySegment;")])
+         (lambda (a) (f (signed-address a) ret-layout)))))
+;; a segment's native address: a native segment's own field, else the JDK's
+(define (ffi-unboxer)
+  (let ([unbox-java (ffi-static "jdk/internal/foreign/abi/SharedUtils" "unboxSegment(Ljava/lang/foreign/MemorySegment;)J")])
+    (lambda (s) (if (seg-native? s) (jslot s (cdr (seg-field-indexes))) (unbox-java s)))))
+(define (ffi-set-captured! cap v)
+  (jinit "java/lang/foreign/ValueLayout")
+  ((jvirt cap "set(Ljava/lang/foreign/ValueLayout$OfInt;JI)V") cap
+   (top-level-value (string->symbol "java/lang/foreign/ValueLayout:JAVA_INT")) 0 v))
+
+;; an address argument: a heap segment, when heap access is allowed, as a
+;; native copy that is copied back after the call
+(define (ffi-segment-arg st a heap? unbox)
+  (let ([s (nn a)])
+    (ffi-acquire! st s)
+    (if (and heap? (not (seg-native? s)))
+        (let* ([n (seg-size s)] [p (ffi-temp! st n)] [ts (temp-segment p n)])
+          (seg-copy! s 0 ts 0 n)
+          (ffi-call-heap-copies-set! st (cons (cons s ts) (ffi-call-heap-copies st)))
+          p)
+        (unbox s))))
+;; a struct by value, k bytes: a native segment's own bytes, else a native
+;; copy (the JDK's copy throws for a segment too small)
+(define (ffi-struct-arg st a k unbox)
+  (let ([s (nn a)])
+    (ffi-acquire! st s)
+    (if (and (seg-native? s) (>= (seg-size s) k))
+        (unbox s)
+        (let ([p (ffi-temp! st k)])
+          (seg-copy! s 0 (temp-segment p k) 0 k)
+          p))))
+(define (ffi-raw-args st kinds args heap? unbox)
+  (let loop ([as args] [i 0] [acc '()])
+    (if (null? as)
+        (reverse acc)
+        (let ([a (car as)] [k (vector-ref kinds i)])
+          (loop (cdr as) (fx+ i 1)
+                (cons (cond [(eq? k 'val) a]
+                            [(eq? k 'seg) (ffi-segment-arg st a heap? unbox)]
+                            [else (ffi-struct-arg st a k unbox)])
+                      acc))))))
+;; the procedure for addr, kept in last (addr . proc) for the next call
+(define (ffi-proc-for! last maker addr)
+  (if (eqv? (car last) addr)
+      (cdr last)
+      (let ([f (maker addr)]) (set-car! last addr) (set-cdr! last f) f)))
+;; the GIL is handed off only when another Java thread could want it while
+;; the call runs in C (or a thread C started, through an upcall stub)
+(define (ffi-run call critical?)
+  (if (or critical? (and (null? java-live-threads) (fx= (hashtable-size upcall-codes) 0)))
+      (call)
+      (ffi-released call)))
+(define (ffi-copy-back! heap-copies)
+  (for-each (lambda (s+t)
+              (when (eqv? ((jvirt (car s+t) "isReadOnly()Z") (car s+t)) 0)
+                (seg-copy! (cdr s+t) 0 (car s+t) 0 (seg-size (car s+t)))))
+            heap-copies))
+;; a struct result: allocated by the call's allocator and filled from rt
+(define (ffi-struct-result alloc ret-struct rt unbox)
+  (let ([out ((jvirt alloc "allocate(Ljava/lang/foreign/MemoryLayout;)Ljava/lang/foreign/MemorySegment;")
+              alloc ret-struct)]
+        [n (layout-size ret-struct)])
+    (if (and (seg-native? out) (>= (seg-size out) n) (eqv? ((jvirt out "isReadOnly()Z") out) 0))
+        (ffi-memcpy (unbox out) rt n)
+        (seg-copy! (temp-segment rt n) 0 out 0 n))
+    out))
+(define (ffi-value-result ret r ret-address)
+  (case (string-ref ret 0)
+    [(#\Z) (if (eqv? r 0) 0 1)]
+    [(#\V) (void)]
+    [else (if ret-address (ret-address r) r)]))
+
 (define (ffi-arrange mt fd options)
   (ffi-validate! mt fd options)
   (let* ([d (mt-desc mt)]
          [params (desc-args d)]
          [ret (desc-ret d)]
-         [opt? (lambda (key) (not (eqv? ((jvirt options key) options) 0)))]
-         [critical? (opt? "isCritical()Z")]
-         [heap? (opt? "allowsHeapAccess()Z")]
-         [capture? (opt? "hasCapturedCallState()Z")]
-         [variadic (and (opt? "isVariadicFunction()Z")
+         [critical? (ffi-option? options "isCritical()Z")]
+         [heap? (ffi-option? options "allowsHeapAccess()Z")]
+         [capture? (ffi-option? options "hasCapturedCallState()Z")]
+         [variadic (and (ffi-option? options "isVariadicFunction()Z")
                         ((jvirt options "firstVariadicArgIndex()I") options))]
-         [layouts (let ([l ((jvirt fd "argumentLayouts()Ljava/util/List;") fd)])
-                    (vector->list (jarr-vec ((jvirt l "toArray()[Ljava/lang/Object;") l))))]
-         [ret-layout (let ([o ((jvirt fd "returnLayout()Ljava/util/Optional;") fd)])
-                       (and (eqv? ((jvirt o "isPresent()Z") o) 1) ((jvirt o "get()Ljava/lang/Object;") o)))]
-         ;; each argument: val, seg (an address), or a group layout's size
-         [kinds (list->vector (map (lambda (p l) (cond [(layout-group? l) (layout-size l)]
-                                                        [(string=? p ms-desc) 'seg]
-                                                        [else 'val]))
-                                   params layouts))]
-         [types (map (lambda (p l) (if (layout-group? l) `(& ,(struct-ftype l)) (ffi-type p))) params layouts)]
+         [layouts (ffi-argument-layouts fd)]
+         [ret-layout (ffi-return-layout fd)]
+         [kinds (ffi-arg-kinds params layouts)]
+         [types (ffi-arg-types params layouts)]
          [ret-struct (and ret-layout (layout-group? ret-layout) ret-layout)]
          [_ (when (chez-misplaces? layouts variadic)
               (jthrow "java/lang/UnsupportedOperationException"
                       (string-append "champaca: Chez Scheme would put an argument passed on the stack in the wrong place here on macOS arm64: "
                                      (jstring-of fd))))]
          [maker (ffi-maker types (if ret-struct `(& ,(struct-ftype ret-struct)) (ffi-type ret)) variadic (not critical?))]
-         [ret-address (and (not ret-struct) (string=? ret ms-desc)
-                           (let ([f (ffi-static "jdk/internal/foreign/Utils"
-                                                "longToAddress(JLjava/lang/foreign/AddressLayout;)Ljava/lang/foreign/MemorySegment;")])
-                             (lambda (a) (f (signed-address a) ret-layout))))]
-         [unbox-java (ffi-static "jdk/internal/foreign/abi/SharedUtils" "unboxSegment(Ljava/lang/foreign/MemorySegment;)J")]
-         [unbox (lambda (s) (if (seg-native? s) (jslot s (cdr (seg-field-indexes))) (unbox-java s)))]
-         [set-int (lambda (s v)
-                    (jinit "java/lang/foreign/ValueLayout")
-                    ((jvirt s "set(Ljava/lang/foreign/ValueLayout$OfInt;JI)V") s
-                     (top-level-value (string->symbol "java/lang/foreign/ValueLayout:JAVA_INT")) 0 v))]
+         [ret-address (ffi-return-address ret ret-struct ret-layout)]
+         [unbox (ffi-unboxer)]
          [last (cons #f #f)]
          [desc (string-append "(" ms-desc "Ljava/lang/foreign/SegmentAllocator;"
                               (if capture? ms-desc "") (apply string-append params) ")" ret)])
@@ -410,86 +510,27 @@
                [alloc (cadr all)]
                [cap (and capture? (nn (caddr all)))]
                [args (if capture? (cdddr all) (cddr all))]
-               [sessions '()]
-               [temps '()]        ; native buffers, freed when the call ends
-               [heap-copies '()]  ; (segment . temp) to copy back after the call
-               [acquire! (lambda (s)
-                           (let ([ss (seg-session s)])
-                             (unless (or (global-session? ss) (memq ss sessions))
-                               ((jvirt ss "acquire0()V") ss)
-                               (set! sessions (cons ss sessions)))))]
-               [temp! (lambda (n) (let ([p (native-temp n)]) (set! temps (cons p temps)) p))])
+               [st (make-ffi-call '() '() '())])
           (dynamic-wind
             void
             (lambda ()
-              (acquire! target)
-              (when cap (acquire! cap))
+              (ffi-acquire! st target)
+              (when cap (ffi-acquire! st cap))
               (let* ([addr (unbox target)]
-                     [raw (let loop ([as args] [i 0] [acc '()])
-                            (if (null? as)
-                                (reverse acc)
-                                (let ([a (car as)] [k (vector-ref kinds i)])
-                                  (loop (cdr as) (fx+ i 1)
-                                        (cons (cond
-                                                [(eq? k 'val) a]
-                                                [(eq? k 'seg)
-                                                 (let ([s (nn a)])
-                                                   (acquire! s)
-                                                   (if (and heap? (not (seg-native? s)))
-                                                       (let* ([n (seg-size s)] [p (temp! n)] [ts (temp-segment p n)])
-                                                         (seg-copy! s 0 ts 0 n)
-                                                         (set! heap-copies (cons (cons s ts) heap-copies))
-                                                         p)
-                                                       (unbox s)))]
-                                                [else
-                                                 ;; a struct by value: a native segment's own
-                                                 ;; bytes, else a native copy (the JDK's copy
-                                                 ;; throws for a segment too small)
-                                                 (let ([s (nn a)])
-                                                   (acquire! s)
-                                                   (if (and (seg-native? s) (>= (seg-size s) k))
-                                                       (unbox s)
-                                                       (let ([p (temp! k)])
-                                                         (seg-copy! s 0 (temp-segment p k) 0 k)
-                                                         p)))])
-                                              acc)))))]
-                     [rt (and ret-struct (temp! (layout-size ret-struct)))]
-                     [f (if (eqv? (car last) addr)
-                            (cdr last)
-                            (let ([f (maker addr)]) (set! last (cons addr f)) f))]
-                     [call (lambda ()
-                             (let ([r (if rt (apply f rt raw) (apply f raw))])
-                               (if cap (cons r (errno)) r)))]
-                     ;; the GIL is handed off only when another Java thread
-                     ;; could want it while the call runs in C
-                     ;; (or a thread C started, through an upcall stub)
-                     [r+e (if (or critical? (and (null? java-live-threads) (fx= (hashtable-size upcall-codes) 0)))
-                              (call)
-                              (ffi-released call))]
+                     [raw (ffi-raw-args st kinds args heap? unbox)]
+                     [rt (and ret-struct (ffi-temp! st (layout-size ret-struct)))]
+                     [f (ffi-proc-for! last maker addr)]
+                     [r+e (ffi-run (lambda ()
+                                     (let ([r (if rt (apply f rt raw) (apply f raw))])
+                                       (if cap (cons r (errno)) r)))
+                                   critical?)]
                      [r (if cap (car r+e) r+e)])
-                (when cap (set-int cap (cdr r+e)))
-                (for-each (lambda (s+t)
-                            (when (eqv? ((jvirt (car s+t) "isReadOnly()Z") (car s+t)) 0)
-                              (seg-copy! (cdr s+t) 0 (car s+t) 0 (seg-size (car s+t)))))
-                          heap-copies)
-                (cond
-                  [rt (let ([out ((jvirt alloc "allocate(Ljava/lang/foreign/MemoryLayout;)Ljava/lang/foreign/MemorySegment;")
-                                  alloc ret-struct)]
-                            [n (layout-size ret-struct)])
-                        (if (and (seg-native? out) (>= (seg-size out) n) (eqv? ((jvirt out "isReadOnly()Z") out) 0))
-                            (ffi-memcpy (unbox out) rt n)
-                            (seg-copy! (temp-segment rt n) 0 out 0 n))
-                        out)]
-                  [else
-                   (case (string-ref ret 0)
-                     [(#\Z) (if (eqv? r 0) 0 1)]
-                     [(#\V) (void)]
-                     [else (if ret-address (ret-address r) r)])])))
-            (lambda ()
-              (for-each foreign-free temps)
-              (set! temps '())
-              (for-each (lambda (ss) ((jvirt ss "release0()V") ss)) sessions)
-              (set! sessions '())))))
+                (when cap (ffi-set-captured! cap (cdr r+e)))
+                (ffi-copy-back! (ffi-call-heap-copies st))
+                (if rt
+                    (ffi-struct-result alloc ret-struct rt unbox)
+                    (ffi-value-result ret r ret-address))))
+            (lambda () (ffi-release! st)))))
       #f)))
 
 (for-each
