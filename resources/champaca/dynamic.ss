@@ -203,16 +203,35 @@
       [(assoc from boxes) => (lambda (b) (and (string=? (cdr b) (string c0)) 3))]
       [else #f])))
 
+;; a jolt seq for parameter descriptor d (first char c0): an array when d is
+;; one or v's inferred array type fits d, else (List, Collection, Iterable)
+;; an ArrayList
+(define (convert-seq-arg v d c0)
+  (if (or (char=? c0 #\[) (class-assignable? (inferred-array-desc v) (ref-class d)))
+      (let ([e (array-elem (if (char=? c0 #\[) d (inferred-array-desc v)))])
+        (make-jarr e (list->vector (map (lambda (x) (convert-arg x e)) v))))
+      (java-list v)))
+
+;; a jolt value for a reference parameter d: wrapped
+(define (wrap-jolt-arg v d)
+  (cond
+    [(string? v) (jstring v)]
+    [(boolean? v) (jbox "Z" (if v 1 0))]
+    [(char? v) (jbox "C" (char->integer v))]
+    [(flonum? v) (let ([t (ref-class d)]) (if (string=? t "java/lang/Float") (jbox "F" (f32 v)) (jbox "D" v)))]
+    [(exact-int? v)
+     (let ([t (ref-class d)])
+       (cond [(string=? t "java/lang/Long") (jbox "J" v)]
+             [(int-range? v) (jbox "I" v)]
+             [else (jbox "J" v)]))]
+    [(procedure? v) (fn->java v (ref-class d))]
+    [else v]))
+
 (define (convert-arg v d)
   (let ([c0 (string-ref d 0)])
     (cond
       [(eq? v jolt-nil) #f]
-      [(seq-arg? v)
-       (if (or (char=? c0 #\[) (class-assignable? (inferred-array-desc v) (ref-class d)))
-           (let ([e (array-elem (if (char=? c0 #\[) d (inferred-array-desc v)))])
-             (make-jarr e (list->vector (map (lambda (x) (convert-arg x e)) v))))
-           ;; List, Collection, Iterable: an ArrayList
-           (java-list v))]
+      [(seq-arg? v) (convert-seq-arg v d c0)]
       [(coll-arg? v) (coll->java v)]
       [(java-value? v)
        (if (memv c0 '(#\L #\[)) v (junbox (string c0) v))]
@@ -222,17 +241,7 @@
       [(char=? c0 #\D) (inexact v)]
       [(char=? c0 #\F) (f32 (inexact v))]
       ;; reference parameter, jolt value: wrap
-      [(string? v) (jstring v)]
-      [(boolean? v) (jbox "Z" (if v 1 0))]
-      [(char? v) (jbox "C" (char->integer v))]
-      [(flonum? v) (let ([t (ref-class d)]) (if (string=? t "java/lang/Float") (jbox "F" (f32 v)) (jbox "D" v)))]
-      [(exact-int? v)
-       (let ([t (ref-class d)])
-         (cond [(string=? t "java/lang/Long") (jbox "J" v)]
-               [(int-range? v) (jbox "I" v)]
-               [else (jbox "J" v)]))]
-      [(procedure? v) (fn->java v (ref-class d))]
-      [else v])))
+      [else (wrap-jolt-arg v d)])))
 
 ;; jolt fn -> instance of the single-method interface iface
 (define (fn->java f iface)
