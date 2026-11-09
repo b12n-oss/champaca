@@ -1426,6 +1426,44 @@
        (catch Exception e
          (if (:linkage (ex-data e)) true (throw e)))))
 
+(defn- check-superclass!
+  "A class's superclass may be neither an interface nor final (an
+  interface's is Object, unchecked here)."
+  [info sup sup-info]
+  (let [n (:name info)]
+    (when (and sup-info (not (cf/interface? info)))
+      (when (cf/interface? sup-info)
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " has interface " (dotted sup) " as super class"))))
+      (when (pos? (bit-and (:flags sup-info) 0x0010))
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup))))))))
+
+(defn- check-implemented! [info]
+  (let [n (:name info)]
+    (doseq [i (:interfaces info)]
+      (when-not (cf/interface? (class-info i))
+        (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
+                              (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
+                                   (s/call "class-place-text" i) ")")))))))
+
+(defn- final-override-error
+  "The error for the first instance method of info overriding a final one of
+  a superclass it can see (a package-private one only from the same
+  package), or nil."
+  [info sup]
+  (let [n (:name info)
+        pkg package-dir]   ; a hidden class's /0x<n> suffix isn't its package
+    (some (fn [m]
+            (when (and (not (cf/static? m)) (not= "<init>" (:name m)) (zero? (bit-and (:flags m) 0x0002)))
+              (some (fn [c]
+                      (let [sm (some #(when (and (= (:name m) (:name %)) (= (:desc m) (:desc %))) %) (class-methods c))]
+                        (when (and sm (pos? (bit-and (:flags sm) 0x0010)) (not (cf/static? sm))
+                                   (zero? (bit-and (:flags sm) 0x0002))
+                                   (or (pos? (bit-and (:flags sm) 0x0005)) (= (pkg c) (pkg n))))
+                          (linkage-error n "java/lang/IncompatibleClassChangeError"
+                                         (str "class " (dotted n) " overrides final method " (dotted c) "." (:name m) (:desc m))))))
+                    (take-while some? (iterate #(:super (class-info %)) sup)))))
+          (:methods info))))
+
 (defn- check-definition!
   "HotSpot's checks of a class being defined, once its superclass and
   interfaces are loaded (JVMS 5.3.5, 5.4.5), with its texts: a final
@@ -1433,32 +1471,14 @@
   a sealed supertype that doesn't permit it, an instance method overriding a
   final one it can see. Throws linkage-error."
   [info]
-  (let [n (:name info) sup (:super info) sup-info (when sup (class-info sup))]
-    (when (and sup-info (not (cf/interface? info)))
-      (when (cf/interface? sup-info)
-        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " has interface " (dotted sup) " as super class"))))
-      (when (pos? (bit-and (:flags sup-info) 0x0010))
-        (throw (linkage-error n "java/lang/IncompatibleClassChangeError" (str "class " (dotted n) " cannot inherit from final class " (dotted sup))))))
-    (doseq [i (:interfaces info)]
-      (when-not (cf/interface? (class-info i))
-        (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
-                              (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
-                                   (s/call "class-place-text" i) ")")))))
+  (let [sup (:super info) sup-info (when sup (class-info sup))]
+    (check-superclass! info sup sup-info)
+    (check-implemented! info)
     ;; after the interfaces are checked for being interfaces, as HotSpot
     ;; does that while parsing
     (doseq [s (remove nil? (cons sup (:interfaces info)))] (check-sealed! info s))
-    (when sup
-      (let [pkg package-dir]   ; a hidden class's /0x<n> suffix isn't its package
-        (doseq [m (:methods info)
-                :when (and (not (cf/static? m)) (not= "<init>" (:name m)) (zero? (bit-and (:flags m) 0x0002)))]
-          (doseq [c (take-while some? (iterate #(:super (class-info %)) sup))
-                  :let [sm (some #(when (and (= (:name m) (:name %)) (= (:desc m) (:desc %))) %) (class-methods c))]
-                  :when (and sm (pos? (bit-and (:flags sm) 0x0010)) (not (cf/static? sm))
-                             (zero? (bit-and (:flags sm) 0x0002))
-                             ;; package-private: only from the same package
-                             (or (pos? (bit-and (:flags sm) 0x0005)) (= (pkg c) (pkg n))))]
-            (throw (linkage-error n "java/lang/IncompatibleClassChangeError"
-                                  (str "class " (dotted n) " overrides final method " (dotted c) "." (:name m) (:desc m))))))))))
+    (when-let [e (when sup (final-override-error info sup))]
+      (throw e))))
 
 (defn- load-supertypes!
   "ensure-loaded! of info's superclass and interfaces, then check-definition!;
@@ -1472,41 +1492,48 @@
         (ensure-loaded! dep)))
     (check-definition! info)))
 
+(defn- register-lazy-class!
+  "A class registered by an earlier run: its class table entry came from the
+  cache, and its registration is one unit of a cached generation. A
+  dependency that isn't there leaves cname lazy, not half-registered."
+  [cname]
+  (let [info (thaw! cname)]
+    (swap! state update :lazy disj cname)
+    (try
+      (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+        (ensure-loaded! dep))
+      (catch Exception e
+        (swap! state update :lazy conj cname)
+        (throw e)))
+    (or (load-unit! (:cached-class info))
+        (let [text (registration-text info)]
+          (record! (cache-origin info) [cname] {:text text})
+          (scheme! text :interpret)))))
+
+(defn- load-new-class!
+  "A class not in the table: restored from the library cache, else parsed,
+  its supertypes loaded, linked and registered. A classpath class's link and
+  registration record what they read."
+  [cname]
+  (when-not (restore-user-class! cname)
+    (when-let [info (timed :parse #(normalize cname))]
+      (load-supertypes! info)
+      (when-not (get-in @state [:classes cname])
+        (let [reads (when (= :user (:origin info)) (volatile! #{}))
+              linked (binding [*reads* reads] (timed :link #(link info)))]
+          (swap! state assoc-in [:classes cname] linked)
+          (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
+                linked (if-let [ks (when reads (library-cache-keys cname @reads))]
+                         (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
+                         linked)]
+            (record! (cache-origin linked) [cname] {:text text})
+            (timed :register-eval #(scheme! text :interpret))))))))
+
 (defn ensure-loaded! [cname]
   (refuse-outside-layer! cname)
   (cond
-    ;; registered by an earlier run: its class table entry came from the
-    ;; cache, and its registration is one unit of a cached generation
-    (contains? (:lazy @state) cname)
-    (let [info (thaw! cname)]
-      (swap! state update :lazy disj cname)
-      ;; a dependency that isn't there leaves cname lazy, not half-registered
-      (try
-        (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
-          (ensure-loaded! dep))
-        (catch Exception e
-          (swap! state update :lazy conj cname)
-          (throw e)))
-      (or (load-unit! (:cached-class info))
-          (let [text (registration-text info)]
-            (record! (cache-origin info) [cname] {:text text})
-            (scheme! text :interpret))))
-
-    (not (get-in @state [:classes cname]))
-    (when-not (restore-user-class! cname)
-      (when-let [info (timed :parse #(normalize cname))]
-        (load-supertypes! info)
-        (when-not (get-in @state [:classes cname])
-          ;; a classpath class's link and registration record what they read
-          (let [reads (when (= :user (:origin info)) (volatile! #{}))
-                linked (binding [*reads* reads] (timed :link #(link info)))]
-            (swap! state assoc-in [:classes cname] linked)
-            (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
-                  linked (if-let [ks (when reads (library-cache-keys cname @reads))]
-                           (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
-                           linked)]
-              (record! (cache-origin linked) [cname] {:text text})
-              (timed :register-eval #(scheme! text :interpret))))))))
+    (contains? (:lazy @state) cname) (register-lazy-class! cname)
+    (not (get-in @state [:classes cname])) (load-new-class! cname))
   cname)
 
 (defn lambda-class

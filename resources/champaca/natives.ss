@@ -2651,52 +2651,63 @@
 ;; for a missing supertype only if this definition's own lookup recorded it
 (define resolution-error-count 0)
 (define resolution-error-stamps (make-hashtable string-hash string=?))
+;; define-class-hook*'s answer for the bytes, "<kind> <arg>". What fails past
+;; parsing (a superclass that isn't there, a link error) is a
+;; NoClassDefFoundError naming the cause, as a class the JVM can't define is
+;; a LinkageError; a supertype the loader itself failed on (a class extending
+;; itself: its nested definition threw ClassCircularityError) is that error,
+;; as the JVM rethrows a failed resolution's error, when this definition's
+;; own lookup (after stamp) recorded it.
+(define (definition-answer loader name v off len hidden? stamp)
+  (guard (e [(and (not (jobj? e))
+                  (let ([m (class-not-found-in e)])
+                    (and m (fx> (hashtable-ref resolution-error-stamps m 0) stamp)
+                         (hashtable-ref resolution-errors m #f))))
+             => raise]
+            ;; a supertype that's nowhere: the JVM's message is its slashed name
+            [(and (not (jobj? e)) (class-not-found-in e)) => (lambda (m) (jthrow "java/lang/NoClassDefFoundError" m))]
+            [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
+    (parameterize ([resolving-loader loader])
+      (define-class-hook* name (bytes->latin1 v off len) hidden?
+                         (and loader (not hidden?)
+                              (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))))))
+;; the JVM's error for an answer that isn't "ok": "bad", "link
+;; <error class>|<text>" (main.clj check-definition!), "wrong" (the JVM's
+;; message keeps both names slashed) or "dup"
+(define (throw-definition-refusal kind arg name)
+  (cond [(string=? kind "bad") (jthrow "java/lang/ClassFormatError" arg)]
+        [(string=? kind "link")
+         (let ([bar (let find ([k 0]) (if (char=? (string-ref arg k) #\|) k (find (fx+ k 1))))])
+           (jthrow (substring arg 0 bar) (substring arg (fx+ bar 1) (string-length arg))))]
+        [(string=? kind "wrong")
+         (jthrow "java/lang/NoClassDefFoundError" (string-append name " (wrong name: " arg ")"))]
+        [(string=? kind "dup")
+         (jthrow "java/lang/LinkageError"
+                 (string-append "loader attempted duplicate class definition for " (slashes->dots arg)
+                                " (one class table here, whatever the loader)"))]))
+;; the class named cname just defined: noted hidden and with its loader, its
+;; mirror given the class data and the domain it was defined with (its
+;; getProtectionDomain)
+(define (defined-mirror cname loader hidden? classdata pd)
+  (when hidden? (hashtable-set! hidden-classes cname #t))
+  (when loader (hashtable-set! class-loaders cname loader))
+  (let ([m (jmirror (find-class cname))])
+    (when classdata (jslot-set! m (jfield-index "java/lang/Class" "classData") classdata))
+    (when pd (jslot-set! m (jfield-index "java/lang/Class" "protectionDomain") pd))
+    m))
 (define (define-class! loader given v off len hidden? classdata pd)
   (unless (and (fx>= off 0) (fx>= len 0) (fx<= (fx+ off len) (vector-length v)))
     (jthrow "java/lang/ArrayIndexOutOfBoundsException"
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
   (let* ([stamp resolution-error-count]
          [name (and given (slashes (jstring->scheme given)))]
-         ;; what fails past parsing (a superclass that isn't there, a link
-         ;; error) is a NoClassDefFoundError naming the cause, as a class
-         ;; the JVM can't define is a LinkageError
-         ;; a supertype the loader itself failed on (a class extending itself:
-         ;; its nested definition threw ClassCircularityError) is that error,
-         ;; as the JVM rethrows a failed resolution's error
-         [r (guard (e [(and (not (jobj? e))
-                            (let ([m (class-not-found-in e)])
-                              (and m (fx> (hashtable-ref resolution-error-stamps m 0) stamp)
-                                   (hashtable-ref resolution-errors m #f))))
-                       => raise]
-                      ;; a supertype that's nowhere: the JVM's message is its slashed name
-                      [(and (not (jobj? e)) (class-not-found-in e)) => (lambda (m) (jthrow "java/lang/NoClassDefFoundError" m))]
-                      [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
-              (parameterize ([resolving-loader loader])
-                (define-class-hook* name (bytes->latin1 v off len) hidden?
-                                   (and loader (not hidden?)
-                                        (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader"))))))]
+         [r (definition-answer loader name v off len hidden? stamp)]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])
-    (cond [(string=? kind "bad") (jthrow "java/lang/ClassFormatError" arg)]
-          ;; a definition the JVM refuses (main.clj check-definition!): "<error class>|<text>"
-          [(string=? kind "link")
-           (let ([bar (let find ([k 0]) (if (char=? (string-ref arg k) #\|) k (find (fx+ k 1))))])
-             (jthrow (substring arg 0 bar) (substring arg (fx+ bar 1) (string-length arg))))]
-          [(string=? kind "wrong")   ; the JVM's message keeps both names slashed
-           (jthrow "java/lang/NoClassDefFoundError" (string-append name " (wrong name: " arg ")"))]
-          [(string=? kind "dup")
-           (jthrow "java/lang/LinkageError"
-                   (string-append "loader attempted duplicate class definition for " (slashes->dots arg)
-                                  " (one class table here, whatever the loader)"))]
-          [else
-           (when hidden? (hashtable-set! hidden-classes arg #t))
-           (when loader (hashtable-set! class-loaders arg loader))
-           (let ([m (jmirror (find-class arg))])
-             (when classdata (jslot-set! m (jfield-index "java/lang/Class" "classData") classdata))
-             ;; the domain it was defined with is its getProtectionDomain
-             (when pd (jslot-set! m (jfield-index "java/lang/Class" "protectionDomain") pd))
-             m)])))
+    (if (member kind '("bad" "link" "wrong" "dup"))
+        (throw-definition-refusal kind arg name)
+        (defined-mirror arg loader hidden? classdata pd))))
 (defnative "java/lang/ClassLoader.defineClass1(Ljava/lang/ClassLoader;Ljava/lang/String;[BIILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
   (define-class! loader name (jarr-vec (nn b)) off len #f #f pd))
