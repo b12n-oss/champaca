@@ -2992,37 +2992,91 @@
 
 (def ^:private source-launcher "com/sun/tools/javac/launcher/SourceLauncher")
 
-(defn -main [& all-argv]
-  (let [{:keys [props classpath assertions argv stack preview source module-options version module-props-ignored module]} (jvm-options all-argv)
-        module-options (cond-> module-options
+(defn- source-mode-of
+  "Source-file mode, as java's: --source, or a first argument that is a
+  .java file; the file and its arguments go to javac's SourceLauncher, which
+  compiles it in memory and runs its main."
+  [argv source]
+  (boolean (and (seq argv) (not= "-jar" (first argv)) (or source (source-file? (first argv))))))
+
+(defn- apply-launcher-options!
+  "The launcher's options take effect before the program runs: the stack
+  bound, the properties, assertion directives and runtime arguments, preview
+  and the module options, in state."
+  [{:keys [props assertions stack preview source module-options version module-props-ignored module]} consumed source-mode?]
+  (let [module-options (cond-> module-options
                          module (conj ["main" (first (str/split module #"/"))]))
+        props (cond-> props source (conj ["jdk.internal.javac.source" source]))]
+    (when (and stack (System/getenv "JOLT_STACK_LIMIT"))
+      (binding [*out* *err*] (println "champaca: ignoring -Xss; JOLT_STACK_LIMIT sets the stack bound")))
+    (bound-stack! (or stack default-stack-limit))
+    (swap! state assoc :command-line-properties props :assertion-directives assertions
+           :runtime-arguments (vec (runtime-arguments consumed source-mode?)) :source-mode source-mode?)
+    (when preview (reset! cf/preview-enabled true))
+    (when module-props-ignored
+      (binding [*out* *err*]
+        (println "OpenJDK 64-Bit Server VM warning: Ignoring system property options whose names match the '-Djdk.module.*'. names that are reserved for internal use.")))
+    (swap! state assoc :module-options module-options :version version)))
+
+(defn- program-args
+  "[class-path main-class & args] from what follows the options. With -cp the
+  main class comes first; without, champaca's own form, the class path first
+  (-jar ignores -cp, as java does). In source-file mode the class path is
+  -cp's or, as the launcher has it, \".\" alone, or nothing with --source. A
+  lone .java name that isn't a file is java's main class (\"Could not find or
+  load main class\"); followed by a main class it stays champaca's class
+  path, which may name a d.java directory."
+  [argv classpath source source-mode?]
+  (cond source-mode? (list* (or classpath (if source "" ".")) source-launcher argv)
+        (and classpath (not= "-jar" (first argv))) (cons classpath argv)
+        (and (= 1 (count argv)) (str/ends-with? (first argv) ".java")) (cons "." argv)
+        :else argv))
+
+(defn- print-usage! []
+  (binding [*out* *err*]
+    (println "usage: jolt -M -m champaca.main [options] <classpath[:entry...] (dirs, jars, dir/*)> <MainClass> [args...]")
+    (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
+    (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
+    (println "   or: jolt -M -m champaca.main [options] [--source <release>] <file.java> [args...]")
+    (println "   or: jolt -M -m champaca.main [options] -p <module path> -m <module>[/<mainclass>] [args...]")
+    (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --source <release>,")
+    (println "         --add-modules, --limit-modules, --enable-native-access <module>[,...], --add-opens, --add-exports <module>/<package>=<module>[,...],")
+    (println "         --add-reads <module>=<module>[,...], --illegal-native-access=allow|warn|deny, -version, -showversion, --version, --show-version;")
+    (println "         -server, -client, -Xdiag accepted; -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX:, -verbose, -Xlog,")
+    (println "         -Xint, -Xmixed, -Xcomp, -Xbatch, -Xrs, -Xverify:, -Xcheck:jni, -Xnoclassgc ignored with a warning")))
+
+(defn- run-jar!
+  "As java -jar: the manifest's Main-Class, the jar alone as the class path
+  given (its Class-Path entries follow it, as for any jar). Any file,
+  whatever its name, as java -jar takes it; one that isn't a zip is the
+  launcher's \"invalid or corrupt\"."
+  [jar args]
+  (let [file? (.isFile (io/file jar))
+        m (when file? (try (or (jar-manifest jar) {}) (catch Exception _ ::corrupt)))
+        main (when (map? m) (get-in m [nil "main-class"]))]
+    (when-not main
+      (binding [*out* *err*]
+        (println (cond (not file?) (str "Error: Unable to access jarfile " jar)
+                       (= m ::corrupt) (str "Error: Invalid or corrupt jarfile " jar)
+                       :else (str "no main manifest attribute, in " jar))))
+      (System/exit 1))
+    (swap! state assoc :java-command (str/join " " (cons jar args)))
+    (System/exit (run [jar] (str/replace (str/trim main) "." "/") (vec args)))))
+
+(defn- run-main-class!
+  "The main class on the class path cp. sun.java.command, as the launcher
+  has it: the main class as given (the source launcher with its module),
+  then the arguments."
+  [cp cname args source-mode?]
+  (swap! state assoc :java-command (str/join " " (cons (if source-mode? (str "jdk.compiler/" (str/replace cname "/" ".")) cname) args)))
+  (System/exit (run (if (= "" cp) [] (vec (expand-class-path cp))) (str/replace cname "." "/") (vec args))))
+
+(defn -main [& all-argv]
+  (let [{:keys [classpath argv source version module] :as opts} (jvm-options all-argv)
         consumed (take (- (count all-argv) (count argv)) all-argv)
-        ;; source-file mode, as java's: --source, or a first argument that is
-        ;; a .java file; the file and its arguments go to javac's
-        ;; SourceLauncher, which compiles it in memory and runs its main
-        source-mode? (boolean (and (seq argv) (not= "-jar" (first argv)) (or source (source-file? (first argv)))))
-        props (cond-> props source (conj ["jdk.internal.javac.source" source]))
-        _ (when (and stack (System/getenv "JOLT_STACK_LIMIT"))
-            (binding [*out* *err*] (println "champaca: ignoring -Xss; JOLT_STACK_LIMIT sets the stack bound")))
-        _ (bound-stack! (or stack default-stack-limit))
-        _ (swap! state assoc :command-line-properties props :assertion-directives assertions
-                 :runtime-arguments (vec (runtime-arguments consumed source-mode?)) :source-mode source-mode?)
-        _ (when preview (reset! cf/preview-enabled true))
-        _ (when module-props-ignored
-            (binding [*out* *err*]
-              (println "OpenJDK 64-Bit Server VM warning: Ignoring system property options whose names match the '-Djdk.module.*'. names that are reserved for internal use.")))
-        _ (swap! state assoc :module-options module-options :version version)
-        ;; with -cp the main class comes first; without, champaca's own
-        ;; form, the class path first (-jar ignores -cp, as java does)
-        ;; in source-file mode the class path is -cp's or, as the launcher
-        ;; has it, "." alone, or nothing with --source
-        ;; a lone .java name that isn't a file is java's main class
-        ;; ("Could not find or load main class"); followed by a main class
-        ;; it stays champaca's class path, which may name a d.java directory
-        [cp cname & args] (cond source-mode? (list* (or classpath (if source "" ".")) source-launcher argv)
-                                (and classpath (not= "-jar" (first argv))) (cons classpath argv)
-                                (and (= 1 (count argv)) (str/ends-with? (first argv) ".java")) (cons "." argv)
-                                :else argv)]
+        source-mode? (source-mode-of argv source)
+        _ (apply-launcher-options! opts consumed source-mode?)
+        [cp cname & args] (program-args argv classpath source source-mode?)]
     ;; -version and --version print and exit, whatever follows, as the
     ;; launcher, which needs no main class for them
     (when (:exit? version)
@@ -3040,36 +3094,8 @@
     (when-not cname
       ;; -showversion without a program prints the version, then the usage
       (when version (run [] nil []))
-      (binding [*out* *err*]
-        (println "usage: jolt -M -m champaca.main [options] <classpath[:entry...] (dirs, jars, dir/*)> <MainClass> [args...]")
-        (println "   or: jolt -M -m champaca.main [options] -cp <classpath> <MainClass> [args...]")
-        (println "   or: jolt -M -m champaca.main [options] -jar <jarfile> [args...]")
-        (println "   or: jolt -M -m champaca.main [options] [--source <release>] <file.java> [args...]")
-        (println "   or: jolt -M -m champaca.main [options] -p <module path> -m <module>[/<mainclass>] [args...]")
-        (println "options: -Dkey=value, -ea[:<class>|:<package>...], -da[...], -esa, -dsa, --enable-preview, --source <release>,")
-        (println "         --add-modules, --limit-modules, --enable-native-access <module>[,...], --add-opens, --add-exports <module>/<package>=<module>[,...],")
-        (println "         --add-reads <module>=<module>[,...], --illegal-native-access=allow|warn|deny, -version, -showversion, --version, --show-version;")
-        (println "         -server, -client, -Xdiag accepted; -Xss<size> bounds the stack (1m by default); -Xmx, -Xms, -Xmn, -Xshare:, -XX:, -verbose, -Xlog,")
-        (println "         -Xint, -Xmixed, -Xcomp, -Xbatch, -Xrs, -Xverify:, -Xcheck:jni, -Xnoclassgc ignored with a warning"))
+      (print-usage!)
       (System/exit 2))
     (if (= cp "-jar")
-      ;; as java -jar: the manifest's Main-Class, the jar alone as the class
-      ;; path given (its Class-Path entries follow it, as for any jar)
-      (let [file? (.isFile (io/file cname))
-            ;; any file, whatever its name, as java -jar takes it; one that
-            ;; isn't a zip is the launcher's "invalid or corrupt"
-            m (when file? (try (or (jar-manifest cname) {}) (catch Exception _ ::corrupt)))
-            main (when (map? m) (get-in m [nil "main-class"]))]
-        (when-not main
-          (binding [*out* *err*]
-            (println (cond (not file?) (str "Error: Unable to access jarfile " cname)
-                           (= m ::corrupt) (str "Error: Invalid or corrupt jarfile " cname)
-                           :else (str "no main manifest attribute, in " cname))))
-          (System/exit 1))
-        (swap! state assoc :java-command (str/join " " (cons cname args)))
-        (System/exit (run [cname] (str/replace (str/trim main) "." "/") (vec args))))
-      (do
-        ;; sun.java.command, as the launcher has it: the main class as given
-        ;; (the source launcher with its module), then the arguments
-        (swap! state assoc :java-command (str/join " " (cons (if source-mode? (str "jdk.compiler/" (str/replace cname "/" ".")) cname) args)))
-        (System/exit (run (if (= "" cp) [] (vec (expand-class-path cp))) (str/replace cname "." "/") (vec args)))))))
+      (run-jar! cname args)
+      (run-main-class! cp cname args source-mode?))))
