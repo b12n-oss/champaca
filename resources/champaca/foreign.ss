@@ -721,6 +721,56 @@
 ;; value is read where the JDK put it. Answers the callable's types and a
 ;; procedure from what it receives to the handle's arguments, or #f for that
 ;; procedure when nothing is on the stack.
+;; the index of the register st names in regs, or #f
+(define (storage-position st regs)
+  (let loop ([rs regs] [i 0])
+    (cond [(null? rs) #f]
+          [(and (fx= (vm-storage-type (car rs)) (vm-storage-type st))
+                (fx= (vm-storage-index (car rs)) (vm-storage-index st))) i]
+          [else (loop (cdr rs) (fx+ i 1))])))
+;; the 8-byte stack words the stack storages reach
+(define (upcall-stack-words storages)
+  (fold-left (lambda (words st)
+               (if (fx= (vm-storage-type st) upcall-stack-type)
+                   (max words (quotient (+ (vm-storage-index st) (vm-storage-size st) 7) 8))
+                   words))
+             0 storages))
+;; how to read an argument of descriptor d from storage st: from the
+;; received values xv when st is a register, whose slot in types it sets to
+;; d's type, else from the stack words copied to bv
+(define (upcall-getter d st int-regs vec-regs ni types)
+  (let ([t (vm-storage-type st)] [ft (ffi-type d)])
+    (cond
+     [(and (fx< t 2) (storage-position st (if (fx= t 0) int-regs vec-regs)))
+      => (lambda (i)
+           (let ([at (if (fx= t 0) i (fx+ ni i))])
+             (vector-set! types at ft)
+             (lambda (xv bv) (vector-ref xv at))))]
+     [(fx= t upcall-stack-type)
+      (let ([off (vm-storage-index st)])
+        (lambda (xv bv) (foreign-ref ft bv off)))]
+     [else (jthrow "java/lang/UnsupportedOperationException"
+                   "champaca: an upcall argument in a storage it doesn't know")])))
+;; from what the callable receives (every register, then the stack words)
+;; to the handle's arguments, through a buffer holding the stack words
+(define (upcall-stack-reader getters words ni nv)
+  (lambda (xs)
+    (let* ([xv (list->vector xs)] [bv (foreign-alloc (fx* 8 (fxmax words 1)))])
+      (do ([i 0 (fx+ i 1)]) ((fx= i words))
+        (foreign-set! 'integer-64 bv (fx* 8 i) (vector-ref xv (fx+ ni nv i))))
+      (let ([r (guard (e [#t (foreign-free bv) (raise e)]) (map (lambda (g) (g xv bv)) getters))])
+        (foreign-free bv)
+        r))))
+;; Arguments that reach the stack (more than the registers hold, a struct the
+;; ABI passes in memory, one the registers left can't hold, and on arm64
+;; whatever comes after such a struct) can't be placed by Chez from the
+;; handle's primitive types alone: it would put them in registers still free.
+;; The JDK says where each one is, a register or a stack offset, so such a
+;; callable takes every argument register in the ABI's order, then the
+;; stack as 8-byte words, and each
+;; value is read where the JDK put it. Answers the callable's types and a
+;; procedure from what it receives to the handle's arguments, or #f for that
+;; procedure when nothing is on the stack.
 (define (upcall-placed params storages abi)
   (if (not (exists (lambda (st) (fx= (vm-storage-type st) upcall-stack-type)) storages))
       (values (map ffi-type params) #f)
@@ -731,82 +781,68 @@
              [int-regs (list-head (vector->list (jarr-vec (vector-ref input 0))) (if upcall-arm64? 8 6))]
              [vec-regs (vector->list (jarr-vec (vector-ref input 1)))]
              [ni (length int-regs)] [nv (length vec-regs)]
-             [position (lambda (st regs)
-                         (let loop ([rs regs] [i 0])
-                           (cond [(null? rs) #f]
-                                 [(and (fx= (vm-storage-type (car rs)) (vm-storage-type st))
-                                       (fx= (vm-storage-index (car rs)) (vm-storage-index st))) i]
-                                 [else (loop (cdr rs) (fx+ i 1))])))]
              [types (let ([v (make-vector (fx+ ni nv) 'double)])
                       (do ([i 0 (fx+ i 1)]) ((fx= i ni) v) (vector-set! v i 'integer-64)))]
-             [words 0]
-             [getters
-              (map (lambda (d st)
-                     (let ([t (vm-storage-type st)] [ft (ffi-type d)])
-                       (cond
-                        [(and (fx< t 2) (position st (if (fx= t 0) int-regs vec-regs)))
-                         => (lambda (i)
-                              (let ([at (if (fx= t 0) i (fx+ ni i))])
-                                (vector-set! types at ft)
-                                (lambda (xv bv) (vector-ref xv at))))]
-                        [(fx= t upcall-stack-type)
-                         (let ([off (vm-storage-index st)])
-                           (set! words (max words (quotient (+ off (vm-storage-size st) 7) 8)))
-                           (lambda (xv bv) (foreign-ref ft bv off)))]
-                        [else (jthrow "java/lang/UnsupportedOperationException"
-                                      "champaca: an upcall argument in a storage it doesn't know")])))
-                   params storages)])
+             [words (upcall-stack-words storages)]
+             [getters (map (lambda (d st) (upcall-getter d st int-regs vec-regs ni types)) params storages)])
         (values (append (vector->list types) (make-list words 'integer-64))
-                (lambda (xs)
-                  (let* ([xv (list->vector xs)] [bv (foreign-alloc (fx* 8 (fxmax words 1)))])
-                    (do ([i 0 (fx+ i 1)]) ((fx= i words))
-                      (foreign-set! 'integer-64 bv (fx* 8 i) (vector-ref xv (fx+ ni nv i))))
-                    (let ([r (guard (e [#t (foreign-free bv) (raise e)]) (map (lambda (g) (g xv bv)) getters))])
-                      (foreign-free bv)
-                      r)))))))
+                (upcall-stack-reader getters words ni nv)))))
+(define (upcall-checked-placed params storages abi)
+  (unless (= (length params) (length storages))
+    (jthrow "java/lang/UnsupportedOperationException"
+            (format "champaca: an upcall handle of ~a arguments for ~a storages" (length params) (length storages))))
+  (upcall-placed params storages abi))
+(define (upcall-runner p) (lambda xs (upcall-run (lambda () (apply p xs)))))
+;; each return register's offset in the return buffer, 8 bytes for an
+;; integer register, 16 for a vector one
+(define (return-buffer-offsets kinds)
+  (let loop ([ks kinds] [off 0] [acc '()])
+    (if (null? ks) (reverse acc) (loop (cdr ks) (+ off (if (eq? (car ks) 'int) 8 16)) (cons off acc)))))
+;; a struct returned in registers: proc fills a zeroed buffer of size bytes,
+;; whose words are copied to the registers' struct
+(define (upcall-buffer-stub proc args conv abi arg-regs size)
+  (let* ([kinds (map (lambda (st) (if (fx= (vm-storage-type st) 0) 'int 'vec)) (call-regs conv "retRegs"))]
+         [offsets (return-buffer-offsets kinds)])
+    (unless (and (pair? kinds) (= (+ (car (last-pair offsets)) (if (eq? (car (last-pair kinds)) 'int) 8 16)) size)
+                 (for-all (lambda (st) (memv (vm-storage-type st) '(0 1))) (call-regs conv "retRegs")))
+      (jthrow "java/lang/UnsupportedOperationException"
+              (format "champaca: an upcall's return registers don't match its ~a-byte return buffer" size)))
+    ;; argRegs lists the buffer too (retBufAddrStorage), filled by the
+    ;; stub itself, not by C
+    (let-values ([(types convert)
+                  (upcall-checked-placed
+                   (cdr args)
+                   (let ([rb (jslot abi (jfield-index "jdk/internal/foreign/abi/ABIDescriptor" "retBufAddrStorage"))])
+                     (remp (lambda (st) (and (fx= (vm-storage-type st) (vm-storage-type rb))
+                                             (fx= (vm-storage-index st) (vm-storage-index rb))))
+                           arg-regs))
+                   abi)])
+      (values types `(& ,(upcall-reg-ftype kinds))
+              (upcall-runner
+               (lambda (rp . xs)
+                 (let ([xs (if convert (convert xs) xs)] [buf (foreign-alloc size)] [to (ftype-pointer-address rp)])
+                   (do ([i 0 (fx+ i 8)]) ((>= i size)) (foreign-set! 'integer-64 buf i 0))
+                   (guard (e [#t (foreign-free buf) (raise e)]) (apply proc buf xs))
+                   (for-each (lambda (off i) (foreign-set! 'integer-64 to (fx* i 8) (foreign-ref 'integer-64 buf off)))
+                             offsets (iota (length offsets)))
+                   (foreign-free buf))))))))
+;; a struct returned in memory on arm64: the caller's x8 pointer is proc's
+;; first argument
+(define (upcall-memory-stub proc args abi arg-regs)
+  (let-values ([(types convert) (upcall-checked-placed (cdr args) (cdr arg-regs) abi)])
+    (values types `(& ,(upcall-memory-ftype!))
+            (upcall-runner (lambda (rp . xs) (apply proc (ftype-pointer-address rp) (if convert (convert xs) xs)) (void))))))
 (define (upcall-stub-proc info conv abi needs-return-buffer return-buffer-size)
   (let* ([proc (mh-info-proc info)] [args (mh-info-args info)] [ret (mh-info-ret info)]
-         [arg-regs (call-regs conv "argRegs")]
-         [placed (lambda (params storages)
-                   (unless (= (length params) (length storages))
-                     (jthrow "java/lang/UnsupportedOperationException"
-                             (format "champaca: an upcall handle of ~a arguments for ~a storages" (length params) (length storages))))
-                   (upcall-placed params storages abi))]
-         [run (lambda (p) (lambda xs (upcall-run (lambda () (apply p xs)))))])
+         [arg-regs (call-regs conv "argRegs")])
     (cond
-     [(eqv? needs-return-buffer 1)
-      (let* ([kinds (map (lambda (st) (if (fx= (vm-storage-type st) 0) 'int 'vec)) (call-regs conv "retRegs"))]
-             [offsets (let loop ([ks kinds] [off 0] [acc '()])
-                        (if (null? ks) (reverse acc) (loop (cdr ks) (+ off (if (eq? (car ks) 'int) 8 16)) (cons off acc))))]
-             [size return-buffer-size])
-        (unless (and (pair? kinds) (= (+ (car (last-pair offsets)) (if (eq? (car (last-pair kinds)) 'int) 8 16)) size)
-                     (for-all (lambda (st) (memv (vm-storage-type st) '(0 1))) (call-regs conv "retRegs")))
-          (jthrow "java/lang/UnsupportedOperationException"
-                  (format "champaca: an upcall's return registers don't match its ~a-byte return buffer" size)))
-        ;; argRegs lists the buffer too (retBufAddrStorage), filled by the
-        ;; stub itself, not by C
-        (let-values ([(types convert)
-                      (placed (cdr args)
-                              (let ([rb (jslot abi (jfield-index "jdk/internal/foreign/abi/ABIDescriptor" "retBufAddrStorage"))])
-                                (remp (lambda (st) (and (fx= (vm-storage-type st) (vm-storage-type rb))
-                                                        (fx= (vm-storage-index st) (vm-storage-index rb))))
-                                      arg-regs)))])
-         (values types `(& ,(upcall-reg-ftype kinds))
-                (run (lambda (rp . xs)
-                       (let ([xs (if convert (convert xs) xs)] [buf (foreign-alloc size)] [to (ftype-pointer-address rp)])
-                         (do ([i 0 (fx+ i 8)]) ((>= i size)) (foreign-set! 'integer-64 buf i 0))
-                         (guard (e [#t (foreign-free buf) (raise e)]) (apply proc buf xs))
-                         (for-each (lambda (off i) (foreign-set! 'integer-64 to (fx* i 8) (foreign-ref 'integer-64 buf off)))
-                                   offsets (iota (length offsets)))
-                         (foreign-free buf)))))))]
+     [(eqv? needs-return-buffer 1) (upcall-buffer-stub proc args conv abi arg-regs return-buffer-size)]
      [(and upcall-arm64? (pair? arg-regs)
            (fx= (vm-storage-type (car arg-regs)) 0) (fx= (vm-storage-index (car arg-regs)) 8))
-      (let-values ([(types convert) (placed (cdr args) (cdr arg-regs))])
-        (values types `(& ,(upcall-memory-ftype!))
-                (run (lambda (rp . xs) (apply proc (ftype-pointer-address rp) (if convert (convert xs) xs)) (void)))))]
+      (upcall-memory-stub proc args abi arg-regs)]
      [else
-      (let-values ([(types convert) (placed args arg-regs)])
-        (values types (ffi-type ret) (run (if convert (lambda xs (apply proc (convert xs))) proc))))])))
+      (let-values ([(types convert) (upcall-checked-placed args arg-regs abi)])
+        (values types (ffi-type ret) (upcall-runner (if convert (lambda xs (apply proc (convert xs))) proc))))])))
 (defnative "jdk/internal/foreign/abi/UpcallLinker.makeUpcallStub(Ljava/lang/invoke/MethodHandle;Ljdk/internal/foreign/abi/ABIDescriptor;Ljdk/internal/foreign/abi/UpcallLinker$CallRegs;ZJ)J"
   (mh abi conv needs-return-buffer return-buffer-size)
   (let-values ([(types ret p) (upcall-stub-proc (mh-info-of mh) conv abi needs-return-buffer return-buffer-size)])
