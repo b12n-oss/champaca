@@ -1332,42 +1332,55 @@
   (if (vector? recipe)
       (jconcat-units recipe args consts)
       (let* ([_ (string-slots!)]   ; concat-latin1-length reads the slots
-             [pieces (let loop ([ps (concat-parts recipe)] [args args] [consts consts] [acc '()])
-                       (if (null? ps)
-                           (reverse acc)
-                           (let ([p (car ps)])
-                             (cond [(eqv? p 1) (loop (cdr ps) (cdr args) consts (cons (concat-arg (car args)) acc))]
-                                   [(eqv? p 2) (loop (cdr ps) args (cdr consts) (cons (car consts) acc))]
-                                   [else (loop (cdr ps) args consts (cons p acc))]))))]
-             [total (let loop ([ps pieces] [n 0])
-                      (cond [(null? ps) n]
-                            [(concat-latin1-length (car ps)) => (lambda (k) (loop (cdr ps) (fx+ n k)))]
-                            [else #f]))])
+             [pieces (concat-pieces (concat-parts recipe) args consts)]
+             [total (concat-latin1-total pieces)])
         (if total
             (let ([v (make-vector total)])
               (string-slots!)
-              (let loop ([ps pieces] [at 0])
-                (unless (null? ps)
-                  (let ([p (car ps)])
-                    (cond
-                      [(string? p)
-                       (let ([n (string-length p)])
-                         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (i2b (char->integer (string-ref p i)))))
-                         (loop (cdr ps) (fx+ at n)))]
-                      [(jobj? p)
-                       (let* ([sv (jarr-vec (vector-ref (jobj-slots p) string-value-slot))] [n (vector-length sv)])
-                         (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (vector-ref sv i)))
-                         (loop (cdr ps) (fx+ at n)))]
-                      [else
-                       (let inner ([l p] [at at])
-                         (if (null? l)
-                             (loop (cdr ps) at)
-                             (begin (vector-set! v at (i2b (car l))) (inner (cdr l) (fx+ at 1)))))]))))
-              (let ([o (jnew "java/lang/String")])
-                (vector-set! (jobj-slots o) string-value-slot (make-jarr "B" v))
-                (vector-set! (jobj-slots o) string-coder-slot 0)
-                o))
+              (concat-latin1-fill! v pieces)
+              (latin1-jstring v))
             (units->jstring (reverse (fold-left (lambda (acc p) (units-onto p acc)) '() pieces)))))))
+;; the recipe's parts with each \x1 replaced by the next argument's piece
+;; and each \x2 by the next constant
+(define (concat-pieces parts args consts)
+  (let loop ([ps parts] [args args] [consts consts] [acc '()])
+    (if (null? ps)
+        (reverse acc)
+        (let ([p (car ps)])
+          (cond [(eqv? p 1) (loop (cdr ps) (cdr args) consts (cons (concat-arg (car args)) acc))]
+                [(eqv? p 2) (loop (cdr ps) args (cdr consts) (cons (car consts) acc))]
+                [else (loop (cdr ps) args consts (cons p acc))])))))
+;; the pieces' total byte length when every one is Latin-1, else #f
+(define (concat-latin1-total pieces)
+  (let loop ([ps pieces] [n 0])
+    (cond [(null? ps) n]
+          [(concat-latin1-length (car ps)) => (lambda (k) (loop (cdr ps) (fx+ n k)))]
+          [else #f])))
+;; the Latin-1 pieces' bytes, one after another, into v
+(define (concat-latin1-fill! v pieces)
+  (let loop ([ps pieces] [at 0])
+    (unless (null? ps)
+      (let ([p (car ps)])
+        (cond
+          [(string? p)
+           (let ([n (string-length p)])
+             (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (i2b (char->integer (string-ref p i)))))
+             (loop (cdr ps) (fx+ at n)))]
+          [(jobj? p)
+           (let* ([sv (jarr-vec (vector-ref (jobj-slots p) string-value-slot))] [n (vector-length sv)])
+             (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (vector-ref sv i)))
+             (loop (cdr ps) (fx+ at n)))]
+          [else
+           (let inner ([l p] [at at])
+             (if (null? l)
+                 (loop (cdr ps) at)
+                 (begin (vector-set! v at (i2b (car l))) (inner (cdr l) (fx+ at 1)))))])))))
+;; a String with coder 0 (Latin-1) over the bytes in v
+(define (latin1-jstring v)
+  (let ([o (jnew "java/lang/String")])
+    (vector-set! (jobj-slots o) string-value-slot (make-jarr "B" v))
+    (vector-set! (jobj-slots o) string-coder-slot 0)
+    o))
 ;; the slow path, for a code-unit recipe (a constant holding a lone surrogate)
 (define (jconcat-units recipe args consts)
   (let loop ([rs (code-units recipe)] [args args] [consts consts] [acc '()])
