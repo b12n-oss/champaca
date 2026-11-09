@@ -1162,94 +1162,125 @@
         (string? v) (cg/str-lit v)
         :else (str "#vu8" (apply cg/sx (map str v)))))
 
-(defn- registration-text [{:keys [name super interfaces template layout fields flags reflection conflicts origin] :as info}]
+(defn- vtable-delta-text
+  "The vtable as changes to the superclass's: printing every inherited entry
+  made it a third of the startup cache's source."
+  [super vtable]
+  (str "'" (apply cg/sx (let [sup-vt (when super (vtable-of (class-info super)))]
+                          (concat
+                           (for [[k g] (sort vtable) :when (not= g (get sup-vt k))]
+                             (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))
+                           (for [k (sort (keys sup-vt)) :when (not (contains? vtable k))]
+                             (str "(" (cg/str-lit k) " . #f)")))))))
+
+(defn- method-meta-text
+  "A method's reflection meta: (name desc flags signature annotations
+  param-annotations annotation-default type-annotations exceptions
+  parameters), Exceptions as class names, MethodParameters as (name flags)
+  with name #f when absent."
+  [m]
+  (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m))
+         (refl-lit (:signature m)) (refl-lit (:annotations m))
+         (refl-lit (:param-annotations m)) (refl-lit (:annotation-default m))
+         (refl-lit (:type-annotations m))
+         (if-let [exs (:exceptions m)] (apply cg/sx (map cg/str-lit exs)) "#f")
+         (if-let [ps (:parameters m)]
+           (apply cg/sx (for [[n fl] ps] (cg/sx (refl-lit n) (str fl))))
+           "#f")))
+
+(defn- field-meta-text
+  "A field's reflection meta: (name desc flags signature annotations
+  type-annotations)."
+  [f]
+  (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))
+         (refl-lit (:signature f)) (refl-lit (:annotations f))
+         (refl-lit (:type-annotations f))))
+
+(defn- record-meta-text
+  "Record: (name desc signature annotations type-annotations) per component."
+  [record]
+  (apply cg/sx (for [rc record]
+                 (cg/sx (cg/str-lit (:name rc)) (cg/str-lit (:desc rc))
+                        (refl-lit (:signature rc)) (refl-lit (:annotations rc))
+                        (refl-lit (:type-annotations rc))))))
+
+(defn- class-meta-text
+  "The class's own reflection meta: (signature annotations inner
+  enclosing-method record-components type-annotations nest-host
+  nest-members permitted-subclasses). inner is InnerClasses' entry for this
+  class, (outer simple-name flags); enclosing-method is (class name desc);
+  NestHost is the host's name and NestMembers their names;
+  PermittedSubclasses their names, () for a sealed class listing none."
+  [{:keys [inner enclosing-method record nest-members permitted-subclasses] :as reflection}]
+  (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
+         (if inner
+           (cg/sx (refl-lit (:outer inner)) (refl-lit (:simple-name inner)) (str (:flags inner)))
+           "#f")
+         (if enclosing-method
+           (cg/sx (refl-lit (:class enclosing-method)) (refl-lit (:name enclosing-method))
+                  (refl-lit (:desc enclosing-method)))
+           "#f")
+         (if record (record-meta-text record) "#f")
+         (refl-lit (:type-annotations reflection))
+         (refl-lit (:nest-host reflection))
+         (if nest-members (apply cg/sx (map cg/str-lit nest-members)) "#f")
+         (if permitted-subclasses (apply cg/sx (map cg/str-lit permitted-subclasses)) "#f")))
+
+(defn- register-form
+  "register-class! for the class: name, super, interfaces, template, vtable
+  delta, layout, flags, then the declared members in classfile order for
+  reflection (methods, fields, then the class's own meta)."
+  [{:keys [name super interfaces template layout fields flags reflection]} vtable methods]
+  (cg/sx "register-class!" (cg/str-lit name) (if super (cg/str-lit super) "#f")
+         (str "'" (apply cg/sx (map cg/str-lit interfaces)))
+         (apply cg/sx "vector" template)
+         (vtable-delta-text super vtable)
+         (str "'" (apply cg/sx (for [[k i] (sort layout)] (str "(" (cg/str-lit k) " . " i ")"))))
+         (str flags)
+         (str "'" (cg/sx (apply cg/sx (map method-meta-text methods))
+                         (apply cg/sx (map field-meta-text fields))
+                         (class-meta-text reflection)))))
+
+(defn- conflict-stubs
+  "A conflicting default's stub, with the JVM's message: the interfaces in
+  declaration order, dotted, without descriptors."
+  [name conflicts]
+  (for [[k is] (sort conflicts)
+        :let [mname (subs k 0 (str/index-of k "("))]]
+    (cg/sx "define-global!" (str "'" (cg/sym (str "icce:" name "." k)))
+           (cg/sx "icce-stub" (cg/str-lit (str "Conflicting default methods: "
+                                               (str/join " " (map #(str (str/replace % "/" ".") "." mname) is))))))))
+
+(defn- static-globals [name fields]
+  (for [f fields :when (:static f)]
+    (cg/sx "define-global!" (str "'" (cg/static-global name (:name f)))
+           (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f))))))
+
+(defn- define-methods-form
+  "Every method's definition from one form: a native's from natives.ss, any
+  other's from method-stub, which returns a runtime override when natives.ss
+  has one, else a closure that JIT-compiles the method on first call."
+  [name methods]
+  (cg/sx "define-methods!" (cg/str-lit name)
+         (str "'" (apply cg/sx (for [m methods
+                                     :when (or (:native m) (:code m) (overridden? name m))]
+                                 (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m))
+                                        (cg/method-global name (:name m) (:desc m))
+                                        (if (:native m) "#t" "#f")))))))
+
+(defn- registration-text [{:keys [name fields conflicts origin] :as info}]
   (let [vtable (vtable-of info) methods (methods-of info)]
-  (str/join
-   "\n"
-   (concat
-    ;; a classpath class stays in the unnamed module whatever its package
-    ;; (runtime.ss user-class!); a registration the library cache keeps
-    ;; carries this too
-    (when (= origin :user) [(cg/sx "user-class!" (cg/str-lit name))])
-    [(cg/sx "register-class!" (cg/str-lit name) (if super (cg/str-lit super) "#f")
-            (str "'" (apply cg/sx (map cg/str-lit interfaces)))
-            (apply cg/sx "vector" template)
-            ;; the vtable as changes to the superclass's: printing every
-            ;; inherited entry made it a third of the startup cache's source
-            (str "'" (apply cg/sx (let [sup-vt (when super (vtable-of (class-info super)))]
-                                    (concat
-                                     (for [[k g] (sort vtable) :when (not= g (get sup-vt k))]
-                                       (str "(" (cg/str-lit k) " . " (cg/sym g) ")"))
-                                     (for [k (sort (keys sup-vt)) :when (not (contains? vtable k))]
-                                       (str "(" (cg/str-lit k) " . #f)"))))))
-            (str "'" (apply cg/sx (for [[k i] (sort layout)] (str "(" (cg/str-lit k) " . " i ")"))))
-            (str flags)
-            ;; declared members, in classfile order, for reflection:
-            ;; methods (name desc flags signature annotations param-annotations
-            ;; annotation-default type-annotations exceptions parameters),
-            ;; fields (name desc flags signature annotations type-annotations),
-            ;; then the class's own (signature annotations inner
-            ;; enclosing-method record-components type-annotations nest-host
-            ;; nest-members permitted-subclasses)
-            (str "'" (cg/sx (apply cg/sx (for [m methods]
-                                           (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m)) (str (:flags m))
-                                                  (refl-lit (:signature m)) (refl-lit (:annotations m))
-                                                  (refl-lit (:param-annotations m)) (refl-lit (:annotation-default m))
-                                                  (refl-lit (:type-annotations m))
-                                                  ;; Exceptions: class names
-                                                  (if-let [exs (:exceptions m)] (apply cg/sx (map cg/str-lit exs)) "#f")
-                                                  ;; MethodParameters: (name flags), name #f when absent
-                                                  (if-let [ps (:parameters m)]
-                                                    (apply cg/sx (for [[n fl] ps] (cg/sx (refl-lit n) (str fl))))
-                                                    "#f"))))
-                            (apply cg/sx (for [f fields]
-                                           (cg/sx (cg/str-lit (:name f)) (cg/str-lit (:desc f)) (str (or (:flags f) 0))
-                                                  (refl-lit (:signature f)) (refl-lit (:annotations f))
-                                                  (refl-lit (:type-annotations f)))))
-                            (let [{:keys [inner enclosing-method record nest-members permitted-subclasses]} reflection]
-                              (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
-                                     ;; (outer simple-name flags): InnerClasses' entry for this class
-                                     (if inner
-                                       (cg/sx (refl-lit (:outer inner)) (refl-lit (:simple-name inner)) (str (:flags inner)))
-                                       "#f")
-                                     ;; (class name desc): EnclosingMethod
-                                     (if enclosing-method
-                                       (cg/sx (refl-lit (:class enclosing-method)) (refl-lit (:name enclosing-method))
-                                              (refl-lit (:desc enclosing-method)))
-                                       "#f")
-                                     ;; Record: (name desc signature annotations type-annotations)
-                                     (if record
-                                       (apply cg/sx (for [rc record]
-                                                      (cg/sx (cg/str-lit (:name rc)) (cg/str-lit (:desc rc))
-                                                             (refl-lit (:signature rc)) (refl-lit (:annotations rc))
-                                                             (refl-lit (:type-annotations rc)))))
-                                       "#f")
-                                     (refl-lit (:type-annotations reflection))
-                                     ;; NestHost: the host's name; NestMembers: their names
-                                     (refl-lit (:nest-host reflection))
-                                     (if nest-members (apply cg/sx (map cg/str-lit nest-members)) "#f")
-                                     ;; PermittedSubclasses: their names, () for a sealed class listing none
-                                     (if permitted-subclasses (apply cg/sx (map cg/str-lit permitted-subclasses)) "#f"))))))]
-    ;; a conflicting default's stub, with the JVM's message: the interfaces
-    ;; in declaration order, dotted, without descriptors
-    (for [[k is] (sort conflicts)
-          :let [mname (subs k 0 (str/index-of k "("))]]
-      (cg/sx "define-global!" (str "'" (cg/sym (str "icce:" name "." k)))
-             (cg/sx "icce-stub" (cg/str-lit (str "Conflicting default methods: "
-                                                 (str/join " " (map #(str (str/replace % "/" ".") "." mname) is)))))))
-    (for [f fields :when (:static f)]
-      (cg/sx "define-global!" (str "'" (cg/static-global name (:name f)))
-             (if-let [k (:constant f)] (constant-text k) (cg/default-value (:desc f)))))
-    ;; every method's definition from one form: a native's from natives.ss,
-    ;; any other's from method-stub, which returns a runtime override when
-    ;; natives.ss has one, else a closure that JIT-compiles the method on
-    ;; first call
-    [(cg/sx "define-methods!" (cg/str-lit name)
-            (str "'" (apply cg/sx (for [m methods
-                                        :when (or (:native m) (:code m) (overridden? name m))]
-                                    (cg/sx (cg/str-lit (:name m)) (cg/str-lit (:desc m))
-                                           (cg/method-global name (:name m) (:desc m))
-                                           (if (:native m) "#t" "#f"))))))]))))
+    (str/join
+     "\n"
+     (concat
+      ;; a classpath class stays in the unnamed module whatever its package
+      ;; (runtime.ss user-class!); a registration the library cache keeps
+      ;; carries this too
+      (when (= origin :user) [(cg/sx "user-class!" (cg/str-lit name))])
+      [(register-form info vtable methods)]
+      (conflict-stubs name conflicts)
+      (static-globals name fields)
+      [(define-methods-form name methods)]))))
 
 (defn- user-deps
   "The dependencies of a library cache entry whose link or compile read the
