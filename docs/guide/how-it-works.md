@@ -86,6 +86,10 @@ One global lock (the GIL, in `natives.ss`) lets one thread at a time run Java co
 
 When `main` returns, `champaca.main` ends the main thread as HotSpot ends any thread: it runs `Thread.exit()`, marks the thread terminated and notifies its monitor, which wakes the threads joining it. Then, as the `java` launcher does, the same native thread carries on as a new non-daemon thread named `DestroyJavaVM` in the `main` group, which waits for the other non-daemon threads and calls `Shutdown.shutdown()` to run the shutdown hooks. After `System.exit`, main never ends, as on HotSpot. A jolt program that calls into Java keeps its main thread, since jolt goes on running on it.
 
+## Reflection
+
+JDK 25 implements `Method.invoke` and `Constructor.newInstance` either with method handles or with two VM natives, `invoke0` and `newInstance0`. It uses the natives when `jdk.reflect.useNativeAccessorOnly=true`, which champaca always sets. So the runtime supplies those natives, plus `Class.getDeclaredMethods0`, `getDeclaredFields0`, `getDeclaredConstructors0` and the rest, and builds real `java.lang.reflect` objects through their own constructors. Field access has no native path in JDK 25, so `Field.get`/`set` and the typed variants are overridden.
+
 ## Stack traces
 
 A Java activation is a Chez frame whose code object is named after the method (`Class.name(desc)`, or a block or trampoline of it carrying the same name), so the Java stack is a walk of the continuation, and ordinary calls record nothing. A synchronized method, whose body runs under `dynamic-wind`, and a method under `CHAMPACA_BT`, whose body runs under `fluid-let`, keep a frame of their own through `jframe`, an identity call the optimizer can't see through. `Throwable.fillInStackTrace` takes the walk with Chez's own continuation primitives, splitting off one frame at a time and keeping a pair per frame, the code object and its return offset, in the throwable's `backtrace` field, where Java sees an opaque `Object` as it does HotSpot's. `getOurStackTrace` turns the pairs into `StackTraceElement`s when a trace is asked for, leaving out `fillInStackTrace` and the constructors of the exception's own class and superclasses as HotSpot does, the methods the JDK marks `@Hidden` (`Thread.runWith`) and every method of a hidden class (an upcall stub's), up to 1024 frames. `StackWalker`'s natives feed the same walk to the JDK's batching protocol a batch at a time.
@@ -126,3 +130,24 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `resources/champaca/foreign.ss` | `java.lang.foreign` downcalls and upcalls, library loading and symbol lookup |
 | `resources/champaca/interop.ss` | conversions behind the descriptor-based API |
 | `resources/champaca/dynamic.ss` | descriptor-free calls, overload choice, the call-site cache |
+
+## Where the code is
+
+| File | Job |
+|---|---|
+| `src/champaca/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
+| `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
+| `src/champaca/main.clj` | loads classes from the classpath (directories and jars), the JDK's runtime image or a loader's `defineClass`, lays out fields, builds vtables (interface defaults included), boots the JDK, keeps the startup and library caches, and is the `java`-like launcher |
+| `src/champaca/api.clj` | the jolt-facing API |
+| `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
+| `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (a port of HotSpot's) |
+| `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
+| `resources/champaca/natives.ss` | JDK native methods (named ones, plus pattern rules for `Unsafe`), resources, a few overrides |
+| `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` and the frame walk behind stack traces |
+| `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
+| `resources/champaca/files.ss` | file, channel and zlib natives through libc, `UnsafeConstants` |
+| `resources/champaca/spawn.ss` | child processes: `forkAndExec` through `posix_spawn`, the reaper's `waitpid`, `destroy0` |
+| `resources/champaca/net.ss` | socket, datagram and selector natives through libc: `sun.nio.ch.Net`, the socket and datagram dispatchers, `DatagramChannelImpl`, `Inet4AddressImpl`, `NetworkInterface`, `KQueue`, `EPoll`, the selector's wakeup pipe |
+| `resources/champaca/foreign.ss` | `java.lang.foreign` downcalls through `foreign-procedure`, upcall stubs through `foreign-callable`, `dlopen` and `dlsym` for library loading and symbol lookup |
+| `resources/champaca/interop.ss` | the conversions and entry points behind `api.clj` |
+| `resources/champaca/dynamic.ss` | descriptor-free calls: candidate lookup, overload fit, the call-site cache, auto-wrapping jolt fns |

@@ -317,6 +317,10 @@ A fn of yours that Java calls (an interface implementation, a `proxy` method, a 
 
 There is one other kind, `:lookup` under `:champaca/error`, for a call nothing fits (above), a setter given a final field, and a `define-class` that refuses a definition, with the reason in the message. `proxy` and `->clj` refuse bad input with an `ex-info` of their own, and a receiver that isn't a Java value at all, such as a vector given to `invoke`, is a plain `RuntimeException` (`champaca: not a Java value [1]`). A JDK native method champaca doesn't provide yet throws `java.lang.UnsatisfiedLinkError`, so it arrives as a Java exception like any other; [debugging](debugging.md) covers it.
 
+## Checked against Java
+
+`examples/dynamic.clj` and `examples/varargs.clj` each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM: 26 and 14 of them. `dynamic.clj` also checks surrogate pairs, a missing native and the out-of-range integers a `byte` parameter refuses, which its twin doesn't. The examples are tests, and the values they assert are the ones the twins print on the JVM. `bb test` runs them and also runs both Java programs on champaca.
+
 ## With descriptors
 
 The older functions take the JVM descriptor explicitly and skip overload resolution entirely: `call-static`, `new-object`, `call` and `implement`.
