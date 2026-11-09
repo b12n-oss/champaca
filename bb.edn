@@ -105,15 +105,17 @@
           (defn lib-jar-stale? []
             (or (not (fs/exists? "target/lib.jar"))
                 (seq (fs/modified-since "target/lib.jar" ["test/jar" "test/jar.mf"]))))
-          ;; The docs site is rendered by the b12n-oss docs-engine, which lives in
-          ;; its own repo. site:* tasks delegate to it. Found via $DOCS_ENGINE,
-          ;; then a sibling checkout, then ~/dev/b12n-oss/docs-engine.
-          (def docs-engine-repo "git@github.com:b12n-oss/docs-engine.git")
+          ;; The docs site is rendered by jlt-commons/docs-engine, which lives
+          ;; in its own repo. site:* tasks delegate to it. Found via
+          ;; $JLT_DOCS_ENGINE (or the older $DOCS_ENGINE), then
+          ;; ~/dev/jlt-commons/docs-engine, then a sibling checkout.
+          (def docs-engine-repo "https://github.com/jlt-commons/docs-engine")
           (defn docs-engine-dir []
             (let [home (System/getProperty "user.home")]
-              (->> [(System/getenv "DOCS_ENGINE")
-                    "../docs-engine"
-                    (str home "/dev/b12n-oss/docs-engine")]
+              (->> [(System/getenv "JLT_DOCS_ENGINE")
+                    (System/getenv "DOCS_ENGINE")
+                    (str home "/dev/jlt-commons/docs-engine")
+                    "../docs-engine"]
                    (remove nil?)
                    (filter (fn [d] (fs/exists? (fs/file d "bb.edn"))))
                    first)))
@@ -125,9 +127,10 @@
                                               :extra-env {"HTTPS_PROXY" "" "https_proxy" ""}} argv)]
                 (when-not (zero? (:exit res)) (System/exit (:exit res))))
               (do
-                (println "docs-engine not found. Looked in $DOCS_ENGINE, ../docs-engine and ~/dev/b12n-oss/docs-engine.")
-                (println "Clone it, or point DOCS_ENGINE at a checkout:")
-                (println (str "  git clone " docs-engine-repo " ~/dev/b12n-oss/docs-engine"))
+                (println "The docs engine is not checked out anywhere I looked:")
+                (println "  $JLT_DOCS_ENGINE, $DOCS_ENGINE, ~/dev/jlt-commons/docs-engine, ../docs-engine")
+                (println)
+                (println (str "  git clone " docs-engine-repo " ~/dev/jlt-commons/docs-engine"))
                 (System/exit 1))))
           ;; The attempt IS the test: bind the wildcard address without
           ;; SO_REUSEADDR, so a port held on any interface counts as busy (a

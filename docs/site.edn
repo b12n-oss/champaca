@@ -1,5 +1,5 @@
-;; Configuration for the documentation site, read by the b12n-oss docs-engine
-;; (git@github.com:b12n-oss/docs-engine.git). See its README for every key.
+;; Configuration for the documentation site, read by jlt-commons/docs-engine
+;; (https://github.com/jlt-commons/docs-engine). See its README for every key.
 ;;
 ;; Build and preview it locally with `bb site:serve`.
 {;; Every URL the engine emits carries this prefix, and `bb site:serve` mounts

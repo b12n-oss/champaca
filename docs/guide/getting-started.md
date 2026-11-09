@@ -84,7 +84,7 @@ Loading a file only defines its tests. Evaluate any form inside a `deftest` to s
 
 ## The docs site
 
-These guides can be read as a local site. `bb site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `bb site:serve 4000` asks for a port of your own, and a busy one is refused rather than swapped for another. `bb site:build` only builds, and `bb site:clean` deletes `_site/`. The rendering is done by the b12n-oss docs-engine, which must be checked out at `$DOCS_ENGINE`, `../docs-engine` or `~/dev/b12n-oss/docs-engine` (`git clone git@github.com:b12n-oss/docs-engine.git ~/dev/b12n-oss/docs-engine`). The engine's config for this project is `docs/site.edn`.
+These guides can be read as a local site. `bb site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `bb site:serve 4000` asks for a port of your own, and a busy one is refused rather than swapped for another. `bb site:build` only builds, and `bb site:clean` deletes `_site/`. The rendering is done by [jlt-commons/docs-engine](https://github.com/jlt-commons/docs-engine), which must be checked out at `$JLT_DOCS_ENGINE`, `~/dev/jlt-commons/docs-engine` or `../docs-engine` (`git clone https://github.com/jlt-commons/docs-engine ~/dev/jlt-commons/docs-engine`). The engine's config for this project is `docs/site.edn`.
 
 ## Running the tests
 
