@@ -276,27 +276,33 @@
        (let loop ([ls layouts] [i 0] [gp 0] [fp 0] [stack '()])
          (if (null? ls)
              (stack-starts-differ? (reverse stack))
-             (let* ([l (car ls)] [size (layout-size l)] [group? (layout-group? l)]
-                    [hfa (and group? (hfa-of l))]
-                    [next (lambda (gp fp entry) (loop (cdr ls) (fx+ i 1) gp fp (if entry (cons entry stack) stack)))])
-               (cond
-                 [(and variadic (fx>= i variadic))
-                  (let ([n (if (and group? (> size 16)) 8 (round-up size 8))])
-                    (next gp fp (list 8 n 8 n)))]
-                 [(not group?)
-                  (if (memq (car (car (layout-leaves l))) '(float double))
-                      (if (fx< fp 8) (next gp (fx+ fp 1) #f) (next gp fp (list size size size size)))
-                      (if (fx< gp 8) (next (fx+ gp 1) fp #f) (next gp fp (list size size size size))))]
-                 [hfa
-                  (let ([n (length (layout-leaves l))] [m (if (eq? hfa 'float) 4 8)])
-                    (if (fx<= (fx+ fp n) 8) (next gp (fx+ fp n) #f) (next gp 8 (list m size m size))))]
-                 [(> size 16)   ; passed as a pointer
-                  (if (fx< gp 8) (next (fx+ gp 1) fp #f) (next gp fp (list 8 8 8 8)))]
-                 [else
-                  (let ([words (quotient (+ size 7) 8)])
-                    (if (fx<= (fx+ gp words) 8)
-                        (next (fx+ gp words) fp #f)
-                        (next 8 fp (list 8 (round-up size 8) (struct-align l) size))))]))))))
+             (let-values ([(gp fp entry) (arm64-place-arg (car ls) i gp fp variadic)])
+               (loop (cdr ls) (fx+ i 1) gp fp (if entry (cons entry stack) stack)))))))
+
+;; argument i's place given gp general and fp float registers taken so far:
+;; (values gp fp entry), entry #f for a register, else the stack entry
+;; (apple-align apple-size chez-align chez-size)
+(define (arm64-place-arg l i gp fp variadic)
+  (let* ([size (layout-size l)] [group? (layout-group? l)]
+         [hfa (and group? (hfa-of l))])
+    (cond
+      [(and variadic (fx>= i variadic))
+       (let ([n (if (and group? (> size 16)) 8 (round-up size 8))])
+         (values gp fp (list 8 n 8 n)))]
+      [(not group?)
+       (if (memq (car (car (layout-leaves l))) '(float double))
+           (if (fx< fp 8) (values gp (fx+ fp 1) #f) (values gp fp (list size size size size)))
+           (if (fx< gp 8) (values (fx+ gp 1) fp #f) (values gp fp (list size size size size))))]
+      [hfa
+       (let ([n (length (layout-leaves l))] [m (if (eq? hfa 'float) 4 8)])
+         (if (fx<= (fx+ fp n) 8) (values gp (fx+ fp n) #f) (values gp 8 (list m size m size))))]
+      [(> size 16)   ; passed as a pointer
+       (if (fx< gp 8) (values (fx+ gp 1) fp #f) (values gp fp (list 8 8 8 8)))]
+      [else
+       (let ([words (quotient (+ size 7) 8)])
+         (if (fx<= (fx+ gp words) 8)
+             (values (fx+ gp words) fp #f)
+             (values 8 fp (list 8 (round-up size 8) (struct-align l) size))))])))
 
 (define (struct-align l)
   (fold-left (lambda (a x) (max a (cadr x))) 1 (layout-leaves l)))
