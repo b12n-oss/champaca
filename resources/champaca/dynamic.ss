@@ -142,53 +142,65 @@
            "[Ljava/lang/Object;"))]
     [else "[Ljava/lang/Object;"]))
 
+;; the cost of passing v where descriptor d is wanted, lower is closer, or
+;; #f when it doesn't fit; one helper per kind of value
 (define (fit v d)
   (let ([c0 (string-ref d 0)])
     (cond
       [(eq? v jolt-nil) (and (ref-class d) 0)]
-      ;; vector -> array: every element must fit the component type. Where
-      ;; the parameter is Object-like, the array type comes from the contents.
-      [(seq-arg? v)
-       (if (char=? c0 #\[)
-           (let ([costs (map (lambda (e) (fit e (array-elem d))) v)])
-             (and (for-all (lambda (c) c) costs)
-                  (fx+ 1 (fold-left fxmax 0 costs))))
-           (let ([t (ref-class d)])
-             (and t (or (class-assignable? (inferred-array-desc v) t)
-                        (class-assignable? "java/util/ArrayList" t))
-                  6)))]
-      [(coll-arg? v)
-       (let ([t (ref-class d)] [from (coll-class v)])
-         (and t (class-assignable? from t) (if (string=? t from) 4 6)))]
+      [(seq-arg? v) (fit-seq v d c0)]
+      [(coll-arg? v) (fit-coll v d)]
       [(boolean? v) (if (char=? c0 #\Z) 0 (box-cost "java/lang/Boolean" d 1))]
       [(char? v) (case c0 [(#\C) 0] [(#\I) 2] [(#\J) 3] [else (box-cost "java/lang/Character" d 5)])]
-      [(exact-int? v)
-       (case c0
-         [(#\I) (and (int-range? v) 0)]
-         [(#\J) (and (long-range? v) 1)]
-         [(#\S) (and (narrowing?) (short-range? v) 8)]
-         [(#\B) (and (narrowing?) (byte-range? v) 8)]
-         [(#\C) #f]
-         [(#\F) 4] [(#\D) 3] [(#\Z) #f]
-         [else (if (int-range? v)
-                   (or (box-cost "java/lang/Integer" d 5) (box-cost "java/lang/Long" d 7))
-                   (box-cost "java/lang/Long" d 5))])]
+      [(exact-int? v) (fit-integer v d c0)]
       [(flonum? v)
        (case c0 [(#\D) 0] [(#\F) 1] [(#\I #\J #\S #\B #\C #\Z) #f]
          [else (box-cost "java/lang/Double" d 5)])]
-      [(string? v)
-       (let ([t (ref-class d)])
-         (and t (cond [(string=? t "java/lang/String") 0]
-                      [(class-assignable? "java/lang/String" t) 2]
-                      [else #f])))]
-      [(java-value? v)
-       (let ([t (ref-class d)] [from (class-name-of v)])
-         (cond
-           [t (and (class-assignable? from t) (if (string=? from t) 0 1))]
-           ;; a boxed Java number passed to a primitive parameter
-           [(assoc from boxes) => (lambda (b) (and (string=? (cdr b) (string c0)) 3))]
-           [else #f]))]
+      [(string? v) (fit-string d)]
+      [(java-value? v) (fit-java v d c0)]
       [(procedure? v) (let ([t (ref-class d)]) (and t (sam-of t) 1))]
+      [else #f])))
+
+;; vector -> array: every element must fit the component type. Where the
+;; parameter is Object-like, the array type comes from the contents.
+(define (fit-seq v d c0)
+  (if (char=? c0 #\[)
+      (let ([costs (map (lambda (e) (fit e (array-elem d))) v)])
+        (and (for-all (lambda (c) c) costs)
+             (fx+ 1 (fold-left fxmax 0 costs))))
+      (let ([t (ref-class d)])
+        (and t (or (class-assignable? (inferred-array-desc v) t)
+                   (class-assignable? "java/util/ArrayList" t))
+             6))))
+
+(define (fit-coll v d)
+  (let ([t (ref-class d)] [from (coll-class v)])
+    (and t (class-assignable? from t) (if (string=? t from) 4 6))))
+
+(define (fit-integer v d c0)
+  (case c0
+    [(#\I) (and (int-range? v) 0)]
+    [(#\J) (and (long-range? v) 1)]
+    [(#\S) (and (narrowing?) (short-range? v) 8)]
+    [(#\B) (and (narrowing?) (byte-range? v) 8)]
+    [(#\C) #f]
+    [(#\F) 4] [(#\D) 3] [(#\Z) #f]
+    [else (if (int-range? v)
+              (or (box-cost "java/lang/Integer" d 5) (box-cost "java/lang/Long" d 7))
+              (box-cost "java/lang/Long" d 5))]))
+
+(define (fit-string d)
+  (let ([t (ref-class d)])
+    (and t (cond [(string=? t "java/lang/String") 0]
+                 [(class-assignable? "java/lang/String" t) 2]
+                 [else #f]))))
+
+(define (fit-java v d c0)
+  (let ([t (ref-class d)] [from (class-name-of v)])
+    (cond
+      [t (and (class-assignable? from t) (if (string=? from t) 0 1))]
+      ;; a boxed Java number passed to a primitive parameter
+      [(assoc from boxes) => (lambda (b) (and (string=? (cdr b) (string c0)) 3))]
       [else #f])))
 
 (define (convert-arg v d)
