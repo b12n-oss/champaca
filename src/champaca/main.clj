@@ -1338,6 +1338,58 @@
       (when-let [deps (user-deps (conj reads cname))]
         {:src-fp fp :src-jar (:jar src) :deps (dissoc deps cname)}))))
 
+(defn- thaw-library-entry
+  "A library cache entry read back, or nil. An entry that doesn't read back
+  goes alone, unlike state.img's (parse-entry): the class compiles, and the
+  next save rewrites it."
+  [cname packed]
+  (try (thaw-entry packed)
+       (catch Exception e
+         (binding [*out* *err*]
+           (println (str "champaca: dropping the library cache's unreadable entry for " cname ":") (ex-message e)))
+         nil)))
+
+(defn- entry-deps-hold?
+  "Whether a cached class's sources are as they were: its own fingerprint,
+  and each dependency present, in the boot layer, or the classpath's copy
+  unchanged and not some other class of that name this run already has (a
+  loader's, the JDK's)."
+  [src info]
+  (and (= (:fp src) (:src-fp info))
+       (every? (fn [[d fp]]
+                 (let [e (get-in @state [:classes d])]
+                   (case fp
+                     :present (some? e)
+                     :layer (not (outside-boot-layer? d))
+                     (and (= fp (:fp (class-source d)))
+                          (or (nil? e) (= :user (:origin e)))))))
+               (:deps info))))
+
+(defn- register-restored!
+  "Register a class restored from the library cache. A directory's class
+  keeps the bytes it was restored as (held by class-source) for the run: a
+  method it lacks (parsed) and its stack frames (frame-class) read them,
+  since the file may have changed or gone by then."
+  [cname src info]
+  (note-class-entry! cname (:entry src))
+  (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
+    (ensure-loaded! dep))
+  (swap! state update :restored (fnil inc 0))
+  (when-not (get-in @state [:classes cname])
+    (swap! state assoc-in [:classes cname] info)
+    (or (load-unit! (:cached-class info))
+        (let [text (registration-text info)]
+          (record! :user [cname] {:text text})
+          (scheme! text :interpret)))))
+
+(defn- drop-stale-entry!
+  "A stale library cache entry dropped, noted for the save's merge."
+  [cname src packed]
+  (swap! state #(-> %
+                    (update-in [:user-cache (:jar src)] dissoc cname)
+                    (assoc-in [:library-dropped (:jar src) cname] packed)
+                    (update :library-dirty (fnil conj #{}) (:jar src)))))
+
 (defn- restore-user-class!
   "Register classpath class cname from the library cache, when an earlier
   run cached it and neither it nor any class it depends on has changed
@@ -1346,45 +1398,11 @@
   [cname]
   (when-let [src (class-source cname)]
     (when-let [packed (when (:fp src) (get (library-cache (:jar src)) cname))]
-      ;; an entry that doesn't read back goes alone, unlike state.img's
-      ;; (parse-entry): the class compiles, and the next save rewrites it
-      (let [info (try (thaw-entry packed)
-                      (catch Exception e
-                        (binding [*out* *err*]
-                          (println (str "champaca: dropping the library cache's unreadable entry for " cname ":") (ex-message e)))
-                        nil))]
-        (if (and info (= (:fp src) (:src-fp info))
-                 (every? (fn [[d fp]]
-                           (let [e (get-in @state [:classes d])]
-                             (case fp
-                               :present (some? e)
-                               :layer (not (outside-boot-layer? d))
-                               ;; the classpath's copy, unchanged, and not some
-                               ;; other class of that name this run already has
-                               ;; (a loader's, the JDK's)
-                               (and (= fp (:fp (class-source d)))
-                                    (or (nil? e) (= :user (:origin e)))))))
-                         (:deps info)))
-          (do (note-class-entry! cname (:entry src))
-              ;; a directory's class keeps the bytes it was restored as
-              ;; (held by class-source) for the run: a method it lacks
-              ;; (parsed) and its stack frames (frame-class) read them,
-              ;; since the file may have changed or gone by then
-              (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
-                (ensure-loaded! dep))
-              (swap! state update :restored (fnil inc 0))
-              (when-not (get-in @state [:classes cname])
-                (swap! state assoc-in [:classes cname] info)
-                (or (load-unit! (:cached-class info))
-                    (let [text (registration-text info)]
-                      (record! :user [cname] {:text text})
-                      (scheme! text :interpret))))
+      (let [info (thaw-library-entry cname packed)]
+        (if (and info (entry-deps-hold? src info))
+          (do (register-restored! cname src info)
               true)
-          (do (swap! state #(-> %
-                                (update-in [:user-cache (:jar src)] dissoc cname)
-                                ;; what was dropped, for the save's merge
-                                (assoc-in [:library-dropped (:jar src) cname] packed)
-                                (update :library-dirty (fnil conj #{}) (:jar src))))
+          (do (drop-stale-entry! cname src packed)
               nil))))))
 
 ;; The classes whose superclass and interfaces are being loaded, on this
@@ -2135,6 +2153,30 @@
                 t (io/file (str (.getPath to) rel))]]
     (if (.isDirectory f) (.mkdirs t) (io/copy f t))))
 
+(defn- copy-to-user-cache!
+  "u, the user cache's copy of the bundle's key directory d: copied into a
+  temp dir and renamed into place when missing (with a seed id), the
+  winner's when another process's rename won. nil, said on stderr, when the
+  copy fails."
+  [d sid root u]
+  (let [tmp (io/file root (str (.getName u) ".tmp-" (System/nanoTime)))]
+    (try
+      (when (and sid (not (.isDirectory u)))
+        (.mkdirs root)
+        (copy-tree! d tmp)
+        (if (.renameTo tmp u)
+          ;; a new version of the bundle's cache: older copies
+          ;; go by the usual rules (a week unused, 16 at most)
+          (prune-cache-root! u)
+          (when-not (.isDirectory u)
+            (throw (ex-info "rename failed" {})))))
+      u
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "champaca: couldn't copy the bundle's cache to" (str root) (str "(" (ex-message e) ")")))
+        nil)
+      (finally (when (.exists tmp) (delete-tree! tmp))))))
+
 (defn- user-copy
   "For a bundle's key directory d that can't be written, a writable copy under
   the user's cache for this bundle (user-cache-root, then a hash of the
@@ -2163,23 +2205,7 @@
                       ;; said: cache-unusable! needn't say it again
                       (swap! state assoc :cache-unusable-said true)
                       nil)
-                  (let [tmp (io/file root (str (.getName u) ".tmp-" (System/nanoTime)))]
-                    (try
-                      (when (and sid (not (.isDirectory u)))
-                        (.mkdirs root)
-                        (copy-tree! d tmp)
-                        (if (.renameTo tmp u)
-                          ;; a new version of the bundle's cache: older copies
-                          ;; go by the usual rules (a week unused, 16 at most)
-                          (prune-cache-root! u)
-                          (when-not (.isDirectory u)
-                            (throw (ex-info "rename failed" {})))))
-                      u
-                      (catch Exception e
-                        (binding [*out* *err*]
-                          (println "champaca: couldn't copy the bundle's cache to" (str root) (str "(" (ex-message e) ")")))
-                        nil)
-                      (finally (when (.exists tmp) (delete-tree! tmp))))))))]
+                  (copy-to-user-cache! d sid root u))))]
       (swap! state assoc :user-copy r)
       r)))
 
