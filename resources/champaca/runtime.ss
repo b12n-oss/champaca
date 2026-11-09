@@ -689,6 +689,54 @@
                   (jinit n))
                 (walk (cdr is) seen)))))))
 
+;; the current Java thread's name, "main" outside any
+(define (init-thread-name)
+  (if current-jthread
+      (jstring->scheme ((method-proc "java/lang/Thread" "getName()Ljava/lang/String;") current-jthread))
+      "main"))
+
+;; c's initializer failed with e: the failure and its thread are kept for
+;; the NoClassDefFoundError of later uses; answers what reaches the caller,
+;; anything but an Error wrapped in an ExceptionInInitializerError (JVMS
+;; 5.5 step 11)
+(define (init-failure! c e)
+  (when (jobj? e)
+    (eq-hashtable-set! init-errors c (cons e (init-thread-name))))
+  (if (and (jobj? e) (not (jinstance? e "java/lang/Error")))
+      (let ([w (begin (jinit "java/lang/ExceptionInInitializerError")
+                      (jnew "java/lang/ExceptionInInitializerError"))])
+        ((method-proc "java/lang/ExceptionInInitializerError" "<init>(Ljava/lang/Throwable;)V") w e)
+        w)
+      e))
+
+;; the superclass, the interfaces with defaults, then c's own <clinit>
+(define (run-initializer! c name)
+  (when (jclass-super c) (jinit (jclass-super c)))
+  (unless (eq? (jclass-kind c) 'interface) (init-default-interfaces c))
+  (let ([sym (string->symbol (string-append name ".<clinit>()V"))])
+    (when (global-bound? sym) ((top-level-value sym)))))
+
+;; another thread is initializing c: wait until it's done
+(define (wait-for-initializer! c)
+  (set! init-waiters (fx+ init-waiters 1))
+  (gil-block! (lambda () (not (eq? (jclass-state c) 'initializing))) #f)
+  (set! init-waiters (fx- init-waiters 1)))
+
+;; the NoClassDefFoundError for a use of c after its initializer failed,
+;; with HotSpot's cause: an ExceptionInInitializerError naming the first
+;; failure and its thread
+(define (initializer-error c name)
+  (let ([first (eq-hashtable-ref init-errors c #f)]
+        [e (begin (jinit "java/lang/NoClassDefFoundError") (jnew "java/lang/NoClassDefFoundError"))])
+    ((method-proc "java/lang/NoClassDefFoundError" "<init>(Ljava/lang/String;)V")
+     e (jstring (string-append "Could not initialize class " (slashes->dots name))))
+    (when first
+      (let ([w (begin (jinit "java/lang/ExceptionInInitializerError") (jnew "java/lang/ExceptionInInitializerError"))])
+        ((method-proc "java/lang/ExceptionInInitializerError" "<init>(Ljava/lang/String;)V")
+         w (jstring (string-append "Exception " (jstring-of (car first)) " [in thread \"" (cdr first) "\"]")))
+        ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;") e w)))
+    e))
+
 (define (jinit-slow c name)
   (case (jclass-state c)
     [(loaded)
@@ -698,45 +746,14 @@
                    (jclass-state-set! c state)
                    (eq-hashtable-delete! init-owners c)
                    (when (fx> init-waiters 0) (gil-poke!)))])
-       ;; anything but an Error reaches the caller wrapped in an
-       ;; ExceptionInInitializerError (JVMS 5.5 step 11); the failure and
-       ;; its thread are kept for the NoClassDefFoundError of later uses
-       (guard (e [#t (done 'erroneous)
-                     (when (jobj? e)
-                       (eq-hashtable-set! init-errors c
-                                          (cons e (if current-jthread
-                                                      (jstring->scheme ((method-proc "java/lang/Thread" "getName()Ljava/lang/String;") current-jthread))
-                                                      "main"))))
-                     (raise (if (and (jobj? e) (not (jinstance? e "java/lang/Error")))
-                                (let ([w (begin (jinit "java/lang/ExceptionInInitializerError")
-                                                (jnew "java/lang/ExceptionInInitializerError"))])
-                                  ((method-proc "java/lang/ExceptionInInitializerError" "<init>(Ljava/lang/Throwable;)V") w e)
-                                  w)
-                                e))])
-         (when (jclass-super c) (jinit (jclass-super c)))
-         (unless (eq? (jclass-kind c) 'interface) (init-default-interfaces c))
-         (let ([sym (string->symbol (string-append name ".<clinit>()V"))])
-           (when (global-bound? sym) ((top-level-value sym)))))
+       (guard (e [#t (done 'erroneous) (raise (init-failure! c e))])
+         (run-initializer! c name))
        (done 'initialized))]
     [(initializing)
      (unless (eq? (eq-hashtable-ref init-owners c #f) (self))
-       (set! init-waiters (fx+ init-waiters 1))
-       (gil-block! (lambda () (not (eq? (jclass-state c) 'initializing))) #f)
-       (set! init-waiters (fx- init-waiters 1))
+       (wait-for-initializer! c)
        (jinit-slow c name))]
-    [(erroneous)
-     ;; with HotSpot's cause: an ExceptionInInitializerError naming the
-     ;; first failure and its thread
-     (let ([first (eq-hashtable-ref init-errors c #f)]
-           [e (begin (jinit "java/lang/NoClassDefFoundError") (jnew "java/lang/NoClassDefFoundError"))])
-       ((method-proc "java/lang/NoClassDefFoundError" "<init>(Ljava/lang/String;)V")
-        e (jstring (string-append "Could not initialize class " (slashes->dots name))))
-       (when first
-         (let ([w (begin (jinit "java/lang/ExceptionInInitializerError") (jnew "java/lang/ExceptionInInitializerError"))])
-           ((method-proc "java/lang/ExceptionInInitializerError" "<init>(Ljava/lang/String;)V")
-            w (jstring (string-append "Exception " (jstring-of (car first)) " [in thread \"" (cdr first) "\"]")))
-           ((method-proc "java/lang/Throwable" "initCause(Ljava/lang/Throwable;)Ljava/lang/Throwable;") e w)))
-       (raise e))]
+    [(erroneous) (raise (initializer-error c name))]
     [else (void)]))
 
 (define (jnew name)
