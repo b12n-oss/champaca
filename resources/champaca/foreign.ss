@@ -711,16 +711,6 @@
 (define upcall-arm64? (and (memq (machine-type) '(arm64osx tarm64osx arm64le tarm64le)) #t))
 (define upcall-stack-type (if upcall-arm64? 2 3))
 (define (vm-storage-size st) (jslot st (jfield-index "jdk/internal/foreign/abi/VMStorage" "segmentMaskOrSize")))
-;; Arguments that reach the stack (more than the registers hold, a struct the
-;; ABI passes in memory, one the registers left can't hold, and on arm64
-;; whatever comes after such a struct) can't be placed by Chez from the
-;; handle's primitive types alone: it would put them in registers still free.
-;; The JDK says where each one is, a register or a stack offset, so such a
-;; callable takes every argument register in the ABI's order, then the
-;; stack as 8-byte words, and each
-;; value is read where the JDK put it. Answers the callable's types and a
-;; procedure from what it receives to the handle's arguments, or #f for that
-;; procedure when nothing is on the stack.
 ;; the index of the register st names in regs, or #f
 (define (storage-position st regs)
   (let loop ([rs regs] [i 0])
