@@ -209,6 +209,26 @@
   parse skips it by length."
   false)
 
+(defn- read-local-vars
+  "A LocalVariableTable's entries, {:start :length :name :index} each (the
+  descriptor read and dropped)."
+  [r cp]
+  (vec (repeatedly (u2 r)
+                   (fn [] (let [start (u2 r) length (u2 r) nm (:value (cp (u2 r)))
+                                _desc (u2 r) index (u2 r)]
+                            {:start start :length length :name nm :index index})))))
+
+(defn- read-line-numbers
+  "A LineNumberTable's entries, [start-pc line] each."
+  [r]
+  (vec (repeatedly (u2 r) (fn [] [(u2 r) (u2 r)]))))
+
+(defn- pc-ordered-lines
+  "[start-pc line] entries in pc order, the first entry for a pc winning as
+  in HotSpot."
+  [lines]
+  (vec (sort-by first (vals (reduce (fn [m [s l]] (if (contains? m s) m (assoc m s [s l]))) {} lines)))))
+
 (defn- code-tables
   "The Code attribute's own attributes: :locals (the LocalVariableTable)
   under *locals*, :lines (the LineNumberTable, several allowed) under
@@ -218,17 +238,13 @@
     (loop [i 0 found {}]
       (if (= i n)
         ;; in pc order, the first entry for a pc winning as in HotSpot
-        (cond-> found (:lines found) (update :lines #(vec (sort-by first (vals (reduce (fn [m [s l]] (if (contains? m s) m (assoc m s [s l]))) {} %))))))
+        (cond-> found (:lines found) (update :lines pc-ordered-lines))
         (let [name (:value (cp (u2 r))) len (u4 r)]
           (cond
             (and *locals* (= "LocalVariableTable" name) (not (contains? found :locals)))
-            (recur (inc i) (assoc found :locals
-                                  (vec (repeatedly (u2 r)
-                                                   (fn [] (let [start (u2 r) length (u2 r) nm (:value (cp (u2 r)))
-                                                                _desc (u2 r) index (u2 r)]
-                                                            {:start start :length length :name nm :index index}))))))
+            (recur (inc i) (assoc found :locals (read-local-vars r cp)))
             (and *lines* (= "LineNumberTable" name))
-            (recur (inc i) (update found :lines (fnil into []) (vec (repeatedly (u2 r) (fn [] [(u2 r) (u2 r)])))))
+            (recur (inc i) (update found :lines (fnil into []) (read-line-numbers r)))
             :else (do (vswap! (:pos r) + len) (recur (inc i) found))))))))
 
 (defn- parse-code [info cp]
