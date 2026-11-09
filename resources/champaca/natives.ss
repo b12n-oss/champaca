@@ -75,46 +75,60 @@
 
 (define (arraycopy-checked src sp dst dp n)
   (let ([src (nn src)] [dst (nn dst)])
-    (unless (jarr? src)
-      (arraycopy-fail "java/lang/ArrayStoreException"
-                      (string-append "source type " (slashes->dots (class-name-of src)) " is not an array")))
-    (unless (jarr? dst)
-      (arraycopy-fail "java/lang/ArrayStoreException"
-                      (string-append "destination type " (slashes->dots (class-name-of dst)) " is not an array")))
+    (arraycopy-arrays! src dst)
     (let* ([se (jarr-elem src)] [de (jarr-elem dst)] [sv (jarr-vec src)] [dv (jarr-vec dst)]
-           [sname (arraycopy-type-name se)]
-           [bounds (lambda (msg) (arraycopy-fail "java/lang/ArrayIndexOutOfBoundsException" msg))]
-           [out-of (lambda (e v) (string-append " out of bounds for " (arraycopy-type-name e)
-                                                "[" (number->string (vector-length v)) "]"))])
+           [sname (arraycopy-type-name se)])
       (unless (if (prim-desc? se) (string=? se de) (not (prim-desc? de)))
         (arraycopy-fail "java/lang/ArrayStoreException"
                         (string-append "type mismatch: can not copy " sname "[] into "
                                        (arraycopy-type-name de) "[]")))
-      (cond [(fx< sp 0) (bounds (string-append "source index " (number->string sp) (out-of se sv)))]
-            [(fx< dp 0) (bounds (string-append "destination index " (number->string dp) (out-of de dv)))]
-            [(fx< n 0) (bounds (string-append "length " (number->string n) " is negative"))]
-            [(fx> (fx+ sp n) (vector-length sv))
-             (bounds (string-append "last source index " (number->string (fx+ sp n)) (out-of se sv)))]
-            [(fx> (fx+ dp n) (vector-length dv))
-             (bounds (string-append "last destination index " (number->string (fx+ dp n)) (out-of de dv)))])
-      (cond
-        ;; descriptors are interned, so the same element type is eq?
-        [(or (eq? se de) (prim-desc? se) (string=? de "Ljava/lang/Object;")
-             (class-assignable? (string-append "[" se) (string-append "[" de)))
-         (arraycopy-move! sv sp dv dp n)]
-        ;; each element, up to the first that doesn't fit; the message says
-        ;; whether the copy narrows or the element types are unrelated
-        [else
-         (do ([i 0 (fx+ i 1)]) ((fx= i n))
-           (let ([x (vector-ref sv (fx+ sp i))])
-             (unless (or (not x) (array-store-ok? dst x))
-               (let ([sn (slashes->dots (desc->class-name se))] [dn (slashes->dots (desc->class-name de))])
-                 (arraycopy-fail "java/lang/ArrayStoreException"
-                                 (if (class-assignable? (string-append "[" de) (string-append "[" se))
-                                     (string-append "element type mismatch: can not cast one of the elements of "
-                                                    sn "[] to the type of the destination array, " dn)
-                                     (string-append "type mismatch: can not copy " sn "[] into " dn "[]")))))
-             (vector-set! dv (fx+ dp i) x)))]))))
+      (arraycopy-bounds! se sv sp de dv dp n)
+      (if (arraycopy-whole? se de)
+          (arraycopy-move! sv sp dv dp n)
+          (arraycopy-elements! dst se sv sp de dv dp n)))))
+
+;; src and dst must both be arrays
+(define (arraycopy-arrays! src dst)
+  (unless (jarr? src)
+    (arraycopy-fail "java/lang/ArrayStoreException"
+                    (string-append "source type " (slashes->dots (class-name-of src)) " is not an array")))
+  (unless (jarr? dst)
+    (arraycopy-fail "java/lang/ArrayStoreException"
+                    (string-append "destination type " (slashes->dots (class-name-of dst)) " is not an array"))))
+
+(define (arraycopy-bounds-fail msg) (arraycopy-fail "java/lang/ArrayIndexOutOfBoundsException" msg))
+(define (arraycopy-out-of e v)
+  (string-append " out of bounds for " (arraycopy-type-name e) "[" (number->string (vector-length v)) "]"))
+;; the indexes and length, checked in HotSpot's order
+(define (arraycopy-bounds! se sv sp de dv dp n)
+  (cond [(fx< sp 0) (arraycopy-bounds-fail (string-append "source index " (number->string sp) (arraycopy-out-of se sv)))]
+        [(fx< dp 0) (arraycopy-bounds-fail (string-append "destination index " (number->string dp) (arraycopy-out-of de dv)))]
+        [(fx< n 0) (arraycopy-bounds-fail (string-append "length " (number->string n) " is negative"))]
+        [(fx> (fx+ sp n) (vector-length sv))
+         (arraycopy-bounds-fail (string-append "last source index " (number->string (fx+ sp n)) (arraycopy-out-of se sv)))]
+        [(fx> (fx+ dp n) (vector-length dv))
+         (arraycopy-bounds-fail (string-append "last destination index " (number->string (fx+ dp n)) (arraycopy-out-of de dv)))]))
+
+;; whether every element of an se array fits a de array, so the copy needs
+;; no per-element check; descriptors are interned, so the same element type
+;; is eq?
+(define (arraycopy-whole? se de)
+  (or (eq? se de) (prim-desc? se) (string=? de "Ljava/lang/Object;")
+      (class-assignable? (string-append "[" se) (string-append "[" de))))
+
+;; each element, up to the first that doesn't fit; the message says whether
+;; the copy narrows or the element types are unrelated
+(define (arraycopy-elements! dst se sv sp de dv dp n)
+  (do ([i 0 (fx+ i 1)]) ((fx= i n))
+    (let ([x (vector-ref sv (fx+ sp i))])
+      (unless (or (not x) (array-store-ok? dst x))
+        (let ([sn (slashes->dots (desc->class-name se))] [dn (slashes->dots (desc->class-name de))])
+          (arraycopy-fail "java/lang/ArrayStoreException"
+                          (if (class-assignable? (string-append "[" de) (string-append "[" se))
+                              (string-append "element type mismatch: can not cast one of the elements of "
+                                             sn "[] to the type of the destination array, " dn)
+                              (string-append "type mismatch: can not copy " sn "[] into " dn "[]")))))
+      (vector-set! dv (fx+ dp i) x))))
 (defnative "java/lang/System.setIn0(Ljava/io/InputStream;)V" (s) (set-top-level-value! '|java/lang/System:in| s))
 (defnative "java/lang/System.setOut0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:out| s))
 (defnative "java/lang/System.setErr0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:err| s))
