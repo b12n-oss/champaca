@@ -1340,8 +1340,8 @@
               (concat-latin1-fill! v pieces)
               (latin1-jstring v))
             (units->jstring (reverse (fold-left (lambda (acc p) (units-onto p acc)) '() pieces)))))))
-;; the recipe's parts with each \x1 replaced by the next argument's piece
-;; and each \x2 by the next constant
+;; the pieces of parsed recipe parts: a 1 takes the next argument's piece
+;; (concat-arg), a 2 the next constant, a literal stays as it is
 (define (concat-pieces parts args consts)
   (let loop ([ps parts] [args args] [consts consts] [acc '()])
     (if (null? ps)
