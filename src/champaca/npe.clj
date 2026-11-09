@@ -192,6 +192,8 @@
     b
     {:stack (if (= (count (:stack a)) (count (:stack b)))
               (mapv (fn [x y] (if (= x y) x :unknown)) (:stack a) (:stack b))
+              ;; depths differ only in code that doesn't verify, or around a
+              ;; jsr subroutine: keep the first stack rather than fail
               (:stack a))
      :written (into (:written a) (:written b))}))
 
