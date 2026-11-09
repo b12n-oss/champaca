@@ -1329,8 +1329,8 @@
       [(define-methods-form name methods)]))))
 
 (defn- class-origin
-  "The origin of n's class table entry (:jdk, :user, :defined), :jdk for an
-  entry still packed, nil when the table has none."
+  "The :origin of n's class table entry (:jdk, :user, :defined, whatever it
+  holds), :jdk for an entry still packed, nil when the table has none."
   [n]
   (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))
 
