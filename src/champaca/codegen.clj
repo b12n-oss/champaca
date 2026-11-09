@@ -189,7 +189,9 @@
   [code pc fmt]
   (if (vector? fmt)
     [[(second fmt)] 1]
-    ((operand-readers fmt) code pc)))
+    (if-let [read (operand-readers fmt)]
+      (read code pc)
+      (throw (ex-info "no reader for operand format" {:pc pc :format fmt})))))
 
 (defn decode
   "Code bytes -> vector of {:pc :op :args :len}."
