@@ -1564,6 +1564,76 @@
 
 (declare defined-jar restore-defined-class! dep-matches?)
 
+(defn- parse-defined
+  "The class file bs parsed, or {:bad text} when it isn't one, or {:version
+  text} for an unsupported version. A wrong magic number's text ends with
+  the name the caller gave, as HotSpot's, or <Unknown>."
+  [bs given]
+  (try (cf/parse bs)
+       (catch Exception e
+         (if-let [f (:class-version (ex-data e))]
+           {:version (f (or given "<Unknown>"))}
+           {:bad (let [m (or (ex-message e) (str (class e)))]
+                   (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))}))))
+
+(defn- definition-refusal
+  "define-class!'s answer when the parsed class c can't be defined, else nil.
+  HotSpot checks the name as it reads it, before the interface and sealed
+  checks."
+  [c given hidden?]
+  (cond
+    (:bad c) (str "bad " (:bad c))
+    (:version c) (str "link java/lang/UnsupportedClassVersionError|" (:version c))
+    (and given (not= given (:name c))) (str "wrong " (:name c))
+    (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
+    (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
+    (final-sealed? c) (str "bad PermittedSubclasses attribute in final class file " (or given (:name c)))
+    (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))))
+
+(defn- defined-deps!
+  "A defined class n's library cache dependencies from what its link and
+  registration read: without checkable ones it isn't cached, and without a
+  fingerprint nothing depending on it is. Answers its class map."
+  [n reads fp]
+  (let [deps (when fp (user-deps (conj @reads n) true))]
+    (when fp
+      (when-not deps (swap! state update :defined-uncacheable (fnil inc 0)))
+      (when (and (not deps) (trace?))
+        (binding [*out* *err*] (println "define" n "not cached: it depends on" (uncheckable-dep (conj @reads n) true)))))
+    (get-in (swap! state update-in [:classes n]
+                   #(if deps (assoc % :deps (dissoc deps n)) (dissoc % :src-fp :src-jar)))
+            [:classes n])))
+
+(defn- define-parsed-class!
+  "Link and register the parsed class c (renamed first when hidden), as
+  ensure-loaded! does for a classpath class: \"ok <name>\", or HotSpot's
+  definition checks' error as \"link <class>|<text>\"."
+  [c hidden? bs fp dj]
+  (try
+    (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
+          n (:name c)
+          info (class-map n c :defined)]
+      ;; bytes class-source held for a classpath class of this name won't be parsed
+      (swap! state update :dir-bytes dissoc n)
+      ;; HotSpot's checks of the definition (load-supertypes!)
+      (load-supertypes! info)
+      ;; the link and the registration record what they read, which the
+      ;; entry depends on; its own fingerprint goes in first: user-deps reads
+      ;; it for the class itself, and for a class depending on it
+      (let [reads (when fp (volatile! #{}))
+            linked (cond-> (binding [*reads* reads] (link info)) fp (assoc :src-fp fp :src-jar dj))]
+        ;; the defined bytes are kept for NPE messages and frames, once the class is in
+        (swap! state #(-> % (assoc-in [:classes n] linked) (assoc-in [:defined-bytes n] bs)))
+        (let [text (binding [*reads* reads] (registration-text linked))
+              linked (defined-deps! n reads fp)]
+          (record! (cache-origin linked) [n] {:text text})
+          (scheme! text :interpret)))
+      (str "ok " n))
+    (catch Exception e
+      (if-let [err (:linkage (ex-data e))]
+        (str "link " err "|" (:message (ex-data e)))
+        (throw e)))))
+
 (defn- define-class!
   "ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
   and Unsafe.defineClass0 (natives.ss define-class!): parse, link and
@@ -1585,59 +1655,9 @@
         dj (when fp (defined-jar))]
     (or (when (and fp (not (get-in @state [:classes given])))
           (restore-defined-class! given bs fp dj))
-        (let [c (try (cf/parse bs)
-                     (catch Exception e
-                       ;; a wrong magic number's text ends with the name the caller
-                       ;; gave, as HotSpot's, or <Unknown>
-                       (if-let [f (:class-version (ex-data e))]
-                         {:version (f (or given "<Unknown>"))}
-                         {:bad (let [m (or (ex-message e) (str (class e)))]
-                                 (if (:named (ex-data e)) (str m " " (or given "<Unknown>")) m))})))]
-          (cond
-            (:bad c) (str "bad " (:bad c))
-            (:version c) (str "link java/lang/UnsupportedClassVersionError|" (:version c))
-            ;; HotSpot checks the name as it reads it, before these two
-            (and given (not= given (:name c))) (str "wrong " (:name c))
-            (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
-            (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
-            (final-sealed? c) (str "bad PermittedSubclasses attribute in final class file " (or given (:name c)))
-            (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))
-            :else
-            (try
-            (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
-                  n (:name c)
-                  info (class-map n c :defined)]
-              ;; bytes class-source held for a classpath class of this name won't be parsed
-              (swap! state update :dir-bytes dissoc n)
-              ;; HotSpot's checks of the definition (load-supertypes!): its
-              ;; error class and text go back as "link <class>|<text>"
-              (load-supertypes! info)
-              ;; as ensure-loaded! does for a classpath class: the link and the
-              ;; registration record what they read, which the entry depends on
-              (let [reads (when fp (volatile! #{}))
-                    ;; its own fingerprint goes in first: user-deps reads it
-                    ;; for the class itself, and for a class depending on it
-                    linked (cond-> (binding [*reads* reads] (link info)) fp (assoc :src-fp fp :src-jar dj))]
-                ;; the defined bytes are kept for NPE messages and frames, once the class is in
-                (swap! state #(-> % (assoc-in [:classes n] linked) (assoc-in [:defined-bytes n] bs)))
-                (let [text (binding [*reads* reads] (registration-text linked))
-                      deps (when fp (user-deps (conj @reads n) true))
-                      _ (when fp
-                          (when-not deps (swap! state update :defined-uncacheable (fnil inc 0)))
-                          (when (and (not deps) (trace?))
-                            (binding [*out* *err*] (println "define" n "not cached: it depends on" (uncheckable-dep (conj @reads n) true)))))
-                      ;; without checkable dependencies it isn't cached, and
-                      ;; without a fingerprint nothing depending on it is
-                      linked (get-in (swap! state update-in [:classes n]
-                                            #(if deps (assoc % :deps (dissoc deps n)) (dissoc % :src-fp :src-jar)))
-                                     [:classes n])]
-                  (record! (cache-origin linked) [n] {:text text})
-                  (scheme! text :interpret)))
-              (str "ok " n))
-            (catch Exception e
-              (if-let [err (:linkage (ex-data e))]
-                (str "link " err "|" (:message (ex-data e)))
-                (throw e)))))))))
+        (let [c (parse-defined bs given)]
+          (or (definition-refusal c given hidden?)
+              (define-parsed-class! c hidden? bs fp dj))))))
 
 (defn- defined-jar
   "The library cache's key for the classes a program's own loaders define:
