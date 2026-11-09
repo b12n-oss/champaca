@@ -834,10 +834,6 @@
           (seq-arg? r) (coll-arg? r) (not jolt-data-hook))
       r
       (jolt-data-hook r)))
-;; what a fn returned, as the method's return type d takes it. nil for a
-;; primitive is a NullPointerException, a value of the wrong kind a
-;; ClassCastException and a number out of the type's range an
-;; IllegalArgumentException, as Clojure's casts throw.
 (define (result-type-error where v type-text)
   (jthrow "java/lang/ClassCastException" (string-append where " returned " (value-kind v) ", not " type-text)))
 
@@ -881,6 +877,10 @@
     [(#\D) (if (and (number? r) (real? r)) (inexact r) (result-type-error where r (prim-type-name c)))]
     [else (if (and (number? r) (real? r)) (f32 (inexact r)) (result-type-error where r (prim-type-name c)))]))
 
+;; what a fn returned, as the method's return type d takes it. nil for a
+;; primitive is a NullPointerException, a value of the wrong kind a
+;; ClassCastException and a number out of the type's range an
+;; IllegalArgumentException, as Clojure's casts throw.
 (define (defined-result where d r)
   (let ([c (string-ref d 0)])
     (cond
