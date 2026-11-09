@@ -2096,18 +2096,20 @@
 
 ;; --- descriptors ----------------------------------------------------------------------
 
+;; the index just past the field descriptor that starts at i in d
+(define (desc-arg-end d i)
+  (case (string-ref d i)
+    [(#\[) (desc-arg-end d (fx+ i 1))]
+    [(#\L) (let find ([k i]) (if (char=? (string-ref d k) #\;) (fx+ k 1) (find (fx+ k 1))))]
+    [else (fx+ i 1)]))
+
 (define (desc-args d)
   ;; "(ILjava/lang/String;[J)V" -> ("I" "Ljava/lang/String;" "[J")
   (let loop ([i 1] [acc '()])
     (if (char=? (string-ref d i) #\))
         (reverse acc)
-        (let scan ([j i])
-          (case (string-ref d j)
-            [(#\[) (scan (fx+ j 1))]
-            [(#\L) (let find ([k j]) (if (char=? (string-ref d k) #\;)
-                                         (loop (fx+ k 1) (cons (substring d i (fx+ k 1)) acc))
-                                         (find (fx+ k 1))))]
-            [else (loop (fx+ j 1) (cons (substring d i (fx+ j 1)) acc))])))))
+        (let ([j (desc-arg-end d i)])
+          (loop j (cons (substring d i j) acc))))))
 
 (define (desc-ret d)
   (let loop ([i 0]) (if (char=? (string-ref d i) #\)) (substring d (fx+ i 1) (string-length d)) (loop (fx+ i 1)))))
