@@ -1469,6 +1469,57 @@
                         (every? #(> % pc) (successors i))))
                  (decode code)))))
 
+(defn- ic-allocator
+  "ic! for one method: a new inline-cache cell given the expression that
+  makes it (a fresh pair by default), answering a variable holding its
+  value, computed once; the cells collect in ics, in one vector when
+  vector-ics?."
+  [ics vector-ics?]
+  (fn ic!
+    ([] (ic! "(cons #f #f)"))
+    ([init] (let [i (dec (count (vswap! ics conj init)))]
+              (if vector-ics? (str "(vector-ref ics " i ")") (str "ic" i))))))
+
+(defn- inline-label
+  "The label of a copy of decl.name desc (ctag) translated for the call site
+  *inline-site* of the method tag, its definition added to defs, or nil when
+  the callee isn't a leaf. A callee that fails to translate (a class missing
+  at run time, say) stays a plain call, so it fails only if called."
+  [cls resolve ic! tag defs decl name desc ctag]
+  (let [{c :cls m :method} ((:inline-candidate resolve) (:name cls) decl name desc)]
+    (when (and m (leaf? c m))
+      (when-let [text (try (binding [*method-tag* ctag]
+                             (compile-method* c m resolve ic! (constantly nil)))
+                           (catch Exception _ nil))]
+        (let [l (sym (str tag "#I:" ctag "@" (first *inline-site*)))]
+          (vswap! defs conj [l text])
+          l)))))
+
+(defn- inliner
+  "inline! for the method tag: a callee's label, or nil to call it plainly;
+  one copy per call site (*inline-site*), since the copy's markers name the
+  site for stack traces, and none under CHAMPACA_BT."
+  [cls resolve ic! tag defs]
+  (let [inlined (volatile! {})          ; [callee tag, site] -> label, or false
+        bt? (System/getenv "CHAMPACA_BT")]
+    (fn [decl name desc]
+      (when-not bt?
+        (let [ctag (str decl "." name desc)
+              key [ctag (first *inline-site*)]]
+          (if (contains? @inlined key)
+            (get @inlined key)
+            (let [lbl (inline-label cls resolve ic! tag defs decl name desc ctag)]
+              (vswap! inlined assoc key (or lbl false))
+              lbl)))))))
+
+(defn- with-ic-cells
+  "f inside a let making the inline-cache cells ics, one vector of them
+  when vector-ics?."
+  [ics vector-ics? f]
+  (cond (empty? ics) f
+        vector-ics? (sx "let" (sx (sx "ics" (apply sx "vector" ics))) f)
+        :else (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) ics)) f)))
+
 (defn compile-method
   "Scheme source for `(set-top-level-value! '|Cls.name(desc)| (lambda ...))`. A small leaf
   method it calls directly (invokestatic, invokespecial, or invokevirtual
@@ -1477,8 +1528,7 @@
   [cls method resolve]
   (let [tag (str (:name cls) "." (:name method) (:desc method))
         ;; inline-cache cells, one per site that needs one, made once per
-        ;; method and shared with the methods inlined into it; given an
-        ;; expression, a variable holding its value, computed once the same way
+        ;; method and shared with the methods inlined into it
         ics (volatile! [])
         ;; a giant method keeps its cells in one vector: Chez's expander scans
         ;; a let's bindings linearly for every variable it resolves, and
@@ -1486,34 +1536,9 @@
         ;; cost it a second of compile time as variables. One more load per
         ;; site is nothing in code that runs once.
         vector-ics? (> (count (:code (:code method))) ic-vector-limit)
-        ic! (fn ic!
-              ([] (ic! "(cons #f #f)"))
-              ([init] (let [i (dec (count (vswap! ics conj init)))]
-                        (if vector-ics? (str "(vector-ref ics " i ")") (str "ic" i)))))
-        inlined (volatile! {})          ; callee tag -> label, or false
+        ic! (ic-allocator ics vector-ics?)
         defs (volatile! [])             ; [label lambda-text], in order
-        bt? (System/getenv "CHAMPACA_BT")
-        inline! (fn [decl name desc]
-                  (when-not bt?
-                    ;; one copy per call site (*inline-site*), since the
-                    ;; copy's markers name the site for stack traces
-                    (let [ctag (str decl "." name desc)
-                          key [ctag (first *inline-site*)]]
-                      (if (contains? @inlined key)
-                        (get @inlined key)
-                        (let [{c :cls m :method} ((:inline-candidate resolve) (:name cls) decl name desc)
-                              lbl (when (and m (leaf? c m))
-                                    ;; a callee that fails to translate (a
-                                    ;; class missing at run time, say) stays
-                                    ;; a plain call, so it fails only if called
-                                    (when-let [text (try (binding [*method-tag* ctag]
-                                                           (compile-method* c m resolve ic! (constantly nil)))
-                                                         (catch Exception _ nil))]
-                                      (let [l (sym (str tag "#I:" ctag "@" (first *inline-site*)))]
-                                        (vswap! defs conj [l text])
-                                        l)))]
-                          (vswap! inlined assoc key (or lbl false))
-                          lbl)))))
+        inline! (inliner cls resolve ic! tag defs)
         f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
         f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
     ;; set-top-level-value!, not define: a top-level define compiled to a
@@ -1523,9 +1548,7 @@
     ;; the procedure as define did (a code name is what stack traces and
     ;; getCallerClass read; a bare lambda has none).
     (let [g (method-global (:name cls) (:name method) (:desc method))
-          body (cond (empty? @ics) f
-                     vector-ics? (sx "let" (sx (sx "ics" (apply sx "vector" @ics))) f)
-                     :else (sx "let" (apply sx (map-indexed (fn [i init] (sx (str "ic" i) init)) @ics)) f))]
+          body (with-ic-cells @ics vector-ics? f)]
       (sx "set-top-level-value!" (str "'" g) (sx "let" (sx (sx g body)) g)))))
 
 ;; --- array loops ------------------------------------------------------------------
