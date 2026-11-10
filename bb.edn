@@ -93,7 +93,7 @@
           ;; serialization and classes put on their classpath
           (defn lib-jar! []
             (shell "mkdir -p target/lib-classes")
-            (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
+            (apply shell "javac -Xlint:-removal -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
             ;; and its other files: a service registration, a properties file
             (doseq [f (fs/glob "test/jar" "**")
                     :when (and (fs/regular-file? f) (not (str/ends-with? (str f) ".java")))
@@ -198,10 +198,10 @@
                     _ (lib-jar!)
                     ;; a second jar sharing one package with the first (PackageCheck)
                     _ (shell "mkdir -p target/lib2-classes")
-                    _ (apply shell "javac -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
+                    _ (apply shell "javac -Xlint:-removal -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
                     _ (shell "jar cfm target/lib2.jar test/jar2.mf -C target/lib2-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
-                    _ (apply shell "javac -parameters -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
+                    _ (apply shell "javac -parameters -Xlint:-removal -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses
