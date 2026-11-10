@@ -86,7 +86,7 @@
   ([] (init! {}))
   ([{:keys [classpath preview add-modules]}]
    ;; with no :classpath, CHAMPACA_CLASSPATH's entries (a bundle's launcher sets
-   ;; it: bb bundle --jolt)
+   ;; it: jolt bundle --jolt)
    (let [classpath (or classpath
                        (some-> (System/getenv "CHAMPACA_CLASSPATH") not-empty
                                (str/split (re-pattern java.io.File/pathSeparator))))

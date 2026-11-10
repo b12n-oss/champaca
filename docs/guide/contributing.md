@@ -4,18 +4,18 @@ Champaca's rule for a change is that it behaves as HotSpot does, and the way to 
 
 ## Set up
 
-You need jolt 0.8.24 or later, JDK 25 with `JAVA_HOME` set, and babashka. Then:
+You need jolt 0.8.24 or later and JDK 25 with `JAVA_HOME` set; jolt runs the tasks in `bb.edn`. Then:
 
 ```sh
-bb jolt      # build the jolt commit deps.edn pins (about 45 s, once per pin)
-bb test      # every test program against the JVM, plus the examples
+jolt jolt      # build the jolt commit deps.edn pins (about 45 s, once per pin)
+jolt test      # every test program against the JVM, plus the examples
 ```
 
-`bb test` has to pass on your machine before anything else. [getting-started](getting-started.md#running-the-tests) says what it runs.
+`jolt test` has to pass on your machine before anything else. [getting-started](getting-started.md#running-the-tests) says what it runs.
 
 ## Making a change
 
-**Start with a test.** A behavior change gets a Java program in `test/java/` whose output is recorded from the JVM into a `.expected` file of the same name (`java -cp target/classes YourCheck > test/java/YourCheck.expected`, on JDK 25). `bb test` diffs champaca's output against it byte for byte. A class `javac` won't write, such as one with a broken attribute or an unusual bytecode shape, is generated with the ClassFile API by a program in `test/gen/`. A change to the jolt API gets an `examples/*.clj` test instead, asserting what each call returns.
+**Start with a test.** A behavior change gets a Java program in `test/java/` whose output is recorded from the JVM into a `.expected` file of the same name (`java -cp target/classes YourCheck > test/java/YourCheck.expected`, on JDK 25). `jolt test` diffs champaca's output against it byte for byte. A class `javac` won't write, such as one with a broken attribute or an unusual bytecode shape, is generated with the ClassFile API by a program in `test/gen/`. A change to the jolt API gets an `examples/*.clj` test instead, asserting what each call returns.
 
 **Check that the test can fail.** Remove the new behavior, rerun, and see the test go red. A test that passes either way checks nothing, and output tests miss more than you'd expect: a fast path and its slow fallback print the same thing.
 
@@ -25,9 +25,9 @@ bb test      # every test program against the JVM, plus the examples
 
 ## Before a pull request
 
-- `bb test` passes.
-- The battery passes on your final commit: `bb battery <ref>` runs the suite cold, warm, with the cache off and with `CHAMPACA_BT=1`, then the eight libraries. It takes half an hour or more, and only one may run at a time.
-- If you can run Docker, `bb linux` passes too.
+- `jolt test` passes.
+- The battery passes on your final commit: `jolt battery <ref>` runs the suite cold, warm, with the cache off and with `CHAMPACA_BT=1`, then the eight libraries. It takes half an hour or more, and only one may run at a time.
+- If you can run Docker, `jolt linux` passes too.
 - Docs ship with the change: a new behavior goes in the guide page that covers its area, and a new gap in [limitations](limitations.md).
 - The pull request says what changed and how it was checked: which tests, which comparison, which numbers.
 - Commit messages and the pull request description carry no AI assistant attribution (a `Co-Authored-By: Claude` line, a session link, a "Generated with" footer). CI checks with `tools/attributioncheck.sh`, which you can run yourself: `sh tools/attributioncheck.sh origin/main..HEAD`.

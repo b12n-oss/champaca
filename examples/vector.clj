@@ -10,7 +10,7 @@
 ;; JDK warns that an incubator module is in use). champaca runs every vector
 ;; operation through the Java fallback the JDK carries for each intrinsic, so
 ;; results are exact but nothing is vectorized.
-;;   bb example vector
+;;   jolt example vector
 (ns examples.vector
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

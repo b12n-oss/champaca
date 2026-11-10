@@ -4,11 +4,10 @@
 
 - **jolt 0.8.24 or later.** Champaca's `deps.edn` declares it as `:jolt/min-version "0.8.24"`.
 - **JDK 25, with `JAVA_HOME` set.** Champaca doesn't run a JVM. It reads the JDK's classes out of its runtime image, `$JAVA_HOME/lib/modules`, and compiles them itself, so it needs only that, plus `javac` if you want to compile Java of your own. It's tested with OpenJDK 25.0.2 (the build from jdk.java.net) on macOS and Linux. GraalVM CE 25.0.1, Temurin 25.0.4.1 on macOS and a `jlink`-built runtime compressed with `--compress zip-6` passed earlier, smaller versions of the suite and haven't been run against today's.
-- **babashka**, for the `bb` tasks in this repo.
 
-The JDK is needed where a program is built and developed. A machine that only runs it can do without one: `bb bundle` packs the slice of the JDK a program needs, champaca built into a native binary and a warmed cache into a directory that runs anywhere on the same OS and architecture ([app-bundles](app-bundles.md)).
+The JDK is needed where a program is built and developed. A machine that only runs it can do without one: `jolt bundle` packs the slice of the JDK a program needs, champaca built into a native binary and a warmed cache into a directory that runs anywhere on the same OS and architecture ([app-bundles](app-bundles.md)).
 
-Inside this repo, `bb jolt` builds the jolt commit pinned in `deps.edn` and `bb test` prefers it. That's optional; [performance](performance.md#the-pinned-jolt) explains why the pin exists.
+The repo's tasks live in `bb.edn`, which jolt reads as it is; `jolt tasks` lists them. Inside this repo, `jolt jolt` builds the jolt commit pinned in `deps.edn` and `jolt test` prefers it. That's optional; [performance](performance.md#the-pinned-jolt) explains why the pin exists.
 
 ## The first call
 
@@ -61,15 +60,15 @@ Call `init!` once per process, before any other champaca function. A second call
 
 ## From an editor
 
-Each file in `examples/` is a namespace of `clojure.test` tests, so it shows a call next to the value it returns. `bb examples` lists them, and `bb example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields`, `serialization` and `classes` need `target/lib.jar`, which `bb test` builds from `test/jar`. `bb example` builds that jar too, when it's missing or older than its sources.
+Each file in `examples/` is a namespace of `clojure.test` tests, so it shows a call next to the value it returns. `jolt examples` lists them, and `jolt example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields`, `serialization` and `classes` need `target/lib.jar`, which `jolt test` builds from `test/jar`. `jolt example` builds that jar too, when it's missing or older than its sources.
 
 To work live from an editor, start jolt's nREPL server from the repo root:
 
 ```sh
-bb nrepl
+jolt nrepl
 ```
 
-It binds a free port on 127.0.0.1 and writes it to `.nrepl-port`, which CIDER and Calva read. In Emacs, `M-x cider-connect-clj` with host `localhost` offers that port. `bb nrepl 7890`, or `CHAMPACA_NREPL_PORT=7890`, asks for a port of your own, and a busy one is refused rather than swapped for another. When `.nrepl-port` already names a server that answers, `bb nrepl` says so and stops, so connect to that one instead. Stop the server with `^C`, which also removes the file.
+It binds a free port on 127.0.0.1 and writes it to `.nrepl-port`, which CIDER and Calva read. In Emacs, `M-x cider-connect-clj` with host `localhost` offers that port. `jolt nrepl 7890`, or `CHAMPACA_NREPL_PORT=7890`, asks for a port of your own, and a busy one is refused rather than swapped for another. When `.nrepl-port` already names a server that answers, `jolt nrepl` says so and stops, so connect to that one instead. Stop the server with `^C`, which also removes the file.
 
 Since `init!` runs once per process, as above, the first form to evaluate in a fresh session is
 
@@ -84,12 +83,12 @@ Loading a file only defines its tests. Evaluate any form inside a `deftest` to s
 
 ## The docs site
 
-These guides can be read as a local site. `bb site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `bb site:serve 4000` asks for a port of your own, and a busy one is refused rather than swapped for another. `bb site:build` only builds, and `bb site:clean` deletes `_site/`. The rendering is done by [jlt-commons/docs-engine](https://github.com/jlt-commons/docs-engine), which must be checked out at `$JLT_DOCS_ENGINE`, `~/dev/jlt-commons/docs-engine` or `../docs-engine` (`git clone https://github.com/jlt-commons/docs-engine ~/dev/jlt-commons/docs-engine`). The engine's config for this project is `docs/site.edn`.
+These guides can be read as a local site. `jolt site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `jolt site:serve 4000` asks for a port of your own, and a busy one is refused rather than swapped for another. `jolt site:build` only builds, and `jolt site:clean` deletes `_site/`. The rendering is done by [jlt-commons/docs-engine](https://github.com/jlt-commons/docs-engine), which must be checked out at `$JLT_DOCS_ENGINE`, `~/dev/jlt-commons/docs-engine` or `../docs-engine` (`git clone https://github.com/jlt-commons/docs-engine ~/dev/jlt-commons/docs-engine`). The engine's config for this project is `docs/site.edn`.
 
 ## Running the tests
 
 ```sh
-bb test
+jolt test
 ```
 
 It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, one with a `.options` file gets that file's lines as launcher options (`-D` ones) before the classpath, and one that runs past five minutes fails. `test/libcache` runs three programs (`LibCacheMain`, `LamMain`, `EditMain`) over jars and directories that change between runs, twenty-five runs in all, which checks the cache of classpath classes. It runs upstream OpenLDK's own `aaa` test programs the same way as `test/java`'s, from `test/aaa` (its README says how they're laid out). Then it runs the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line says which jolt it used.

@@ -7,7 +7,7 @@
 
 ;; Calling Java from jolt through champaca, with JVM descriptors. Run from the
 ;; repo root:
-;;   bb example interop
+;;   jolt example interop
 (ns examples.interop
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

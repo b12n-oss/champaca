@@ -3,7 +3,7 @@ import java.nio.file.*;
 
 // test/libcache/def: classes a loader of the program's own defines, cached by
 // their bytes. DirLoader reads d/A and d/B from the directory given, which
-// is not on the class path, and defines them. bb test runs it over v1, v1
+// is not on the class path, and defines them. jolt test runs it over v1, v1
 // again (every class restored), v2 of B alone (A restored, but its cached
 // methods read B, whose bytes changed: they compile again and see v2's
 // field layout and values), v2 again calling other too (compiled anew, not

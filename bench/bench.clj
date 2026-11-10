@@ -19,6 +19,8 @@
 ;; Needs mvn on PATH (Maven Central reached with the proxy unset).
 
 (ns bench
+  ;; run! here runs one benchmark command, not clojure.core's
+  (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]))
@@ -198,7 +200,7 @@
         what (or what "all")
         app (get apps app-name)]
     (when-not (and app (#{"build" "bench" "all"} what))
-      (binding [*out* *err*] (println (str "usage: bb bench <" (str/join "|" (keys apps)) "> [build|bench|all]")))
+      (binding [*out* *err*] (println (str "usage: jolt bench <" (str/join "|" (keys apps)) "> [build|bench|all]")))
       (System/exit 2))
     (let [dir (str repo "/bench/" app-name) t (str dir "/target")]
       (when (#{"build" "all"} what) (fs/create-dirs t) ((:build app) dir t))

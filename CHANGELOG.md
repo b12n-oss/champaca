@@ -33,27 +33,31 @@ The first public version. Champaca is still experimental: the
   NullPointerException messages, and HotSpot's error texts for linkage,
   class format and cast failures.
 - **Libraries and frameworks**: commons-lang3, gson, jsoup, Jackson,
-  Caffeine, Guava, SLF4J and SnakeYAML match HotSpot's output (`bb libs`),
+  Caffeine, Guava, SLF4J and SnakeYAML match HotSpot's output (`jolt libs`),
   and Spring Boot 4.1.2 and Quarkus 3.40.1 applications start in every
-  packaging (`bb bench`).
+  packaging (`jolt bench`).
 - **Caches**: a startup cache for the JDK's boot and compiled methods, and a
   library cache for classes from jars, directories and class loaders, each
   keyed by the bytes it was built from.
-- **App bundles**: `bb bundle` builds a directory that runs a program with
+- **App bundles**: `jolt bundle` builds a directory that runs a program with
   no JDK installed.
-- **Tasks**: `bb test` (every test program against HotSpot's recorded
-  output, plus the examples), `bb battery`, `bb linux`, `bb libs`,
-  `bb bench`, `bb prof`, `bb heap`, `bb metrics`, `bb nrepl`, and the docs
+- **Tasks**: `jolt test` (every test program against HotSpot's recorded
+  output, plus the examples), `jolt battery`, `jolt linux`, `jolt libs`,
+  `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, and the docs
   site tasks.
 - Guides under `docs/guide/`, `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
 
 ### Changed
 
-- The jolt that `bb test` and the other tasks build is the v0.8.25 tag; champaca
+- The repo's tasks run on jolt: `jolt test`, `jolt battery`, `jolt linux` and the
+  rest, from the same `bb.edn`, so babashka is no longer needed. The pinned jolt
+  is built by `tools/build-jolt.sh`, which needs only git and make, and the
+  Linux image and CI use it.
+- The jolt that `jolt test` and the other tasks build is the v0.8.25 tag; champaca
   still needs jolt 0.8.24 or later.
 - The largest functions were split into named steps, guided by
-  jolt-metrics (`bb metrics`): codegen's `emit-block`, `compile-method`,
+  jolt-metrics (`jolt metrics`): codegen's `emit-block`, `compile-method`,
   `decode` and `render-steps`, the launcher's option parsing, the boot,
   `define-class`, the class loading and cache paths, the FFI arrangement
   and upcall stubs, and a few dozen smaller ones. Each split was checked

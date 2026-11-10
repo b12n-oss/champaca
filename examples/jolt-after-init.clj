@@ -9,7 +9,7 @@
 ;; jolt's top-level environment, and a definition there with one of jolt's
 ;; own names (jfloat->string, jclass?, reflect-args, ...) used to replace
 ;; jolt's, which broke its float printing and Java interop.
-;;   bb example jolt-after-init
+;;   jolt example jolt-after-init
 (ns examples.jolt-after-init
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

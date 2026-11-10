@@ -16,6 +16,8 @@
   handlers. Jumps inside a region are tail calls too. A jump out of a covered
   region returns a thunk to the method's trampoline, so the handler installed
   on entry to the region (jtry) covers the region and nothing past it."
+  ;; this namespace's own pop! (a block-state helper) replaces clojure.core's
+  (:refer-clojure :exclude [pop!])
   (:require [clojure.string :as str]))
 
 ;; --- text helpers ------------------------------------------------------------

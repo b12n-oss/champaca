@@ -2046,7 +2046,7 @@
 
 ;; Whatever goes wrong gives no message, as HotSpot gives none for bytecode
 ;; its analysis can't follow: getMessage must not throw. CHAMPACA_BT says
-;; why on stderr, and CHAMPACA_NPE_STRICT (set by bb test) rethrows, so a
+;; why on stderr, and CHAMPACA_NPE_STRICT (set by jolt test) rethrows, so a
 ;; bug in the port fails the suite instead of passing as a missing message.
 (defn- npe-message* [site]
   (try (npe-message** site)

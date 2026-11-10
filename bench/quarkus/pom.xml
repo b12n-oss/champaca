@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- The Quarkus startup benchmark's application, from upstream OpenLDK's
-     bench/quarkus.  `bb bench quarkus` builds and times it; see
+     bench/quarkus.  `jolt bench quarkus` builds and times it; see
      bench/README.md. -->
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">

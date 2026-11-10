@@ -7,7 +7,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 // FFM upcalls: Linker.upcallStub makes a function pointer that calls a Java
 // method handle, here passed to C (target/libffitest's ffi_apply_* functions,
-// test/native/ffitest.c, which bb test builds) and to libc's qsort, against
+// test/native/ffitest.c, which jolt test builds) and to libc's qsort, against
 // the JVM's results and texts. Upcalls also come from Java threads at once,
 // from a thread C started (attached as HotSpot does: a daemon Thread-N in
 // group main, one Thread for the C thread's life), and take and give structs.

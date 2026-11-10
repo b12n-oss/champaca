@@ -32,21 +32,21 @@ Methods are found by name, and the overload is picked from the arguments the way
 
 ## What it runs
 
-- **Eight common libraries** (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML) give the same output as on HotSpot, which `bb libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
+- **Eight common libraries** (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML) give the same output as on HotSpot, which `jolt libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
 - **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
 - **Compiled Java programs** run from the command line as with `java`: `-cp`, `-jar`, `-D` options, `-p` and `-m` for modules, source files, and the JDK's own rules for finding `main` ([running-java-programs](docs/guide/running-java-programs.md)).
 - **Many JDK areas**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each checked against HotSpot ([compatibility](docs/guide/compatibility.md)).
 - **A startup cache** keeps what a run compiled, so a warm `Hello` takes 0.39 s from exec to exit on an M1 Pro, where the first run took 6.5 s ([performance](docs/guide/performance.md#the-startup-cache)).
-- **App bundles**: `bb bundle` makes a directory that runs a program on a machine with no JDK ([app-bundles](docs/guide/app-bundles.md)).
+- **App bundles**: `jolt bundle` makes a directory that runs a program on a machine with no JDK ([app-bundles](docs/guide/app-bundles.md)).
 
 ## Getting started
 
 You need jolt 0.8.24 or later and JDK 25, with `JAVA_HOME` set.
 
 ```sh
-bb jolt                                         # build the jolt commit deps.edn pins, once
-bb test                                         # every test program against the JVM, plus the examples
-jolt -M -m champaca.main target/classes Hello   # run a class bb test compiled
+jolt jolt                                         # build the jolt commit deps.edn pins, once
+jolt test                                         # every test program against the JVM, plus the examples
+jolt -M -m champaca.main target/classes Hello   # run a class jolt test compiled
 ```
 
 [getting-started](docs/guide/getting-started.md) covers depending on champaca from your own project and using it from an editor. [development](docs/guide/development.md) lists every task and switch.
@@ -75,4 +75,4 @@ The logo in `docs/images/logo.svg` was drawn for this project.
 
 ## License
 
-GPLv3 or later with the Classpath Exception, inherited from OpenLDK. See `COPYING` and `COPYING.CLASSPATH-EXCEPTION`. Each source file, task file and script starts with the SPDX line `GPL-3.0-or-later WITH Classpath-exception-2.0` and a copyright line, crediting OpenLDK where it derives from OpenLDK, as OpenLDK's own files do. Four pieces that once followed GPL-version-2-only OpenJDK code (`src/champaca/npe.clj`, `class-cast-message` in runtime.ss, the class name checks in natives.ss, `encode-path` in main.clj) were written again from HotSpot's observed behavior. `bb bundle` ships jolt's EPL-2.0 binaries beside this GPL code, a pairing that isn't settled yet ([app-bundles](docs/guide/app-bundles.md#limits)). The Java test programs carry no header, since their recorded output has line numbers in it. The test programs in `test/aaa` are OpenLDK's own, under the same license (`test/aaa/README.md`).
+GPLv3 or later with the Classpath Exception, inherited from OpenLDK. See `COPYING` and `COPYING.CLASSPATH-EXCEPTION`. Each source file, task file and script starts with the SPDX line `GPL-3.0-or-later WITH Classpath-exception-2.0` and a copyright line, crediting OpenLDK where it derives from OpenLDK, as OpenLDK's own files do. Four pieces that once followed GPL-version-2-only OpenJDK code (`src/champaca/npe.clj`, `class-cast-message` in runtime.ss, the class name checks in natives.ss, `encode-path` in main.clj) were written again from HotSpot's observed behavior. `jolt bundle` ships jolt's EPL-2.0 binaries beside this GPL code, a pairing that isn't settled yet ([app-bundles](docs/guide/app-bundles.md#limits)). The Java test programs carry no header, since their recorded output has line numbers in it. The test programs in `test/aaa` are OpenLDK's own, under the same license (`test/aaa/README.md`).

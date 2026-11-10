@@ -7,7 +7,7 @@
 
 ;; jolt maps, vectors, sets and seqs as java.util collections, and back.
 ;; test/java/CollectionsCheck.java makes the same Java-side calls on the JVM.
-;;   bb example collections
+;;   jolt example collections
 (ns examples.collections
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

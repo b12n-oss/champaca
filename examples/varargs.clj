@@ -9,7 +9,7 @@
 ;; into the varargs array; a jolt vector passed for an array parameter
 ;; becomes a Java array of the parameter's element type. The expected values
 ;; are what test/java/VarargsCheck.java prints on the JVM.
-;;   bb example varargs
+;;   jolt example varargs
 (ns examples.varargs
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

@@ -3,7 +3,7 @@ import java.util.*;
 import java.util.function.*;
 
 // The JVM's helpful NullPointerException messages (JEP 358): which action
-// failed and what was null, worked out from the failing bytecode. bb test
+// failed and what was null, worked out from the failing bytecode. jolt test
 // compiles without -g, so this file's locals print as <localN> and
 // <parameterN>; the JDK's classes carry local variable names.
 public class NpeCheck {

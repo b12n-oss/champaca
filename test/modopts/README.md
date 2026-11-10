@@ -3,7 +3,7 @@
 The launcher's module options, case by case: `--add-opens`, `--add-exports`,
 `--add-reads`, `--limit-modules`, `--illegal-native-access` and
 `--add-modules` with them. Each `<case>.args` holds the launcher arguments,
-one a line, and bb test runs them through `champaca.main` from
+one a line, and jolt test runs them through `champaca.main` from
 `target/modopts`, where it compiles this directory's probes. `<case>.expected`
 holds what HotSpot's `java` gives with the same arguments, from the same
 compiled probes: a line `exit <status>`, then stdout, then a line
@@ -22,7 +22,7 @@ The probes:
 - `Ref` names the same kind of classes in its bytecode instead: `ldc`, `new`,
   `getstatic`, `invokestatic`, `invokevirtual` and `invokeinterface` on null,
   `getfield` on null, `instanceof`, `checkcast`, `anewarray` and a descriptor.
-  bb test runs its cases in name order, so `ref-default` leaves its classes
+  jolt test runs its cases in name order, so `ref-default` leaves its classes
   in the cache for the limited runs after it.
 - `Inc` shows the default boot layer and that `jdk.incubator.vector`, outside
   it, has no classes without `--add-modules`.

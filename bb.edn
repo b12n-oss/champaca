@@ -8,12 +8,18 @@
 {:tasks
  {:requires ([babashka.fs :as fs] [babashka.process :as process] [clojure.string :as str] [clojure.edn :as edn] [clojure.java.io :as io])
   :init (do
-          ;; deps.edn :champaca/jolt pins an upstream jolt commit; `bb jolt` builds
+          ;; deps.edn :champaca/jolt pins an upstream jolt commit; `jolt jolt` builds
           ;; it to ~/.cache/champaca/jolt/<sha>/jolt from a jolt checkout
           ;; ($JOLT_SRC, default ~/dev/jolt) through a detached worktree.
           (def jolt-pin (:champaca/jolt (edn/read-string (slurp "deps.edn"))))
           (def jolt-dir (str (System/getenv "HOME") "/.cache/champaca/jolt/" (subs (:git/sha jolt-pin) 0 8)))
           (def jolt-pinned (str jolt-dir "/jolt"))
+          ;; the task runner tasks that start another task use: bb under bb, and
+          ;; under jolt (which reads bb.edn too) the pinned jolt once built, since a
+          ;; machine that only built it (the Linux container) has no jolt on PATH
+          (def runner (cond (System/getProperty "babashka.version") "bb"
+                            (fs/executable? jolt-pinned) jolt-pinned
+                            :else "jolt"))
           ;; $JOLT wins, then the pinned build, then jolt on PATH
           (defn jolt-bin []
             (or (System/getenv "JOLT") (when (fs/executable? jolt-pinned) jolt-pinned) "jolt"))
@@ -43,11 +49,17 @@
             (let [[g a v] (str/split coord (re-pattern ":"))]
               (str (str/replace g "." "/") "/" a "/" v "/" a "-" v ".jar")))
           (defn m2-jar [coord] (str (System/getenv "HOME") "/.m2/repository/" (m2-path coord)))
+          ;; a file's digest in hex through openssl (macOS and Linux both have it):
+          ;; jolt has no java.security.MessageDigest provider of its own, so
+          ;; this keeps the tasks the same under bb and jolt
+          (defn file-digest [algo f]
+            (first (str/split (str/trim (:out (shell {:out :string} "openssl" "dgst" (str "-" algo) "-r" (str f))))
+                              (re-pattern " "))))
           ;; ci/linux: the image's architecture, and building it
           (defn linux-arch [given]
             (let [arch (or given (if (re-find (re-pattern "arm64|aarch64") (str/trim (:out (shell {:out :string} "uname -m")))) "arm64" "amd64"))]
               (when-not (contains? #{"arm64" "amd64"} arch)
-                (println (str "bb linux: the architecture is arm64 or amd64, not " arch))
+                (println (str "jolt linux: the architecture is arm64 or amd64, not " arch))
                 (System/exit 1))
               arch))
           ;; the pinned OpenJDK 25.0.2 per architecture: the one place its checksums live
@@ -64,8 +76,7 @@
                        "curl -fsSL --retry 2 -o" (str f ".part")
                        (str "https://download.java.net/java/GA/jdk25.0.2/b1e0dfa218384cb9959bdcb897162d4e/10/GPL/openjdk-25.0.2_linux-" a "_bin.tar.gz"))
                 (fs/move (str f ".part") f {:replace-existing true}))
-              (let [md (java.security.MessageDigest/getInstance "SHA-256")
-                    got (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f))))]
+              (let [got (file-digest "sha256" f)]
                 (when-not (= got sha)
                   (fs/delete f)
                   (println "REFUSED" f ": SHA-256" got "is not the pinned" sha)
@@ -73,7 +84,7 @@
               (shell "docker build --platform" (str "linux/" arch) "--build-arg" (str "JDK_FILE=" file)
                      "--build-arg" (str "JDK_SHA256=" sha) "-t" (str "champaca-linux:" arch) "ci/linux")))
           ;; the jolt programs in examples/, each with what it shows; each is a
-          ;; namespace of tests that bb test and bb example run
+          ;; namespace of tests that jolt test and jolt example run
           (def examples [["interop" "jolt calling Java"] ["dynamic" "descriptor-free calls"]
                          ["varargs" "varargs and vectors as arrays"]
                          ["jars" "a jar and other JDK modules"]
@@ -121,7 +132,10 @@
                    first)))
           (defn site-task [task & args]
             (if-let [engine (docs-engine-dir)]
-              (let [argv (into ["bb" task (str (fs/canonicalize "."))] (remove nil? args))
+              ;; jolt names its own commands build, run and so on: jolt run <task>
+              ;; reaches the engine's task of that name
+              (let [argv (into (if (= runner "bb") [runner task] [runner "run" task])
+                               (cons (str (fs/canonicalize ".")) (remove nil? args)))
                     ;; HTTPS_PROXY cleared: the engine fetches markdown-clj on first run.
                     res (apply process/shell {:dir (str engine) :continue true
                                               :extra-env {"HTTPS_PROXY" "" "https_proxy" ""}} argv)]
@@ -155,41 +169,9 @@
                  (catch Exception _ false)))
           (defn port-file-port [f]
             (when (fs/exists? f) (parse-long (str/trim (slurp f)))))
-          (defn sha1-hex [f]
-            (let [md (java.security.MessageDigest/getInstance "SHA-1")]
-              (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))
-  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha8>/jolt"
-        :task (let [sha (:git/sha jolt-pin)
-                    src (or (System/getenv "JOLT_SRC") (str (System/getenv "HOME") "/dev/jolt"))
-                    wt (str jolt-dir "/src")]
-                (if (fs/executable? jolt-pinned)
-                  (println "already built:" jolt-pinned)
-                  (do
-                    (when-not (fs/exists? src)
-                      (shell "git clone" (:git/url jolt-pin) src))
-                    (when-not (zero? (:exit (shell {:continue true :err :string} "git -C" src "cat-file" "-e" (str sha "^{commit}"))))
-                      (shell "git -C" src "fetch" (:git/url jolt-pin) sha))
-                    ;; the release tags too: jolt's version is git describe over v*
-                    ;; tags (tools/version.sh), so a commit without its tag builds as
-                    ;; the previous release plus a count, which :jolt/min-version
-                    ;; refuses. Not forced, so a moved rolling tag (vnightly) is
-                    ;; rejected and left alone; release tags never move.
-                    (let [r (shell {:continue true :err :string} "git -C" src "fetch" (:git/url jolt-pin) "refs/tags/v*:refs/tags/v*")]
-                      (when-not (zero? (:exit r))
-                        (println "bb jolt: some tags weren't updated (a moved tag is left as it was):")
-                        (println (str/trim (:err r)))))
-                    (when-not (fs/exists? wt)
-                      (shell "git -C" src "worktree" "add" "--detach" wt sha))
-                    ;; borrow the checkout's submodule objects when it has them
-                    (doseq [m (str/split-lines (:out (shell {:dir wt :out :string} "git config -f .gitmodules --get-regexp path")))
-                            :let [p (second (str/split m (re-pattern " ")))
-                                  ref (str src "/" p)]]
-                      (if (fs/exists? (str ref "/.git"))
-                        (shell {:dir wt} "git submodule update --init --reference" ref p)
-                        (shell {:dir wt} "git submodule update --init" p)))
-                    (shell {:dir wt} "make build")
-                    (fs/copy (str wt "/target/release/jolt") jolt-pinned {:replace-existing true})
-                    (shell jolt-pinned "--version"))))}
+          (defn sha1-hex [f] (file-digest "sha1" f)))
+  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha8>/jolt (tools/build-jolt.sh, which needs no jolt to run)"
+        :task (shell "sh tools/build-jolt.sh")}
   test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected; the same for upstream OpenLDK's test/aaa programs; then the examples/*.clj tests"
         :task (let [_ (println "jolt:" (jolt-bin) (str/trim (:out (shell {:out :string} (jolt-bin) "--version"))))
                     _ (shell "mkdir -p target/classes")
@@ -526,7 +508,7 @@
                     ;; library cache, its key hashing the image's index and the
                     ;; jar named relative to CHAMPACA_BUNDLE. Then, the copy's
                     ;; cache read-only, a class it never saw runs and exits 0
-                    ;; (skipped where chmod doesn't stop writes: root in bb linux)
+                    ;; (skipped where chmod doesn't stop writes: root in jolt linux)
                     bundle-fails
                     (if-not (not= "off" (System/getenv "CHAMPACA_CACHE"))
                       (do (println "SKIP the bundle cache rows (CHAMPACA_CACHE=off)") [])
@@ -673,7 +655,7 @@
                     _ (doseq [v ["v1" "v2" "v3"]]
                         (shell (str "javac -d " lc "/" v "-classes test/libcache/" v "/lc/Base.java")))
                     _ (when-not (apply = (map (fn [v] (fs/size (str lc "/" v "-classes/lc/Base.class"))) ["v1" "v3"]))
-                        (println "bb test: lc/Base.class sizes differ between v1 and v3, so test/libcache doesn't check the CRC")
+                        (println "jolt test: lc/Base.class sizes differ between v1 and v3, so test/libcache doesn't check the CRC")
                         (System/exit 1))
                     _ (shell (str "javac -cp " lc "/v1-classes -d " lc "/sub-classes test/libcache/lc/Sub.java"))
                     _ (doseq [v ["v1" "v2"]]
@@ -685,7 +667,7 @@
                                     (with-open [z (java.util.zip.ZipFile. (str lc "/base-" v ".jar"))]
                                       (.getCrc (.getEntry z "lc/Sub.class")))))
                     _ (when-not (= 1 (count sub-crcs))
-                        (println "bb test: lc/Sub.class differs between base-v1.jar and base-v2.jar, so test/libcache checks nothing")
+                        (println "jolt test: lc/Sub.class differs between base-v1.jar and base-v2.jar, so test/libcache checks nothing")
                         (System/exit 1))
                     cache-on (not= "off" (System/getenv "CHAMPACA_CACHE"))
                     ;; each run: the jar, the expected output, and how many classes
@@ -737,7 +719,7 @@
                                         (remove nil?)
                                         vec)
                     ;; without CHAMPACA_LINES a jar class's frame has no line number (-1,
-                    ;; as a JDK frame's): the first libcache run again, on bb test's own
+                    ;; as a JDK frame's): the first libcache run again, on jolt test's own
                     ;; key, against v1's output with the line number -1
                     ;; the same with the cache off (the methods compile without recording:
                     ;; the same rule), and StackCheck's directory classes with
@@ -891,7 +873,7 @@
                                    (map (fn [p] (str/replace (fs/file-name p) ".expected" "")))
                                    sort)
                     ;; none found is a broken checkout or path, not a pass
-                    _ (when (empty? aaa-mains) (println "bb test: no test/aaa/*.expected found") (System/exit 1))
+                    _ (when (empty? aaa-mains) (println "jolt test: no test/aaa/*.expected found") (System/exit 1))
                     deps (str "{:deps {champaca/champaca {:local/root " (pr-str (str (fs/absolutize "."))) "}}}")
                     ;; a path to jolt is made absolute for the work dirs; a bare name is found on PATH
                     jolt (let [j (jolt-bin)] (if (str/includes? j "/") (str (fs/absolutize j)) j))
@@ -925,7 +907,7 @@
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
-  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, bb test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then bb libs (bb battery [ref]; BATTERY_MODES=cold,libs runs a subset, cold first since the cache starts empty); logs and a hang's artifacts stay under target/battery/, and the cache until the next run of another ref"
+  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, jolt test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then jolt libs (jolt battery [ref]; BATTERY_MODES=cold,libs runs a subset, cold first since the cache starts empty); logs and a hang's artifacts stay under target/battery/, and the cache until the next run of another ref"
            :task (let [ref (or (first *command-line-args*) "HEAD")
                        tip (str/trim (:out (shell {:out :string} "git" "rev-parse" "--short" ref)))
                        dir (str (fs/absolutize "target/battery"))
@@ -934,7 +916,7 @@
                        envs {"cold" {} "warm" {} "cache-off" {"CHAMPACA_CACHE" "off"} "bt" {"CHAMPACA_BT" "1"} "libs" {}}
                        modes (if-let [m (System/getenv "BATTERY_MODES")] (str/split m (re-pattern ",")) ["cold" "warm" "cache-off" "bt" "libs"])
                        _ (when (or (empty? modes) (some (fn [m] (not (contains? envs m))) modes))
-                           (println "bb battery: BATTERY_MODES names modes among" (str/join ", " (keys envs)) "; got" (pr-str modes))
+                           (println "jolt battery: BATTERY_MODES names modes among" (str/join ", " (keys envs)) "; got" (pr-str modes))
                            (System/exit 2))
                        ;; the modes' environment: this process's, less the two variables a mode
                        ;; sets for itself, so an outer CHAMPACA_BT=1 doesn't make every mode bt
@@ -946,7 +928,7 @@
                        ;; is read from
                        _ (doseq [d (fs/list-dir dir)
                                  :let [n (fs/file-name d)]]
-                           ;; a run killed in bb test's test/bundlecache rows leaves
+                           ;; a run killed in jolt test's test/bundlecache rows leaves
                            ;; read-only directories (r-x), which no delete gets through
                            (when (or (str/starts-with? n "wt-") (str/starts-with? n "cache-"))
                              (shell {:continue true :out :string :err :string} "chmod" "-R" "u+w" (str d)))
@@ -971,7 +953,7 @@
                                                 st (with-open [o (io/output-stream log)]
                                                      (:exit (shell {:dir wt :out o :err :out :continue true
                                                                     :env (merge base-env (get envs mode) {"CHAMPACA_CACHE_DIR" cache})}
-                                                                   "bb" (if (= mode "libs") "libs" "test"))))
+                                                                   runner (if (= mode "libs") "libs" "test"))))
                                                 lines (str/split-lines (slurp log))
                                                 fails (filter (fn [l] (or (str/starts-with? l "FAIL") (str/starts-with? l "DIFF"))) lines)
                                                 count-line (last (filter (fn [l] (or (str/ends-with? l " passed") (str/includes? l " matched"))) lines))]
@@ -989,23 +971,23 @@
                            [results hangs])
                          (finally
                            (let [r (shell {:continue true :out :string :err :string} "git" "worktree" "remove" "--force" wt)]
-                             (when-not (zero? (:exit r)) (println "bb battery: couldn't remove the worktree" wt (str/trim (:err r)))))))
+                             (when-not (zero? (:exit r)) (println "jolt battery: couldn't remove the worktree" wt (str/trim (:err r)))))))
                        ok (and (every? true? results) (zero? hangs))]
                    (println (str "== hangs: " hangs))
                    (println (if ok "battery green" "battery RED"))
                    (System/exit (if ok 0 1)))}
-  bundle {:doc "An app bundle that runs with no JDK installed: a jlink runtime without the JVM, champaca built by jolt, the classpath, a launcher and a warmed cache that moves with the directory (bb bundle -o OUT -cp CP -m MAIN [--train ARGS...], or --jolt NS --project DIR; tools/bundle.clj)"
+  bundle {:doc "An app bundle that runs with no JDK installed: a jlink runtime without the JVM, champaca built by jolt, the classpath, a launcher and a warmed cache that moves with the directory (jolt bundle -o OUT -cp CP -m MAIN [--train ARGS...], or --jolt NS --project DIR; tools/bundle.clj)"
           :task (do (load-file "tools/bundle.clj")
                     (apply (resolve 'bundle/-main) (str (fs/cwd)) (jolt-bin) *command-line-args*))}
-  prof {:doc "Where a process's time goes: boot, run <Main> with a sampling profiler on its thread, print the hot Java frames (bb prof <classpath> <Main> [args...]; PROF_US=2000; tools/prof.clj)"
+  prof {:doc "Where a process's time goes: boot, run <Main> with a sampling profiler on its thread, print the hot Java frames (jolt prof <classpath> <Main> [args...]; PROF_US=2000; tools/prof.clj)"
         :task (let [args *command-line-args*]
-                (when (< (count args) 2) (println "usage: bb prof <classpath> <Main> [args...]") (System/exit 2))
+                (when (< (count args) 2) (println "usage: jolt prof <classpath> <Main> [args...]") (System/exit 2))
                 (apply shell (jolt-bin) "-M" "tools/prof.clj" args))}
-  heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (bb heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
+  heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (jolt heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
         :task (let [args *command-line-args*]
-                (when (< (count args) 2) (println "usage: bb heap <classpath> <Main> [types|roots|java] [args...]") (System/exit 2))
+                (when (< (count args) 2) (println "usage: jolt heap <classpath> <Main> [types|roots|java] [args...]") (System/exit 2))
                 (apply shell (jolt-bin) "-M" "tools/heap.clj" args))}
-  libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (bb libs Gua Yml runs some; --allow-skip lets missing jars pass)"
+  libs {:doc "Run the real libraries in test/libs on the JVM and through champaca, compare outputs (jolt libs Gua Yml runs some; --allow-skip lets missing jars pass)"
         :task (let [allow-skip (some (fn [a] (= a "--allow-skip")) *command-line-args*)
                     only (set (remove (fn [a] (= a "--allow-skip")) *command-line-args*))
                     libs (:libs (edn/read-string (slurp "test/libs/libs.edn")))
@@ -1023,7 +1005,7 @@
                                        (remove (fn [[c sha]] (= sha (sha1-hex (m2-jar c)))) jars))]]
                        (cond
                          (seq missing)
-                         (do (println "SKIP" main "(not in ~/.m2:" (str (str/join ", " (map first missing)) "; bb libs:fetch gets them)"))
+                         (do (println "SKIP" main "(not in ~/.m2:" (str (str/join ", " (map first missing)) "; jolt libs:fetch gets them)"))
                              :skip)
                          (seq bad)
                          (do (println "FAIL" main "(SHA-1 is not the pinned one:" (str (str/join ", " (map (fn [[c _]] (m2-jar c)) bad)) ")"))
@@ -1073,10 +1055,10 @@
                   (System/exit 1)))}
   linux:image {:doc "Build ci/linux's image for arm64 or amd64 (default: this machine's), fetching its JDK into ci/linux/cache first"
                :task (linux-image! (linux-arch (first *command-line-args*)))}
-  linux {:doc "Run bb test and bb libs on Linux (arm64 or amd64, default this machine's) in ci/linux's image (CHAMPACA_LINUX_RUN replaces that command, e.g. \"BATTERY_MODES=bt bb battery\"); jars come from ~/.m2, read-only"
+  linux {:doc "Run the tests and the libraries (test, libs) with the pinned jolt on Linux (arm64 or amd64, default this machine's) in ci/linux's image (CHAMPACA_LINUX_RUN replaces that command, with $J the pinned jolt, e.g. \"BATTERY_MODES=bt $J battery\"); jars come from ~/.m2, read-only"
          :task (let [arch (linux-arch (first *command-line-args*))]
                  (linux-image! arch)
-                 (shell "bb libs:fetch")
+                 (shell runner "libs:fetch")
                  (shell "docker run --rm --platform" (str "linux/" arch)
                         "-v" (str (fs/cwd) ":/champaca")
                         ;; the jolt build and champaca's caches persist per architecture,
@@ -1088,9 +1070,11 @@
                                   ":/root")
                         "-v" (str (System/getenv "HOME") "/.m2:/root/.m2:ro")
                         (str "champaca-linux:" arch)
-                        "sh" "-c" (str "bb jolt && "
+                        ;; no task runner in the image: build-jolt.sh builds the pinned
+                        ;; jolt and prints its path, and that jolt runs the tasks ($J)
+                        "sh" "-c" (str "J=$(sh tools/build-jolt.sh) && "
                                        (or (not-empty (System/getenv "CHAMPACA_LINUX_RUN"))
-                                           "bb test && bb libs"))))}
+                                           "\"$J\" test && \"$J\" libs"))))}
   libs:fetch {:doc "Download the test/libs jars missing from ~/.m2 from Maven Central, each kept only when its SHA-1 is the pinned one"
               :task (doseq [{:keys [jars]} (:libs (edn/read-string (slurp "test/libs/libs.edn")))
                             [c sha] jars
@@ -1109,7 +1093,7 @@
                                   (fs/delete-if-exists part)
                                   (System/exit 1))))
                           (finally (fs/delete-if-exists part)))))}
-  bench {:doc "Upstream OpenLDK's startup benchmarks: build and time Spring Boot or Quarkus on HotSpot and through champaca (bb bench spring-boot [build|bench|all]); see bench/README.md"
+  bench {:doc "Upstream OpenLDK's startup benchmarks: build and time Spring Boot or Quarkus on HotSpot and through champaca (jolt bench spring-boot [build|bench|all]); see bench/README.md"
          :task (do (load-file "bench/bench.clj")
                    ((resolve (symbol "bench" "main")) (jolt-bin) *command-line-args*))}
   ;; Report only: findings never fail these. metrics.cli exits non-zero
@@ -1126,28 +1110,28 @@
                             args (if out? args (cons "target/metrics.html" args))]
                         (some-> (fs/parent (first args)) fs/create-dirs)
                         (apply shell (jolt-bin) "-M:metrics" "." "--format" "html" args))}
-  examples {:doc "List the examples/*.clj programs that bb example runs"
+  examples {:doc "List the examples/*.clj programs that jolt example runs"
             :task (doseq [[n what] examples]
                     (println (format "  %-16s %s" n what)))}
-  example {:doc "Run one examples/*.clj file's tests on the jolt bb test picks (bb example interop), building target/lib.jar first when it's missing or stale"
+  example {:doc "Run one examples/*.clj file's tests on the jolt jolt test picks (jolt example interop), building target/lib.jar first when it's missing or stale"
            :task (let [arg (first *command-line-args*)
                        n (when arg (fs/strip-ext (fs/file-name arg)))]
                    (when-not (some (fn [[e _]] (= e n)) examples)
-                     (println (if arg (str "no such example: " arg) "usage: bb example <name>, one of:"))
+                     (println (if arg (str "no such example: " arg) "usage: jolt example <name>, one of:"))
                      (run 'examples)
                      (System/exit 1))
                    (when (lib-jar-stale?) (lib-jar!))
                    (System/exit (:exit (shell {:continue true} (jolt-bin) "-M" "test/run_example.clj" (str "examples/" n ".clj")))))}
-  nrepl {:doc "Start jolt's nREPL server here for an editor (CIDER, Calva); a free port by default, written to .nrepl-port (bb nrepl 7890 or CHAMPACA_NREPL_PORT=7890 asks for one, refused when busy)"
+  nrepl {:doc "Start jolt's nREPL server here for an editor (CIDER, Calva); a free port by default, written to .nrepl-port (jolt nrepl 7890 or CHAMPACA_NREPL_PORT=7890 asks for one, refused when busy)"
          :task (let [given (or (first *command-line-args*) (System/getenv "CHAMPACA_NREPL_PORT"))
                      port (if given (parse-long given) 0)
                      pf ".nrepl-port"
                      running (port-file-port pf)]
                  (when-not (and port (<= 0 port 65535))
-                   (println (str "bb nrepl: the port is a number from 0 (any free one) to 65535, not " given))
+                   (println (str "jolt nrepl: the port is a number from 0 (any free one) to 65535, not " given))
                    (System/exit 1))
                  (when (and running (port-answers? running))
-                   (println (str "bb nrepl: a server already answers on port " running " (.nrepl-port); connect to it, or stop it first"))
+                   (println (str "jolt nrepl: a server already answers on port " running " (.nrepl-port); connect to it, or stop it first"))
                    (System/exit 1))
                  ;; left by a server that was killed
                  (fs/delete-if-exists pf)
@@ -1167,17 +1151,17 @@
               :task (let [requested (first *command-line-args*)
                           port (when requested (parse-long requested))]
                       (when (and requested (not (and port (<= 1 port 65535))))
-                        (println (str "bb site:serve: the port is a number from 1 to 65535, not " requested))
+                        (println (str "jolt site:serve: the port is a number from 1 to 65535, not " requested))
                         (System/exit 1))
                       (if port
                         (if (can-bind? port)
                           (site-task "serve" (str port))
-                          (do (println (str "bb site:serve: port " port " is busy; pick another, or drop the argument to scan from 3000"))
+                          (do (println (str "jolt site:serve: port " port " is busy; pick another, or drop the argument to scan from 3000"))
                               (System/exit 1)))
                         (if-let [p (free-port 3000 100)]
-                          (do (println (str "bb site:serve: using free port " p))
+                          (do (println (str "jolt site:serve: using free port " p))
                               (site-task "serve" (str p)))
-                          (do (println "bb site:serve: no free port in 3000..3100")
+                          (do (println "jolt site:serve: no free port in 3000..3100")
                               (System/exit 1)))))}
   site:clean {:doc "Delete the _site/ build output"
               :task (site-task "clean")}}}

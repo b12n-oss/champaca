@@ -8,7 +8,7 @@
 ;; Real Java classes defined from jolt: a superclass, interfaces, fields and
 ;; methods that are jolt fns, statics too, seen by Java code, reflection and
 ;; Class.forName as any other class of the application loader.
-;;   bb example classes
+;;   jolt example classes
 (ns examples.classes
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]

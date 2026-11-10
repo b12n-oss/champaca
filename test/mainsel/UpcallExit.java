@@ -4,7 +4,7 @@ import java.nio.file.Path;
 import static java.lang.foreign.ValueLayout.*;
 
 // An upcall's target that calls System.exit(3) from inside C: the shutdown hooks run and
-// the status is 3, as HotSpot (bb test builds target/libffitest).
+// the status is 3, as HotSpot (jolt test builds target/libffitest).
 public class UpcallExit {
     static int target(int i) {
         System.out.println("exiting from the upcall");

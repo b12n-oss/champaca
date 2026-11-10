@@ -13,7 +13,7 @@
 #   cp/ (cp.Probe naming com.greet.Greeter, cp.Res asking for its resources)
 #   split/ (com.greet.Extra on the class path, in com.greet's package)
 #   mods3/ (seven modules with META-INF/x, and om requiring them)
-# Used by bb test and record.sh. JAVA_HOME's javac and jar, else PATH's.
+# Used by jolt test and record.sh. JAVA_HOME's javac and jar, else PATH's.
 set -e
 src="$(cd "$(dirname "$0")" && pwd)/src"
 out=$1
