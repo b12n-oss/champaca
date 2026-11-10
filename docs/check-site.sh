@@ -6,7 +6,7 @@
 # Assertions the documentation build must satisfy. Run by the shared site
 # workflow (jlt-commons/ci-builds) against the freshly built _site, with
 # BASE_PATH exported. Locally:
-#   bb site:build && BASE_PATH=/champaca bash docs/check-site.sh
+#   jolt site:build && BASE_PATH=/champaca bash docs/check-site.sh
 
 set -euo pipefail
 out=_site

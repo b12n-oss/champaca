@@ -6,8 +6,8 @@
 ;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
 
 ;; jolt calling into a jar, and into JDK modules other than java.base.
-;; target/lib.jar is built from test/jar by bb test and bb example.
-;;   bb example jars
+;; target/lib.jar is built from test/jar by jolt test and jolt example.
+;;   jolt example jars
 (ns examples.jars
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

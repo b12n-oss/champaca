@@ -11,7 +11,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | `CHAMPACA_PROF=1` | prints how long each phase took, after boot and again when `main` returns |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
-| `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `bb test` and `bb libs` set it |
+| `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `jolt test` and `jolt libs` set it |
 | `CHAMPACA_CACHE=off` | ignores the startup cache ([performance](performance.md)) |
 | `CHAMPACA_CACHE_DIR=<dir>` | puts the startup cache there instead of `~/.cache/champaca` ([performance](performance.md)) |
 | `CHAMPACA_BUNDLE=<dir>` | marks a run as an app bundle's: the cache key hashes the runtime image's index instead of its mtime, and class path entries inside the directory are named relative to it, so a moved bundle keeps its cache; the bundle's launcher sets it ([app-bundles](app-bundles.md)) |
@@ -130,10 +130,10 @@ On a cache miss the phases are parsing, registering classes, code generation, Ch
 
 ## Sampling a run
 
-`CHAMPACA_PROF` says how long champaca's own phases took. For where a program's time goes, `bb prof` runs a main class with a sampling profiler on its thread and prints the hot Java frames:
+`CHAMPACA_PROF` says how long champaca's own phases took. For where a program's time goes, `jolt prof` runs a main class with a sampling profiler on its thread and prints the hot Java frames:
 
 ```console
-$ PROF_ROWS=4 bb prof target/classes Streams
+$ PROF_ROWS=4 jolt prof target/classes Streams
 ...
 main returned after 109 ms
 31 samples (2 with no Java frame)

@@ -254,7 +254,7 @@ public class SocketCheck {
             ssc.close();
             row("close wakes channel accept", blocked.get(10, TimeUnit.SECONDS));
         }
-        // a FileChannel read blocked on a FIFO is woken the same way. The FIFO is the one bb test
+        // a FileChannel read blocked on a FIFO is woken the same way. The FIFO is the one jolt test
         // makes (target/blocking-io.fifo), assumed empty, as the programs before this one leave it;
         // a run without it says so instead of pretending
         java.nio.file.Path fifo = java.nio.file.Path.of("target/blocking-io.fifo");
@@ -266,7 +266,7 @@ public class SocketCheck {
             fc.close();
             row("close wakes file channel read", blocked.get(10, TimeUnit.SECONDS) + " " + fc.isOpen());
         } else {
-            row("close wakes file channel read", "skipped: no target/blocking-io.fifo (run under bb test)");
+            row("close wakes file channel read", "skipped: no target/blocking-io.fifo (run under jolt test)");
         }
         try (java.nio.channels.ServerSocketChannel ssc = java.nio.channels.ServerSocketChannel.open()) {
             ssc.bind(new InetSocketAddress(LOOP, 0));

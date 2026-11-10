@@ -1,4 +1,4 @@
-;; jolt-metrics config for `bb metrics` (report only, never a gate).
+;; jolt-metrics config for `jolt metrics` (report only, never a gate).
 ;; test and examples (each examples/*.clj is a clojure.test namespace) are
 ;; measured but kept out of the refactoring queue. Left out: build output
 ;; (target, the benchmark apps' target dirs, where CHAMPACA_TRACE writes

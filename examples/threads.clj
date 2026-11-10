@@ -7,7 +7,7 @@
 
 ;; Java threads from jolt. Each call into Java holds the runtime's lock only
 ;; while it runs, so a Java thread keeps going while jolt does other work.
-;;   bb example threads
+;;   jolt example threads
 (ns examples.threads
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

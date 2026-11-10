@@ -5,7 +5,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 // An upcall on a thread C started (ffi_apply_in_thread) calls System.exit(4):
 // the process ends there with status 4 and the shutdown hooks run, as
-// HotSpot (bb test builds target/libffitest).
+// HotSpot (jolt test builds target/libffitest).
 public class UpcallThreadExit {
     static int target(int i) {
         System.out.println("exiting from " + Thread.currentThread().getName());

@@ -1,6 +1,6 @@
 import java.util.*;
 
-// Run as `-jar target/app.jar` by bb test: Main-Class names this class, and
+// Run as `-jar target/app.jar` by jolt test: Main-Class names this class, and
 // the manifest's Class-Path names lib.jar beside it, whose classes, services
 // and code source come through it as on the JVM. java.class.path is the jar
 // alone, as java -jar has it.

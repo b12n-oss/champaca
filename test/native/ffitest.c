@@ -5,7 +5,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 // See COPYING and COPYING.CLASSPATH-EXCEPTION.
 
-// ForeignCheck's native library: bb test builds it as target/libffitest
+// ForeignCheck's native library: jolt test builds it as target/libffitest
 // (cc -shared). Structs of each kind the ABIs pass differently by value:
 // in integer registers, as floats or doubles (HFAs), through memory when
 // larger than 16 bytes, padded, nested, unions, and on the stack after the

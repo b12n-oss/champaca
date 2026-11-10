@@ -9,7 +9,7 @@
 ;; java.lang.reflect.Proxy, and what happens when a jolt fn that Java called
 ;; throws: Java's catch and finally blocks see it as a RuntimeException, and
 ;; it comes back to jolt as itself.
-;;   bb example proxy
+;;   jolt example proxy
 (ns examples.proxy
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

@@ -5,7 +5,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 ;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
 
-;; A sampling profiler over Java frames, for tools/prof.clj (bb prof).
+;; A sampling profiler over Java frames, for tools/prof.clj (jolt prof).
 ;;
 ;; A thread of its own sends SIGPROF to the thread running the program every
 ;; interval; the handler walks the continuation as fillInStackTrace does

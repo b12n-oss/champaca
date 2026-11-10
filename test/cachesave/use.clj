@@ -5,7 +5,7 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 ;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
 
-;; bb test's failed-save row, second process (fail.clj says why)
+;; jolt test's failed-save row, second process (fail.clj says why)
 (require '[champaca.api :as ldk])
 (ldk/init! {})
 (println "adler" (ldk/invoke (ldk/construct "java.util.zip.Adler32") "getValue"))

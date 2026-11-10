@@ -11,7 +11,7 @@
 ;; frame on the stack (inclusive), and the innermost Scheme code names, which
 ;; show what a native or the runtime was doing under a Java frame:
 ;;
-;;   bb prof <classpath> <Main> [args...]
+;;   jolt prof <classpath> <Main> [args...]
 ;;
 ;; PROF_US sets the interval in microseconds (default 2000), PROF_ROWS the
 ;; rows per table (30), PROF_DEPTH the code names per chain (4). The main
@@ -29,10 +29,10 @@
 (let [[cp mc & args] *command-line-args*
       env #(or (System/getenv %1) %2)]
   (when-not (and cp mc)
-    (binding [*out* *err*] (println "usage: bb prof <classpath> <Main> [args...]"))
+    (binding [*out* *err*] (println "usage: jolt prof <classpath> <Main> [args...]"))
     (System/exit 2))
   (ldk/init! {:classpath (vec (.split ^String cp ":"))})
-  (scm/eval-string "(load \"tools/prof.ss\")")   ; bb prof runs from the repo root
+  (scm/eval-string "(load \"tools/prof.ss\")")   ; jolt prof runs from the repo root
   (scm/eval-string (str "(prof-start! " (env "PROF_US" "2000") " " (env "PROF_DEPTH" "4") ")"))
   (let [t0 (System/nanoTime)
         ;; the report covers whatever main did, a throw included

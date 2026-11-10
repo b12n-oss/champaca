@@ -1,7 +1,7 @@
 import java.io.*;
 
 // Standard input read a byte at a time, then in small chunks, then through a
-// BufferedReader: nothing is lost between reads. bb test feeds StdinCheck.stdin.
+// BufferedReader: nothing is lost between reads. jolt test feeds StdinCheck.stdin.
 public class StdinCheck {
     public static void main(String[] args) throws Exception {
         InputStream in = new FileInputStream(FileDescriptor.in);

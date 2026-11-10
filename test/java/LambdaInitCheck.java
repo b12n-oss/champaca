@@ -6,7 +6,7 @@ import java.util.function.*;
 // class ready. Each class here prints from its static initializer, so the
 // order of the lines shows when that ran. The first line runs JDK code
 // with ProxySelector::getDefault in it before anything loads ProxySelector:
-// from the startup cache (a second bb test run) that lambda once called a
+// from the startup cache (a second jolt test run) that lambda once called a
 // method whose class wasn't registered yet.
 public class LambdaInitCheck {
     static class Lazy {

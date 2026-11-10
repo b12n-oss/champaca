@@ -9,7 +9,7 @@
 ;; bound to a jolt fn, called by C from the calling thread and from a thread
 ;; C starts, while a Java thread runs beside it. The fn calls Java itself, so
 ;; the global lock is entered and left inside the upcall.
-;;   bb example upcalls
+;;   jolt example upcalls
 (ns examples.upcalls
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]
@@ -20,7 +20,7 @@
 (def ^:private lib
   (str "target/" (ldk/invoke-static "java.lang.System" "mapLibraryName" "ffitest")))
 
-;; bb test builds the library; bb example upcalls may run before it has
+;; jolt test builds the library; jolt example upcalls may run before it has
 (defn- ensure-lib! []
   (when-not (ldk/invoke (ldk/construct "java.io.File" lib) "exists")
     (let [pb (ldk/construct "java.lang.ProcessBuilder"

@@ -5,7 +5,7 @@ import java.util.Collections;
 import java.util.Properties;
 import java.util.ServiceLoader;
 
-// Classes from a jar on the classpath (target/lib.jar, built by bb test from
+// Classes from a jar on the classpath (target/lib.jar, built by jolt test from
 // test/jar) and from JDK modules other than java.base.
 public class JarCheck {
   public static void main(String[] args) throws Exception {

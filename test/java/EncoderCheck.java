@@ -1,6 +1,6 @@
 import java.nio.charset.Charset;
 
-// Each standard charset's encoder and decoder, ASCII output only. bb test also
+// Each standard charset's encoder and decoder, ASCII output only. jolt test also
 // runs it after a warm start whose boot loaded the ISO-8859-1 encoder for
 // -Dstdout.encoding=ISO-8859-1, which the cached boot never did: that boot's
 // classes must reach the startup cache with their code.

@@ -9,7 +9,7 @@
 ;; jolt when init! is given :preview true, as java --enable-preview runs
 ;; them. Without it they're refused with HotSpot's
 ;; UnsupportedClassVersionError, as test/java/VersionCheck.java checks.
-;;   bb example preview
+;;   jolt example preview
 (ns examples.preview
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

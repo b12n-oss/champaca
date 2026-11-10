@@ -1,6 +1,6 @@
-;; Real libraries, each run by `bb libs` on the JVM and through champaca with
+;; Real libraries, each run by `jolt libs` on the JVM and through champaca with
 ;; the outputs compared. A probe runs only when its jars are in ~/.m2;
-;; `bb libs:fetch` downloads the missing ones from Maven Central and keeps a
+;; `jolt libs:fetch` downloads the missing ones from Maven Central and keeps a
 ;; jar only when its SHA-1 matches the one pinned here.
 {:libs
  [{:main "Lang" :jars [["org.apache.commons:commons-lang3:3.12.0" "c6842c86792ff03b9f1d1fe2aab8dc23aa6c6f0e"]]}

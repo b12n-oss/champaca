@@ -4,7 +4,7 @@ import java.util.*;
 // Natives a library reaches for early: the environment, process ids, the
 // JDK's own native libraries, and a native that isn't there, which throws
 // UnsatisfiedLinkError as on the JVM. Every row prints the same on macOS
-// and Linux. bb test sets CHAMPACA_TEST_VAR=a=b=c, and so did the JVM run
+// and Linux. jolt test sets CHAMPACA_TEST_VAR=a=b=c, and so did the JVM run
 // that recorded the expected output.
 public class NativesCheck {
     static native int noLibrary();
@@ -54,7 +54,7 @@ public class NativesCheck {
         System.out.println("onExit polls: " + !exit.isDone());
         Thread.setDefaultUncaughtExceptionHandler(null);
         // Console.istty (stdin and stdout both terminals) decides what
-        // System.console() gives; bb test pipes both
+        // System.console() gives; jolt test pipes both
         java.io.Console con = System.console();
         System.out.println("console: " + (con == null ? "none" : "terminal " + con.isTerminal()));
         // a class whose initializer failed: the second use names the first failure

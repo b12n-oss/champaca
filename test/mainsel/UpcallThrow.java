@@ -5,7 +5,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 // An upcall's target that throws: the JDK's upcall wrapper prints the trace and its
 // line, then System.exit(1), as HotSpot (the stub's hidden class leaves no
-// frame) (bb test builds target/libffitest).
+// frame) (jolt test builds target/libffitest).
 public class UpcallThrow {
     static int target(int i) {
         throw new IllegalStateException("boom " + i);

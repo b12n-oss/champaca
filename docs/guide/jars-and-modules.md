@@ -9,7 +9,7 @@
 (ldk/invoke-static "champaca.lib.Shelf" "sum" [1 2 3 4])   ;=> 10
 ```
 
-(`target/lib.jar` is the small test library `bb test` builds from `test/jar`. `examples/jars.clj` uses it.)
+(`target/lib.jar` is the small test library `jolt test` builds from `test/jar`. `examples/jars.clj` uses it.)
 
 A directory holds `.class` files in package folders, the way `javac -d` writes them. A jar is read in place, nothing gets unpacked. Classes load lazily: a class is read, parsed and registered the first time something names it, and each method compiles the first time it's called.
 
@@ -34,7 +34,7 @@ Eight libraries have been run this way and checked against the JVM, with identic
 | SLF4J 2.0.16 with `slf4j-simple` | logging through the provider `ServiceLoader` finds in `slf4j-simple`'s jar |
 | SnakeYAML 2.3 | loading and dumping maps, beans with generic `List` and `Map` properties, public fields and enums, anchors and merge keys, multi-document streams, block style, timestamps, error messages with their line and column marks |
 
-`bb libs` reruns all eight, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `bb libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `bb libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `bb test`, which needs no network.
+`jolt libs` reruns all eight, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `jolt libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `jolt libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `jolt test`, which needs no network.
 
 To call one of them from jolt, with the jars in `~/.m2`:
 

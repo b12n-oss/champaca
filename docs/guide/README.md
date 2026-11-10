@@ -25,6 +25,6 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 ## Working on champaca
 
 - [contributing](contributing.md): how a change gets in, from its test against the JVM to the pull request, and the licensing rules for new code.
-- [development](development.md): every `bb` task and `CHAMPACA_*` switch, the checks to run before a merge, and the metrics report.
+- [development](development.md): every task and `CHAMPACA_*` switch, the checks to run before a merge, and the metrics report.
 
-The top-level [README](../../README.md) is the short version. The files in `examples/` are tests that `bb test` runs, each asserting what its calls return, so they make a good second reference.
+The top-level [README](../../README.md) is the short version. The files in `examples/` are tests that `jolt test` runs, each asserting what its calls return, so they make a good second reference.

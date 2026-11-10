@@ -1,6 +1,6 @@
 import java.util.*;
 
-// bb test's bundle cache rows: run from a bundle-shaped directory, then from a
+// jolt test's bundle cache rows: run from a bundle-shaped directory, then from a
 // copy of it, which must compile nothing (test/bundlecache).
 public class BundleMain {
     public static void main(String[] args) {

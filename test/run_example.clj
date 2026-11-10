@@ -7,7 +7,7 @@
 
 ;; Runs the tests of one examples/*.clj file, then saves the startup cache:
 ;;   jolt -M test/run_example.clj examples/interop.clj
-;; bb test and bb example call it. The example files only define tests, so
+;; jolt test and jolt example call it. The example files only define tests, so
 ;; loading one into an nREPL session (C-c C-k in CIDER) runs nothing and
 ;; never exits the server; (clojure.test/run-tests) in its namespace does.
 ;; Exits 0 when at least one test ran and none failed. Tests can tell they run

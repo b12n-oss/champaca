@@ -7,7 +7,7 @@ import java.util.Arrays;
 // a copy of the loop reads each array local's vector and length taken once,
 // entered only when every such local holds an array. Each row has to print
 // what HotSpot prints, exceptions, their messages and their lines included.
-// Needs ArrayLoopShapes, which bb test writes with test/gen/ArrayLoopGen.java.
+// Needs ArrayLoopShapes, which jolt test writes with test/gen/ArrayLoopGen.java.
 public class ArrayLoopCheck {
     static int effects;
 

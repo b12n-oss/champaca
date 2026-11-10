@@ -7,7 +7,7 @@
 
 ;; jolt reading and writing files through java.nio.file, and hashing with
 ;; MessageDigest, whose providers load through the same file system code.
-;;   bb example files
+;;   jolt example files
 (ns examples.files
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

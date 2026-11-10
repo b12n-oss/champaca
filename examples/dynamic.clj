@@ -9,7 +9,7 @@
 ;; the argument values, the way javac chooses at a call site. The expected
 ;; values are what test/java/DynamicCheck.java, which makes the same calls,
 ;; prints on the JVM.
-;;   bb example dynamic
+;;   jolt example dynamic
 (ns examples.dynamic
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

@@ -4,7 +4,7 @@ import java.lang.reflect.*;
 import java.util.*;
 
 // Record components, parameter names, checked exceptions and type
-// annotations, as reflection reports them. bb test compiles with -parameters,
+// annotations, as reflection reports them. jolt test compiles with -parameters,
 // so this file's methods have real names and the JDK's are synthesized.
 @Retention(RetentionPolicy.RUNTIME) @Target({ElementType.RECORD_COMPONENT, ElementType.FIELD, ElementType.METHOD, ElementType.PARAMETER})
 @interface Tag { String value(); }

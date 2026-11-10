@@ -5,15 +5,15 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
 ;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
 
-;; bb bundle: an app bundle that runs with no JDK installed (ROADMAP 41).
+;; jolt bundle: an app bundle that runs with no JDK installed (ROADMAP 41).
 ;;
-;;   bb bundle -o OUT -cp CLASSPATH -m MAIN [options]     a Java program
-;;   bb bundle -o OUT --jolt NS --project DIR [-cp CP]    a jolt program that
+;;   jolt bundle -o OUT -cp CLASSPATH -m MAIN [options]     a Java program
+;;   jolt bundle -o OUT --jolt NS --project DIR [-cp CP]    a jolt program that
 ;;                                                        calls Java through
 ;;                                                        champaca.api, whose
 ;;                                                        init! takes CP from
 ;;                                                        CHAMPACA_CLASSPATH
-;; Paths are the checkout's (bb runs tasks there) or absolute.
+;; Paths are the checkout's (jolt runs tasks there) or absolute.
 ;; options:
 ;;   --name NAME            the launcher's name (default: the main class's or
 ;;                          namespace's last part, lower-cased)
@@ -154,7 +154,7 @@
 
 (defn- jolt-build! [jolt project ns out-bin signable]
   (when-not (or (fs/executable? jolt) (fs/which jolt))
-    (die "no jolt at" jolt "(bb jolt builds the pinned one; $JOLT names another)"))
+    (die "no jolt at" jolt "(jolt jolt builds the pinned one; $JOLT names another)"))
   (fs/create-dirs (fs/parent out-bin))
   (let [{:keys [exit]} (apply p/shell {:dir (str project) :continue true} jolt "build" "-m" ns "-o" (str out-bin)
                               (when signable ["--signable"]))]
@@ -172,7 +172,7 @@
 
 (defn- launcher [name exec-line]
   (str "#!/bin/sh\n"
-       "# " name ": a champaca app bundle (bb bundle). It needs no JDK: runtime/ holds\n"
+       "# " name ": a champaca app bundle (jolt bundle). It needs no JDK: runtime/ holds\n"
        "# the JDK's class files, and cache/ the compiled code, which moves with the\n"
        "# directory.\n"
        "p=$0\n"
@@ -200,7 +200,7 @@
     (die "--jolt NS's binary would be named champaca, which lib/ keeps for champaca.main; give --name"))
   (when (fs/exists? out) (die out "exists; give a new directory"))
   (when-not (or (fs/executable? jolt) (fs/which jolt))
-    (die "no jolt at" jolt "(bb jolt builds the pinned one; $JOLT names another)")))
+    (die "no jolt at" jolt "(jolt jolt builds the pinned one; $JOLT names another)")))
 
 (defn- check-out-outside!
   "Dies when -o is inside a class path directory, which would copy itself;

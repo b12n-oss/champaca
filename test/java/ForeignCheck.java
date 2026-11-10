@@ -5,7 +5,7 @@ import java.util.Arrays;
 import static java.lang.foreign.ValueLayout.*;
 
 // java.lang.foreign downcalls against HotSpot: libc and libm through the
-// default lookup, then target/libffitest (test/native/ffitest.c, which bb
+// default lookup, then target/libffitest (test/native/ffitest.c, which jolt
 // test builds) through SymbolLookup.libraryLookup and System.loadLibrary,
 // with structs by value of each kind, variadic calls, errno capture,
 // critical calls on heap arrays, and the linker's errors. A row named

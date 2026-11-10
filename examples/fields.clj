@@ -6,8 +6,8 @@
 ;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
 
 ;; jolt reading and writing Java fields, and ->clj's :key-fn.
-;; target/lib.jar is built from test/jar by bb test and bb example.
-;;   bb example fields
+;; target/lib.jar is built from test/jar by jolt test and jolt example.
+;;   jolt example fields
 (ns examples.fields
   (:require [clojure.test :refer [deftest is]]
             [clojure.string :as str]

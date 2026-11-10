@@ -1,8 +1,8 @@
 ;; Configuration for the documentation site, read by jlt-commons/docs-engine
 ;; (https://github.com/jlt-commons/docs-engine). See its README for every key.
 ;;
-;; Build and preview it locally with `bb site:serve`.
-{;; Every URL the engine emits carries this prefix, and `bb site:serve` mounts
+;; Build and preview it locally with `jolt site:serve`.
+{;; Every URL the engine emits carries this prefix, and `jolt site:serve` mounts
  ;; the build under it, so the local URL matches.
  :base-path   "/champaca"
 

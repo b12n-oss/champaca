@@ -8,8 +8,8 @@
 ;; The call-site cache: a call remembers which overload it chose for the kinds
 ;; of arguments it saw. Each test reuses a site with arguments that need a
 ;; different choice, so a cache keyed too coarsely answers something else.
-;;   bb example callsite
-;;   CHAMPACA_CALL_CACHE=off bb example callsite   (the same, with no cache)
+;;   jolt example callsite
+;;   CHAMPACA_CALL_CACHE=off jolt example callsite   (the same, with no cache)
 (ns examples.callsite
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]

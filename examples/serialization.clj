@@ -10,8 +10,8 @@
 ;; back through ObjectOutputStream and ObjectInputStream. ObjectInputStream
 ;; resolves class names through the application class loader when jolt is
 ;; the caller, as the JVM would for a Clojure caller.
-;; target/lib.jar is built from test/jar by bb test and bb example.
-;;   bb example serialization
+;; target/lib.jar is built from test/jar by jolt test and jolt example.
+;;   jolt example serialization
 (ns examples.serialization
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]))

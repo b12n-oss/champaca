@@ -8,7 +8,7 @@
 ;; Where a champaca process's memory goes. Boots, runs a main class, then
 ;; measures the live heap after a full collection:
 ;;
-;;   bb heap <classpath> <Main> [types|roots|java] [args...]
+;;   jolt heap <classpath> <Main> [types|roots|java] [args...]
 ;;
 ;; types  Chez's (object-counts) by type, bytes and count, top 40, with the
 ;;        heap's allocated and committed sizes and the collector's settings.
@@ -96,7 +96,7 @@
 (let [[cp mc mode & args] *command-line-args*
       mode (or mode "types")]
   (when-not (and cp mc (#{"types" "roots" "java"} mode))
-    (binding [*out* *err*] (println "usage: bb heap <classpath> <Main> [types|roots|java] [args...]"))
+    (binding [*out* *err*] (println "usage: jolt heap <classpath> <Main> [types|roots|java] [args...]"))
     (System/exit 2))
   (when (= mode "types") (scm/eval-string "(enable-object-counts #t)"))
   (ldk/init! {:classpath (vec (.split ^String cp ":"))})

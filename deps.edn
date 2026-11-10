@@ -14,7 +14,7 @@
  :champaca/jolt {:git/url "https://github.com/burinc/jolt.git"
                  :git/sha "f8af36d3a32725b5959c0735d9efabb8d5cb02a9"}
  :aliases
- {;; Code metrics report (bb metrics): jolt-metrics' CLI. Report only.
+ {;; Code metrics report (jolt metrics): jolt-metrics' CLI. Report only.
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
                          {:git/url "https://github.com/jlt-commons/jolt-metrics"
                           :git/tag "v0.2.2" :git/sha "8568d4c"}}

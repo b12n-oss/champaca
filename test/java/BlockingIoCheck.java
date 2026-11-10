@@ -5,7 +5,7 @@ import java.nio.file.*;
 // keep running meanwhile, as on the JVM: the reader's open waits for the
 // writer, which first sleeps; the writer's writes wait on the full pipe while
 // the first reader sleeps; and every reader waits on the empty pipe while the
-// writer sleeps halfway. bb test makes the FIFO.
+// writer sleeps halfway. jolt test makes the FIFO.
 public class BlockingIoCheck {
     static final String FIFO = "target/blocking-io.fifo";
     static final String COPY = "target/blocking-io.copy";

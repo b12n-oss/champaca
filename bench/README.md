@@ -8,9 +8,9 @@ license as champaca). Their sources here are upstream's, minus the
 `Snapshot` main classes, which only OpenLDK's saved images use.
 
 ```bash
-bb bench spring-boot          # build, then time (bb bench spring-boot build|bench)
-bb bench quarkus
-RUNS=20 COLD_RUNS=5 bb bench spring-boot bench
+jolt bench spring-boot          # build, then time (jolt bench spring-boot build|bench)
+jolt bench quarkus
+RUNS=20 COLD_RUNS=5 jolt bench spring-boot bench
 ```
 
 The task needs `JAVA_HOME` set to a JDK 25 and `mvn` on `PATH`, and Maven

@@ -319,7 +319,7 @@ There is one other kind, `:lookup` under `:champaca/error`, for a call nothing f
 
 ## Checked against Java
 
-`examples/dynamic.clj` and `examples/varargs.clj` each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM: 26 and 14 of them. `dynamic.clj` also checks surrogate pairs, a missing native and the out-of-range integers a `byte` parameter refuses, which its twin doesn't. The examples are tests, and the values they assert are the ones the twins print on the JVM. `bb test` runs them and also runs both Java programs on champaca.
+`examples/dynamic.clj` and `examples/varargs.clj` each have a Java twin, `test/java/DynamicCheck.java` and `test/java/VarargsCheck.java`, which makes the same calls on the JVM: 26 and 14 of them. `dynamic.clj` also checks surrogate pairs, a missing native and the out-of-range integers a `byte` parameter refuses, which its twin doesn't. The examples are tests, and the values they assert are the ones the twins print on the JVM. `jolt test` runs them and also runs both Java programs on champaca.
 
 ## With descriptors
 

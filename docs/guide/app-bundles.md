@@ -1,23 +1,23 @@
 # App bundles
 
-Champaca never starts a JVM. It reads the JDK's class files and a few data files from `$JAVA_HOME`, and jolt runs everything else as native code. So an app can ship with a slice of the JDK's files beside it, and the person running it doesn't need a JDK at all. `bb bundle` builds that slice, a native binary of champaca, and a warmed startup cache into one directory you can copy anywhere.
+Champaca never starts a JVM. It reads the JDK's class files and a few data files from `$JAVA_HOME`, and jolt runs everything else as native code. So an app can ship with a slice of the JDK's files beside it, and the person running it doesn't need a JDK at all. `jolt bundle` builds that slice, a native binary of champaca, and a warmed startup cache into one directory you can copy anywhere.
 
 ## Building one
 
 A Java program, given its class path and main class:
 
 ```sh
-bb bundle -o out/jack -cp target/classes:lib/jackson-databind.jar:lib/jackson-core.jar:lib/jackson-annotations.jar \
+jolt bundle -o out/jack -cp target/classes:lib/jackson-databind.jar:lib/jackson-core.jar:lib/jackson-annotations.jar \
           -m Jack --train
 ```
 
 A jolt program that calls Java through `champaca.api`, given its namespace and its project:
 
 ```sh
-bb bundle -o out/demo --jolt demo.core --project ../demo -cp lib/jackson-databind.jar:... --name demo --train x y
+jolt bundle -o out/demo --jolt demo.core --project ../demo -cp lib/jackson-databind.jar:... --name demo --train x y
 ```
 
-Relative paths are the champaca checkout's, since bb runs its tasks there. Building needs `JAVA_HOME` set to a JDK 25 (for `jdeps` and `jlink`) and jolt (the pinned build, `$JOLT`, or `jolt` on your `PATH`).
+Relative paths are the champaca checkout's, since jolt runs its tasks there. Building needs `JAVA_HOME` set to a JDK 25 (for `jdeps` and `jlink`) and jolt (the pinned build, `$JOLT`, or `jolt` on your `PATH`).
 
 What lands in the directory:
 
@@ -62,7 +62,7 @@ Without a user cache (`off`, or no writable home), champaca reads the bundle's c
 
 ## Signing
 
-A `jolt build` binary is unsigned, and macOS refuses to start an unsigned binary that was downloaded (the file carries a quarantine attribute). `bb bundle --signable` builds the binaries with `jolt build --signable`, which needs a C compiler, so they can be signed afterwards with `codesign` and notarized before you hand the bundle to anyone. An ad-hoc signature (`codesign -s -`) on such a binary passes `codesign --verify --strict`, and the bundle runs as before; notarizing needs an Apple Developer ID, which the build can't supply. For a bundle you copied yourself, `xattr -d com.apple.quarantine <file>` lifts the mark. Linux has no such check.
+A `jolt build` binary is unsigned, and macOS refuses to start an unsigned binary that was downloaded (the file carries a quarantine attribute). `jolt bundle --signable` builds the binaries with `jolt build --signable`, which needs a C compiler, so they can be signed afterwards with `codesign` and notarized before you hand the bundle to anyone. An ad-hoc signature (`codesign -s -`) on such a binary passes `codesign --verify --strict`, and the bundle runs as before; notarizing needs an Apple Developer ID, which the build can't supply. For a bundle you copied yourself, `xattr -d com.apple.quarantine <file>` lifts the mark. Linux has no such check.
 
 ## Limits
 
