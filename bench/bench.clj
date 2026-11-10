@@ -19,6 +19,8 @@
 ;; Needs mvn on PATH (Maven Central reached with the proxy unset).
 
 (ns bench
+  ;; run! here runs one benchmark command, not clojure.core's
+  (:refer-clojure :exclude [run!])
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]))
