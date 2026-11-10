@@ -569,7 +569,9 @@
               ;; over 255 dimensions) is not found by that slashed form
               [(memv #\/ (string->list s)) (jthrow "java/lang/ClassNotFoundException" s)]
               [(not (valid-class-name? n)) (jthrow "java/lang/ClassNotFoundException" n)]
-              [else (overlong-class-name name)])]
+              ;; one Scheme char is at most 6 bytes of modified UTF-8 (a code
+              ;; point beyond the BMP), so a shorter name can't be too long
+              [(fx> (string-length s) 10922) (overlong-class-name name)])]
          ;; an array with a class element exists once the element resolves
          ;; through the loader (its pseudo-class would be made for any name,
          ;; and mirrored, it loads its element)
