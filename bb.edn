@@ -43,6 +43,12 @@
             (let [[g a v] (str/split coord (re-pattern ":"))]
               (str (str/replace g "." "/") "/" a "/" v "/" a "-" v ".jar")))
           (defn m2-jar [coord] (str (System/getenv "HOME") "/.m2/repository/" (m2-path coord)))
+          ;; a file's digest in hex through openssl (macOS and Linux both have it):
+          ;; jolt has no java.security.MessageDigest provider of its own, so
+          ;; this keeps the tasks the same under bb and jolt
+          (defn file-digest [algo f]
+            (first (str/split (str/trim (:out (shell {:out :string} "openssl" "dgst" (str "-" algo) "-r" (str f))))
+                              (re-pattern " "))))
           ;; ci/linux: the image's architecture, and building it
           (defn linux-arch [given]
             (let [arch (or given (if (re-find (re-pattern "arm64|aarch64") (str/trim (:out (shell {:out :string} "uname -m")))) "arm64" "amd64"))]
@@ -64,8 +70,7 @@
                        "curl -fsSL --retry 2 -o" (str f ".part")
                        (str "https://download.java.net/java/GA/jdk25.0.2/b1e0dfa218384cb9959bdcb897162d4e/10/GPL/openjdk-25.0.2_linux-" a "_bin.tar.gz"))
                 (fs/move (str f ".part") f {:replace-existing true}))
-              (let [md (java.security.MessageDigest/getInstance "SHA-256")
-                    got (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f))))]
+              (let [got (file-digest "sha256" f)]
                 (when-not (= got sha)
                   (fs/delete f)
                   (println "REFUSED" f ": SHA-256" got "is not the pinned" sha)
@@ -155,41 +160,9 @@
                  (catch Exception _ false)))
           (defn port-file-port [f]
             (when (fs/exists? f) (parse-long (str/trim (slurp f)))))
-          (defn sha1-hex [f]
-            (let [md (java.security.MessageDigest/getInstance "SHA-1")]
-              (apply str (map (fn [b] (format "%02x" (bit-and b 0xff))) (.digest md (fs/read-all-bytes f)))))))
-  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha8>/jolt"
-        :task (let [sha (:git/sha jolt-pin)
-                    src (or (System/getenv "JOLT_SRC") (str (System/getenv "HOME") "/dev/jolt"))
-                    wt (str jolt-dir "/src")]
-                (if (fs/executable? jolt-pinned)
-                  (println "already built:" jolt-pinned)
-                  (do
-                    (when-not (fs/exists? src)
-                      (shell "git clone" (:git/url jolt-pin) src))
-                    (when-not (zero? (:exit (shell {:continue true :err :string} "git -C" src "cat-file" "-e" (str sha "^{commit}"))))
-                      (shell "git -C" src "fetch" (:git/url jolt-pin) sha))
-                    ;; the release tags too: jolt's version is git describe over v*
-                    ;; tags (tools/version.sh), so a commit without its tag builds as
-                    ;; the previous release plus a count, which :jolt/min-version
-                    ;; refuses. Not forced, so a moved rolling tag (vnightly) is
-                    ;; rejected and left alone; release tags never move.
-                    (let [r (shell {:continue true :err :string} "git -C" src "fetch" (:git/url jolt-pin) "refs/tags/v*:refs/tags/v*")]
-                      (when-not (zero? (:exit r))
-                        (println "bb jolt: some tags weren't updated (a moved tag is left as it was):")
-                        (println (str/trim (:err r)))))
-                    (when-not (fs/exists? wt)
-                      (shell "git -C" src "worktree" "add" "--detach" wt sha))
-                    ;; borrow the checkout's submodule objects when it has them
-                    (doseq [m (str/split-lines (:out (shell {:dir wt :out :string} "git config -f .gitmodules --get-regexp path")))
-                            :let [p (second (str/split m (re-pattern " ")))
-                                  ref (str src "/" p)]]
-                      (if (fs/exists? (str ref "/.git"))
-                        (shell {:dir wt} "git submodule update --init --reference" ref p)
-                        (shell {:dir wt} "git submodule update --init" p)))
-                    (shell {:dir wt} "make build")
-                    (fs/copy (str wt "/target/release/jolt") jolt-pinned {:replace-existing true})
-                    (shell jolt-pinned "--version"))))}
+          (defn sha1-hex [f] (file-digest "sha1" f)))
+  jolt {:doc "Build the jolt commit pinned in deps.edn (:champaca/jolt) to ~/.cache/champaca/jolt/<sha8>/jolt (tools/build-jolt.sh, which needs no jolt to run)"
+        :task (shell "sh tools/build-jolt.sh")}
   test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected; the same for upstream OpenLDK's test/aaa programs; then the examples/*.clj tests"
         :task (let [_ (println "jolt:" (jolt-bin) (str/trim (:out (shell {:out :string} (jolt-bin) "--version"))))
                     _ (shell "mkdir -p target/classes")
