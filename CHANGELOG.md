@@ -56,3 +56,7 @@ The first public version. Champaca is still experimental: the
   `define-class`, the class loading and cache paths, the FFI arrangement
   and upcall stubs, and a few dozen smaller ones. Each split was checked
   against the old code on the same inputs and gives identical results.
+- `src/champaca/npe.clj`, the helpful NullPointerException messages, was
+  written again from JEP 358 and HotSpot's observed messages instead of
+  following HotSpot's GPL-version-2-only code. It matches HotSpot 25 on
+  NpeCheck and the probes it was written against.
