@@ -44,9 +44,13 @@ The first public version. Champaca is still experimental: the
 - **Tasks**: `jolt test` (every test program against HotSpot's recorded
   output, plus the examples), `jolt battery`, `jolt linux`, `jolt libs`,
   `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, and the docs
-  site tasks.
+  site tasks, and `jolt warm`.
 - Guides under `docs/guide/`, `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
+- **`jolt warm`**, a training run for the startup cache. It compiles the JDK
+  paths programs reach early, so a first `String.format`, `SecureRandom` or
+  time zone no longer costs seconds. A program using all three went from
+  16.0 s to 0.93 s on a fresh cache.
 
 ### Changed
 
