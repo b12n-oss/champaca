@@ -7,11 +7,10 @@
 
 {:paths ["src" "resources"]
  :jolt/min-version "0.8.24"
- ;; The jolt `bb test` runs on: the v0.8.24 tag, the release's own code, built from
- ;; source by `bb jolt`. A local `make build` of it ran a warm Hello in 0.42 s where
- ;; the release binary of the same version took 0.59 s (2026-11-06).
+ ;; The jolt `bb test` runs on: the v0.8.25 tag, the release's own code, built from
+ ;; source by `bb jolt`. The minimum stays 0.8.24, the first release champaca needs.
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                 :git/sha "a9b24d4c9dd57e3615d68975eb457e7b16554da9"}
+                 :git/sha "c6a45783323803b44f053712a85f1ecf88f24819"}
  :aliases
  {;; Code metrics report (bb metrics): jolt-metrics' CLI. Report only.
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
