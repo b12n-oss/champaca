@@ -674,30 +674,6 @@
   [entry]
   (str (.toURI (.getCanonicalFile (io/file entry)))))
 
-;; Follows JDK code that is GPL version 2 only (ParseUtil.encodePath); due a
-;; rewrite from behavior before release.
-(defn- encode-path
-  "A resource name in a URL as the JDK's ParseUtil.encodePath writes it for
-  its class path's loaders: ASCII kept except controls, space and
-  \" # % ; < = > ? [ \\ ] ^ ` { | } DEL, which are %xx in lower-case hex,
-  and every UTF-16 unit above 0x7F as its two or three UTF-8-style bytes
-  (a character beyond the BMP as its two surrogates, three bytes each)."
-  [path]
-  (let [enc (set (concat (map char (range 0 32)) " \"#%;<=>?[\\]^`{|}" [(char 127)]))
-        esc (fn [b] (str "%" (format "%02x" b)))
-        units (fn [cp] (if (> cp 0xFFFF)
-                         (let [v (- cp 0x10000)] [(+ 0xD800 (bit-shift-right v 10)) (+ 0xDC00 (bit-and v 0x3FF))])
-                         [cp]))]
-    (apply str (for [ch path
-                     u (units (int ch))]
-                 (cond (and (< u 128) (enc (char u))) (esc u)
-                       (< u 128) (str (char u))
-                       (> u 0x7FF) (str (esc (bit-or 0xE0 (bit-and (bit-shift-right u 12) 0x0F)))
-                                        (esc (bit-or 0x80 (bit-and (bit-shift-right u 6) 0x3F)))
-                                        (esc (bit-or 0x80 (bit-and u 0x3F))))
-                       :else (str (esc (bit-or 0xC0 (bit-and (bit-shift-right u 6) 0x1F)))
-                                  (esc (bit-or 0x80 (bit-and u 0x3F)))))))))
-
 (defn- resource-urls
   "Every classpath entry's URL for path, file: for a directory and jar: for a
   jar, in classpath order. In a directory anything that exists counts, a
