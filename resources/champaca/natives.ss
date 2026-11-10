@@ -148,16 +148,18 @@
   (define cls "sun/management/VMManagementImpl")
   (define (def name proc) (define-native! (string-append cls "." name) proc))
   (def "getVersion0()Ljava/lang/String;" (lambda () (jstring "4.0")))
-  ;; the CPU times of the current thread and of others are measured (below);
-  ;; the other optional supports stay off
+  ;; the CPU times of the current thread and of others are measured, and so
+  ;; are the bytes each thread allocated (below); the other optional
+  ;; supports stay off
   (def "initOptionalSupportFields()V"
        (lambda ()
          (set-top-level-value! '|sun/management/VMManagementImpl:currentThreadCpuTimeSupport| 1)
-         (set-top-level-value! '|sun/management/VMManagementImpl:otherThreadCpuTimeSupport| 1)))
+         (set-top-level-value! '|sun/management/VMManagementImpl:otherThreadCpuTimeSupport| 1)
+         (set-top-level-value! '|sun/management/VMManagementImpl:threadAllocatedMemorySupport| 1)))
   (def "isThreadCpuTimeEnabled()Z" (lambda (this) thread-cpu-enabled))
+  (def "isThreadAllocatedMemoryEnabled()Z" (lambda (this) thread-alloc-enabled))
   (for-each (lambda (n) (def n (lambda (this) 0)))
-            '("isThreadContentionMonitoringEnabled()Z"
-              "isThreadAllocatedMemoryEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
+            '("isThreadContentionMonitoringEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
               "getUnloadedClassCount()J" "getTotalCompileTime()J" "getSafepointCount()J"
               "getTotalSafepointTime()J" "getSafepointSyncTime()J" "getTotalApplicationNonStoppedTime()J"
               "getLoadedClassSize()J" "getUnloadedClassSize()J" "getClassLoadingTime()J"
@@ -1457,11 +1459,49 @@
 (define scoped-value-cache #f)
 (define no-yield-depth 0)          ; see without-yields
 
+;; Bytes each Java thread allocated (ThreadMXBean.getThreadAllocatedBytes).
+;; Chez counts allocation for the whole process, but only the thread holding
+;; the GIL runs Java code, so the bytes allocated while a thread holds it are
+;; that thread's: gil-save! charges the count since alloc-mark to the
+;; running thread, and gil-restore! starts a new mark. What jolt's own
+;; threads or a thread without the GIL allocate is charged to the owner.
+(define (allocated-total) (+ (bytes-allocated) (bytes-deallocated)))   ; cumulative, survives collections
+(define thread-allocated (make-weak-eq-hashtable))   ; java.lang.Thread -> bytes charged
+(define alloc-mark (allocated-total))
+;; The running thread's depth of uncharged work, a per-thread value kept
+;; across handoffs in uncharged-depths (keyed by jthread-state, as gil-save!
+;; and gil-restore! see it): while it's above 0 a charge only moves the mark.
+(define uncharged-depth 0)
+(define uncharged-depths (make-weak-eq-hashtable))
+(define (charge-allocation!)
+  (let ([now (allocated-total)])
+    (when (and current-jthread (fx= uncharged-depth 0))
+      (eq-hashtable-set! thread-allocated current-jthread
+                         (+ (eq-hashtable-ref thread-allocated current-jthread 0) (- now alloc-mark))))
+    (set! alloc-mark now)))
+;; Run thunk, champaca's own work for the running thread (compiling a method,
+;; loading a class: runtime.ss jit!, find-class), without charging the thread
+;; for what it allocates, as HotSpot's JIT runs on threads of its own and
+;; class metadata isn't on its heap. Java code the thunk runs (a loader's
+;; findClass) goes uncharged too, and so does a nested compile or a wait
+;; inside it: only the outermost entry charges what came before.
+(define (uncharged thunk)
+  (dynamic-wind
+    (lambda () (charge-allocation!) (set! uncharged-depth (fx+ uncharged-depth 1)))
+    thunk
+    (lambda ()
+      (charge-allocation!)   ; still above 0 here, so this only moves the mark
+      (set! uncharged-depth (fx- uncharged-depth 1)))))
+
 (define (gil-save! s)
+  (charge-allocation!)
+  (eq-hashtable-set! uncharged-depths s uncharged-depth)
   (jthread-state-jstack-set! s jstack)
   (jthread-state-svc-set! s scoped-value-cache)
   (jthread-state-no-yield-set! s no-yield-depth))
 (define (gil-restore! s)
+  (set! alloc-mark (allocated-total))
+  (set! uncharged-depth (eq-hashtable-ref uncharged-depths s 0))
   (set! no-yield-depth (jthread-state-no-yield s))
   (set! current-jthread (jthread-state-jthread s))
   (set! jstack (jthread-state-jstack s))
@@ -1773,6 +1813,7 @@
 (define main-ended #f)
 (define destroy-jthread #f)
 (define (main-thread-exit!)
+  (charge-allocation!)   ; main's last bytes are its own, not DestroyJavaVM's
   (thread-terminated! main-thread (lambda () (set! main-ended #t)))
   (eq-hashtable-delete! jthread-states main-thread)
   (let ([t (jnew "java/lang/Thread")])
@@ -1939,6 +1980,24 @@
   (let ([iv (jarr-vec (nn ids))] [rv (jarr-vec (nn result))])
     (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length iv))) (vector-set! rv i (thread-cpu-ns (vector-ref iv i) user?)))))
 (defnative "sun/management/ThreadImpl.getThreadTotalCpuTime1([J[J)V" (ids result) (thread-cpu-times! ids result #f))
+;; allocated bytes (see charge-allocation!): id 0 is the current thread, -1
+;; a thread that isn't alive; the running thread's own count includes what
+;; it allocated since it last took the GIL
+(define thread-alloc-enabled 1)   ; HotSpot measures by default
+(defnative "sun/management/ThreadImpl.setThreadAllocatedMemoryEnabled0(Z)V" (on) (set! thread-alloc-enabled on))
+(define (thread-allocated-bytes id)
+  (let* ([tid-slot (jfield-index "java/lang/Thread" "tid")]
+         [t (if (eqv? id 0) current-jthread (find (lambda (t) (eqv? id (jslot t tid-slot))) (live-jthreads)))])
+    (if t
+        (+ (eq-hashtable-ref thread-allocated t 0)
+           (if (eq? t current-jthread) (- (allocated-total) alloc-mark) 0))
+        -1)))
+(defnative "sun/management/ThreadImpl.getThreadAllocatedMemory0(J)J" (id) (thread-allocated-bytes id))
+(defnative "sun/management/ThreadImpl.getThreadAllocatedMemory1([J[J)V" (ids result)
+  (let ([iv (jarr-vec (nn ids))] [rv (jarr-vec (nn result))])
+    (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length iv))) (vector-set! rv i (thread-allocated-bytes (vector-ref iv i))))))
+;; the process's whole allocation, as an approximation of every thread's
+(defnative "sun/management/ThreadImpl.getTotalThreadAllocatedMemory()J" () (allocated-total))
 (defnative "sun/management/ThreadImpl.getThreadUserCpuTime1([J[J)V" (ids result) (thread-cpu-times! ids result #t))
 
 ;; The launcher's DestroyJavaVM: wait for every non-daemon thread, then run
