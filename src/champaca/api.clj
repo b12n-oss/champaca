@@ -17,7 +17,9 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.scheme :as s]
-            [champaca.main :as main]))
+            [champaca.boot :as boot]
+            [champaca.libcache :as libcache]
+            [champaca.loader :as loader]))
 
 (defonce ^:private interop-loaded (atom false))
 (defonce ^:private dynamic-loaded (atom false))
@@ -90,7 +92,7 @@
    (let [classpath (or classpath
                        (some-> (System/getenv "CHAMPACA_CLASSPATH") not-empty
                                (str/split (re-pattern java.io.File/pathSeparator))))
-         status (main/init! (or classpath []) {:preview preview :add-modules add-modules})]
+         status (boot/init! (or classpath []) {:preview preview :add-modules add-modules})]
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "champaca/interop.ss")))
@@ -98,7 +100,7 @@
      (reset! interop-loaded true))
    (when-not @dynamic-loaded
      (s/eval-string (slurp (io/resource "champaca/dynamic.ss")))
-     (s/call "set-lambda-class-hook!" (fn [iface sam-key] (main/lambda-class [iface] [sam-key])))
+     (s/call "set-lambda-class-hook!" (fn [iface sam-key] (loader/lambda-class [iface] [sam-key])))
      (s/call "set-jolt-data-hook!" ->arg)
      (reset! dynamic-loaded true))
    ;; boot ran holding the lock; from here on each call takes it
@@ -107,11 +109,11 @@
    :ok))
 
 (defn call-static [cls mname desc & args]
-  (rethrow #(do (main/ensure-loaded! cls)
+  (rethrow #(do (loader/ensure-loaded! cls)
                 (apply s/call "ldk-call-static" cls mname desc args))))
 
 (defn new-object [cls desc & args]
-  (rethrow #(do (main/ensure-loaded! cls)
+  (rethrow #(do (loader/ensure-loaded! cls)
                 (apply s/call "ldk-new" cls desc args))))
 
 (defn call [obj mname desc & args]
@@ -121,7 +123,7 @@
   "A Java object implementing the single-method interface iface, whose
   method (mname, desc) calls the jolt fn f with converted arguments."
   [iface mname desc f]
-  (with-gil #(s/call "ldk-implement" (main/lambda-class [iface] [(str mname desc)]) desc f)))
+  (with-gil #(s/call "ldk-implement" (loader/lambda-class [iface] [(str mname desc)]) desc f)))
 
 (defn to-string [obj] (rethrow #(s/call "ldk-to-string" obj)))
 
@@ -132,7 +134,7 @@
   also tells the JIT this process saves, so later compiles go straight to
   object code instead of being compiled again at the next call."
   []
-  (with-gil #(do (main/saves-generation!) (main/save-generation!))))
+  (with-gil #(do (libcache/saves-generation!) (libcache/save-generation!))))
 
 (defn- ->arg
   "jolt vectors go to Scheme as lists, which the runtime turns into a Java

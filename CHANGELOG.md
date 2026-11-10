@@ -54,14 +54,20 @@ The first public version. Champaca is still experimental: the
   rest, from the same `bb.edn`, so babashka is no longer needed. The pinned jolt
   is built by `tools/build-jolt.sh`, which needs only git and make, and the
   Linux image and CI use it.
-- The jolt that `jolt test` and the other tasks build is the v0.8.25 tag; champaca
-  still needs jolt 0.8.24 or later.
+- The jolt that `jolt test` and the other tasks build is jolt's main at
+  3db8a534, the first commit with `System/mapLibraryName`, until a release
+  carries it; champaca still needs jolt 0.8.24 or later.
 - The largest functions were split into named steps, guided by
   jolt-metrics (`jolt metrics`): codegen's `emit-block`, `compile-method`,
   `decode` and `render-steps`, the launcher's option parsing, the boot,
   `define-class`, the class loading and cache paths, the FFI arrangement
   and upcall stubs, and a few dozen smaller ones. Each split was checked
   against the old code on the same inputs and gives identical results.
+- `src/champaca/main.clj`, 3275 lines, is now ten namespaces by job: the
+  shared state, the launcher, the class path, the cache directory, linking,
+  the library and startup caches, the loader, the JIT, the boot, and `main`,
+  which keeps only the command line (112 lines). Each step moved code
+  unchanged.
 - The pieces that followed GPL-version-2-only OpenJDK code were written
   again from HotSpot 25's observed behavior: `src/champaca/npe.clj` (the
   helpful NullPointerException messages, from JEP 358), `class-cast-message`,

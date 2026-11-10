@@ -344,7 +344,7 @@
 (defnative "java/lang/Class.getPrimitiveClass(Ljava/lang/String;)Ljava/lang/Class;" (n)
   (jmirror-of (jstring->scheme n)))
 ;; --enable-preview, from champaca.main (set-preview!, before the boot);
-;; main.clj's parser lets this release's preview class files load by the
+;; classfile.clj's parser lets this release's preview class files load by the
 ;; same flag
 (define preview-enabled #f)
 (define (set-preview! on) (set! preview-enabled on))
@@ -615,7 +615,7 @@
 ;; throwable's frames alive until a collection swept its entry, which cost
 ;; another 1.5 us a throw over 100k of them. getOurStackTrace turns the
 ;; frames into StackTraceElements when something asks, with the file, line,
-;; module and hidden flag from a jolt hook (main.clj frame-info).
+;; module and hidden flag from a jolt hook (jit.clj frame-info).
 (define frame-hook #f)
 (define (set-frame-hook! f) (set! frame-hook f))
 (define (slot-of cname fname) (jfield-index cname fname))
@@ -2176,7 +2176,7 @@
 ;; One flat class space: module wiring is recorded nowhere, and every loader
 ;; sees the same classes (user classpath, then java.base).
 
-;; Resources come from the loader (main.clj) the way classes do: the user
+;; Resources come from the class path (classpath.clj) the way classes do: the user
 ;; classpath, then the JDK module whose packages the path falls under. The
 ;; JDK finds its own resources in the runtime image, which isn't read here,
 ;; so the getResourceAsStream methods are overridden to ask the loader. The
@@ -2223,7 +2223,7 @@
          (construct "java/io/ByteArrayInputStream" "([B)V" (make-jarr "B" v)))))
 ;; whether a named application module (java -p) opens slashed package dir to
 ;; everyone: the application loader finds a resource of such a package in the
-;; module only then, else on the class path alone (main.clj resource-entries,
+;; module only then, else on the class path alone (classpath.clj resource-entries,
 ;; as BuiltinClassLoader.findResource); #f for any other package
 (define (app-package-open? dir)
   (let ([m (hashtable-ref package-modules dir #f)])
@@ -2486,7 +2486,7 @@
 (define (try-class n)
   (and (class-exists? n)
        ;; a JDK class outside the boot layer is "class not found" from the
-       ;; linker (main.clj outside-boot-layer?), which find-class makes a
+       ;; linker (classpath.clj outside-boot-layer?), which find-class makes a
        ;; NoClassDefFoundError naming the class itself: to a lookup by name
        ;; it isn't there, a ClassNotFoundException as on HotSpot. One that
        ;; is there but needs a missing class names that class, and stays
@@ -2561,8 +2561,8 @@
   (or (not boot-layer-complete)
       (let ([p (class-package c)])
         (or (string=? p "champaca") (and (hashtable-ref package-modules p #f) #t)))))
-;; the same for main.clj, which resolves the classes bytecode names
-;; (outside-boot-layer?) and records the modules a library cache entry
+;; the same for classpath.clj, which resolves the classes bytecode names
+;; (outside-boot-layer?), and libcache.clj, which records the modules a library cache entry
 ;; needs (user-deps): the name of the module holding slashed package p,
 ;; #f when none does, #t before the boot layer exists
 (define (layer-module-name p)
@@ -2578,7 +2578,7 @@
         ;; not a module of the application loader's (java -p)
         (and m (not (and (app-loader) (eq? (module-loader m) (app-loader)))) #t))))
 ;; the application loader's modules from files (java -p's module path), as
-;; main.clj's lookups need them: name, a tab, the module's jar or exploded
+;; classpath.clj's lookups need them: name, a tab, the module's jar or exploded
 ;; directory, a line each, in the order the loader itself searches them for
 ;; a resource in no package (its nameToModule map's, which
 ;; BuiltinClassLoader.findMiscResource walks), so a module the path held twice
@@ -2603,12 +2603,12 @@
                                                            (jstring->scheme ((jvirt uri "getPath()Ljava/lang/String;") uri))
                                                            "\n"))))))
                             (vector->list (jarr-vec arr))))))))
-;; a named module's resource from its own jar or directory (main.clj's
+;; a named module's resource from its own jar or directory (classpath.clj's
 ;; hook): the bytes, or #f
 (define module-resource-hook (lambda (mn path) #f))
 (define (set-module-resource-hook! f) (set! module-resource-hook f))
 ;; the class file the application loader would read for a slashed name from
-;; the class path (main.clj's hook, which says what it answers), or #f
+;; the class path (jit.clj's hook, which says what it answers), or #f
 (define classpath-class-hook (lambda (cname parse?) #f))
 (define (set-classpath-class-hook! f) (set! classpath-class-hook f))
 ;; what the JDK's application loader does with a name it can't load as a
@@ -2663,7 +2663,7 @@
 ;; --- classes defined at run time -------------------------------------------------
 ;; ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
 ;; (JavaLangAccess.defineClass) and Unsafe.defineClass0 end in one family of
-;; natives, which hand the bytes to main.clj (define-class-hook) to parse,
+;; natives, which hand the bytes to loader.clj (define-class-hook) to parse,
 ;; link and register as a class of this run, or to restore from the library
 ;; cache when a loader of the program's own (not a built-in one) defines a
 ;; named, non-hidden class from bytes an earlier run saw. The bytes cross
@@ -2725,7 +2725,7 @@
                          (and loader (not hidden?)
                               (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))))))
 ;; the JVM's error for an answer that isn't "ok": "bad", "link
-;; <error class>|<text>" (main.clj check-definition!), "wrong" (the JVM's
+;; <error class>|<text>" (link.clj check-definition!), "wrong" (the JVM's
 ;; message keeps both names slashed) or "dup"
 (define (throw-definition-refusal kind arg name)
   (cond [(string=? kind "bad") (jthrow "java/lang/ClassFormatError" arg)]
