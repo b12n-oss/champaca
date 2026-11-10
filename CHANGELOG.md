@@ -45,8 +45,8 @@ The first public version. Champaca is still experimental: the
   output, plus the examples), `bb battery`, `bb linux`, `bb libs`,
   `bb bench`, `bb prof`, `bb heap`, `bb metrics`, `bb nrepl`, and the docs
   site tasks.
-- Guides under `docs/guide/`, `CONTRIBUTING.md`, and license headers on
-  every source file.
+- Guides under `docs/guide/`, `CONTRIBUTING.md`, and SPDX license headers
+  on the sources, task files and scripts.
 
 ### Changed
 
