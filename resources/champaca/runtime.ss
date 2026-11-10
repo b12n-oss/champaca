@@ -1587,21 +1587,6 @@
           (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n)))
           (loop (fx- i 1))))]
    [else (slashes->dots n)]))
-;; (Follows JDK code that is GPL version 2 only; due a rewrite from behavior
-;; before release.)
-;; A failed checkcast's message, HotSpot's SharedRuntime::
-;; generate_class_cast_message: both classes, then one place when they share
-;; a module ("X and Y are in module java.base of loader 'bootstrap'"), else
-;; each one's, the target's last. An array's module and loader are its
-;; element's, a primitive array's java.base's (class-module, class-loader-of).
-(define (class-cast-message from target)
-  (let ([fc (find-class from)] [tc (find-class target)]
-        [fe (external-class-name from)] [te (external-class-name target)])
-    (string-append "class " fe " cannot be cast to class " te " ("
-                   (if (eq? (class-module fc) (class-module tc))
-                       (string-append fe " and " te " are in " (class-place-of tc))
-                       (string-append fe " is in " (class-place-of fc) "; " te " is in " (class-place-of tc)))
-                   ")")))
 ;; a class name with dots, a hidden class keeping the slash before /0x<n>
 ;; (it isn't marked hidden until its definition ends)
 (define (sealed-dotted-name n)
