@@ -47,10 +47,18 @@
   {\B "byte" \C "char" \D "double" \F "float" \I "int" \J "long" \S "short"
    \Z "boolean" \V "void"})
 
-(defn- type-text [t]
+(defn- type-text
+  "A parameter type. HotSpot drops \"java.lang.\" from a name that starts
+  with java.lang.Object or java.lang.String (a prefix test, so StringBuilder
+  loses it too; measured on HotSpot 25)."
+  [t]
   (let [c (first t)]
     (cond
-      (= c \L) (class-text (subs t 1 (dec (count t))))
+      (= c \L) (let [n (class-text (subs t 1 (dec (count t))))]
+                  (if (or (str/starts-with? n "java.lang.Object")
+                          (str/starts-with? n "java.lang.String"))
+                    (subs n 10)
+                    n))
       (= c \[) (str (type-text (subs t 1)) "[]")
       :else (primitive-names c))))
 

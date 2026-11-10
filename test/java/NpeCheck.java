@@ -36,6 +36,10 @@ public class NpeCheck {
     static int merged(boolean c) { String s = c ? null : sf; return s.length(); }
     static int getter(NpeCheck n) { return n.count; }
     static int deep(NpeCheck n) { return n.next.next.name.length(); }
+    void takeA(StringBuilder a, StringBuffer b, String c, Object d) { }
+    void takeB(java.lang.StringBuilder[][] a, String[] b, Integer c) { }
+    void takeC(StringIndexOutOfBoundsException e, Integer i) { }
+    static StringBuilder mk(StringBuilder a, Integer i) { return null; }
     static String concat(StringBuilder sb, Object[] xs) { return sb.append("x").toString(); }
     int[] ints;
     Object obj;
@@ -155,6 +159,11 @@ public class NpeCheck {
         } catch (NullPointerException e) {
             System.out.println(e.getMessage());
         }
+        // HotSpot drops java.lang. from a parameter type starting with java.lang.Object or java.lang.String
+        run("trimmed parameters", () -> { NpeCheck n = null; n.takeA(null, null, null, null); });
+        run("trimmed array parameters", () -> { NpeCheck n = null; n.takeB(null, null, null); });
+        run("trimmed exception parameter", () -> { NpeCheck n = null; n.takeC(null, null); });
+        run("trimmed return value", () -> mk(null, null).length());
     }
 }
 

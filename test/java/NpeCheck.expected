@@ -61,3 +61,7 @@ same
 Cannot invoke "String.isEmpty()" because "<local1>" is null
 after fillInStackTrace: Cannot invoke "Object.toString()" because "<local2>" is null
 Cannot invoke "java.lang.Integer.intValue()" because the return value of "java.lang.reflect.InvocationHandler.invoke(Object, java.lang.reflect.Method, Object[])" is null
+trimmed parameters: Cannot invoke "NpeCheck.takeA(StringBuilder, StringBuffer, String, Object)" because "<local0>" is null
+trimmed array parameters: Cannot invoke "NpeCheck.takeB(StringBuilder[][], String[], java.lang.Integer)" because "<local0>" is null
+trimmed exception parameter: Cannot invoke "NpeCheck.takeC(StringIndexOutOfBoundsException, java.lang.Integer)" because "<local0>" is null
+trimmed return value: Cannot invoke "java.lang.StringBuilder.length()" because the return value of "NpeCheck.mk(StringBuilder, java.lang.Integer)" is null
