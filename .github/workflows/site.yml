@@ -5,11 +5,11 @@ name: Site
 # this project's own: docs/, docs/site.edn, the base path below and the
 # assertions in docs/check-site.sh.
 #
-# A pull request builds the site and runs the checks. A run on main also
-# deploys, so push to main comes back once GitHub Pages is enabled for the
-# repository; until then a run on main fails at the deploy step.
+# Builds on every pull request, and publishes to GitHub Pages from main.
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
