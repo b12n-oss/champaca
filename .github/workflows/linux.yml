@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: babashka 1.13.220
         run: |
           curl -fsSL -o /tmp/bb.tgz https://github.com/babashka/babashka/releases/download/v1.13.220/babashka-1.13.220-linux-amd64-static.tar.gz
@@ -33,7 +33,7 @@ jobs:
       # hash over all of ci/linux would differ by then.
       - name: restore the jolt build
         id: jolt
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
           key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
@@ -46,7 +46,39 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" "${{ runner.temp }}/linux-home"
       - name: save the jolt build
         if: always() && steps.jolt.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
           key: ${{ steps.jolt.outputs.cache-primary-key }}
+
+  # bb battery's other modes, one job each, in parallel: cold then warm on one
+  # cache, the cache off, and CHAMPACA_BT=1 (bb libs runs in linux-amd64). The
+  # same task as on a workstation, so CI and local runs mean the same thing;
+  # macOS arm64 still needs a local bb battery.
+  battery-amd64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        modes: ["cold,warm", "cache-off", "bt"]
+    steps:
+      - uses: actions/checkout@v7
+      - name: babashka 1.13.220
+        run: |
+          curl -fsSL -o /tmp/bb.tgz https://github.com/babashka/babashka/releases/download/v1.13.220/babashka-1.13.220-linux-amd64-static.tar.gz
+          echo "eb3edd128276f0b6fbdefcb18dc7d42652a95ea409a81b34f08e36b8ac3cbc3c  /tmp/bb.tgz" | sha256sum -c -
+          sudo tar xzf /tmp/bb.tgz -C /usr/local/bin bb
+      - name: restore the jolt build
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
+          key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
+      - name: bb battery (${{ matrix.modes }})
+        env:
+          CHAMPACA_LINUX_HOME: ${{ runner.temp }}/linux-home
+          # git refuses a repository another user owns: /champaca is the
+          # runner's checkout, the container runs as root
+          CHAMPACA_LINUX_RUN: git config --global --add safe.directory '*' && BATTERY_MODES=${{ matrix.modes }} bb battery
+        run: bb linux amd64
+
