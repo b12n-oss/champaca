@@ -28,8 +28,9 @@ jobs:
       base-path: /champaca
       # Pinned rather than trusting the shared workflow's default. v0.4.4 is
       # the first release that copies the README's docs/images and renders
-      # its GitHub alerts as callouts, which docs/check-site.sh checks.
-      docs-engine-ref: v0.4.4
+      # its GitHub alerts as callouts, which docs/check-site.sh checks; v0.4.5
+      # builds on jolt v0.8.25 (its jolt-lang/time pin was too old).
+      docs-engine-ref: v0.4.5
     permissions:
       contents: read
       pages: write
