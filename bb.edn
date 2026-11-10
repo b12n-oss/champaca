@@ -1073,7 +1073,7 @@
                   (System/exit 1)))}
   linux:image {:doc "Build ci/linux's image for arm64 or amd64 (default: this machine's), fetching its JDK into ci/linux/cache first"
                :task (linux-image! (linux-arch (first *command-line-args*)))}
-  linux {:doc "Run bb test and bb libs on Linux (arm64 or amd64, default this machine's) in ci/linux's image; jars come from ~/.m2, read-only"
+  linux {:doc "Run bb test and bb libs on Linux (arm64 or amd64, default this machine's) in ci/linux's image (CHAMPACA_LINUX_RUN replaces that command, e.g. \"BATTERY_MODES=bt bb battery\"); jars come from ~/.m2, read-only"
          :task (let [arch (linux-arch (first *command-line-args*))]
                  (linux-image! arch)
                  (shell "bb libs:fetch")
@@ -1088,7 +1088,9 @@
                                   ":/root")
                         "-v" (str (System/getenv "HOME") "/.m2:/root/.m2:ro")
                         (str "champaca-linux:" arch)
-                        "sh" "-c" "bb jolt && bb test && bb libs"))}
+                        "sh" "-c" (str "bb jolt && "
+                                       (or (not-empty (System/getenv "CHAMPACA_LINUX_RUN"))
+                                           "bb test && bb libs"))))}
   libs:fetch {:doc "Download the test/libs jars missing from ~/.m2 from Maven Central, each kept only when its SHA-1 is the pinned one"
               :task (doseq [{:keys [jars]} (:libs (edn/read-string (slurp "test/libs/libs.edn")))
                             [c sha] jars

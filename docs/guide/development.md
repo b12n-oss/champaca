@@ -14,6 +14,7 @@ bb battery [ref]                                      # before a merge: bb test 
                                                       # with its own cache (kept until the next run of another ref), logs under target/battery/; about 30 min, more under load; BATTERY_MODES=cold,libs for a subset
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
                                                       # (CHAMPACA_LINUX_HOME=dir keeps the container's home there instead of a volume)
+                                                      # (CHAMPACA_LINUX_RUN='BATTERY_MODES=bt bb battery' runs that instead of bb test and bb libs; CI runs the battery's modes this way)
 bb examples                                           # list the examples/*.clj test files
 bb example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
 bb heap target/classes Hello                          # where the memory goes: the live heap by type after Hello (roots or java for the other views)
