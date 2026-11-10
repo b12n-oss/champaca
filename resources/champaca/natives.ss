@@ -442,6 +442,107 @@
                   (substring s (fx+ i 1) (fx- len 1)))]
             [(and (fx= i (fx- len 1)) (memv (string-ref s i) '(#\B #\C #\D #\F #\I #\J #\S #\Z))) 'prim]
             [else #f]))))
+;; Class name checks for forName0, written from HotSpot 25's observed behavior
+;; (probed with class loaders that count their loadClass calls). A name is
+;; refused at once, without asking any loader, when:
+;; - it is empty, or has an empty segment (a leading or doubled separator;
+;;   one trailing separator is allowed, but not alone);
+;; - it holds ; or [ (apart from an array descriptor's own), or a segment
+;;   whose last char is NUL (a NUL elsewhere is fine);
+;; - an array descriptor has over 255 dimensions, no element, a primitive
+;;   element other than B C D F I J S Z, or a class element that is not
+;;   L<valid name>; (one name, nothing after the semicolon).
+;; n is the slashed form.
+(define (cn-plain-name? n)
+  (let ([len (string-length n)])
+    (and (fx> len 0)
+         (let loop ([i 0] [start 0])
+           (cond
+             [(fx= i len)
+              ;; the last segment: empty only after a separator
+              (and (or (fx> i start) (fx> start 0))
+                   (or (fx= i start) (not (char=? (string-ref n (fx- i 1)) #\nul))))]
+             [else
+              (let ([c (string-ref n i)])
+                (cond
+                  [(or (char=? c #\;) (char=? c #\[)) #f]
+                  [(char=? c #\/)
+                   (and (fx> i start)
+                        (not (char=? (string-ref n (fx- i 1)) #\nul))
+                        (loop (fx+ i 1) (fx+ i 1)))]
+                  [else (loop (fx+ i 1) start)]))])))))
+(define (valid-class-name? n)
+  (let ([len (string-length n)])
+    (and (fx> len 0)
+         (if (char=? (string-ref n 0) #\[)
+             (let skip ([d 0])
+               (cond
+                 [(fx= d len) #f]
+                 [(char=? (string-ref n d) #\[) (skip (fx+ d 1))]
+                 [(fx> d 255) #f]
+                 [(char=? (string-ref n d) #\L)
+                  (and (fx> len (fx+ d 2)) (char=? (string-ref n (fx- len 1)) #\;)
+                       (cn-plain-name? (substring n (fx+ d 1) (fx- len 1))))]
+                 [else (and (fx= d (fx- len 1)) (memv (string-ref n d) '(#\B #\C #\D #\F #\I #\J #\S #\Z)) #t)]))
+             (cn-plain-name? n)))))
+
+;; The modified UTF-8 bytes of a list of UTF-16 units, as a bytevector.
+(define (cn-mutf8-bytes units)
+  (let* ([unit-size (lambda (u) (cond [(and (fx> u 0) (fx< u #x80)) 1] [(fx< u #x800) 2] [else 3]))]
+         [bv (make-bytevector (fold-left (lambda (a u) (fx+ a (unit-size u))) 0 units))])
+    (let loop ([us units] [i 0])
+      (if (null? us) bv
+          (let ([u (car us)])
+            (case (unit-size u)
+              [(1) (bytevector-u8-set! bv i u) (loop (cdr us) (fx+ i 1))]
+              [(2) (bytevector-u8-set! bv i (fxlogor #xc0 (fxsrl u 6)))
+                   (bytevector-u8-set! bv (fx+ i 1) (fxlogor #x80 (fxlogand u #x3f)))
+                   (loop (cdr us) (fx+ i 2))]
+              [else (bytevector-u8-set! bv i (fxlogor #xe0 (fxsrl u 12)))
+                    (bytevector-u8-set! bv (fx+ i 1) (fxlogor #x80 (fxlogand (fxsrl u 6) #x3f)))
+                    (bytevector-u8-set! bv (fx+ i 2) (fxlogor #x80 (fxlogand u #x3f)))
+                    (loop (cdr us) (fx+ i 3))]))))))
+;; Bytes lo..hi as UTF-16 units: a complete 2- or 3-byte sequence is one unit,
+;; any other byte (a cut sequence's pieces) one unit of its own value.
+(define (cn-bytes->units bv lo hi)
+  (let ([cont? (lambda (i) (fx= (fxlogand (bytevector-u8-ref bv i) #xc0) #x80))])
+    (let loop ([i lo] [acc '()])
+      (if (fx>= i hi) (reverse acc)
+          (let ([b (bytevector-u8-ref bv i)])
+            (cond
+              [(and (fx>= b #xc0) (fx< b #xe0) (fx< (fx+ i 1) hi) (cont? (fx+ i 1)))
+               (loop (fx+ i 2) (cons (fxlogor (fxsll (fxlogand b #x1f) 6) (fxlogand (bytevector-u8-ref bv (fx+ i 1)) #x3f)) acc))]
+              [(and (fx>= b #xe0) (fx< b #xf0) (fx< (fx+ i 2) hi) (cont? (fx+ i 1)) (cont? (fx+ i 2)))
+               (loop (fx+ i 3)
+                     (cons (fxlogor (fxsll (fxlogand b #x0f) 12)
+                                    (fxsll (fxlogand (bytevector-u8-ref bv (fx+ i 1)) #x3f) 6)
+                                    (fxlogand (bytevector-u8-ref bv (fx+ i 2)) #x3f))
+                           acc))]
+              [else (loop (fx+ i 1) (cons b acc))]))))))
+;; A name over 65535 bytes of modified UTF-8 (counted on the slashed form) is
+;; ClassNotFoundException "Class name exceeds maximum length of 65535: " plus
+;; its first 128 bytes, " ... (N characters omitted) ... " (N = length - 256,
+;; in bytes) and its last 128 bytes, each part decoded by cn-bytes->units.
+;; The message has as many units as its text has bytes that aren't UTF-8
+;; continuation bytes, so a cut sequence's stray bytes push the message's
+;; last units off the end.
+(define (overlong-class-name name)
+  (let* ([units (map (lambda (u) (if (fx= u 46) 47 u)) (jstring-units name))]
+         [size (fold-left (lambda (a u) (fx+ a (cond [(and (fx> u 0) (fx< u #x80)) 1] [(fx< u #x800) 2] [else 3]))) 0 units)])
+    (when (fx> size 65535)
+      (let ([bv (cn-mutf8-bytes units)])
+        (let* ([pre (code-units "Class name exceeds maximum length of 65535: ")]
+               [mid (code-units (string-append " ... (" (number->string (fx- size 256)) " characters omitted) ... "))]
+               [all (append pre (cn-bytes->units bv 0 128) mid (cn-bytes->units bv (fx- size 128) size))]
+               [lead-count (lambda (lo hi)
+                             (let loop ([i lo] [k 0])
+                               (if (fx= i hi) k
+                                   (loop (fx+ i 1)
+                                         (if (fx= (fxlogand (bytevector-u8-ref bv i) #xc0) #x80) k (fx+ k 1))))))]
+               [keep (fx+ (length pre) (length mid) (lead-count 0 128) (lead-count (fx- size 128) size))])
+          (jthrow "java/lang/ClassNotFoundException"
+                  (list->vector (list-head all (fxmin keep (length all))))))))))
+
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
