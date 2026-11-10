@@ -1,0 +1,34 @@
+name: Site
+
+# Builds the documentation site and publishes it to GitHub Pages. The build
+# lives in jlt-commons/ci-builds, shared by every project; what stays here is
+# this project's own: docs/, docs/site.edn, the base path below and the
+# assertions in docs/check-site.sh.
+#
+# Run by hand only for now (workflow_dispatch). Once the repository is public,
+# add push to main and pull_request back.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Deploys must not race; pull request builds cancel their own earlier runs.
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  site:
+    uses: jlt-commons/ci-builds/.github/workflows/site.yml@main
+    with:
+      base-path: /champaca
+      # Pinned rather than trusting the shared workflow's default. v0.4.4 is
+      # the first release that copies the README's docs/images and renders
+      # its GitHub alerts as callouts, which docs/check-site.sh checks.
+      docs-engine-ref: v0.4.4
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
