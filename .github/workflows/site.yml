@@ -5,10 +5,12 @@ name: Site
 # this project's own: docs/, docs/site.edn, the base path below and the
 # assertions in docs/check-site.sh.
 #
-# Run by hand only for now (workflow_dispatch). Once the repository is public,
-# add push to main and pull_request back.
+# A pull request builds the site and runs the checks. A run on main also
+# deploys, so push to main comes back once GitHub Pages is enabled for the
+# repository; until then a run on main fails at the deploy step.
 
 on:
+  pull_request:
   workflow_dispatch:
 
 permissions:
