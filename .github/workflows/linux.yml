@@ -11,6 +11,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# a new push to a pull request cancels its older run; main runs every commit
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   linux-amd64:
     runs-on: ubuntu-24.04
@@ -22,5 +26,27 @@ jobs:
           curl -fsSL -o /tmp/bb.tgz https://github.com/babashka/babashka/releases/download/v1.13.220/babashka-1.13.220-linux-amd64-static.tar.gz
           echo "eb3edd128276f0b6fbdefcb18dc7d42652a95ea409a81b34f08e36b8ac3cbc3c  /tmp/bb.tgz" | sha256sum -c -
           sudo tar xzf /tmp/bb.tgz -C /usr/local/bin bb
+      # the pinned jolt binary, built once per deps.edn and image (bb jolt skips
+      # the build when it is there); everything else in the container's home
+      # starts fresh. The key is computed here only and reused by the save:
+      # bb linux downloads the JDK into ci/linux/cache/ during the run, so a
+      # hash over all of ci/linux would differ by then.
+      - name: restore the jolt build
+        id: jolt
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
+          key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
       - name: bb linux amd64
+        env:
+          CHAMPACA_LINUX_HOME: ${{ runner.temp }}/linux-home
         run: bb linux amd64
+      - name: own the container's files
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ runner.temp }}/linux-home"
+      - name: save the jolt build
+        if: always() && steps.jolt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
+          key: ${{ steps.jolt.outputs.cache-primary-key }}

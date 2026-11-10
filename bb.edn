@@ -93,7 +93,7 @@
           ;; serialization and classes put on their classpath
           (defn lib-jar! []
             (shell "mkdir -p target/lib-classes")
-            (apply shell "javac -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
+            (apply shell "javac -Xlint:-removal -d target/lib-classes" (map str (fs/glob "test/jar" "**.java")))
             ;; and its other files: a service registration, a properties file
             (doseq [f (fs/glob "test/jar" "**")
                     :when (and (fs/regular-file? f) (not (str/ends-with? (str f) ".java")))
@@ -198,10 +198,10 @@
                     _ (lib-jar!)
                     ;; a second jar sharing one package with the first (PackageCheck)
                     _ (shell "mkdir -p target/lib2-classes")
-                    _ (apply shell "javac -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
+                    _ (apply shell "javac -Xlint:-removal -d target/lib2-classes" (map str (fs/glob "test/jar2" "**.java")))
                     _ (shell "jar cfm target/lib2.jar test/jar2.mf -C target/lib2-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
-                    _ (apply shell "javac -parameters -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
+                    _ (apply shell "javac -parameters -Xlint:-removal -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses
@@ -264,7 +264,17 @@
                                                                  (jolt-bin) "-M" "-m" "champaca.main"
                                                                  (concat opts ["target/classes:target/lib.jar:target/lib2.jar" m]))
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
-                             (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
+                             (do (println (if ok "PASS" "FAIL") m)
+                                 ;; a failing program's output is kept under target/fails/ and
+                                 ;; the start of its diff printed, so a CI log says what differed
+                                 (when-not ok
+                                   (let [actual (str "target/fails/" m ".out")]
+                                     (fs/create-dirs "target/fails")
+                                     (spit actual out)
+                                     (println "  exit" exit)
+                                     (let [d (:out (process/sh "diff" "-u" (str "test/java/" m ".expected") actual))]
+                                       (doseq [l (take 40 (str/split-lines (or d "")))] (println " " l)))))
+                                 (when-not ok m))))
                     jar-fails (let [{:keys [out exit]} (run-limited 300 {:label "jarmain"} (jolt-bin) "-M" "-m" "champaca.main" "-jar" "target/app.jar" "a" "b")
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
@@ -873,7 +883,7 @@
                     ;; arguments upstream's run.exp gives; .expected is the JVM's output
                     _ (fs/delete-tree "target/aaa-classes")
                     _ (fs/delete-tree "target/aaa-work")
-                    _ (apply shell "javac -nowarn -d target/aaa-classes" (map str (fs/glob "test/aaa" "*.java")))
+                    _ (apply shell "javac -nowarn -Xlint:-removal -d target/aaa-classes" (map str (fs/glob "test/aaa" "*.java")))
                     _ (fs/create-dirs "target/aaa-jar/a")
                     _ (spit "target/aaa-jar/a/x.txt" "x\n")
                     _ (shell "jar cf target/aaa-test.jar -C target/aaa-jar .")
@@ -1069,8 +1079,13 @@
                  (shell "bb libs:fetch")
                  (shell "docker run --rm --platform" (str "linux/" arch)
                         "-v" (str (fs/cwd) ":/champaca")
-                        ;; the jolt build and champaca's caches persist per architecture
-                        "-v" (str "champaca-linux-" arch ":/root")
+                        ;; the jolt build and champaca's caches persist per architecture,
+                        ;; in a volume, or in CHAMPACA_LINUX_HOME's directory (CI caches
+                        ;; the jolt binary from there)
+                        "-v" (str (or (some-> (System/getenv "CHAMPACA_LINUX_HOME") not-empty
+                                              (doto (fs/create-dirs)) fs/absolutize str)
+                                      (str "champaca-linux-" arch))
+                                  ":/root")
                         "-v" (str (System/getenv "HOME") "/.m2:/root/.m2:ro")
                         (str "champaca-linux:" arch)
                         "sh" "-c" "bb jolt && bb test && bb libs"))}

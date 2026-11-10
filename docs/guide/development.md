@@ -7,11 +7,13 @@ The tasks below are in `bb.edn`, and `bb tasks` lists them with a line each. [ge
 ```sh
 bb jolt                                               # build the pinned jolt (about 45 s, once per pin)
 bb test                                               # every test/java and test/aaa program vs the JVM, plus the examples/*.clj tests
+                                                      # (a failing program's output goes to target/fails/, and the start of its diff is printed)
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
 bb battery [ref]                                      # before a merge: bb test cold, warm, cache off and CHAMPACA_BT=1, then bb libs (after bb libs:fetch), on a worktree of HEAD
                                                       # with its own cache (kept until the next run of another ref), logs under target/battery/; about 30 min, more under load; BATTERY_MODES=cold,libs for a subset
 bb linux                                              # bb test and bb libs on Linux, in Docker (bb linux amd64 for x86_64)
+                                                      # (CHAMPACA_LINUX_HOME=dir keeps the container's home there instead of a volume)
 bb examples                                           # list the examples/*.clj test files
 bb example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
 bb heap target/classes Hello                          # where the memory goes: the live heap by type after Hello (roots or java for the other views)
