@@ -7,10 +7,12 @@
 
 {:paths ["src" "resources"]
  :jolt/min-version "0.8.24"
- ;; The jolt `bb test` runs on: the v0.8.25 tag, the release's own code, built from
- ;; source by `bb jolt`. The minimum stays 0.8.24, the first release champaca needs.
- :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                 :git/sha "c6a45783323803b44f053712a85f1ecf88f24819"}
+ ;; The jolt the tasks build and test on. For now a commit of burinc/jolt:
+ ;; jolt's main plus System/mapLibraryName (jolt-lang/jolt#1580), which the
+ ;; tasks need when jolt runs them. Back to an upstream tag once a release has
+ ;; it. The minimum stays 0.8.24, the first release champaca itself needs.
+ :champaca/jolt {:git/url "https://github.com/burinc/jolt.git"
+                 :git/sha "f8af36d3a32725b5959c0735d9efabb8d5cb02a9"}
  :aliases
  {;; Code metrics report (bb metrics): jolt-metrics' CLI. Report only.
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
