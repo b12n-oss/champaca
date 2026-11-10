@@ -1573,6 +1573,22 @@
                    " of loader " (loader-text (class-loader-of c)))))
 (define (class-place-text cname)
   (string-append (slashes->dots cname) " is in " (class-place-of (find-class cname))))
+;; The message of the ClassCastException a failed cast throws. Written from
+;; HotSpot 25's observed messages: "class X cannot be cast to class Y (" then
+;; either "X and Y are in <place>" when both classes share one module (the
+;; same Module object) or "X is in <place>; Y is in <place>", closed by ")".
+;; An array is placed by its element class, a primitive array in java.base.
+(define (class-cast-message from target)
+  (let ([fx-name (external-class-name from)]
+        [tg-name (external-class-name target)]
+        [fc (find-class from)]
+        [tc (find-class target)])
+    (string-append
+     "class " fx-name " cannot be cast to class " tg-name " ("
+     (if (eq? (class-module fc) (class-module tc))
+         (string-append fx-name " and " tg-name " are in " (class-place-of fc))
+         (string-append fx-name " is in " (class-place-of fc) "; " tg-name " is in " (class-place-of tc)))
+     ")")))
 ;; Klass::external_name: dots, but a hidden class keeps the slash before its
 ;; /0x<n> suffix, inside an array's name too
 (define (external-class-name n)
