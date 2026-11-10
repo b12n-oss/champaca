@@ -7,6 +7,7 @@ The tasks below are in `bb.edn`, and `bb tasks` lists them with a line each. [ge
 ```sh
 bb jolt                                               # build the pinned jolt (about 45 s, once per pin)
 bb test                                               # every test/java and test/aaa program vs the JVM, plus the examples/*.clj tests
+                                                      # (a failing program's output goes to target/fails/, and the start of its diff is printed)
 JOLT=jolt bb test                                     # the same suite on the jolt from your PATH
 bb libs:fetch && bb libs                              # the eight real libraries vs the JVM (jars into ~/.m2)
 bb battery [ref]                                      # before a merge: bb test cold, warm, cache off and CHAMPACA_BT=1, then bb libs (after bb libs:fetch), on a worktree of HEAD

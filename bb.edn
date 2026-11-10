@@ -264,7 +264,17 @@
                                                                  (jolt-bin) "-M" "-m" "champaca.main"
                                                                  (concat opts ["target/classes:target/lib.jar:target/lib2.jar" m]))
                                        ok (and (zero? exit) (= out (slurp (str "test/java/" m ".expected"))))]]
-                             (do (println (if ok "PASS" "FAIL") m) (when-not ok m))))
+                             (do (println (if ok "PASS" "FAIL") m)
+                                 ;; a failing program's output is kept under target/fails/ and
+                                 ;; the start of its diff printed, so a CI log says what differed
+                                 (when-not ok
+                                   (let [actual (str "target/fails/" m ".out")]
+                                     (fs/create-dirs "target/fails")
+                                     (spit actual out)
+                                     (println "  exit" exit)
+                                     (let [d (:out (process/sh "diff" "-u" (str "test/java/" m ".expected") actual))]
+                                       (doseq [l (take 40 (str/split-lines (or d "")))] (println " " l)))))
+                                 (when-not ok m))))
                     jar-fails (let [{:keys [out exit]} (run-limited 300 {:label "jarmain"} (jolt-bin) "-M" "-m" "champaca.main" "-jar" "target/app.jar" "a" "b")
                                     ok (and (zero? exit) (= out (slurp "test/jarmain/JarMain.expected")))]
                                 (println (if ok "PASS" "FAIL") "-jar target/app.jar (test/jarmain)")
