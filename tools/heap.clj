@@ -80,7 +80,7 @@
     (doseq [t ["interned" "natives" "overrides" "elem-by-text" "interned-units" "frame-methods" "user-classes" "class-loaders"
                "package-modules" "jpackage-table" "hidden-methods" "defined-supers" "call-cache" "const-sites" "indy-sites" "class-by-symbol" "classes"]]
       (println (try (scm/eval-string (str "(heap-tally \"" t "\" " t ")")) (catch Throwable e (str t ": " (ex-message e))))))
-    (let [st @@#'champaca.main/state
+    (let [st @@#'champaca.state/state
           total (scm/eval-string "(lambda (x) (fold-left + 0 (map cddr (compute-composition x))))")]
       (println (scm/call "heap-tally" "main.clj state" st))
       (println "  state keys by reachable MB (compute-composition, overlapping):")
