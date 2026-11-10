@@ -59,7 +59,7 @@ jolt -M -m champaca.main target/classes Hello   # run a class bb test compiled
 - [app-bundles](docs/guide/app-bundles.md): shipping a program without a JDK.
 - [performance](docs/guide/performance.md) and [debugging](docs/guide/debugging.md): the caches, what generated code costs, the `CHAMPACA_*` switches.
 - [compatibility](docs/guide/compatibility.md), [limitations](docs/guide/limitations.md) and [how-it-works](docs/guide/how-it-works.md): what matches the JVM, what doesn't, and why.
-- [contributing](docs/guide/contributing.md) and [development](docs/guide/development.md): how a change gets in, the tasks, the checks before a merge.
+- [contributing](docs/guide/contributing.md) and [development](docs/guide/development.md): how a change gets in, the tasks, the checks before a merge. Changes written with an LLM's help are welcome on the same terms ([AI_POLICY.md](AI_POLICY.md)).
 
 ## The name
 

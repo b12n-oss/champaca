@@ -31,6 +31,8 @@ bb test      # every test program against the JVM, plus the examples
 - Docs ship with the change: a new behavior goes in the guide page that covers its area, and a new gap in [limitations](limitations.md).
 - The pull request says what changed and how it was checked: which tests, which comparison, which numbers.
 
+Writing a change with an LLM's help is fine. Either way you own what you submit, so it meets the same review, tests and gates as any other change. [AI_POLICY.md](../../AI_POLICY.md) states the project's stance in full.
+
 ## Source files
 
 Every source file, task file and script starts with the license header the others carry:
