@@ -236,8 +236,9 @@
 ;; at 13, not 16; three chars and a short: the short at 2). chez-misplaces?
 ;; places each stack argument both ways and refuses a signature where any
 ;; starts differ. Registers are assigned alike by both; variadic arguments
-;; take 8-byte slots in both. Linux arm64 and x86_64 aren't affected: Chez
-;; gives every stack argument there a multiple of 8 bytes, as their ABIs do.
+;; take 8-byte slots in both. Linux arm64 isn't affected: Chez gives every
+;; stack argument there a multiple of 8 bytes, as its ABI does. x86_64 places
+;; them right but copies some structs over the next one (sysv-stack-overrun?).
 (define ffi-macos-arm64? (memq (machine-type) '(arm64osx tarm64osx)))
 
 ;; a layout's scalar leaves as (kind size . offset), kind float, double or
@@ -321,6 +322,57 @@
                              (+ chez (- c-align (modulo chez 8))))])
            (or (not (= a-start c-start))
                (loop (cdr es) (+ a-start (cadr e)) (+ c-start (cadddr e)) #f))))))
+
+;; Chez Scheme's x86_64 System V backend (s/x86_64.ss load-content-stack)
+;; copies a struct passed on the stack in 8-, 4-, 2- and 1-byte pieces but
+;; stores each piece as a whole 8-byte word. For a size whose remainder mod 8
+;; is 3, 5, 6 or 7 the last store runs 2 to 6 bytes past the struct's slot,
+;; over the next stack argument (a short after a 3-byte struct read as 0) or
+;; past the argument area. sysv-stack-overrun? finds such a struct, placing
+;; arguments as Chez does: a struct goes on the stack when its eightbytes are
+;; memory class (over 16 bytes, empty, or a misaligned member) or don't fit
+;; the 6 integer and 8 SSE registers left.
+(define ffi-x86-64-sysv?
+  (memq (machine-type) '(a6le ta6le a6osx ta6osx a6fb ta6fb a6ob ta6ob a6nb ta6nb)))
+
+;; a struct's eightbyte classes as Chez's classify-eightbytes gives them
+(define (sysv-eightbyte-classes l)
+  (let ([size (layout-size l)])
+    (if (or (> size 16) (= size 0))
+        '(memory)
+        (let ([v (make-vector (quotient (+ size 7) 8) 'no-class)])
+          (let loop ([ls (layout-leaves l)])
+            (if (null? ls)
+                (vector->list v)
+                (let* ([x (car ls)] [sz (cadr x)] [off (cddr x)])
+                  (if (not (= 0 (modulo off sz)))
+                      '(memory)
+                      (let* ([pos (quotient off 8)]
+                             [old (vector-ref v pos)]
+                             [c (if (memq (car x) '(float double)) 'sse 'integer)])
+                        (vector-set! v pos (if (or (eq? old 'no-class) (eq? old c)) c 'integer))
+                        (loop (cdr ls)))))))))))
+
+(define (sysv-count c cs) (length (filter (lambda (x) (eq? x c)) cs)))
+
+;; ret-memory?: a struct result returned through a hidden pointer, which
+;; takes the first integer register
+(define (sysv-stack-overrun? layouts ret-memory?)
+  (and ffi-x86-64-sysv?
+       (let loop ([ls layouts] [iint (if ret-memory? 1 0)] [ifp 0])
+         (and (pair? ls)
+              (let ([l (car ls)])
+                (if (layout-group? l)
+                    (let* ([cs (sysv-eightbyte-classes l)]
+                           [ints (sysv-count 'integer cs)]
+                           [fps (sysv-count 'sse cs)])
+                      (if (or (eq? (car cs) 'memory) (> (+ iint ints) 6) (> (+ ifp fps) 8))
+                          (or (and (memv (modulo (layout-size l) 8) '(3 5 6 7)) #t)
+                              (loop (cdr ls) iint ifp))
+                          (loop (cdr ls) (+ iint ints) (+ ifp fps))))
+                    (if (memq (car (car (layout-leaves l))) '(float double))
+                        (loop (cdr ls) iint (if (< ifp 8) (+ ifp 1) ifp))
+                        (loop (cdr ls) (if (< iint 6) (+ iint 1) iint) ifp))))))))
 
 ;; a native buffer of n bytes, and a segment over it for the JDK's copy
 (define (native-temp n) (foreign-alloc (max n 1)))
@@ -505,6 +557,10 @@
          [_ (when (chez-misplaces? layouts variadic)
               (jthrow "java/lang/UnsupportedOperationException"
                       (string-append "champaca: Chez Scheme would put an argument passed on the stack in the wrong place here on macOS arm64: "
+                                     (jstring-of fd))))]
+         [_ (when (sysv-stack-overrun? layouts (and ret-struct (eq? 'memory (car (sysv-eightbyte-classes ret-struct)))))
+              (jthrow "java/lang/UnsupportedOperationException"
+                      (string-append "champaca: Chez Scheme would overwrite the argument after a struct passed on the stack here on x86_64: "
                                      (jstring-of fd))))]
          [maker (ffi-maker types (if ret-struct `(& ,(struct-ftype ret-struct)) (ffi-type ret)) variadic (not critical?))]
          [ret-address (ffi-return-address ret ret-struct ret-layout)]
