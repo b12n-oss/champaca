@@ -30,6 +30,7 @@ bb test      # every test program against the JVM, plus the examples
 - If you can run Docker, `bb linux` passes too.
 - Docs ship with the change: a new behavior goes in the guide page that covers its area, and a new gap in [limitations](limitations.md).
 - The pull request says what changed and how it was checked: which tests, which comparison, which numbers.
+- Commit messages and the pull request description carry no AI assistant attribution (a `Co-Authored-By: Claude` line, a session link, a "Generated with" footer). CI checks with `tools/attributioncheck.sh`, which you can run yourself: `sh tools/attributioncheck.sh origin/main..HEAD`.
 
 Writing a change with an LLM's help is fine. Either way you own what you submit, so it meets the same review, tests and gates as any other change. [AI_POLICY.md](../../AI_POLICY.md) states the project's stance in full.
 
