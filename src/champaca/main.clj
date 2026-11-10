@@ -674,6 +674,38 @@
   [entry]
   (str (.toURI (.getCanonicalFile (io/file entry)))))
 
+;; A resource name as it appears in a class loader's URL: letters, digits and
+;; the characters in encode-path-plain stay, / stays as the separator, every
+;; other character becomes %xx in lower-case hex over its UTF-8 bytes. A code
+;; point beyond the BMP is first split into its two UTF-16 units, each written
+;; as its own three bytes. Written from HotSpot 25's observed URLs.
+(def ^:private encode-path-plain
+  (set "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!$&'()*+,-.@_~/"))
+
+(defn- encode-unit
+  "The %xx text of one UTF-16 unit u (0 to 0xFFFF) as UTF-8 bytes."
+  [u]
+  (let [hex (fn [b] (str "%" (when (< b 16) "0") (Integer/toHexString b)))]
+    (cond
+      (< u 0x80) (hex u)
+      (< u 0x800) (str (hex (bit-or 0xC0 (bit-shift-right u 6)))
+                       (hex (bit-or 0x80 (bit-and u 0x3F))))
+      :else (str (hex (bit-or 0xE0 (bit-shift-right u 12)))
+                 (hex (bit-or 0x80 (bit-and (bit-shift-right u 6) 0x3F)))
+                 (hex (bit-or 0x80 (bit-and u 0x3F)))))))
+
+(defn- encode-path
+  [path]
+  (apply str
+         (for [ch path
+               :let [cp (int ch)]]
+           (cond
+             (contains? encode-path-plain ch) (str ch)
+             (> cp 0xFFFF) (let [v (- cp 0x10000)]
+                             (str (encode-unit (+ 0xD800 (bit-shift-right v 10)))
+                                  (encode-unit (+ 0xDC00 (bit-and v 0x3FF)))))
+             :else (encode-unit cp)))))
+
 (defn- resource-urls
   "Every classpath entry's URL for path, file: for a directory and jar: for a
   jar, in classpath order. In a directory anything that exists counts, a
