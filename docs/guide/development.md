@@ -19,6 +19,7 @@ jolt examples                                           # list the examples/*.cl
 jolt example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
 jolt heap target/classes Hello                          # where the memory goes: the live heap by type after Hello (roots or java for the other views)
 jolt prof target/classes Streams                        # where the time goes: the hottest Java frames of a run, sampled (PROF_US=500 for a finer interval)
+jolt warm                                               # a training run for the startup cache of the jolt on PATH (JOLT=... for another): compiles the JDK paths programs reach early
 jolt nrepl                                              # an nREPL server for your editor, on a free port written to .nrepl-port
 jolt metrics                                            # jolt-metrics: refactoring queue, hotspots, cleanup candidates (report only; jolt metrics:edn or metrics:json for data)
 jolt metrics:html                                       # the same as one page to share, target/metrics.html
