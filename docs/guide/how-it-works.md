@@ -120,6 +120,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/state.clj` | the state the others share (one atom), tracing and profiling, and packing cache entries |
 | `src/champaca/launcher.clj` | the `java`-like command line: options, `-D` properties, module options, the class path |
 | `src/champaca/classpath.clj` | where class and resource bytes come from: the JDK image, class path entries and their manifests, boot layer lookups, resource URLs |
+| `src/champaca/cachedir.clj` | where the caches live and what keys them: the cache root and key directory, the translator fingerprint, read-only caches and a bundle's user copy, pruning, compiled units |
 | `src/champaca/api.clj` | the jolt-facing API |
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |

@@ -174,9 +174,9 @@
         :task (shell "sh tools/build-jolt.sh")}
   test {:doc "javac test/java/*.java, run each main class through the JIT, diff against <Name>.expected; the same for upstream OpenLDK's test/aaa programs; then the examples/*.clj tests"
         :task (let [_ (println "jolt:" (jolt-bin) (str/trim (:out (shell {:out :string} (jolt-bin) "--version"))))
-                    ;; every translator source must be in main.clj's translator-sources, or
+                    ;; every translator source must be in cachedir.clj's translator-sources, or
                     ;; editing it would leave the startup cache key unchanged
-                    _ (let [text (slurp "src/champaca/main.clj")
+                    _ (let [text (slurp "src/champaca/cachedir.clj")
                             start (str/index-of text "(def ^:private translator-sources")
                             listed (subs text start (str/index-of text "]" start))
                             unlisted (->> (fs/glob "src/champaca" "*.clj")
@@ -185,7 +185,7 @@
                                           (remove (fn [n] (str/includes? listed (str "\"champaca/" n "\""))))
                                           sort)]
                         (when (seq unlisted)
-                          (println "bb test: src/champaca files missing from translator-sources in main.clj (the startup cache key would ignore edits to them):" (str/join ", " unlisted))
+                          (println "bb test: src/champaca files missing from translator-sources in cachedir.clj (the startup cache key would ignore edits to them):" (str/join ", " unlisted))
                           (System/exit 1)))
                     _ (shell "mkdir -p target/classes")
                     ;; test/jar is packed into target/lib.jar, so its classes reach
