@@ -52,16 +52,23 @@ jobs:
           key: ${{ steps.jolt.outputs.cache-primary-key }}
 
   # bb battery's other modes, one job each, in parallel: cold then warm on one
-  # cache, the cache off, and CHAMPACA_BT=1 (bb libs runs in linux-amd64). The
-  # same task as on a workstation, so CI and local runs mean the same thing;
-  # macOS arm64 still needs a local bb battery.
+  # cache, and CHAMPACA_BT=1 (bb libs runs in linux-amd64). The same task as on
+  # a workstation, so CI and local runs mean the same thing; macOS arm64 still
+  # needs a local bb battery. The cache-off mode boots the JDK from scratch for
+  # every program (over 90 minutes here), so it runs on main and by hand only.
   battery-amd64:
+    name: battery-amd64 (${{ matrix.modes }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        modes: ["cold,warm", "cache-off", "bt"]
+        modes: ["cold,warm", "bt", "cache-off"]
+        on-pr:
+          - ${{ github.event_name == 'pull_request' }}
+        exclude:
+          - modes: cache-off
+            on-pr: true
     steps:
       - uses: actions/checkout@v7
       - name: babashka 1.13.220
@@ -81,4 +88,10 @@ jobs:
           # runner's checkout, the container runs as root
           CHAMPACA_LINUX_RUN: git config --global --add safe.directory '*' && BATTERY_MODES=${{ matrix.modes }} bb battery
         run: bb linux amd64
-
+      # bb battery keeps each mode's output in target/battery/<tip>-<mode>.log
+      - name: the failed mode's log
+        if: failure()
+        run: |
+          for f in target/battery/*-*.log; do
+            echo "::group::$f"; grep -E '^FAIL|passed' "$f" || true; tail -n 60 "$f"; echo "::endgroup::"
+          done
