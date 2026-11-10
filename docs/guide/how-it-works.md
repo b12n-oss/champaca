@@ -116,7 +116,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 |---|---|
 | `src/champaca/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
 | `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
-| `src/champaca/main.clj` | boots the JDK and runs the `java`-like launcher |
+| `src/champaca/main.clj` | the `java`-like launcher: reads the command line and runs the main class |
 | `src/champaca/state.clj` | the state the others share (one atom), tracing and profiling, and packing cache entries |
 | `src/champaca/launcher.clj` | the `java`-like command line: options, `-D` properties, module options, the class path |
 | `src/champaca/classpath.clj` | where class and resource bytes come from: the JDK image, class path entries and their manifests, boot layer lookups, resource URLs |
@@ -125,6 +125,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/libcache.clj` | the caches that outlive a process: the library cache (classes from jars, directories and a program's own loaders, restored while what they depend on is unchanged) and the startup cache (`boot.so`, `state.img` and the generations later saves add) |
 | `src/champaca/loader.clj` | loads and defines classes (from the class path, the JDK's runtime image or a loader's `defineClass`), and the synthetic classes behind lambdas |
 | `src/champaca/jit.clj` | compiles methods on first call, and answers the runtime's hooks for NPE messages, stack frames' lines and constant pool entries |
+| `src/champaca/boot.clj` | boots the JDK: loads the runtime, installs its hooks and runs the JVM's boot before main, from the startup cache when it can |
 | `src/champaca/api.clj` | the jolt-facing API |
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |

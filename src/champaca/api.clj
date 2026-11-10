@@ -17,9 +17,9 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.scheme :as s]
+            [champaca.boot :as boot]
             [champaca.libcache :as libcache]
-            [champaca.loader :as loader]
-            [champaca.main :as main]))
+            [champaca.loader :as loader]))
 
 (defonce ^:private interop-loaded (atom false))
 (defonce ^:private dynamic-loaded (atom false))
@@ -92,7 +92,7 @@
    (let [classpath (or classpath
                        (some-> (System/getenv "CHAMPACA_CLASSPATH") not-empty
                                (str/split (re-pattern java.io.File/pathSeparator))))
-         status (main/init! (or classpath []) {:preview preview :add-modules add-modules})]
+         status (boot/init! (or classpath []) {:preview preview :add-modules add-modules})]
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "champaca/interop.ss")))
