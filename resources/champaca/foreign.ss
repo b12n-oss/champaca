@@ -539,6 +539,66 @@
     [(#\V) (void)]
     [else (if ret-address (ret-address r) r)]))
 
+(define (ffi-variadic-index options)
+  (and (ffi-option? options "isVariadicFunction()Z")
+       ((jvirt options "firstVariadicArgIndex()I") options)))
+;; the signatures Chez would pass wrongly are refused, macOS arm64 first
+(define (ffi-refuse-misplaced! fd layouts variadic ret-struct)
+  (when (chez-misplaces? layouts variadic)
+    (jthrow "java/lang/UnsupportedOperationException"
+            (string-append "champaca: Chez Scheme would put an argument passed on the stack in the wrong place here on macOS arm64: "
+                           (jstring-of fd))))
+  (when (sysv-stack-overrun? layouts (and ret-struct (eq? 'memory (car (sysv-eightbyte-classes ret-struct)))))
+    (jthrow "java/lang/UnsupportedOperationException"
+            (string-append "champaca: Chez Scheme would overwrite the argument after a struct passed on the stack here on x86_64: "
+                           (jstring-of fd)))))
+;; the handle's descriptor: target, allocator, the captured state segment if
+;; asked, then the arguments
+(define (ffi-handle-desc params ret capture?)
+  (string-append "(" ms-desc "Ljava/lang/foreign/SegmentAllocator;"
+                 (if capture? ms-desc "") (apply string-append params) ")" ret))
+
+;; What one downcall handle needs to run a call: argument kinds, the options
+;; that change the call, the result shape, the unboxer, the procedure maker and
+;; the box holding the last (addr . proc).
+(define-record-type ffi-sig
+  (fields kinds critical? heap? capture? ret ret-struct ret-address unbox maker last)
+  (sealed #t))
+
+;; one call, with st collecting what the end must release
+(define (ffi-invoke sg st all)
+  (let* ([capture? (ffi-sig-capture? sg)]
+         [critical? (ffi-sig-critical? sg)]
+         [ret-struct (ffi-sig-ret-struct sg)]
+         [unbox (ffi-sig-unbox sg)]
+         [target (nn (car all))]
+         [alloc (cadr all)]
+         [cap (and capture? (nn (caddr all)))]
+         [args (if capture? (cdddr all) (cddr all))])
+    (ffi-acquire! st target)
+    (when cap (ffi-acquire! st cap))
+    (let* ([addr (unbox target)]
+           [raw (ffi-raw-args st (ffi-sig-kinds sg) args (ffi-sig-heap? sg) unbox)]
+           [rt (and ret-struct (ffi-temp! st (layout-size ret-struct)))]
+           [f (ffi-proc-for! (ffi-sig-last sg) (ffi-sig-maker sg) addr)]
+           [r+e (ffi-run (lambda ()
+                           (let ([r (if rt (apply f rt raw) (apply f raw))])
+                             (if cap (cons r (errno)) r)))
+                         critical?)]
+           [r (if cap (car r+e) r+e)])
+      (when cap (ffi-set-captured! cap (cdr r+e)))
+      (ffi-copy-back! (ffi-call-heap-copies st))
+      (if rt
+          (ffi-struct-result alloc ret-struct rt unbox)
+          (ffi-value-result (ffi-sig-ret sg) r (ffi-sig-ret-address sg))))))
+(define (ffi-downcall-proc sg)
+  (lambda all
+    (let ([st (make-ffi-call '() '() '())])
+      (dynamic-wind
+        void
+        (lambda () (ffi-invoke sg st all))
+        (lambda () (ffi-release! st))))))
+
 (define (ffi-arrange mt fd options)
   (ffi-validate! mt fd options)
   (let* ([d (mt-desc mt)]
@@ -547,54 +607,20 @@
          [critical? (ffi-option? options "isCritical()Z")]
          [heap? (ffi-option? options "allowsHeapAccess()Z")]
          [capture? (ffi-option? options "hasCapturedCallState()Z")]
-         [variadic (and (ffi-option? options "isVariadicFunction()Z")
-                        ((jvirt options "firstVariadicArgIndex()I") options))]
+         [variadic (ffi-variadic-index options)]
          [layouts (ffi-argument-layouts fd)]
          [ret-layout (ffi-return-layout fd)]
          [kinds (ffi-arg-kinds params layouts)]
          [types (ffi-arg-types params layouts)]
          [ret-struct (and ret-layout (layout-group? ret-layout) ret-layout)]
-         [_ (when (chez-misplaces? layouts variadic)
-              (jthrow "java/lang/UnsupportedOperationException"
-                      (string-append "champaca: Chez Scheme would put an argument passed on the stack in the wrong place here on macOS arm64: "
-                                     (jstring-of fd))))]
-         [_ (when (sysv-stack-overrun? layouts (and ret-struct (eq? 'memory (car (sysv-eightbyte-classes ret-struct)))))
-              (jthrow "java/lang/UnsupportedOperationException"
-                      (string-append "champaca: Chez Scheme would overwrite the argument after a struct passed on the stack here on x86_64: "
-                                     (jstring-of fd))))]
+         [_ (ffi-refuse-misplaced! fd layouts variadic ret-struct)]
          [maker (ffi-maker types (if ret-struct `(& ,(struct-ftype ret-struct)) (ffi-type ret)) variadic (not critical?))]
          [ret-address (ffi-return-address ret ret-struct ret-layout)]
          [unbox (ffi-unboxer)]
-         [last (box (cons #f #f))]
-         [desc (string-append "(" ms-desc "Ljava/lang/foreign/SegmentAllocator;"
-                              (if capture? ms-desc "") (apply string-append params) ")" ret)])
-    (make-mh desc
-      (lambda all
-        (let* ([target (nn (car all))]
-               [alloc (cadr all)]
-               [cap (and capture? (nn (caddr all)))]
-               [args (if capture? (cdddr all) (cddr all))]
-               [st (make-ffi-call '() '() '())])
-          (dynamic-wind
-            void
-            (lambda ()
-              (ffi-acquire! st target)
-              (when cap (ffi-acquire! st cap))
-              (let* ([addr (unbox target)]
-                     [raw (ffi-raw-args st kinds args heap? unbox)]
-                     [rt (and ret-struct (ffi-temp! st (layout-size ret-struct)))]
-                     [f (ffi-proc-for! last maker addr)]
-                     [r+e (ffi-run (lambda ()
-                                     (let ([r (if rt (apply f rt raw) (apply f raw))])
-                                       (if cap (cons r (errno)) r)))
-                                   critical?)]
-                     [r (if cap (car r+e) r+e)])
-                (when cap (ffi-set-captured! cap (cdr r+e)))
-                (ffi-copy-back! (ffi-call-heap-copies st))
-                (if rt
-                    (ffi-struct-result alloc ret-struct rt unbox)
-                    (ffi-value-result ret r ret-address))))
-            (lambda () (ffi-release! st)))))
+         [last (box (cons #f #f))])
+    (make-mh (ffi-handle-desc params ret capture?)
+      (ffi-downcall-proc
+        (make-ffi-sig kinds critical? heap? capture? ret ret-struct ret-address unbox maker last))
       #f)))
 
 (for-each
