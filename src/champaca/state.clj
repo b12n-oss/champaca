@@ -15,18 +15,18 @@
 
 (defonce state (atom {:classpath [] :classes {} :jitted 0}))
 
-;; ensure-loaded! stays in champaca.main, which links classes with this
+;; ensure-loaded! is in champaca.loader, which links classes with this
 ;; namespace's readers and which they call back to load a class missing from
-;; the table; main installs it when it loads, boot! checks it is there.
+;; the table; loader installs it when it loads, boot! checks it is there.
 (defonce ensure-loaded-fn (atom nil))
 
 (defn ensure-loaded!*
-  "Load cname through champaca.main's ensure-loaded!, which main installs
+  "Load cname through champaca.loader's ensure-loaded!, which loader installs
   when it loads; a clear error when it hasn't (champaca.link used alone)."
   [cname]
   (if-let [f (deref ensure-loaded-fn)]
     (f cname)
-    (throw (ex-info "champaca.state/ensure-loaded-fn is unset: require champaca.main, which installs ensure-loaded!" {:class cname}))))
+    (throw (ex-info "champaca.state/ensure-loaded-fn is unset: require champaca.loader, which installs ensure-loaded!" {:class cname}))))
 
 (defn env [k] (System/getenv k))
 (defn trace? [] (some? (env "CHAMPACA_TRACE")))

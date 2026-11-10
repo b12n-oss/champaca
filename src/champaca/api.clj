@@ -18,6 +18,7 @@
             [clojure.string :as str]
             [jolt.scheme :as s]
             [champaca.libcache :as libcache]
+            [champaca.loader :as loader]
             [champaca.main :as main]))
 
 (defonce ^:private interop-loaded (atom false))
@@ -99,7 +100,7 @@
      (reset! interop-loaded true))
    (when-not @dynamic-loaded
      (s/eval-string (slurp (io/resource "champaca/dynamic.ss")))
-     (s/call "set-lambda-class-hook!" (fn [iface sam-key] (main/lambda-class [iface] [sam-key])))
+     (s/call "set-lambda-class-hook!" (fn [iface sam-key] (loader/lambda-class [iface] [sam-key])))
      (s/call "set-jolt-data-hook!" ->arg)
      (reset! dynamic-loaded true))
    ;; boot ran holding the lock; from here on each call takes it
@@ -108,11 +109,11 @@
    :ok))
 
 (defn call-static [cls mname desc & args]
-  (rethrow #(do (main/ensure-loaded! cls)
+  (rethrow #(do (loader/ensure-loaded! cls)
                 (apply s/call "ldk-call-static" cls mname desc args))))
 
 (defn new-object [cls desc & args]
-  (rethrow #(do (main/ensure-loaded! cls)
+  (rethrow #(do (loader/ensure-loaded! cls)
                 (apply s/call "ldk-new" cls desc args))))
 
 (defn call [obj mname desc & args]
@@ -122,7 +123,7 @@
   "A Java object implementing the single-method interface iface, whose
   method (mname, desc) calls the jolt fn f with converted arguments."
   [iface mname desc f]
-  (with-gil #(s/call "ldk-implement" (main/lambda-class [iface] [(str mname desc)]) desc f)))
+  (with-gil #(s/call "ldk-implement" (loader/lambda-class [iface] [(str mname desc)]) desc f)))
 
 (defn to-string [obj] (rethrow #(s/call "ldk-to-string" obj)))
 
