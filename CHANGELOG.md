@@ -50,6 +50,8 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- The jolt that `bb test` and the other tasks build is the v0.8.25 tag; champaca
+  still needs jolt 0.8.24 or later.
 - The largest functions were split into named steps, guided by
   jolt-metrics (`bb metrics`): codegen's `emit-block`, `compile-method`,
   `decode` and `render-steps`, the launcher's option parsing, the boot,
