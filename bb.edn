@@ -883,7 +883,7 @@
                     ;; arguments upstream's run.exp gives; .expected is the JVM's output
                     _ (fs/delete-tree "target/aaa-classes")
                     _ (fs/delete-tree "target/aaa-work")
-                    _ (apply shell "javac -nowarn -d target/aaa-classes" (map str (fs/glob "test/aaa" "*.java")))
+                    _ (apply shell "javac -nowarn -Xlint:-removal -d target/aaa-classes" (map str (fs/glob "test/aaa" "*.java")))
                     _ (fs/create-dirs "target/aaa-jar/a")
                     _ (spit "target/aaa-jar/a/x.txt" "x\n")
                     _ (shell "jar cf target/aaa-test.jar -C target/aaa-jar .")
