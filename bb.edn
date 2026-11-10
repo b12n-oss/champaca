@@ -1079,8 +1079,13 @@
                  (shell "bb libs:fetch")
                  (shell "docker run --rm --platform" (str "linux/" arch)
                         "-v" (str (fs/cwd) ":/champaca")
-                        ;; the jolt build and champaca's caches persist per architecture
-                        "-v" (str "champaca-linux-" arch ":/root")
+                        ;; the jolt build and champaca's caches persist per architecture,
+                        ;; in a volume, or in CHAMPACA_LINUX_HOME's directory (CI caches
+                        ;; the jolt binary from there)
+                        "-v" (str (or (some-> (System/getenv "CHAMPACA_LINUX_HOME") not-empty
+                                              (doto (fs/create-dirs)) fs/absolutize str)
+                                      (str "champaca-linux-" arch))
+                                  ":/root")
                         "-v" (str (System/getenv "HOME") "/.m2:/root/.m2:ro")
                         (str "champaca-linux:" arch)
                         "sh" "-c" "bb jolt && bb test && bb libs"))}
