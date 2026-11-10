@@ -71,7 +71,7 @@
 ;; on (user-deps).
 (def ^:dynamic *reads* nil)
 
-(defn pack
+(defn- pack
   "A class entry's edn text as UTF-8 bytes, the form the caches keep it in
   and the class table holds it in until thawed: a Chez string takes four
   bytes a character, and the JDK's entries alone run to 19 million
@@ -88,8 +88,8 @@
   (and (some? a) (some? b)
        (= (if (vector? a) (mapv unpack a) [(unpack a)]) (if (vector? b) (mapv unpack b) [(unpack b)]))))
 
-(def interned-strings (atom {}))
-(defn intern-string
+(def ^:private interned-strings (atom {}))
+(defn- intern-string
   "One copy of each string the thawed entries hold: a method's key recurs in
   the vtable of every class that inherits it, and a descriptor in every
   method with that signature; read apart, each is its own string of four

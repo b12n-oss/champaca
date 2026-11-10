@@ -15,7 +15,7 @@
 ;; roots  what each root holds, with symbols and code objects as leaves (a
 ;;        symbol's value, which compute-composition would follow, reaches
 ;;        everything from any compiled method): the runtime's string-keyed
-;;        tables, the class table, main.clj's state by key, then the symbol
+;;        tables, the class table, champaca.state's state by key, then the symbol
 ;;        and code names. Each object counts for the first root reaching it.
 ;; java   the Java object graph from every top-level symbol bound to a Java
 ;;        object, array or bignum (the static fields) and the intern table:
@@ -82,7 +82,7 @@
       (println (try (scm/eval-string (str "(heap-tally \"" t "\" " t ")")) (catch Throwable e (str t ": " (ex-message e))))))
     (let [st @@#'champaca.state/state
           total (scm/eval-string "(lambda (x) (fold-left + 0 (map cddr (compute-composition x))))")]
-      (println (scm/call "heap-tally" "main.clj state" st))
+      (println (scm/call "heap-tally" "champaca.state state" st))
       (println "  state keys by reachable MB (compute-composition, overlapping):")
       (doseq [[k m v] (sort-by (comp - second) (for [[k v] st] [k (mb (total v)) v]))
               :when (pos? m)]
