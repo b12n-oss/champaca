@@ -53,7 +53,7 @@
     ;; sources, which io/resource could still find in a checkout beside it
     ;; (a deps.edn in the current directory): the hash taken at build time.
     ;; Elsewhere the sources themselves, since jolt caches a compiled
-    ;; namespace by its own text, so main.clj's macro alone could miss a
+    ;; namespace by its own text, so this namespace's macro alone could miss a
     ;; codegen change
     (if (jolt.host/embedded-resource? "champaca/runtime.ss")
       (hash [rt (built-sources-hash)])
