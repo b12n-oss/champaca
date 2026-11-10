@@ -185,7 +185,7 @@
                                           (remove (fn [n] (str/includes? listed (str "\"champaca/" n "\""))))
                                           sort)]
                         (when (seq unlisted)
-                          (println "bb test: src/champaca files missing from translator-sources in cachedir.clj (the startup cache key would ignore edits to them):" (str/join ", " unlisted))
+                          (println "jolt test: src/champaca files missing from translator-sources in cachedir.clj (the startup cache key would ignore edits to them):" (str/join ", " unlisted))
                           (System/exit 1)))
                     _ (shell "mkdir -p target/classes")
                     ;; test/jar is packed into target/lib.jar, so its classes reach

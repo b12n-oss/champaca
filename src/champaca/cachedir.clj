@@ -35,7 +35,8 @@
 
 (def ^:private translator-sources
   ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"
-   "champaca/state.clj" "champaca/launcher.clj" "champaca/classpath.clj" "champaca/cachedir.clj"])
+   "champaca/state.clj" "champaca/launcher.clj" "champaca/classpath.clj" "champaca/cachedir.clj"
+   "champaca/link.clj"])
 
 (defmacro ^:private built-sources-hash
   "The translator sources' hash where this namespace is compiled: what a
