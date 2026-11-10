@@ -209,40 +209,57 @@
 ;; slot counted as stored, whatever its try range stored.
 (def ^:private handler-state {:stack [:catch] :written #{}})
 
+(defn- flow!
+  "Merges state st into the one held for the instruction at pc, and notes
+  in the flow's changed flag when that altered it. A pc that starts no
+  instruction is ignored."
+  [{:keys [states changed pos-of]} pc st]
+  (when-let [pos (pos-of pc)]
+    (let [old (get @states pos)
+          new (merge-state old st)]
+      (when (not= old new)
+        (vswap! states assoc pos new)
+        (vreset! changed true)))))
+
+(defn- step!
+  "Runs the instruction in state st: its handlers whose range covers it
+  start fresh, and every successor receives the state it leaves."
+  [{:keys [cp handlers] :as flow} {:keys [pc] :as insn} st]
+  (doseq [{:keys [start end handler]} handlers
+          :when (and (<= start pc) (< pc end))]
+    (flow! flow handler handler-state))
+  (doseq [[succ st'] (transfer cp insn st)]
+    (flow! flow succ st')))
+
+(defn- sweep
+  "One pass over the code in pc order. Answers the state at position target
+  if the pass reaches it, else nil."
+  [{:keys [insns states] :as flow} target]
+  (loop [pos 0]
+    (when (< pos (count insns))
+      (let [st (get @states pos)]
+        (cond
+          (nil? st) (recur (inc pos))
+          (= pos target) st
+          :else (do (step! flow (nth insns pos) st)
+                    (recur (inc pos))))))))
+
 (defn- analyze
   "Sweeps the code until one reaches the instruction at position target.
   Answers {:states pos->state :at state} with the in-state of every
   instruction processed so far, or nil if no sweep reaches it."
   [cp insns pos-of handlers target]
-  (let [n (count insns)
-        states (volatile! {0 {:stack [] :written #{}}})
-        changed (volatile! false)
-        flow! (fn [pc st]
-                (when-let [pos (pos-of pc)]
-                  (let [old (get @states pos)
-                        new (merge-state old st)]
-                    (when (not= old new)
-                      (vswap! states assoc pos new)
-                      (vreset! changed true)))))
-        sweep (fn []
-                (loop [pos 0]
-                  (when (< pos n)
-                    (if-let [st (get @states pos)]
-                      (if (= pos target)
-                        st
-                        (let [{:keys [pc] :as insn} (nth insns pos)]
-                          (doseq [{:keys [start end handler]} handlers
-                                  :when (and (<= start pc) (< pc end))]
-                            (flow! handler handler-state))
-                          (doseq [[succ st'] (transfer cp insn st)]
-                            (flow! succ st'))
-                          (recur (inc pos))))
-                      (recur (inc pos))))))]
+  (let [flow {:cp cp
+              :insns insns
+              :handlers handlers
+              :pos-of pos-of
+              :states (volatile! {0 {:stack [] :written #{}}})
+              :changed (volatile! false)}]
     (loop []
-      (vreset! changed false)
-      (if-let [at (sweep)]
-        {:states @states :at at}
-        (when @changed (recur))))))
+      (vreset! (:changed flow) false)
+      (if-let [at (sweep flow target)]
+        {:states @(:states flow) :at at}
+        (when @(:changed flow) (recur))))))
 
 ;; --- descriptions ------------------------------------------------------------
 
