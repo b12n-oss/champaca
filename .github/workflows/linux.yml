@@ -27,7 +27,7 @@ jobs:
       - uses: jlt-commons/setup-jolt@v1
         with:
           version: "0.8.25"
-      # the pinned jolt binary, built once per deps.edn and image (build-jolt.sh skips
+      # the pinned jolt binary, built once per deps.edn, build script and image (build-jolt.sh skips
       # the build when it is there); everything else in the container's home
       # starts fresh. The key is computed here only and reused by the save:
       # jolt linux downloads the JDK into ci/linux/cache/ during the run, so a
@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
-          key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
+          key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'tools/build-jolt.sh', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
       - name: jolt linux amd64
         env:
           CHAMPACA_LINUX_HOME: ${{ runner.temp }}/linux-home
@@ -82,7 +82,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
-          key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
+          key: jolt-linux-amd64-${{ hashFiles('deps.edn', 'tools/build-jolt.sh', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
       - name: jolt battery (${{ matrix.modes }})
         env:
           CHAMPACA_LINUX_HOME: ${{ runner.temp }}/linux-home

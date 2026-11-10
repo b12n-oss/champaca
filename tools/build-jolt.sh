@@ -32,8 +32,11 @@ src="${JOLT_SRC:-$HOME/dev/jolt}"
 git -C "$src" cat-file -e "$sha^{commit}" 2>/dev/null || git -C "$src" fetch "$url" "$sha" >&2
 # the release tags too: jolt's version is git describe over v* tags, so a
 # commit without its tag builds as the previous release plus a count, which
-# :jolt/min-version refuses. Not forced: a moved rolling tag is left alone.
-git -C "$src" fetch "$url" 'refs/tags/v*:refs/tags/v*' >&2 \
+# :jolt/min-version refuses. They come from jolt-lang/jolt whatever URL the pin
+# names, since a fork's tags can lag (a fork at v0.8.18 built as
+# v0.8.18-1049). Not forced: a moved rolling tag is left alone.
+tags_url="https://github.com/jolt-lang/jolt.git"
+git -C "$src" fetch "$tags_url" 'refs/tags/v*:refs/tags/v*' >&2 \
   || echo "build-jolt: some tags weren't updated (a moved tag is left as it was)" >&2
 
 wt="$dir/src"
