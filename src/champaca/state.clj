@@ -15,6 +15,13 @@
 
 (defonce state (atom {:classpath [] :classes {} :jitted 0}))
 
+;; ensure-loaded! stays in champaca.main, which links classes with this
+;; namespace's readers and which they call back to load a class missing from
+;; the table; main installs it when it loads, boot! checks it is there.
+(defonce ensure-loaded-fn (atom nil))
+
+(defn ensure-loaded!* [cname] ((deref ensure-loaded-fn) cname))
+
 (defn env [k] (System/getenv k))
 (defn trace? [] (some? (env "CHAMPACA_TRACE")))
 
