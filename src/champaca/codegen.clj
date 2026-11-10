@@ -524,7 +524,7 @@
 
 (defn- missing-class
   "The class a resolution failure says isn't there, or nil for any other
-  failure (main.clj's normalize: \"class not found\" with the name)."
+  failure (link.clj's normalize: \"class not found\" with the name)."
   [e]
   (let [d (ex-data e)]
     (when (and (= (set (keys d)) #{:class}) (str/starts-with? (str (ex-message e)) "class not found"))
@@ -598,7 +598,7 @@
         nil))))
 
 (defn- bad-class
-  "[class message] of a class whose file isn't a class file (main.clj's
+  "[class message] of a class whose file isn't a class file (link.clj's
   normalize), or nil for any other failure."
   [e]
   (let [d (ex-data e)]
@@ -607,22 +607,22 @@
 
 (defn- missing-method
   "[class name desc] of a method a call names that its class doesn't have
-  (main.clj's resolve-method, check-virtual), or nil for any other failure."
+  (link.clj's resolve-method, check-virtual), or nil for any other failure."
   [e]
   (let [d (ex-data e)]
     (when (and (= (set (keys d)) #{:class :method :desc}) (= "no such method" (ex-message e)))
       [(:class d) (:method d) (:desc d)])))
 
 (defn- refused-class
-  "[class error-class text] of a class the JVM refuses to define (main.clj
-  check-definition!, load-supertypes!), or nil."
+  "[class error-class text] of a class the JVM refuses to define (link.clj
+  check-definition!, loader.clj load-supertypes!), or nil."
   [e]
   (let [d (ex-data e)]
     (when (:linkage d) [(:class d) (:linkage d) (:message d)])))
 
 (defn- wrong-kind
   "[what class name desc] of a call whose instruction doesn't match the
-  method it resolves to (main.clj check-kind), or nil."
+  method it resolves to (link.clj check-kind), or nil."
   [e]
   (let [d (ex-data e)]
     (when (:icce d) [(:icce d) (:class d) (:method d) (:desc d)])))

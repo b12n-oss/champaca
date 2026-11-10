@@ -596,14 +596,14 @@
 (define (class-not-found-in e)
   (text-after (condition-text e) "class not found: "))
 ;; HotSpot's ClassFormatError text from a load whose class file (the class
-;; named or one it needs) isn't one: main.clj normalize's "class format
+;; named or one it needs) isn't one: link.clj normalize's "class format
 ;; error in X: <text>", or #f
 (define (class-format-of e)
   (let ([r (text-after (condition-text e) "class format error in ")])
     (and r (text-after r ": "))))
 ;; the same from generated code: an instruction naming such a class (codegen)
 (define (jthrow-class-format name msg) (jthrow "java/lang/ClassFormatError" msg))
-;; a class the JVM refuses to define (main.clj check-definition!): "linkage
+;; a class the JVM refuses to define (link.clj check-definition!): "linkage
 ;; error in X: <error class>|<text>" -> (error-class . text), or #f
 (define (linkage-error-of e)
   (let* ([r (text-after (condition-text e) "linkage error in ")]
@@ -652,7 +652,7 @@
 (define (jthrow-no-method cname name desc)
   (jthrow "java/lang/NoSuchMethodError" (method-external cname name desc)))
 ;; a call whose instruction doesn't match the static-ness of the method it
-;; resolves to (main.clj check-kind): what as HotSpot's LinkResolver says it
+;; resolves to (link.clj check-kind): what as HotSpot's LinkResolver says it
 (define (jthrow-icce what cname name desc)
   (jthrow "java/lang/IncompatibleClassChangeError" (string-append what " " (method-external cname name desc))))
 (define (method-proc cname key)
@@ -883,7 +883,7 @@
   (jthrow "java/lang/AbstractMethodError"
           (string-append "Method " (slashes->dots (jclass-cname c)) "." (symbol->string k) " is abstract")))
 
-;; the vtable entry for conflicting default methods (main.clj link)
+;; the vtable entry for conflicting default methods (link.clj link)
 (define (icce-stub msg)
   (lambda args (jthrow "java/lang/IncompatibleClassChangeError" msg)))
 
@@ -1469,7 +1469,7 @@
 (define (app-unnamed-module)
   (let ([l (app-loader)]) (and l (jslot l (jfield-index "java/lang/ClassLoader" "unnamedModule")))))
 (define package-modules (make-hashtable string-hash string=?))   ; "java/util" -> Module
-;; classes read from the classpath (main.clj registration-text): they stay in
+;; classes read from the classpath (link.clj registration-text): they stay in
 ;; the unnamed module whatever their package, as a classpath class does on the
 ;; JVM, where one in a package a JDK module owns is never even loaded
 (define user-classes (make-hashtable string-hash string=?))
@@ -1994,7 +1994,7 @@
   (when (champaca-global-name? s) (self-label! s))
   (top-level-bound? s))
 
-;; A method's text evaluated outside the cache paths (main.clj
+;; A method's text evaluated outside the cache paths (jit.clj
 ;; compile-method!), with inspector information as lines? decided, where
 ;; the global setting above would keep it for every method
 (define (eval-method-text text lines?)
