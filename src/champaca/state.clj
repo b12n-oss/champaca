@@ -20,7 +20,13 @@
 ;; the table; main installs it when it loads, boot! checks it is there.
 (defonce ensure-loaded-fn (atom nil))
 
-(defn ensure-loaded!* [cname] ((deref ensure-loaded-fn) cname))
+(defn ensure-loaded!*
+  "Load cname through champaca.main's ensure-loaded!, which main installs
+  when it loads; a clear error when it hasn't (champaca.link used alone)."
+  [cname]
+  (if-let [f (deref ensure-loaded-fn)]
+    (f cname)
+    (throw (ex-info "champaca.state/ensure-loaded-fn is unset: require champaca.main, which installs ensure-loaded!" {:class cname}))))
 
 (defn env [k] (System/getenv k))
 (defn trace? [] (some? (env "CHAMPACA_TRACE")))

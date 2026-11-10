@@ -324,7 +324,8 @@
     (not (get-in @state [:classes cname])) (load-new-class! cname))
   cname)
 
-(reset! ensure-loaded-fn ensure-loaded!)
+;; the var, so a REPL redefinition of ensure-loaded! reaches class-info too
+(reset! ensure-loaded-fn #'ensure-loaded!)
 
 (defn lambda-class
   "The synthetic class implementing ifaces for lambdas whose abstract
