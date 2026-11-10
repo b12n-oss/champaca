@@ -17,6 +17,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.scheme :as s]
+            [champaca.libcache :as libcache]
             [champaca.main :as main]))
 
 (defonce ^:private interop-loaded (atom false))
@@ -132,7 +133,7 @@
   also tells the JIT this process saves, so later compiles go straight to
   object code instead of being compiled again at the next call."
   []
-  (with-gil #(do (main/saves-generation!) (main/save-generation!))))
+  (with-gil #(do (libcache/saves-generation!) (libcache/save-generation!))))
 
 (defn- ->arg
   "jolt vectors go to Scheme as lists, which the runtime turns into a Java

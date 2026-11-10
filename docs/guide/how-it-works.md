@@ -116,12 +116,13 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 |---|---|
 | `src/champaca/classfile.clj` | parses `.class` files: constant pool, fields with `ConstantValue`, methods, `Code`, `BootstrapMethods` |
 | `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
-| `src/champaca/main.clj` | loads and defines classes (from the class path, the JDK's runtime image or a loader's `defineClass`), restores them through the library cache, compiles methods on first call, boots the JDK, and runs the `java`-like launcher |
+| `src/champaca/main.clj` | loads and defines classes (from the class path, the JDK's runtime image or a loader's `defineClass`), compiles methods on first call, boots the JDK, and runs the `java`-like launcher |
 | `src/champaca/state.clj` | the state the others share (one atom), tracing and profiling, and packing cache entries |
 | `src/champaca/launcher.clj` | the `java`-like command line: options, `-D` properties, module options, the class path |
 | `src/champaca/classpath.clj` | where class and resource bytes come from: the JDK image, class path entries and their manifests, boot layer lookups, resource URLs |
 | `src/champaca/cachedir.clj` | where the caches live and what keys them: the cache root and key directory, the translator fingerprint, read-only caches and a bundle's user copy, pruning, compiled units |
 | `src/champaca/link.clj` | the class table's readers and the linker: resolution of fields and methods, the class map with its field layout and vtable (interface defaults included), the registration text the runtime evaluates, HotSpot's checks of a definition |
+| `src/champaca/libcache.clj` | the caches that outlive a process: the library cache (classes from jars, directories and a program's own loaders, restored while what they depend on is unchanged) and the startup cache (`boot.so`, `state.img` and the generations later saves add) |
 | `src/champaca/api.clj` | the jolt-facing API |
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |
