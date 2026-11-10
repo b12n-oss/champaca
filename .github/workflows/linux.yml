@@ -1,10 +1,13 @@
 # champaca on Linux x86_64: bb test and the eight real libraries (bb libs) in
 # ci/linux's image, the same command as on a workstation (`bb linux amd64`).
-# Manual only, from the Actions tab or `gh workflow run linux`: while the repo
-# is private, a run costs Actions minutes (it builds jolt from source), so
-# nothing starts it on a push or a pull request.
+# Runs on a push to main, on every pull request, and by hand from the Actions
+# tab or `gh workflow run linux`. A run builds jolt from source, so it takes
+# a while.
 name: linux
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
