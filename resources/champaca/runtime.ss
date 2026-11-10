@@ -1923,30 +1923,33 @@
     [(#\D) (let ([b (if (nan? v) #x7ff8000000000000 (logand (double->bits v) #xffffffffffffffff))])
               (i32 (logxor b (ash b -32))))]
     [else v]))
+(define (record-slot o f) (vector-ref (jobj-slots o) (cadr f)))
+;; "Name[a=1, b=x]"
+(define (record-to-string simple fields this)
+  (jstring (string-append simple "["
+                          (let loop ([fs fields] [acc ""])
+                            (if (null? fs) acc
+                                (loop (cdr fs)
+                                      (string-append acc (if (string=? acc "") "" ", ")
+                                                     (car (car fs)) "=" (field-string (record-slot this (car fs)) (caddr (car fs)))))))
+                          "]")))
+(define (record-hash fields this)
+  (fold-left (lambda (h f) (i32 (+ (* 31 h) (field-hash (record-slot this f) (caddr f))))) 0 fields))
+;; a reference field is equal when identical or by its own equals, anything else by eqv?
+(define (record-field-equal? f a b)
+  (if (memv (string-ref (caddr f) 0) '(#\L #\[))
+      (or (eq? a b) (and a (not (eqv? 0 ((jvirt a "equals(Ljava/lang/Object;)Z") a b)))))
+      (eqv? a b)))
+(define (record-equals fields this o)
+  (if (and o (jobj? o) (eq? (jobj-cls o) (jobj-cls this))
+           (for-all (lambda (f) (record-field-equal? f (record-slot this f) (record-slot o f))) fields))
+      1 0))
 (define (jrecord-op op simple fields this . rest)
-  (let ([get (lambda (o f) (vector-ref (jobj-slots o) (cadr f)))])
-    (cond
-      [(string=? op "toString")
-       (jstring (string-append simple "["
-                               (let loop ([fs fields] [acc ""])
-                                 (if (null? fs) acc
-                                     (loop (cdr fs)
-                                           (string-append acc (if (string=? acc "") "" ", ")
-                                                          (car (car fs)) "=" (field-string (get this (car fs)) (caddr (car fs)))))))
-                               "]"))]
-      [(string=? op "hashCode")
-       (fold-left (lambda (h f) (i32 (+ (* 31 h) (field-hash (get this f) (caddr f))))) 0 fields)]
-      [(string=? op "equals")
-       (let ([o (car rest)])
-         (if (and o (jobj? o) (eq? (jobj-cls o) (jobj-cls this))
-                  (for-all (lambda (f)
-                             (let ([a (get this f)] [b (get o f)])
-                               (if (memv (string-ref (caddr f) 0) '(#\L #\[))
-                                   (or (eq? a b) (and a (not (eqv? 0 ((jvirt a "equals(Ljava/lang/Object;)Z") a b)))))
-                                   (eqv? a b))))
-                           fields))
-             1 0))]
-      [else (error 'champaca "record op" op)])))
+  (cond
+    [(string=? op "toString") (record-to-string simple fields this)]
+    [(string=? op "hashCode") (record-hash fields this)]
+    [(string=? op "equals") (record-equals fields this (car rest))]
+    [else (error 'champaca "record op" op)]))
 
 ;; Registration text is one-shot data plumbing (define a class, its statics,
 ;; a stub per method). Chez's interpreter runs it far cheaper than compile.
