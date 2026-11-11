@@ -11,7 +11,8 @@ import java.util.concurrent.locks.LockSupport;
 // since the JDK frames above them (Thread.sleep0, the native method on top)
 // differ between VMs, as do lambda classes' own frames (HotSpot's hidden
 // OtherStackCheck$$Lambda shows in getAllStackTraces); a thread not started
-// or finished has none.
+// or finished has none. Each thread's getState() is printed too, which
+// settle waits on.
 public class OtherStackCheck {
     static final Object LOCK = new Object();
     static final Object MONITOR = new Object();
@@ -56,6 +57,7 @@ public class OtherStackCheck {
             settle(p, Thread.State.WAITING);
             settle(b, Thread.State.BLOCKED);
             settle(a, Thread.State.RUNNABLE);
+            row("states", s.getState() + " " + w.getState() + " " + p.getState() + " " + b.getState() + " " + a.getState());
             row("sleeping", own(s.getStackTrace()));
             row("waiting", own(w.getStackTrace()));
             row("parked", own(p.getStackTrace()));

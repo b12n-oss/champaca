@@ -65,6 +65,10 @@ The first public version. Champaca is still experimental: the
   (or, for `getStackTrace`, an `UnsatisfiedLinkError`). A thread waiting in
   `sleep`, `wait`, `park`, a contended monitor or blocking I/O reads as on
   the JVM, but for the native frame on top (`test/java/OtherStackCheck.java`).
+- `Thread.getState()` says what a thread waits for, as on the JVM:
+  `TIMED_WAITING` while it sleeps, `WAITING` or `TIMED_WAITING` in
+  `Object.wait` and `LockSupport.park`, `BLOCKED` while it waits to enter a
+  monitor. It said `RUNNABLE` for all of them.
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm

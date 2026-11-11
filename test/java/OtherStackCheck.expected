@@ -1,9 +1,10 @@
 not started: 0
-sleeping: [innerSleep:35, outerSleep:34, sleeper:33]
-waiting: [waiter:37]
-parked: [parker:38]
-blocked on a monitor: [blocked:39]
-in accept: [acceptor:40, lambda$main$0:48]
-all stack traces: [innerSleep:35, outerSleep:34, sleeper:33] [waiter:37] [parker:38] [blocked:39] [acceptor:40, lambda$main$0:48] [main:64]
-own stack still: [main:67]
+states: TIMED_WAITING WAITING WAITING BLOCKED RUNNABLE
+sleeping: [innerSleep:36, outerSleep:35, sleeper:34]
+waiting: [waiter:38]
+parked: [parker:39]
+blocked on a monitor: [blocked:40]
+in accept: [acceptor:41, lambda$main$0:49]
+all stack traces: [innerSleep:36, outerSleep:35, sleeper:34] [waiter:38] [parker:39] [blocked:40] [acceptor:41, lambda$main$0:49] [main:66]
+own stack still: [main:69]
 finished: 0 0

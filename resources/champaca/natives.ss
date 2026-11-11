@@ -1645,7 +1645,7 @@
 (define (monitor-acquire! m s n)
   (when (jmonitor-owner m)
     (jmonitor-blocked-set! m (fx+ (jmonitor-blocked m) 1))
-    (gil-block! (lambda () (not (jmonitor-owner m))) #f)
+    (with-thread-status status-blocked (lambda () (gil-block! (lambda () (not (jmonitor-owner m))) #f)))
     (jmonitor-blocked-set! m (fx- (jmonitor-blocked m) 1)))
   (jmonitor-owner-set! m s)
   (jmonitor-count-set! m n))
@@ -1699,7 +1699,8 @@
     (when (take-interrupt! t) (jthrow "java/lang/InterruptedException" #f))
     (jmonitor-waiters-set! m (append (jmonitor-waiters m) (list w)))
     (monitor-release! m)
-    (gil-block! (lambda () (or (vector-ref w 1) (interrupted? t))) deadline)
+    (with-thread-status (status-object-wait deadline)
+      (lambda () (gil-block! (lambda () (or (vector-ref w 1) (interrupted? t))) deadline)))
     (jmonitor-waiters-set! m (remq w (jmonitor-waiters m)))
     (monitor-acquire! m s count)
     (when (and (not (vector-ref w 1)) (take-interrupt! t))
@@ -1728,10 +1729,33 @@
 ;; JVMTI thread state bits, as Thread.holder.threadStatus holds them
 (define status-runnable 5)    ; ALIVE | RUNNABLE
 (define status-terminated 2)
+;; HotSpot's statuses for a thread that waits (javaThreadStatus.hpp): ALIVE
+;; with WAITING (#x80) and WAITING_INDEFINITELY (#x10) or
+;; WAITING_WITH_TIMEOUT (#x20), and SLEEPING (#x40), IN_OBJECT_WAIT (#x100)
+;; or PARKED (#x200); BLOCKED_ON_MONITOR_ENTER (#x400) for a monitor
+(define status-sleeping #xE1)
+(define (status-object-wait timed?) (if timed? #x1A1 #x191))
+(define (status-parked timed?) (if timed? #x2A1 #x291))
+(define status-blocked #x401)
 
 (define (thread-status-set! t v)
   (let ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))])
     (jslot-set! holder (jfield-index "java/lang/Thread$FieldHolder" "threadStatus") v)))
+;; run thunk with the current Java thread's status set to v, as HotSpot
+;; sets it around a wait, so Thread.getState says what the thread waits
+;; for; the status it had comes back after, however thunk leaves. A thread
+;; outside Java (no current Java thread) has no status to set
+(define (with-thread-status v thunk)
+  (let ([t current-jthread])
+    (if (jobj? t)
+        (let* ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))]
+               [i (jfield-index "java/lang/Thread$FieldHolder" "threadStatus")]
+               [before (jslot holder i)])
+          (dynamic-wind
+            (lambda () (jslot-set! holder i v))
+            thunk
+            (lambda () (jslot-set! holder i before))))
+        (thunk))))
 (define (thread-daemon? t)
   (let ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))])
     (fx= 1 (jslot holder (jfield-index "java/lang/Thread$FieldHolder" "daemon")))))
@@ -1762,7 +1786,8 @@
 (defnative "java/lang/Thread.sleepNanos0(J)V" (nanos)
   (let ([t current-jthread])
     (when (take-interrupt! t) (jthrow "java/lang/InterruptedException" "sleep interrupted"))
-    (when (gil-block! (lambda () (interrupted? t)) (deadline-after-nanos (max nanos 0)))
+    (when (with-thread-status status-sleeping
+            (lambda () (gil-block! (lambda () (interrupted? t)) (deadline-after-nanos (max nanos 0)))))
       (take-interrupt! t)
       (jthrow "java/lang/InterruptedException" "sleep interrupted"))))
 
@@ -1776,12 +1801,13 @@
   (let ([s (self)] [t current-jthread])
     (unless (or (jthread-state-permit s) (interrupted? t)
                 (and (fx= absolute 1) (<= time (quotient (now-nanos) 1000000))))
-      (gil-block! (lambda () (or (jthread-state-permit s) (interrupted? t)))
-                  (cond [(fx= absolute 1)
-                         (let ([n (* time 1000000)])
-                           (make-time 'time-utc (remainder n 1000000000) (quotient n 1000000000)))]
-                        [(> time 0) (deadline-after-nanos time)]
-                        [else #f])))
+      (let ([deadline (cond [(fx= absolute 1)
+                             (let ([n (* time 1000000)])
+                               (make-time 'time-utc (remainder n 1000000000) (quotient n 1000000000)))]
+                            [(> time 0) (deadline-after-nanos time)]
+                            [else #f])])
+        (with-thread-status (status-parked deadline)
+          (lambda () (gil-block! (lambda () (or (jthread-state-permit s) (interrupted? t))) deadline)))))
     (jthread-state-permit-set! s #f)))
 
 (defnative "jdk/internal/misc/Unsafe.unpark(Ljava/lang/Object;)V" (this t)
