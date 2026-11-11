@@ -12,9 +12,13 @@
 ;; NioSocketImpl, so a blocking socket is a real socket fd configured
 ;; non-blocking when a timeout is set, polled with poll(2).
 ;;
-;; IPv4 only: Net.isIPv6Available0 and InetAddress.isIPv6Supported both say
-;; no, so every address is a sockaddr_in and an Inet6Address is refused with
-;; the JDK's "Protocol family unavailable". Blocking calls (connect, accept,
+;; IPv6 as the JDK has it (net_util.c ipv6_available): available when an
+;; AF_INET6 socket can be made (on Linux, when /proc/net/if_inet6 lists an
+;; address) and java.net.preferIPv4Stack isn't true. The JDK then makes every
+;; socket AF_INET6 with IPV6_V6ONLY off, an IPv4 address going as
+;; ::ffff:a.b.c.d, and resolves through Inet6AddressImpl; without it every
+;; address is a sockaddr_in and an Inet6Address is "Protocol family
+;; unavailable". Blocking calls (connect, accept,
 ;; poll, read, write, getaddrinfo) give the GIL up through __collect_safe
 ;; entries. A write to a socket whose peer is gone raises SIGPIPE, which
 ;; would end a process that hasn't ignored it. Chez's runtime ignores it
@@ -33,13 +37,13 @@
     (SO_NOSIGPIPE . #x1022) (MSG_NOSIGNAL . 0) (FIONREAD . #x4004667f) (O_NONBLOCK . 4) (NI_NAMEREQD . 4)
     (EAGAIN . 35) (EINPROGRESS . 36) (EALREADY . 37) (EISCONN . 56) (ECONNREFUSED . 61) (ECONNRESET . 54)
     (ETIMEDOUT . 60) (ENOTCONN . 57) (EHOSTUNREACH . 65) (EADDRINUSE . 48) (EADDRNOTAVAIL . 49) (EPROTO . 100)
-    (ENETUNREACH . 51) (EAFNOSUPPORT . 47) (ai-addr . 32)))
+    (ENETUNREACH . 51) (EAFNOSUPPORT . 47) (ai-addr . 32) (AF_INET6 . 30) (IPV6_V6ONLY . 27)))
 (define net-consts-linux
   '((SOL_SOCKET . 1) (SO_REUSEADDR . 2) (SO_REUSEPORT . 15) (SO_ERROR . 4) (SO_LINGER . 13)
     (SO_NOSIGPIPE . #f) (MSG_NOSIGNAL . #x4000) (FIONREAD . #x541b) (O_NONBLOCK . 2048) (NI_NAMEREQD . 8)
     (EAGAIN . 11) (EINPROGRESS . 115) (EALREADY . 114) (EISCONN . 106) (ECONNREFUSED . 111) (ECONNRESET . 104)
     (ETIMEDOUT . 110) (ENOTCONN . 107) (EHOSTUNREACH . 113) (EADDRINUSE . 98) (EADDRNOTAVAIL . 99) (EPROTO . 71)
-    (ENETUNREACH . 101) (EAFNOSUPPORT . 97) (ai-addr . 24)))
+    (ENETUNREACH . 101) (EAFNOSUPPORT . 97) (ai-addr . 24) (AF_INET6 . 10) (IPV6_V6ONLY . 26)))
 (define (net-const name)
   (cdr (or (assq name (if net-macos? net-consts-macos net-consts-linux)) (error 'champaca "no net constant" name))))
 ;; the same on both: AF_INET 2, SOCK_STREAM 1, SOCK_DGRAM 2, EINTR 4, EPIPE 32,
@@ -47,7 +51,9 @@
 ;; POLLHUP 16, POLLNVAL 32; struct addrinfo: ai_family at 4, ai_socktype at 8,
 ;; ai_next at 40, 48 bytes; struct pollfd {int fd; short events, revents};
 ;; struct linger {int l_onoff; int l_linger}; sockaddr_in 16 bytes with the
-;; port at 2 and the address at 4, both big-endian
+;; port at 2 and the address at 4, both big-endian; sockaddr_in6 28 bytes, the
+;; port at 2, flow info at 4, the address at 8, the scope id at 24;
+;; IPPROTO_IPV6 41
 
 (deflibc libc-socket "socket" #f (int int int) int)
 (deflibc libc-bind "bind" #f (int uptr unsigned-32) int)
@@ -83,43 +89,118 @@
 ;; --- addresses -----------------------------------------------------------------------
 (define (ia-holder ia) (jslot (nn ia) (jfield-index "java/net/InetAddress" "holder")))
 (define (ia-family ia) (jslot (ia-holder ia) (jfield-index "java/net/InetAddress$InetAddressHolder" "family")))
+(define (ia-v4-raw ia) (fxlogand (jslot (ia-holder ia) (jfield-index "java/net/InetAddress$InetAddressHolder" "address")) #xffffffff))
 ;; an InetAddress's IPv4 address as a 32-bit unsigned number
 (define (ia-ipv4 ia)
   (unless (fx= (ia-family ia) 1) (jthrow "java/net/SocketException" "Protocol family unavailable"))
-  (fxlogand (jslot (ia-holder ia) (jfield-index "java/net/InetAddress$InetAddressHolder" "address")) #xffffffff))
+  (ia-v4-raw ia))
+(define (ia-holder6 ia) (jslot (nn ia) (jfield-index "java/net/Inet6Address" "holder6")))
+(define (holder6-field name) (jfield-index "java/net/Inet6Address$Inet6AddressHolder" name))
+;; an Inet6Address's 16 bytes as a list, and its scope id (0 when none)
+(define (ia-ipv6-bytes ia)
+  (map (lambda (b) (fxlogand b 255)) (vector->list (jarr-vec (jslot (ia-holder6 ia) (holder6-field "ipaddress"))))))
+(define (ia-scope ia) (jslot (ia-holder6 ia) (holder6-field "scope_id")))
 (define (inet4 host ip)   ; host a jstring or #f
   (jinit "java/net/Inet4Address")
   (construct "java/net/Inet4Address" "(Ljava/lang/String;I)V" host (i32 ip)))
-(define (inet-socket-address ip port)
-  (construct "java/net/InetSocketAddress" "(Ljava/net/InetAddress;I)V" (inet4 #f ip) port))
+;; an Inet6Address of 16 bytes; a scope of 0 is none, as NET_SockaddrToInetAddress
+;; sets it (so ::1 prints without a %0)
+(define (inet6 host bytes scope)
+  (jinit "java/net/Inet6Address")
+  (construct "java/net/Inet6Address" "(Ljava/lang/String;[BI)V" host
+             (make-jarr "B" (list->vector (map i2b bytes))) (if (eqv? scope 0) -1 scope)))
+;; an IPv4-mapped address, ::ffff:a.b.c.d, is the Inet4Address a.b.c.d
+(define (v4-mapped? bytes)
+  (let loop ([i 0] [bs bytes])
+    (cond [(fx= i 10) (and (fx= (car bs) 255) (fx= (cadr bs) 255))]
+          [(fx= (car bs) 0) (loop (fx+ i 1) (cdr bs))]
+          [else #f])))
+(define (bytes->ip4 bs) (fold-left (lambda (acc b) (fxlogor (fxsll acc 8) b)) 0 bs))
+(define (inet-socket-address-of ia port)
+  (construct "java/net/InetSocketAddress" "(Ljava/net/InetAddress;I)V" ia port))
+(define (inet-socket-address ip port) (inet-socket-address-of (inet4 #f ip) port))
 
 (define sockaddr-size 16)
-(define (sockaddr-in! sa ip port)
-  (do ([i 0 (fx+ i 1)]) ((fx= i sockaddr-size)) (foreign-set! 'unsigned-8 sa i 0))
+(define sockaddr6-size 28)
+(define (sockaddr-family sa) (if net-macos? (foreign-ref 'unsigned-8 sa 1) (foreign-ref 'unsigned-16 sa 0)))
+(define (sockaddr-head! sa size family)
+  (do ([i 0 (fx+ i 1)]) ((fx= i size)) (foreign-set! 'unsigned-8 sa i 0))
   (if net-macos?
-      (begin (foreign-set! 'unsigned-8 sa 0 sockaddr-size) (foreign-set! 'unsigned-8 sa 1 2))
-      (foreign-set! 'unsigned-16 sa 0 2))
+      (begin (foreign-set! 'unsigned-8 sa 0 size) (foreign-set! 'unsigned-8 sa 1 family))
+      (foreign-set! 'unsigned-16 sa 0 family)))
+(define (sockaddr-port! sa port)
   (foreign-set! 'unsigned-8 sa 2 (fxlogand (fxsrl port 8) 255))
-  (foreign-set! 'unsigned-8 sa 3 (fxlogand port 255))
+  (foreign-set! 'unsigned-8 sa 3 (fxlogand port 255)))
+(define (sockaddr-in! sa ip port)
+  (sockaddr-head! sa sockaddr-size 2)
+  (sockaddr-port! sa port)
   (do ([i 0 (fx+ i 1)]) ((fx= i 4))
     (foreign-set! 'unsigned-8 sa (fx+ 4 i) (fxlogand (fxsrl ip (fx* 8 (fx- 3 i))) 255))))
+(define (sockaddr-in6! sa bytes scope port)
+  (sockaddr-head! sa sockaddr6-size (net-const 'AF_INET6))
+  (sockaddr-port! sa port)
+  (let loop ([i 0] [bs bytes]) (unless (null? bs) (foreign-set! 'unsigned-8 sa (fx+ 8 i) (car bs)) (loop (fx+ i 1) (cdr bs))))
+  (foreign-set! 'unsigned-32 sa 24 scope))
 (define (sockaddr-port sa) (fxlogor (fxsll (foreign-ref 'unsigned-8 sa 2) 8) (foreign-ref 'unsigned-8 sa 3)))
 (define (sockaddr-ip sa)
   (let loop ([i 0] [acc 0])
     (if (fx= i 4) acc (loop (fx+ i 1) (fxlogor (fxsll acc 8) (foreign-ref 'unsigned-8 sa (fx+ 4 i)))))))
-;; (k sa) with a sockaddr_in for ia:port in fresh foreign memory, freed after
-(define (with-sockaddr ia port k)
-  (let ([ip (ia-ipv4 ia)] [sa (foreign-alloc sockaddr-size)])
-    (sockaddr-in! sa ip port)
-    (let ([r (guard (e [#t (foreign-free sa) (raise e)]) (k sa))])
+(define (sockaddr6-bytes sa)
+  (let loop ([i 15] [acc '()]) (if (fx< i 0) acc (loop (fx- i 1) (cons (foreign-ref 'unsigned-8 sa (fx+ 8 i)) acc)))))
+;; the InetAddress a sockaddr holds, as NET_SockaddrToInetAddress makes it
+(define (sockaddr->inet sa)
+  (if (fx= (sockaddr-family sa) (net-const 'AF_INET6))
+      (let ([bs (sockaddr6-bytes sa)])
+        (if (v4-mapped? bs)
+            (inet4 #f (bytes->ip4 (list-tail bs 12)))
+            (inet6 #f bs (foreign-ref 'unsigned-32 sa 24))))
+      (inet4 #f (sockaddr-ip sa))))
+;; ia:port as the socket's family has it (v6 true for an AF_INET6 socket: an
+;; IPv4 address mapped), into sa (sockaddr6-size bytes); answers its length.
+;; An Inet6Address for an IPv4 socket is "Protocol family unavailable"
+(define (sockaddr-for! sa ia port v6)
+  (cond [(not v6) (sockaddr-in! sa (ia-ipv4 ia) port) sockaddr-size]
+        [(fx= (ia-family ia) 1)
+         ;; 0.0.0.0 is ::, the dual-stack wildcard (::ffff:0.0.0.0 would hear
+         ;; IPv4 only), as NET_InetAddressToSockaddr maps it
+         (let ([ip (ia-v4-raw ia)])
+           (sockaddr-in6! sa (if (fx= ip 0)
+                                 (make-list 16 0)
+                                 (append '(0 0 0 0 0 0 0 0 0 0 255 255)
+                                         (list (fxsrl ip 24) (fxlogand (fxsrl ip 16) 255) (fxlogand (fxsrl ip 8) 255) (fxlogand ip 255))))
+                          0 port)
+           sockaddr6-size)]
+        [else (sockaddr-in6! sa (ia-ipv6-bytes ia) (ia-scope ia) port) sockaddr6-size]))
+;; (k sa len) with a sockaddr for ia:port in fresh foreign memory, freed after
+(define (with-sockaddr ia port v6 k)
+  (let ([sa (foreign-alloc sockaddr6-size)])
+    (let ([r (guard (e [#t (foreign-free sa) (raise e)]) (k sa (sockaddr-for! sa ia port v6)))])
       (foreign-free sa) r)))
-;; (k sa) with an empty sockaddr_in and its length cell, for getsockname and the like
+;; (k sa len) with an empty sockaddr, room for either family, and its length cell,
+;; for getsockname and the like
 (define (with-sockaddr-out k)
-  (let ([sa (foreign-alloc sockaddr-size)] [len (foreign-alloc 4)])
-    (do ([i 0 (fx+ i 1)]) ((fx= i sockaddr-size)) (foreign-set! 'unsigned-8 sa i 0))
-    (foreign-set! 'unsigned-32 len 0 sockaddr-size)
+  (let ([sa (foreign-alloc sockaddr6-size)] [len (foreign-alloc 4)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i sockaddr6-size)) (foreign-set! 'unsigned-8 sa i 0))
+    (foreign-set! 'unsigned-32 len 0 sockaddr6-size)
     (let ([r (guard (e [#t (foreign-free sa) (foreign-free len) (raise e)]) (k sa len))])
       (foreign-free sa) (foreign-free len) r)))
+
+;; whether IPv6 is there, as net_util.c's ipv6_available decides it, once
+(define net-ipv6-answer 'unknown)
+(define (prefer-ipv4-stack?)
+  (let ([v ((method-proc "java/lang/System" "getProperty(Ljava/lang/String;)Ljava/lang/String;") (jstring "java.net.preferIPv4Stack"))])
+    (and v (string-ci=? (jstring->scheme v) "true"))))
+(define (net-ipv6?)
+  (when (eq? net-ipv6-answer 'unknown)
+    (set! net-ipv6-answer
+          (and (let ([fd (libc-socket (net-const 'AF_INET6) 1 0)])
+                 (and (fx>= fd 0) (begin (libc-close fd) #t)))
+               (or net-macos?
+                   (guard (e [#t #f])
+                     (and (file-exists? "/proc/net/if_inet6")
+                          (not (eof-object? (call-with-input-file "/proc/net/if_inet6" get-line))))))
+               (not (prefer-ipv4-stack?)))))
+  net-ipv6-answer)
 
 (define (net-fd fdo) (fdo-fd fdo))
 (define (local-sockaddr fd k) (with-sockaddr-out (lambda (sa len) (check-socket (libc-getsockname fd sa len)) (k sa))))
@@ -174,16 +255,20 @@
 
 ;; --- sun.nio.ch.Net ------------------------------------------------------------------
 (define (defnet sig proc) (define-native! (string-append "sun/nio/ch/Net." sig) proc))
-(defnet "isIPv6Available0()Z" (lambda () 0))
+(defnet "isIPv6Available0()Z" (lambda () (if (net-ipv6?) 1 0)))
 (defnet "isReusePortAvailable0()Z" (lambda () 1))
 (defnet "isExclusiveBindAvailable()I" (lambda () -1))
 ;; macOS needs the write side shut before close so the peer sees the FIN
 ;; before a reset, as the JDK's native answers there
 (defnet "shouldShutdownWriteBeforeClose0()Z" (lambda () (if net-macos? 1 0)))
 (defnet "shouldSetBothIPv4AndIPv6Options0()Z" (lambda () (if net-macos? 0 1)))
-(defnet "canIPv6SocketJoinIPv4Group0()Z" (lambda () 0))
-(defnet "canJoin6WithIPv4Group0()Z" (lambda () 0))
-(defnet "canUseIPv6OptionsWithIPv4LocalAddress0()Z" (lambda () 0))
+;; as Net.c answers them per platform: an IPv6 socket can join an IPv4 group
+;; on both; IPV6_ADD_MEMBERSHIP takes an IPv4 group, and IPV6_ options work
+;; on an IPv6 socket bound to an IPv4 address, on macOS only (Linux refuses
+;; them there, so the JDK uses the IPv4 options)
+(defnet "canIPv6SocketJoinIPv4Group0()Z" (lambda () 1))
+(defnet "canJoin6WithIPv4Group0()Z" (lambda () (if net-macos? 1 0)))
+(defnet "canUseIPv6OptionsWithIPv4LocalAddress0()Z" (lambda () (if net-macos? 1 0)))
 (defnet "pollinValue()S" (lambda () 1))
 (defnet "polloutValue()S" (lambda () 4))
 (defnet "pollerrValue()S" (lambda () 8))
@@ -196,8 +281,10 @@
 ;; at the buffer's size, best effort as there (the JDK checks neither call);
 ;; on Linux IP_MULTICAST_ALL off (49), so a socket only hears the groups it
 ;; joined, where only a kernel without the option (ENOPROTOOPT, 92) is let
-;; pass and any other failure is the JDK's IOException
-(define (datagram-socket! fd)
+;; pass and any other failure is the JDK's IOException; an IPv6 one sets
+;; IPV6_MULTICAST_ALL (29) instead and IPV6_MULTICAST_HOPS (18) to 1, as
+;; Linux's default is the route's
+(define (datagram-socket! fd v6)
   (if net-macos?
       (let ([buf (foreign-alloc 4)] [len (foreign-alloc 4)])
         (foreign-set! 'int buf 0 0)
@@ -209,32 +296,43 @@
         (foreign-free buf) (foreign-free len))
       (let ([buf (foreign-alloc 4)])
         (foreign-set! 'int buf 0 0)
-        (let* ([r (libc-setsockopt fd 0 49 buf 4)] [e (errno)])
-          (foreign-free buf)
+        (let* ([r (libc-setsockopt fd (if v6 41 0) (if v6 29 49) buf 4)] [e (errno)])
           (when (and (< r 0) (not (fx= e 92)))
+            (foreign-free buf)
             (libc-close fd)
-            (jthrow "java/io/IOException" (strerror-text e)))))))
+            (jthrow "java/io/IOException" (strerror-text e)))
+          (when v6
+            (foreign-set! 'int buf 0 1)
+            (let* ([r (libc-setsockopt fd 41 18 buf 4)] [e (errno)])
+              (when (< r 0)
+                (foreign-free buf)
+                (libc-close fd)
+                (jthrow "java/io/IOException" (strerror-text e)))))
+          (foreign-free buf)))))
 (defnet "socket0(ZZZZ)I"
   (lambda (ipv6 stream reuse fast)
-    (let ([fd (check-socket (libc-socket 2 (if (eqv? stream 1) 1 2) 0))])
+    (let* ([v6 (eqv? ipv6 1)]
+           [fd (check-socket (libc-socket (if v6 (net-const 'AF_INET6) 2) (if (eqv? stream 1) 1 2) 0))])
       ;; the new fd doesn't leak when its option can't be set
-      (when (eqv? reuse 1)
-        (guard (e [#t (libc-close fd) (raise e)])
+      (guard (e [#t (libc-close fd) (raise e)])
+        ;; dual stack: an IPv4 peer reaches an IPv6 socket through a mapped address
+        (when v6 (set-int-option! fd 41 (net-const 'IPV6_V6ONLY) 0))
+        (when (eqv? reuse 1)
           (set-int-option! fd (net-const 'SOL_SOCKET) (net-const 'SO_REUSEADDR) 1)))
       (quiet-pipe! fd)
-      (unless (eqv? stream 1) (datagram-socket! fd))
+      (unless (eqv? stream 1) (datagram-socket! fd v6))
       fd)))
 (defnet "bind0(Ljava/io/FileDescriptor;ZZLjava/net/InetAddress;I)V"
   (lambda (fdo ipv6 excl ia port)
-    (with-sockaddr ia port (lambda (sa) (check-socket (libc-bind (net-fd fdo) sa sockaddr-size)) (void)))))
+    (with-sockaddr ia port (eqv? ipv6 1) (lambda (sa len) (check-socket (libc-bind (net-fd fdo) sa len)) (void)))))
 (defnet "listen(Ljava/io/FileDescriptor;I)V"
   (lambda (fdo backlog) (check-socket (libc-listen (net-fd fdo) backlog)) (void)))
 ;; 1 connected; -2 in progress (a non-blocking socket); -3 interrupted
 (defnet "connect0(ZLjava/io/FileDescriptor;Ljava/net/InetAddress;I)I"
   (lambda (ipv6 fdo ia port)
-    (with-sockaddr ia port
-      (lambda (sa)
-        (let ([r (released-call* (lambda () (libc-connect-blocking (net-fd fdo) sa sockaddr-size)))])
+    (with-sockaddr ia port (eqv? ipv6 1)
+      (lambda (sa len)
+        (let ([r (released-call* (lambda () (libc-connect-blocking (net-fd fdo) sa len)))])
           (if (fx>= r 0)
               1
               (let ([e (errno)])
@@ -250,7 +348,7 @@
          (if (fx>= r 0)
              (begin (fdo-fd-set! newfdo r)   ; the caller owns the fd from here, whatever follows
                     (quiet-pipe! r)
-                    (vector-set! (jarr-vec isaa) 0 (inet-socket-address (sockaddr-ip sa) (sockaddr-port sa)))
+                    (vector-set! (jarr-vec isaa) 0 (inet-socket-address-of (sockaddr->inet sa) (sockaddr-port sa)))
                     1)
              (let ([e (errno)])
                (cond [(fx= e (net-const 'EAGAIN)) -2]
@@ -263,10 +361,10 @@
     (void)))
 (defnet "localPort(Ljava/io/FileDescriptor;)I" (lambda (fdo) (local-sockaddr (net-fd fdo) sockaddr-port)))
 (defnet "localInetAddress(Ljava/io/FileDescriptor;)Ljava/net/InetAddress;"
-  (lambda (fdo) (local-sockaddr (net-fd fdo) (lambda (sa) (inet4 #f (sockaddr-ip sa))))))
+  (lambda (fdo) (local-sockaddr (net-fd fdo) sockaddr->inet)))
 (defnet "remotePort(Ljava/io/FileDescriptor;)I" (lambda (fdo) (peer-sockaddr (net-fd fdo) sockaddr-port)))
 (defnet "remoteInetAddress(Ljava/io/FileDescriptor;)Ljava/net/InetAddress;"
-  (lambda (fdo) (peer-sockaddr (net-fd fdo) (lambda (sa) (inet4 #f (sockaddr-ip sa))))))
+  (lambda (fdo) (peer-sockaddr (net-fd fdo) sockaddr->inet)))
 ;; IP_MULTICAST_TTL and IP_MULTICAST_LOOP are one byte, as the JDK passes them
 ;; when it says they may need converting (macOS 10 and 11, Linux 33 and 34)
 (define (byte-option? conv level opt)
@@ -317,6 +415,12 @@
         (foreign-free buf)
         (after-free r e socket-error)
         (void)))))
+;; IPV6_MULTICAST_IF (macOS 9, Linux 17): an interface index, 0 for any
+(define ipv6-multicast-if (if net-macos? 9 17))
+(defnet "getInterface6(Ljava/io/FileDescriptor;)I"
+  (lambda (fdo) (get-int-option (net-fd fdo) 41 ipv6-multicast-if)))
+(defnet "setInterface6(Ljava/io/FileDescriptor;I)V"
+  (lambda (fdo index) (set-int-option! (net-fd fdo) 41 ipv6-multicast-if index) (void)))
 ;; the events that happened (0 on a timeout or an interrupt), as the JDK's poll answers
 (define (poll-fd fd events timeout)
   (let ([pfd (foreign-alloc 8)])
@@ -484,7 +588,7 @@
 (defnative "java/net/Inet6Address.init()V" () (void))
 (defnative "java/net/NetworkInterface.init()V" () (void))
 (defnative "java/net/InetAddress.isIPv4Available()Z" () 1)
-(defnative "java/net/InetAddress.isIPv6Supported()Z" () 0)
+(defnative "java/net/InetAddress.isIPv6Supported()Z" () (if (net-ipv6?) 1 0))
 
 (define (c-string s)   ; a fresh NUL-terminated copy in foreign memory
   (let* ([bv (string->utf8 s)] [n (bytevector-length bv)] [p (foreign-alloc (fx+ n 1))])
@@ -496,19 +600,22 @@
     (let ([b (foreign-ref 'unsigned-8 p i)])
       (if (fx= b 0) (utf8->string (u8-list->bytevector (reverse acc))) (loop (fx+ i 1) (cons b acc))))))
 
-(defnative "java/net/Inet4AddressImpl.getLocalHostName()Ljava/lang/String;" (this)
+(define (local-host-name)
   (let ([buf (foreign-alloc 256)])
     (let ([r (libc-gethostname buf 255)])
       (foreign-set! 'unsigned-8 buf 255 0)
       (let ([name (if (< r 0) "localhost" (c-string-text buf))])
         (foreign-free buf)
         (jstring name)))))
-;; getaddrinfo for IPv4 stream addresses, the GIL given up while it waits on
-;; the resolver; the JDK's message is "host: gai_strerror"
-(define (lookup-ipv4 host)
+(defnative "java/net/Inet4AddressImpl.getLocalHostName()Ljava/lang/String;" (this) (local-host-name))
+;; getaddrinfo for stream addresses of family (2 AF_INET, AF_INET6, or 0 for
+;; both), the GIL given up while it waits on the resolver; the JDK's message is
+;; "host: gai_strerror". An address is an ip number (IPv4) or (bytes . scope),
+;; in the resolver's order, each once
+(define (lookup-addresses host family)
   (let ([cname (c-string host)] [hints (foreign-alloc 48)] [res (foreign-alloc 8)])
     (do ([i 0 (fx+ i 1)]) ((fx= i 48)) (foreign-set! 'unsigned-8 hints i 0))
-    (foreign-set! 'int hints 4 2)   ; AF_INET
+    (foreign-set! 'int hints 4 family)
     (foreign-set! 'int hints 8 1)   ; SOCK_STREAM, one entry per address
     (foreign-set! 'uptr res 0 0)
     (let ([r (gil-released (lambda () (libc-getaddrinfo-blocking cname 0 hints res)))])
@@ -522,11 +629,14 @@
               (if (= p 0)
                   (begin (unless (= head 0) (libc-freeaddrinfo head))
                          (reverse acc))
-                  (let ([family (foreign-ref 'int p 4)] [sa (foreign-ref 'uptr p (net-const 'ai-addr))])
-                    (loop (foreign-ref 'uptr p 40)
-                          (if (and (fx= family 2) (not (= sa 0)) (not (memv (sockaddr-ip sa) acc)))
-                              (cons (sockaddr-ip sa) acc)
-                              acc))))))))))
+                  (let* ([fam (foreign-ref 'int p 4)] [sa (foreign-ref 'uptr p (net-const 'ai-addr))]
+                         [a (cond [(= sa 0) #f]
+                                  [(fx= fam 2) (sockaddr-ip sa)]
+                                  [(fx= fam (net-const 'AF_INET6)) (cons (sockaddr6-bytes sa) (foreign-ref 'unsigned-32 sa 24))]
+                                  [else #f])])
+                    (loop (foreign-ref 'uptr p 40) (if (and a (not (member a acc))) (cons a acc) acc))))))))))
+(define (lookup-ipv4 host) (lookup-addresses host 2))
+(define (address->inet host a) (if (pair? a) (inet6 host (car a) (cdr a)) (inet4 host a)))
 ;; The JDK's macOS fallback (Inet4AddressImpl.c lookupIfLocalhost, JDK bug
 ;; 8170910): when the resolver fails for this machine's own hostname (a
 ;; network whose DNS doesn't know it), the IPv4 addresses of its interfaces
@@ -572,6 +682,37 @@
          [sa (foreign-alloc sockaddr-size)] [buf (foreign-alloc 1025)])
     (sockaddr-in! sa ip 0)
     (let ([r (gil-released (lambda () (libc-getnameinfo sa sockaddr-size buf 1025 0 0 (net-const 'NI_NAMEREQD))))])
+      (foreign-free sa)
+      (if (fx= r 0)
+          (let ([name (c-string-text buf)]) (foreign-free buf) (jstring name))
+          (begin (foreign-free buf) (jthrow "java/net/UnknownHostException" #f))))))
+
+;; Inet6AddressImpl, which InetAddress uses for every lookup once IPv6 is there.
+;; characteristics (InetAddress.addressesFor): 1 IPv4, 2 IPv6, 4 IPv4 first, 8
+;; IPv6 first; getaddrinfo is asked for the families wanted and its order kept
+;; unless one family goes first, as Inet6AddressImpl.c does
+(defnative "java/net/Inet6AddressImpl.getLocalHostName()Ljava/lang/String;" (this) (local-host-name))
+(defnative "java/net/Inet6AddressImpl.lookupAllHostAddr(Ljava/lang/String;I)[Ljava/net/InetAddress;" (this host chars)
+  (let* ([h (jstring->scheme (nn host))]
+         [v4 (fxlogtest chars 1)] [v6 (fxlogtest chars 2)]
+         [family (cond [(and v4 v6) 0] [v6 (net-const 'AF_INET6)] [else 2])]
+         [found (guard (e [(and (jobj? e) (jinstance? e "java/net/UnknownHostException") net-macos? v4 (local-host-name? h))
+                           (let ([local (local-interface-ips)])
+                             (if (null? local) (raise e) local))])
+                  (lookup-addresses h family))]
+         [fours (filter (lambda (a) (not (pair? a))) found)]
+         [sixes (filter pair? found)]
+         [ordered (cond [(fxlogtest chars 4) (append fours sixes)]
+                        [(fxlogtest chars 8) (append sixes fours)]
+                        [else found])])
+    (when (null? ordered) (jthrow "java/net/UnknownHostException" h))
+    (make-jarr "Ljava/net/InetAddress;" (list->vector (map (lambda (a) (address->inet host a)) ordered)))))
+(defnative "java/net/Inet6AddressImpl.getHostByAddr([B)Ljava/lang/String;" (this addr)
+  (let* ([bs (map (lambda (b) (fxlogand b 255)) (vector->list (jarr-vec addr)))]
+         [v4 (fx= (length bs) 4)]
+         [sa (foreign-alloc sockaddr6-size)] [buf (foreign-alloc 1025)])
+    (if v4 (sockaddr-in! sa (bytes->ip4 bs) 0) (sockaddr-in6! sa bs 0 0))
+    (let ([r (gil-released (lambda () (libc-getnameinfo sa (if v4 sockaddr-size sockaddr6-size) buf 1025 0 0 (net-const 'NI_NAMEREQD))))])
       (foreign-free sa)
       (if (fx= r 0)
           (let ([name (c-string-text buf)]) (foreign-free buf) (jstring name))
@@ -819,10 +960,11 @@
     (void)))
 
 ;; --- java.net.NetworkInterface ----------------------------------------------------------
-;; The interfaces with an IPv4 address, from getifaddrs, as the JDK's
-;; enumIPv4Interfaces finds them: each new interface and each address goes in
-;; front, so the order is the JVM's for the IPv4 part. IPv6 is off, so an
-;; interface with IPv6 addresses only isn't listed. Flags and the MTU come
+;; The interfaces with an address, from getifaddrs, as the JDK's
+;; enumIPv4Interfaces and then enumIPv6Interfaces find them: each new
+;; interface and each address goes in front, the IPv4 pass first, so the order
+;; is the JVM's for the IPv4 part. IPv6 addresses only when IPv6 is there;
+;; each is scoped to its interface, as the JDK's are. Flags and the MTU come
 ;; from ioctl on a datagram socket, as in the JDK, with its messages; the
 ;; hardware address from the AF_LINK entry on macOS (6 bytes or none) and
 ;; SIOCGIFHWADDR on Linux (none when all zeros). struct ifaddrs is the same
@@ -835,71 +977,95 @@
   (cdr (assq name (if net-macos?
                       '((SIOCGIFFLAGS . #xc0206911) (SIOCGIFMTU . #xc0206933) (IFF_MULTICAST . #x8000))
                       '((SIOCGIFFLAGS . #x8913) (SIOCGIFMTU . #x8921) (SIOCGIFHWADDR . #x8927) (IFF_MULTICAST . #x1000))))))
-(define (sockaddr-family sa) (if net-macos? (foreign-ref 'unsigned-8 sa 1) (foreign-ref 'unsigned-16 sa 0)))
 (define (prefix-length sa)
-  (let loop ([i 0] [n 0])
-    (if (fx= i 4) n (loop (fx+ i 1) (fx+ n (fxbit-count (foreign-ref 'unsigned-8 sa (fx+ 4 i))))))))
+  (let ([at (if (fx= (sockaddr-family sa) (net-const 'AF_INET6)) 8 4)]
+        [n (if (fx= (sockaddr-family sa) (net-const 'AF_INET6)) 16 4)])
+    (let loop ([i 0] [bits 0])
+      (if (fx= i n) bits (loop (fx+ i 1) (fx+ bits (fxbit-count (foreign-ref 'unsigned-8 sa (fx+ at i)))))))))
 (define (interface-index name)
   (let* ([p (c-string name)] [i (libc-if-nametoindex p)])
     (foreign-free p) i))
 
-;; ((name . addresses) ...), newest first; an address is (ip prefix broadcast-ip-or-#f)
-(define (ipv4-interfaces)
+;; ((name . addresses) ...), newest first; an address is (a prefix
+;; broadcast-ip-or-#f), a an ip number (IPv4) or (bytes . scope) (IPv6)
+(define (interface-entry p fam)
+  (let ([sa (foreign-ref 'uptr p 24)])
+    (cond
+      [(or (= sa 0) (not (fx= (sockaddr-family sa) fam))) #f]
+      [(fx= fam 2)
+       (let ([flags (foreign-ref 'unsigned-32 p 16)] [mask (foreign-ref 'uptr p 32)] [broad (foreign-ref 'uptr p 40)])
+         (list (sockaddr-ip sa)
+               (if (= mask 0) 0 (prefix-length mask))
+               (and (fxlogtest flags 2) (not (= broad 0)) (sockaddr-ip broad))))]
+      [else
+       (let* ([bs (sockaddr6-bytes sa)] [scope (foreign-ref 'unsigned-32 sa 24)] [mask (foreign-ref 'uptr p 32)]
+              ;; macOS (KAME) keeps a link-local address's interface index in
+              ;; bytes 2 and 3; the address itself has zeros there
+              [kame (and net-macos? (fx= (car bs) #xfe) (fx= (fxlogand (cadr bs) #xc0) #x80))]
+              [scope (if (and kame (fx= scope 0)) (fxlogor (fxsll (caddr bs) 8) (cadddr bs)) scope)]
+              [bs (if kame (cons (car bs) (cons (cadr bs) (cons 0 (cons 0 (list-tail bs 4))))) bs)])
+         (list (cons bs scope) (if (= mask 0) 0 (prefix-length mask)) #f))])))
+(define (all-interfaces)
   (let ([head (foreign-alloc 8)])
     (foreign-set! 'uptr head 0 0)
     (let* ([r (libc-getifaddrs head)] [e (errno)] [first (foreign-ref 'uptr head 0)])
       (foreign-free head)
       (when (< r 0) (socket-error e))
-      (let loop ([p first] [ifs '()])
-        (if (= p 0)
+      (let pass ([fams (if (net-ipv6?) (list 2 (net-const 'AF_INET6)) '(2))] [ifs '()])
+        (if (null? fams)
             (begin (unless (= first 0) (libc-freeifaddrs first)) ifs)
-            (let ([sa (foreign-ref 'uptr p 24)] [next (foreign-ref 'uptr p 0)])
-              (if (or (= sa 0) (not (fx= (sockaddr-family sa) 2)))
-                  (loop next ifs)
-                  (let* ([name (c-string-text (foreign-ref 'uptr p 8))]
-                         [flags (foreign-ref 'unsigned-32 p 16)]
-                         [mask (foreign-ref 'uptr p 32)]
-                         [broad (foreign-ref 'uptr p 40)]
-                         [addr (list (sockaddr-ip sa)
-                                     (if (= mask 0) 0 (prefix-length mask))
-                                     (and (fxlogtest flags 2) (not (= broad 0)) (sockaddr-ip broad)))]
-                         [old (assoc name ifs)])
-                    (loop next (if old
-                                   (begin (set-cdr! old (cons addr (cdr old))) ifs)
-                                   (cons (list name addr) ifs)))))))))))
+            (pass (cdr fams)
+                  (let loop ([p first] [ifs ifs])
+                    (if (= p 0)
+                        ifs
+                        (let ([addr (interface-entry p (car fams))] [next (foreign-ref 'uptr p 0)])
+                          (if (not addr)
+                              (loop next ifs)
+                              (let* ([name (c-string-text (foreign-ref 'uptr p 8))] [old (assoc name ifs)])
+                                (loop next (if old
+                                               (begin (set-cdr! old (cons addr (cdr old))) ifs)
+                                               (cons (list name addr) ifs))))))))))))))
 
+(define (address-inet a) (if (pair? (car a)) (inet6 #f (caar a) (cdar a)) (inet4 #f (car a))))
 (define (interface-address a inet)
   (let ([ia (construct "java/net/InterfaceAddress" "()V")])
     (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "address") inet)
     (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "broadcast") (and (caddr a) (inet4 #f (caddr a))))
     (jslot-set! ia (jfield-index "java/net/InterfaceAddress" "maskLength") (cadr a))
     ia))
+;; an IPv6 address of an interface is scoped to it, its id the interface's index
+(define (scope-to! inet ni index)
+  (let ([h (ia-holder6 inet)])
+    (jslot-set! h (holder6-field "scope_ifname") ni)
+    (jslot-set! h (holder6-field "scope_id") index)
+    (jslot-set! h (holder6-field "scope_id_set") 1)))
 (define (network-interface entry)
-  (let* ([name (jstring (car entry))] [addrs (cdr entry)]
-         [inets (map (lambda (a) (inet4 #f (car a))) addrs)]
+  (let* ([name (jstring (car entry))] [addrs (cdr entry)] [index (interface-index (car entry))]
+         [inets (map address-inet addrs)]
          [ni (construct "java/net/NetworkInterface" "(Ljava/lang/String;I[Ljava/net/InetAddress;)V"
-                        name (interface-index (car entry))
-                        (make-jarr "Ljava/net/InetAddress;" (list->vector inets)))])
+                        name index (make-jarr "Ljava/net/InetAddress;" (list->vector inets)))])
+    (for-each (lambda (a inet) (when (pair? (car a)) (scope-to! inet ni index))) addrs inets)
     (jslot-set! ni (jfield-index "java/net/NetworkInterface" "displayName") name)
     (jslot-set! ni (jfield-index "java/net/NetworkInterface" "bindings")
                 (make-jarr "Ljava/net/InterfaceAddress;" (list->vector (map interface-address addrs inets))))
     (jslot-set! ni (jfield-index "java/net/NetworkInterface" "childs") (make-jarr "Ljava/net/NetworkInterface;" (vector)))
     ni))
 (define (find-interface pred)
-  (let loop ([ifs (ipv4-interfaces)])
+  (let loop ([ifs (all-interfaces)])
     (cond [(null? ifs) #f]
           [(pred (car ifs)) (network-interface (car ifs))]
           [else (loop (cdr ifs))])))
-;; the interface holding an InetAddress; an IPv6 one has none here
+;; the interface holding an InetAddress (its scope aside)
 (define (holds-address? ia)
   (if (fx= (ia-family ia) 1)
-      (let ([ip (fxlogand (jslot (ia-holder ia) (jfield-index "java/net/InetAddress$InetAddressHolder" "address")) #xffffffff)])
-        (lambda (entry) (exists (lambda (a) (= (car a) ip)) (cdr entry))))
-      (lambda (entry) #f)))
+      (let ([ip (ia-v4-raw ia)])
+        (lambda (entry) (exists (lambda (a) (eqv? (car a) ip)) (cdr entry))))
+      (let ([bs (ia-ipv6-bytes ia)])
+        (lambda (entry) (exists (lambda (a) (and (pair? (car a)) (equal? (caar a) bs))) (cdr entry))))))
 
 (define (defni sig proc) (define-native! (string-append "java/net/NetworkInterface." sig) proc))
 (defni "getAll()[Ljava/net/NetworkInterface;"
-  (lambda () (make-jarr "Ljava/net/NetworkInterface;" (list->vector (map network-interface (ipv4-interfaces))))))
+  (lambda () (make-jarr "Ljava/net/NetworkInterface;" (list->vector (map network-interface (all-interfaces))))))
 (defni "getByName0(Ljava/lang/String;)Ljava/net/NetworkInterface;"
   (lambda (name) (let ([n (jstring->scheme (nn name))]) (find-interface (lambda (e) (string=? (car e) n))))))
 (defni "getByIndex0(I)Ljava/net/NetworkInterface;"
@@ -907,7 +1073,7 @@
 (defni "getByInetAddress0(Ljava/net/InetAddress;)Ljava/net/NetworkInterface;"
   (lambda (ia) (find-interface (holds-address? (nn ia)))))
 (defni "boundInetAddress0(Ljava/net/InetAddress;)Z"
-  (lambda (ia) (if (exists (holds-address? (nn ia)) (ipv4-interfaces)) 1 0)))
+  (lambda (ia) (if (exists (holds-address? (nn ia)) (all-interfaces)) 1 0)))
 
 ;; (k ifr) with a struct ifreq naming the interface, on a datagram socket; the
 ;; request's failure is "<strerror> (<what> failed)" as the JDK says it
@@ -980,26 +1146,29 @@
         (cond [(> r 0) (foreign-free pfd) #t]
               [(and (< r 0) (fx= e 4)) (loop (- deadline (real-time)))]
               [else (foreign-free pfd) #f])))))
-(defnative "java/net/Inet4AddressImpl.isReachable0([BI[BI)Z" (this addr timeout ifaddr ttl)
-  (define (bytes->ip arr)
-    (let ([v (jarr-vec arr)])
-      (let loop ([i 0] [acc 0]) (if (fx= i 4) acc (loop (fx+ i 1) (fxlogor (fxsll acc 8) (fxlogand (vector-ref v i) 255)))))))
-  (let ([fd (libc-socket 2 1 0)])
+;; TCP echo to port 7 of addr (bytes), from ifaddr's when given, as the JDK's
+;; tcp_ping4 and tcp_ping6: a connection or a refusal means the host answered
+(define (tcp-ping addr scope timeout ifaddr ttl)
+  (let* ([v6 (fx= (length addr) 16)]
+         [fd (libc-socket (if v6 (net-const 'AF_INET6) 2) 1 0)])
     (when (< fd 0) (socket-error (errno)))
-    (let ([sa (foreign-alloc sockaddr-size)])
+    (let ([sa (foreign-alloc sockaddr6-size)])
+      (define (fill! bytes port) (if v6 (sockaddr-in6! sa bytes scope port) (sockaddr-in! sa (bytes->ip4 bytes) port)))
+      (define len (if v6 sockaddr6-size sockaddr-size))
       (define (done v) (foreign-free sa) (libc-close fd) v)
       (guard (e [#t (foreign-free sa) (libc-close fd) (raise e)])
         (when (> ttl 0)
           (let ([buf (foreign-alloc 4)])
             (foreign-set! 'int buf 0 ttl)
-            (libc-setsockopt fd 0 (if net-macos? 4 2) buf 4)
+            ;; IP_TTL, or IPV6_UNICAST_HOPS (macOS 4, Linux 16)
+            (if v6 (libc-setsockopt fd 41 (if net-macos? 4 16) buf 4) (libc-setsockopt fd 0 (if net-macos? 4 2) buf 4))
             (foreign-free buf)))
-        (if (and ifaddr (begin (sockaddr-in! sa (bytes->ip ifaddr) 0) (< (libc-bind fd sa sockaddr-size) 0)))
+        (if (and ifaddr (begin (fill! ifaddr 0) (< (libc-bind fd sa len) 0)))
             (done 0)
             (let ([flags (libc-fcntl-int fd 3 0)])
               (libc-fcntl-int fd 4 (fxlogor flags (net-const 'O_NONBLOCK)))
-              (sockaddr-in! sa (bytes->ip addr) 7)
-              (let* ([r (libc-connect fd sa sockaddr-size)] [e (if (< r 0) (errno) 0)])
+              (fill! addr 7)
+              (let* ([r (libc-connect fd sa len)] [e (if (< r 0) (errno) 0)])
                 (cond [(or (fx= r 0) (fx= e (net-const 'ECONNREFUSED))) (done 1)]
                       [(memv e (append (list (net-const 'ENETUNREACH) (net-const 'EAFNOSUPPORT) (net-const 'EADDRNOTAVAIL))
                                        (if net-macos? '() (list 22 (net-const 'EHOSTUNREACH)))))
@@ -1010,3 +1179,8 @@
                            (let ([err (guard (x [#t -1]) (get-int-option fd (net-const 'SOL_SOCKET) (net-const 'SO_ERROR)))])
                              (done (if (or (fx= err 0) (fx= err (net-const 'ECONNREFUSED))) 1 0))))]
                       [else (jthrow "java/net/ConnectException" (string-append (strerror-text e) " (connect failed)"))]))))))))
+(define (jbytes-list a) (and a (map (lambda (b) (fxlogand b 255)) (vector->list (jarr-vec a)))))
+(defnative "java/net/Inet4AddressImpl.isReachable0([BI[BI)Z" (this addr timeout ifaddr ttl)
+  (tcp-ping (jbytes-list addr) 0 timeout (jbytes-list ifaddr) ttl))
+(defnative "java/net/Inet6AddressImpl.isReachable0([BII[BII)Z" (this addr scope timeout ifaddr ttl if-scope)
+  (tcp-ping (jbytes-list addr) scope timeout (jbytes-list ifaddr) ttl))

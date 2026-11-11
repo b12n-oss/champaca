@@ -67,6 +67,12 @@ The first public version. Champaca is still experimental: the
   `SystemModules$default` and the module resolution. That class runs once,
   interpreted, when the archive is built, instead of being compiled: a cold
   `Hello` went from 5.3 s to 4.4 s, a warm one is unchanged.
+- Sockets speak IPv6. The JDK is told IPv6 is there when it is, as on the
+  JVM, so sockets are dual stack, `::1` and other IPv6 literals connect and
+  bind, lookups return IPv6 addresses too, and `NetworkInterface` lists
+  IPv6 addresses (on a Mac every interface matched the JVM's).
+  `test/java/Ipv6Check.java` covers TCP, the NIO channels, UDP, lookups and
+  the loopback interface. `-Djava.net.preferIPv4Stack=true` turns it off.
 - A method over 4,000 bytes of bytecode does its array accesses outside
   loops through calls instead of inline checks, which made the JDK's locale
   tables slow to compile: on a cache holding only the boot a first

@@ -3,7 +3,7 @@
 <h1 align="center">Champaca</h1>
 
 > [!WARNING]
-> **Experimental.** Champaca runs real Java programs and libraries with the same output as HotSpot, but it isn't a complete JVM. A program can still reach a JDK native that hasn't been written yet (an `UnsatisfiedLinkError`, named on stderr with `CHAMPACA_BT=1`), JNI libraries and IPv6 aren't there, and a warm start takes a few times HotSpot's time and memory. The [limitations](docs/guide/limitations.md) page lists the gaps, and [debugging](docs/guide/debugging.md) shows how to read one.
+> **Experimental.** Champaca runs real Java programs and libraries with the same output as HotSpot, but it isn't a complete JVM. A program can still reach a JDK native that hasn't been written yet (an `UnsatisfiedLinkError`, named on stderr with `CHAMPACA_BT=1`), JNI libraries aren't there, and a warm start takes a few times HotSpot's time and memory. The [limitations](docs/guide/limitations.md) page lists the gaps, and [debugging](docs/guide/debugging.md) shows how to read one.
 
 Champaca is a Java runtime inside [jolt](https://github.com/jolt-lang/jolt). It rebuilds [OpenLDK](https://github.com/atgreen/openldk), Anthony Green's Java runtime for Common Lisp, on jolt: a translator written in jolt's Clojure turns each method's bytecode into Chez Scheme source the first time the method is called, and `jolt.scheme/eval-string` compiles that to native code. Java objects are Chez records in jolt's own heap, so jolt code calls a Java library as a plain procedure call, with no second runtime in the process.
 

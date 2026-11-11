@@ -1,0 +1,24 @@
+literals: Inet6Address 0:0:0:0:0:0:0:1 | Inet6Address 0:0:0:0:0:0:0:1 | Inet6Address 0:0:0:0:0:0:0:1 | Inet4Address 127.0.0.1 | Inet6Address 0:0:0:0:0:0:0:0 | Inet6Address fe80:0:0:0:0:0:0:1%1 1 | Inet6Address 2001:db8:0:0:0:0:a:b
+predicates: true true true true true true
+bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1] 16 0:0:0:0:0:0:0:0 Inet4Address
+equality: true true false /[0:0:0:0:0:0:0:1]:80 0:0:0:0:0:0:0:1
+loopback lookups: [Inet6Address 0:0:0:0:0:0:0:1] Inet4Address
+server on ::1: Inet6Address 0:0:0:0:0:0:0:1 true true
+client to ::1: hi back, client local Inet6Address 0:0:0:0:0:0:0:1 remote Inet6Address 0:0:0:0:0:0:0:1 | server saw Inet6Address 0:0:0:0:0:0:0:1 local Inet6Address 0:0:0:0:0:0:0:1
+IPv4 client to ::1: java.net.ConnectException
+server on wildcard: Inet4Address 0.0.0.0
+IPv4 client to wildcard: hi back, client local Inet4Address 127.0.0.1 remote Inet4Address 127.0.0.1 | server saw Inet4Address 127.0.0.1 local Inet4Address 127.0.0.1
+IPv6 client to wildcard: hi back, client local Inet6Address 0:0:0:0:0:0:0:1 remote Inet6Address 0:0:0:0:0:0:0:1 | server saw Inet6Address 0:0:0:0:0:0:0:1 local Inet6Address 0:0:0:0:0:0:0:1
+server on 127.0.0.1: Inet4Address 127.0.0.1
+IPv6 client to 127.0.0.1: java.net.ConnectException
+channels on ::1: Inet6Address 0:0:0:0:0:0:0:1 nio Inet6Address 0:0:0:0:0:0:0:1 Inet6Address 0:0:0:0:0:0:0:1 true
+channels on wildcard: Inet6Address 0:0:0:0:0:0:0:0 Inet4Address 127.0.0.1 Inet4Address 127.0.0.1
+INET6 channel: null Inet6Address 0:0:0:0:0:0:0:1
+INET channel to ::1: java.nio.channels.UnsupportedAddressTypeException
+datagram on ::1: udp6 from Inet6Address 0:0:0:0:0:0:0:1 true
+datagram wildcard to 127.0.0.1: udp4 from Inet4Address 127.0.0.1
+connected datagram: Inet4Address 127.0.0.1 true
+datagram socket on ::1: Inet6Address 0:0:0:0:0:0:0:1
+loopback interface: true [Inet6Address ::1/128 scoped true] true true
+link-local scope: true
+reachable ::1: true
