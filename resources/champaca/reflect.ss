@@ -800,61 +800,74 @@
            (let ([m (class-module c)])
              (and m (eqv? 1 ((jvirt m "isExported(Ljava/lang/String;)Z") m (jstring (slashes->dots (class-package c)))))
                   (begin (eq-hashtable-set! everywhere-classes c #t) #t))))))
-(define (check-field-access! f c mods obj static?)
-  (let ([caller (and (not (open-to-all? c mods)) (field-caller))])
+(define (check-field-access! f c meta obj)
+  (let ([caller (and (not (open-to-all? c (caddr meta))) (field-caller))])
     (when caller
       ((method-proc "java/lang/reflect/AccessibleObject"
                     "checkAccess(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/Class;I)V")
        f caller (jmirror c)
-       (if static? #f (jmirror-of (class-name-of obj)))
+       (if (static-flag? (caddr meta)) #f (jmirror-of (class-name-of obj)))
        (field-modifiers f)))))
 ;; where a class's field lives, per declared slot: its index in an
 ;; object's slots, or a static field's global symbol, found once per class
 ;; and slot (a class is never unloaded, so the table only saves the lookups)
 (define field-places (make-weak-eq-hashtable))
-(define (field-place c slot static? cname name)
+(define (field-place c slot meta)
   (let ([v (or (eq-hashtable-ref field-places c #f)
                (let ([v (make-vector (length (meta-fields c)) #f)])
                  (eq-hashtable-set! field-places c v)
                  v))])
     (or (vector-ref v slot)
-        (let ([p (if static? (string->symbol (string-append cname ":" name)) (jfield-index cname name))])
+        (let* ([cname (jclass-cname c)]
+               [p (if (static-flag? (caddr meta))
+                      (string->symbol (string-append cname ":" (car meta)))
+                      (jfield-index cname (car meta)))])
           (vector-set! v slot p)
           p))))
+;; the JDK's read-only fields: a final one that is static, not made
+;; accessible, a record's or a hidden class's
+(define (field-read-only? c meta override?)
+  (and (fxpositive? (fxlogand (caddr meta) #x10))
+       (or (static-flag? (caddr meta)) (not override?)
+           (equal? (jclass-super c) "java/lang/Record")
+           (and (string-search "/0x" (jclass-cname c)) #t))))
+;; what and qname, as thunks: only an error reads them
+(define (field-names c meta)
+  (let* ([flags (caddr meta)]
+         [qname (lambda () (string-append (binary-name (jclass-cname c)) "." (car meta)))])
+    (values (lambda () (string-append (if (static-flag? flags) "static " "")
+                                      (if (fxpositive? (fxlogand flags #x10)) "final " "")
+                                      (field-type-name (cadr meta)) " field " (qname)))
+            qname)))
+(define (null-receiver! override? mode)
+  (jthrow "java/lang/NullPointerException"
+          (cond [(not override?) "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
+                [(eq? mode 'set) "Cannot invoke \"Object.getClass()\" because \"o\" is null"]
+                [else #f])))
+(define (wrong-receiver! obj mode what)
+  (jthrow "java/lang/IllegalArgumentException"
+          (string-append "Can not " (if (eq? mode 'get) "get " "set ") (what) (if (eq? mode 'set) " to " " on ")
+                         (binary-name (class-name-of obj)))))
 (define (field-access f obj mode)
   (let* ([c (mirror-class (field-clazz f))]
          [slot (field-slot f)]
          [meta (list-ref (meta-fields c) slot)]
-         [cname (jclass-cname c)] [name (car meta)] [desc (cadr meta)]
-         [static? (static-flag? (caddr meta))]
-         [final? (fxpositive? (fxlogand (caddr meta) #x10))]
          [override? (eqv? 1 (field-override f))]
-         [read-only? (and final? (or static? (not override?) (equal? (jclass-super c) "java/lang/Record")
-                                     (string-search "/0x" cname)))]
-         [qname (lambda () (string-append (binary-name cname) "." name))]
-         [what (lambda () (string-append (if static? "static " "") (if final? "final " "")
-                                         (field-type-name desc) " field " (qname)))])
-    (if static?
-        (let ([sym (field-place c slot #t cname name)])
-          (unless override? (check-field-access! f c (caddr meta) obj #t))
-          (jinit cname)
-          (values (lambda () (top-level-value sym))
-                  (lambda (v) (set-top-level-value! sym v))
-                  desc what qname read-only?))
-        (let ([i (field-place c slot #f cname name)])
-          (unless obj
-            (jthrow "java/lang/NullPointerException"
-                    (cond [(not override?) "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
-                          [(eq? mode 'set) "Cannot invoke \"Object.getClass()\" because \"o\" is null"]
-                          [else #f])))
-          (unless override? (check-field-access! f c (caddr meta) obj #f))
-          (unless (jinstance? obj cname)
-            (jthrow "java/lang/IllegalArgumentException"
-                    (string-append "Can not " (if (eq? mode 'get) "get " "set ") (what) (if (eq? mode 'set) " to " " on ")
-                                   (binary-name (class-name-of obj)))))
-          (values (lambda () (vector-ref (jobj-slots obj) i))
-                  (lambda (v) (vector-set! (jobj-slots obj) i v))
-                  desc what qname read-only?)))))
+         [place (field-place c slot meta)])
+    (let-values ([(what qname) (field-names c meta)])
+      (define (answer get set)
+        (values get set (cadr meta) what qname (field-read-only? c meta override?)))
+      (cond
+        [(static-flag? (caddr meta))
+         (unless override? (check-field-access! f c meta obj))
+         (jinit (jclass-cname c))
+         (answer (lambda () (top-level-value place)) (lambda (v) (set-top-level-value! place v)))]
+        [else
+         (unless obj (null-receiver! override? mode))
+         (unless override? (check-field-access! f c meta obj))
+         (unless (jinstance? obj (jclass-cname c)) (wrong-receiver! obj mode what))
+         (answer (lambda () (vector-ref (jobj-slots obj) place))
+                 (lambda (v) (vector-set! (jobj-slots obj) place v)))]))))
 
 (define (field-type-name d)
   (cond [(assoc d prim-names) => cdr] [else (binary-name (desc->class-name d))]))

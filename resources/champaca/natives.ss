@@ -2514,25 +2514,28 @@
     (or (and ld (loader-package ld pn cn))
         (hashtable-ref jpackage-table pn #f)
         (let ([p (jdk-module-package pn)]) (when p (hashtable-set! jpackage-table pn p)) p)
-        (let* ([info (text-lines (jpackage-hook cn))]
-               [module (and (not (string=? dir "")) (string=? (car info) "jdk") (hashtable-ref package-modules dir #f))]
-               [attrs (if (string=? (car info) "jdk")
-                          (make-list 7 #f)
-                          (package-attributes info))]
-               [p (if module
-                      (construct "java/lang/Package" "(Ljava/lang/String;Ljava/lang/Module;)V" (jstring pn) module)
-                      (apply construct "java/lang/Package"
-                             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
-                             (jstring pn) (append attrs (list #f))))])
-          ;; constructing ran Java code, which can let another thread in to
-          ;; define the same package first: keep whichever got there. A JDK
-          ;; package asked for before its module and the boot loader object
-          ;; exist (the hook says jdk only for a package the runtime image
-          ;; owns) isn't kept, so a later call gets its loader's
-          (if (string=? (car info) "jdk")
-              p
-              (or (hashtable-ref jpackage-table pn #f)
-                  (begin (hashtable-set! jpackage-table pn p) p)))))))
+        (table-package dir pn cn))))
+;; a package with no loader to define it, kept in jpackage-table: a JDK
+;; package of its module (no version information), anything else (a
+;; lambda's champaca package) with the hook's attributes
+(define (table-package dir pn cn)
+  (let* ([info (text-lines (jpackage-hook cn))]
+         [jdk? (string=? (car info) "jdk")]
+         [module (and jdk? (not (string=? dir "")) (hashtable-ref package-modules dir #f))]
+         [p (if module
+                (construct "java/lang/Package" "(Ljava/lang/String;Ljava/lang/Module;)V" (jstring pn) module)
+                (apply construct "java/lang/Package"
+                       "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
+                       (jstring pn) (append (if jdk? (make-list 7 #f) (package-attributes info)) (list #f))))])
+    ;; constructing ran Java code, which can let another thread in to
+    ;; define the same package first: keep whichever got there. A JDK
+    ;; package asked for before its module and the boot loader object
+    ;; exist (the hook says jdk only for a package the runtime image
+    ;; owns) isn't kept, so a later call gets its loader's
+    (if jdk?
+        p
+        (or (hashtable-ref jpackage-table pn #f)
+            (begin (hashtable-set! jpackage-table pn p) p)))))
 (define-override! "java/lang/Class.getPackage()Ljava/lang/Package;"
   (lambda (this)
     (let ([cn (jclass-cname (mirror-class this))])

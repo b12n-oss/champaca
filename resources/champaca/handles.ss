@@ -149,17 +149,23 @@
 (define (prim-cast from to v)
   (let ([f (string-ref from 0)] [t (string-ref to 0)])
     (cond [(char=? f t) v]
-          [(char=? t #\Z) (if (odd? (if (memv f '(#\F #\D)) (d2i v) v)) 1 0)]
+          [(char=? t #\Z) (if (odd? (integral-of f #\I v)) 1 0)]
           [(char=? t #\F) (f32 (inexact v))]
           [(char=? t #\D) (inexact v)]
-          [else
-           (let ([i (if (memv f '(#\F #\D)) (if (char=? t #\J) (d2l v) (d2i v)) v)])
-             (case t
-               [(#\J) (low-bits i 64 #t)]
-               [(#\I) (low-bits i 32 #t)]
-               [(#\S) (low-bits i 16 #t)]
-               [(#\C) (low-bits i 16 #f)]
-               [else (low-bits i 8 #t)]))])))
+          [else (narrow-to t (integral-of f t v))])))
+;; v of primitive type f as an integer: a float or double as d2l for a long,
+;; d2i for anything narrower
+(define (integral-of f t v)
+  (if (memv f '(#\F #\D)) (if (char=? t #\J) (d2l v) (d2i v)) v))
+;; an integer as integral type t keeps it: its low bits, sign-extended but
+;; for char
+(define (narrow-to t i)
+  (case t
+    [(#\J) (low-bits i 64 #t)]
+    [(#\I) (low-bits i 32 #t)]
+    [(#\S) (low-bits i 16 #t)]
+    [(#\C) (low-bits i 16 #f)]
+    [else (low-bits i 8 #t)]))
 (define (low-bits x bits signed?)
   (let ([m (bitwise-bit-field x 0 bits)])
     (if (and signed? (bitwise-bit-set? m (fx- bits 1))) (- m (expt 2 bits)) m)))
@@ -671,19 +677,21 @@
                                  (type-text (append before (map (lambda (t) elem) spread) after)
                                             (mh-info-ret info)))))
         (make-mh (args->desc (append before (list ad) after) (mh-info-ret info))
-                 (lambda xs
-                   (let ([arr (list-ref xs pos)])
-                     (when (and (not arr) (fx> n 0))
-                       (jthrow "java/lang/NullPointerException" "null array reference"))
-                     (unless (or (not arr) (fx= (jarraylength arr) n))
-                       (vh-iae "array is not of length " (number->string n)))
-                     (apply p (append (list-head xs pos)
-                                      (if arr
-                                          (map (lambda (t v) (adapt elem t v))
-                                               spread (vector->list (jarr-vec arr)))
-                                          '())
-                                      (list-tail xs (fx+ pos 1))))))
+                 (spread-proc p pos elem spread)
                  #f)))))
+;; p taking the array argument at pos as the spread types' arguments, each
+;; adapted from the array's element type; the array must have their number
+(define (spread-proc p pos elem spread)
+  (let ([n (length spread)])
+    (lambda xs
+      (let ([arr (list-ref xs pos)])
+        (when (and (not arr) (fx> n 0))
+          (jthrow "java/lang/NullPointerException" "null array reference"))
+        (unless (or (not arr) (fx= (jarraylength arr) n))
+          (vh-iae "array is not of length " (number->string n)))
+        (apply p (append (list-head xs pos)
+                         (if arr (map (lambda (t v) (adapt elem t v)) spread (vector->list (jarr-vec arr))) '())
+                         (list-tail xs (fx+ pos 1))))))))
 (def-mh "asSpreader" (string-append "(Ljava/lang/Class;I)" mh-ret)
   (lambda (mh c n) (spreader mh #f c n)))
 (def-mh "asSpreader" (string-append "(ILjava/lang/Class;I)" mh-ret)
@@ -843,22 +851,31 @@
     (vector (proc init) (proc step) (proc pred) (proc fini) (void? init) (void? step))))
 
 (define (run-loop clauses args)
-  ;; the inits run in clause order
-  (let ([vars (let init ([cs clauses] [acc '()])
-                (if (null? cs)
-                    (list->vector (reverse acc))
-                    (let ([v (apply (vector-ref (car cs) 0) args)])
-                      (init (cdr cs) (if (vector-ref (car cs) 4) acc (cons v acc))))))])
-    (define (vars-and-args) (append (vector->list vars) args))
+  (let ([vars (loop-inits clauses args)])
     (let again ()
-      (let next ([cs clauses] [v 0])
-        (if (null? cs)
-            (again)
-            (let* ([c (car cs)] [r (apply (vector-ref c 1) (vars-and-args))])
-              (unless (vector-ref c 5) (vector-set! vars v r))
-              (if (eqv? 0 (apply (vector-ref c 2) (vars-and-args)))
-                  (apply (vector-ref c 3) (vars-and-args))
-                  (next (cdr cs) (if (vector-ref c 5) v (fx+ v 1))))))))))
+      (let ([r (loop-pass clauses vars args)])
+        (if (eq? r loop-goes-on) (again) r)))))
+;; the loop variables, from the inits in clause order (a void init gives none)
+(define (loop-inits clauses args)
+  (let init ([cs clauses] [acc '()])
+    (if (null? cs)
+        (list->vector (reverse acc))
+        (let ([v (apply (vector-ref (car cs) 0) args)])
+          (init (cdr cs) (if (vector-ref (car cs) 4) acc (cons v acc)))))))
+;; one round of the clauses: each step updates its variable (v counts the
+;; variables so far), then a false pred ends the loop with that clause's fini
+;; result; loop-goes-on when every pred held
+(define loop-goes-on (list 'loop-goes-on))
+(define (loop-pass clauses vars args)
+  (define (vars-and-args) (append (vector->list vars) args))
+  (let next ([cs clauses] [v 0])
+    (if (null? cs)
+        loop-goes-on
+        (let* ([c (car cs)] [r (apply (vector-ref c 1) (vars-and-args))])
+          (unless (vector-ref c 5) (vector-set! vars v r))
+          (if (eqv? 0 (apply (vector-ref c 2) (vars-and-args)))
+              (apply (vector-ref c 3) (vars-and-args))
+              (next (cdr cs) (if (vector-ref c 5) v (fx+ v 1))))))))
 
 (def-mhs "throwException" (string-append "(Ljava/lang/Class;Ljava/lang/Class;)" mh-ret)
   (lambda (ret exc)
