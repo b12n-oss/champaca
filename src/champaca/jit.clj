@@ -83,6 +83,23 @@
       :defined (boolean (:source-mode @state))
       false)))
 
+;; the throws codegen leaves for what it couldn't resolve, scanned for in
+;; each method's text; a method without the marker can't match, and almost
+;; none has one, so a substring test skips the regex (the scans were 2.8% of a
+;; first-use run's samples, each pattern compiled again per method)
+(def ^:private throw-patterns
+  {:missing ["(jthrow-missing \"" (re-pattern "\\(jthrow-missing \"([^\"]+)\"")]
+   :class-format ["(jthrow-class-format \"" (re-pattern "\\(jthrow-class-format \"([^\"]+)\"")]
+   :no-method ["(jthrow-no-method \"" (re-pattern "\\(jthrow-no-method \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"")]
+   :linkage ["(jthrow-linkage \"" (re-pattern "\\(jthrow-linkage \"([^\"]+)\"")]
+   :icce ["(jthrow-icce \"" (re-pattern "\\(jthrow-icce \"[^\"]+\" \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"")]})
+
+(defn- thrown-in
+  "re-seq of the throw pattern named k over a method's text."
+  [k text]
+  (let [[marker pat] (throw-patterns k)]
+    (when (str/includes? text marker) (re-seq pat text))))
+
 (defn- compile-method! [cname mname desc]
   (let [p (parsed cname)
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
@@ -109,22 +126,22 @@
           ;; an instruction naming a class that isn't there throws when it
           ;; runs (codegen): such a method is never cached, so a cache can't
           ;; carry a throw for a class a later run has, and CHAMPACA_BT says so
-          missing (seq (map second (re-seq (re-pattern "\\(jthrow-missing \"([^\"]+)\"") text)))
+          missing (seq (map second (thrown-in :missing text)))
           ;; and for a class whose file isn't a class file (ClassFormatError)
-          bad-format (seq (map second (re-seq (re-pattern "\\(jthrow-class-format \"([^\"]+)\"") text)))
+          bad-format (seq (map second (thrown-in :class-format text)))
           ;; the same for a method its class doesn't have (NoSuchMethodError)
           no-method (seq (map (fn [[_ c n d]] (str c "." n d))
-                              (re-seq (re-pattern "\\(jthrow-no-method \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"") text)))
+                              (thrown-in :no-method text)))
           report (fn [names why what]
                    (when (and names (System/getenv "CHAMPACA_BT"))
                      (binding [*out* *err*]
                        (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
                                      ", " why "; that code throws " what)))))
           ;; and for a class the JVM refuses to define (check-definition!)
-          refused (seq (map second (re-seq (re-pattern "\\(jthrow-linkage \"([^\"]+)\"") text)))
+          refused (seq (map second (thrown-in :linkage text)))
           ;; and for a call of the wrong kind (IncompatibleClassChangeError)
           icce (seq (map (fn [[_ c n d]] (str c "." n d))
-                         (re-seq (re-pattern "\\(jthrow-icce \"[^\"]+\" \"([^\"]+)\" \"([^\"]+)\" \"([^\"]+)\"") text)))
+                         (thrown-in :icce text)))
           _ (report missing "not found" "NoClassDefFoundError")
           _ (report no-method "not found" "NoSuchMethodError")
           _ (report bad-format "not a class file" "ClassFormatError")
