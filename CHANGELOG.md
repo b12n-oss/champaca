@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- GC notifications: a listener on a garbage collector bean hears each
+  collection as the JDK's `GarbageCollectionNotificationInfo`, with its
+  action, cause and `GcInfo`, on a daemon `Notification Thread`, as on
+  HotSpot, so GC pause metrics work; `getLastGcInfo` answers too
+  (`test/java/GcNotificationCheck.java`).
 - `ManagementFactory` lists a memory pool, `Chez heap`, and a garbage
   collector, `Chez`, where both lists were empty: the pool reports Chez's
   heap usage and peak, the collector Chez's collection count and time, and

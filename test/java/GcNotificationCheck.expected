@@ -1,0 +1,9 @@
+notified: true
+action: end of major GC, cause: System.gc()
+name is a collector: true
+info: id>0 true end>=start true duration>=0 true
+usage keys are pools: true true
+thread: Notification Thread daemon=true
+minor notified while busy: true
+last gc info: true
+removed

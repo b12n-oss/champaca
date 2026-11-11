@@ -230,10 +230,90 @@
 (defnative "sun/management/GarbageCollectorImpl.getCollectionTime()J" (this)
   (let ([t (sstats-gc-real (statistics))])
     (+ (* 1000 (time-second t)) (quotient (time-nanosecond t) 1000000))))
-(defnative "com/sun/management/internal/GarbageCollectorExtImpl.setNotificationEnabled(Ljava/lang/management/GarbageCollectorMXBean;Z)V" (this gc on) (void))
+;; Each collection is noted as it ends, with the world stopped and no Java
+;; code run: its number, start and end (milliseconds of uptime, as GcInfo
+;; has them), the heap's used and committed bytes before and after, and its
+;; action and cause as HotSpot names them. A collection Chez asks for is a
+;; minor one for an allocation; System.gc() is a major one, and so is the
+;; collection a thread dump makes to find locks. jolt's collect-request
+;; handler gets wrapped once, at load; a full collection with no other
+;; thread running doesn't go through it, so the caller notes that one.
+(define-record-type gc-record
+  (fields index start end used-before committed-before used-after committed-after action cause)
+  (sealed #t) (nongenerative champaca-gc-record))
+(define gc-index 0)
+(define gc-last #f)
+(define gc-pending '())      ; newest first, while notifications are on
+(define gc-notifying #f)     ; the Notification Thread, once a listener asked
+(define gc-cause (make-thread-parameter #f))   ; (action . cause) of an explicit collection
+(define (note-gc! collect)
+  (let ([n gc-index] [t0 (uptime-ms)] [ub (bytes-allocated)] [cb (current-memory-bytes)]
+        [why (or (gc-cause) '("end of minor GC" . "Allocation Failure"))])
+    (collect)
+    (when (fx= n gc-index)   ; not noted already by the handler within
+      (set! gc-index (fx+ gc-index 1))
+      (set! gc-last (make-gc-record gc-index t0 (uptime-ms) ub cb (bytes-allocated) (current-memory-bytes) (car why) (cdr why)))
+      (when gc-notifying
+        (set! gc-pending (if (fx< (length gc-pending) 64) (cons gc-last gc-pending) (list gc-last)))
+        ;; wakes the Notification Thread once the world runs again; no
+        ;; mutex is taken inside a collection
+        (condition-broadcast gil-cv)))))
+(let ([orig (collect-request-handler)])
+  (collect-request-handler (lambda () (note-gc! orig))))
+(define (explicit-collect! action cause)
+  (parameterize ([gc-cause (cons action cause)]) (note-gc! full-collect))
+  (gil-poke!))
+
+;; GcInfo as the VM builds it, through its private constructor, the one pool's
+;; usage before and after, and no extension attributes
+(define (gc-info builder r)
+  (let ([info (begin (jinit "com/sun/management/GcInfo") (jnew "com/sun/management/GcInfo"))]
+        [usages (lambda (used committed) (make-jarr "Ljava/lang/management/MemoryUsage;" (vector (memory-usage -1 used (max used committed) -1))))])
+    ((method-proc "com/sun/management/GcInfo"
+                  "<init>(Lcom/sun/management/internal/GcInfoBuilder;JJJ[Ljava/lang/management/MemoryUsage;[Ljava/lang/management/MemoryUsage;[Ljava/lang/Object;)V")
+     info builder (gc-record-index r) (gc-record-start r) (gc-record-end r)
+     (usages (gc-record-used-before r) (gc-record-committed-before r))
+     (usages (gc-record-used-after r) (gc-record-committed-after r))
+     (make-jarr "Ljava/lang/Object;" (vector)))
+    info))
+(define gc-ext "com/sun/management/internal/GarbageCollectorExtImpl")
+(define (gc-info-builder gc) ((method-proc gc-ext "getGcInfoBuilder()Lcom/sun/management/internal/GcInfoBuilder;") gc))
+;; The JDK's own GC notification for each noted collection, sent on a
+;; daemon "Notification Thread" in the system group, as HotSpot sends it,
+;; started when the first listener is added; it waits for collections
+;; without the GIL.
+(define (deliver-gc! gc r)
+  (guard (e [(java-halt? e) (raise e)] [#t (void)])   ; a listener's exception is dropped, as HotSpot's thread drops it
+    ((method-proc gc-ext "createGCNotification(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/sun/management/GcInfo;)V")
+     gc (quotient (now-nanos) 1000000) (jstring "Chez") (jstring (gc-record-action r)) (jstring (gc-record-cause r))
+     (gc-info (gc-info-builder gc) r))))
+(define (start-gc-notifier! gc)
+  (let* ([run (lambda ()
+                (let loop ()
+                  (with-thread-status (status-parked #f) #f
+                    (lambda () (gil-block! (lambda () (pair? gc-pending)) #f)))
+                  (let ([rs (reverse gc-pending)])
+                    (set! gc-pending '())
+                    (for-each (lambda (r) (deliver-gc! gc r)) rs))
+                  (loop)))]
+         [t (begin (jinit "java/lang/Thread") (jnew "java/lang/Thread"))]
+         [main-group ((method-proc "java/lang/Thread" "getThreadGroup()Ljava/lang/ThreadGroup;") main-thread)]
+         [system-group (or ((method-proc "java/lang/ThreadGroup" "getParent()Ljava/lang/ThreadGroup;") main-group) main-group)])
+    ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;)V")
+     t system-group #f (jstring "Notification Thread"))
+    (eq-hashtable-set! scheme-thread-bodies t run)
+    ((method-proc "java/lang/Thread" "setDaemon(Z)V") t 1)
+    ((jvirt t "start()V") t)
+    t))
+(defnative "com/sun/management/internal/GarbageCollectorExtImpl.setNotificationEnabled(Lcom/sun/management/GarbageCollectorMXBean;Z)V" (this gc on)
+  (when (and (eqv? on 1) (not gc-notifying))
+    (set! gc-notifying #t)
+    (set! gc-notifying (start-gc-notifier! gc))))
 (defnative "com/sun/management/internal/GcInfoBuilder.getNumGcExtAttributes(Ljava/lang/management/GarbageCollectorMXBean;)I" (this gc) 0)
 (defnative "com/sun/management/internal/GcInfoBuilder.fillGcAttributeInfo(Ljava/lang/management/GarbageCollectorMXBean;I[Ljava/lang/String;[C[Ljava/lang/String;)V" (this gc n names types descs) (void))
-(defnative "com/sun/management/internal/GcInfoBuilder.getLastGcInfo0(Ljava/lang/management/GarbageCollectorMXBean;I[Ljava/lang/Object;[C[Ljava/lang/management/MemoryUsage;[Ljava/lang/management/MemoryUsage;)Lcom/sun/management/GcInfo;" (this gc n values types before after) #f)
+;; the last collection's GcInfo, null before the first
+(defnative "com/sun/management/internal/GcInfoBuilder.getLastGcInfo0(Ljava/lang/management/GarbageCollectorMXBean;I[Ljava/lang/Object;[C[Ljava/lang/management/MemoryUsage;[Ljava/lang/management/MemoryUsage;)Lcom/sun/management/GcInfo;" (this gc n values types before after)
+  (and gc-last (gc-info this gc-last)))
 (defnative "sun/management/MemoryImpl.setVerboseGC(Z)V" (this on) (void))
 (defnative "sun/management/ClassLoadingImpl.setVerboseClass(Z)V" (on) (void))
 ;; OperatingSystemMXBean.getSystemLoadAverage: the 1, 5 and 15 minute figures
@@ -380,7 +460,7 @@
 ;; another thread is active, and ended the process with a Scheme error
 (define full-collect   ; jolt has had it since before 0.8.13; the pin is newer
   (if (top-level-bound? 'jolt-collect-full!) (top-level-value 'jolt-collect-full!) (lambda () (collect (collect-maximum-generation)))))
-(defnative "java/lang/Runtime.gc()V" (this) (full-collect))
+(defnative "java/lang/Runtime.gc()V" (this) (explicit-collect! "end of major GC" "System.gc()"))
 
 ;; --- java.lang.Class --------------------------------------------------------------
 
@@ -1968,6 +2048,9 @@
 ;; uncaught exception goes to dispatchUncaughtException, which prints it the
 ;; JDK's way; anything else (a runtime bug) is reported here. Then
 ;; thread-terminated!.
+;; a thread the runtime starts for itself (the Notification Thread) runs a
+;; Scheme procedure where a Java thread runs run()
+(define scheme-thread-bodies (make-weak-eq-hashtable))
 (define (thread-body t)
   (call/cc
    (lambda (k)
@@ -1981,7 +2064,7 @@
                 (cond [(java-halt? r) (exit-process (java-halt-status r))]
                       [(not (eq? r 'done)) (report-uncaught r)]))]
              [else (report-uncaught e)]))))
-      (lambda () ((jvirt t "run()V") t)))))
+      (lambda () (let ([p (eq-hashtable-ref scheme-thread-bodies t #f)]) (if p (p) ((jvirt t "run()V") t)))))))
   (thread-terminated! t (lambda () (set! java-live-threads (remq t java-live-threads))))
   (flush-output-port (current-output-port)))
 
@@ -2181,7 +2264,7 @@
 ;; . seq), and each ownable synchronizer with an owner, as (o . owner)
 (define (heap-locks)
   (enable-object-backreferences #t)
-  (full-collect)
+  (explicit-collect! "end of major GC" "Heap Inspection Initiated GC")
   (enable-object-backreferences #f)
   (let ([aos? (let ([memo (make-hashtable string-hash string=?)])
                 (lambda (x)
