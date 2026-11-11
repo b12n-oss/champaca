@@ -1,0 +1,32 @@
+supports: monitors true synchronizers true contention true enabled false
+self: main RUNNABLE lock=none owner=null blocked=0 waited=0 monitors=[] syncs=[] top=sun.management.ThreadImpl.dumpThreads0 native
+after two sleeps: main RUNNABLE lock=none owner=null blocked=0 waited=2 monitors=[] syncs=[] top=sun.management.ThreadImpl.dumpThreads0 native
+after a wait: main RUNNABLE lock=none owner=null blocked=0 waited=3 monitors=[] syncs=[] top=sun.management.ThreadImpl.dumpThreads0 native
+after a park: main RUNNABLE lock=none owner=null blocked=0 waited=4 monitors=[] syncs=[] top=sun.management.ThreadImpl.dumpThreads0 native
+holding two monitors: main RUNNABLE lock=none owner=null blocked=0 waited=4 monitors=[java.lang.String, java.lang.Object] syncs=[] top=sun.management.ThreadImpl.dumpThreads0 native
+holding a ReentrantLock: main RUNNABLE lock=none owner=null blocked=0 waited=4 monitors=[] syncs=[java.util.concurrent.locks.ReentrantLock$NonfairSync] top=sun.management.ThreadImpl.dumpThreads0 native
+holding a write lock: main RUNNABLE lock=none owner=null monitors=[] syncs=[java.util.concurrent.locks.ReentrantReadWriteLock$NonfairSync] top=sun.management.ThreadImpl.dumpThreads0 native
+released: main RUNNABLE lock=none owner=null monitors=[] syncs=[] top=sun.management.ThreadImpl.dumpThreads0 native
+waiting: waiter WAITING lock=java.lang.Object owner=null blocked=0 waited=1 monitors=[] syncs=[] top=java.lang.Object.wait0 native
+waiting, its monitor held: waiter WAITING lock=java.lang.Object owner=main blocked=0 waited=1 monitors=[] syncs=[] top=java.lang.Object.wait0 native
+sleeping: sleeper TIMED_WAITING lock=none owner=null blocked=0 waited=1 monitors=[] syncs=[] top=java.lang.Thread.sleepNanos0 native
+parked on a lock main holds: parked WAITING lock=java.util.concurrent.locks.ReentrantLock$NonfairSync owner=main blocked=0 waited=1 monitors=[] syncs=[] top=jdk.internal.misc.Unsafe.park native
+blocked on main's monitor: blocked BLOCKED lock=java.lang.Object owner=main blocked=1 waited=0 monitors=[] syncs=[] top=ThreadInfoCheck.lambda$main$3
+no deadlocks: null null
+deadlocked: d1 BLOCKED lock=java.lang.Object owner=d2 monitors=[java.lang.Object] syncs=[] top=ThreadInfoCheck.lambda$main$4
+behind the deadlock: d3 BLOCKED lock=java.lang.Object owner=d1 monitors=[] syncs=[] top=ThreadInfoCheck.lambda$main$6
+monitor deadlock: [d1, d2] [d1, d2]
+lock deadlocked: e1 WAITING lock=java.util.concurrent.locks.ReentrantLock$NonfairSync owner=e2 monitors=[] syncs=[java.util.concurrent.locks.ReentrantLock$NonfairSync] top=jdk.internal.misc.Unsafe.park native
+lock deadlock: [d1, d2] [d1, d2, e1, e2]
+dump: [d1, d2, d3, e1, e2, main, sleeper, waiter]
+dump's own top: sun.management.ThreadImpl.dumpThreads0 native, then sun.management.ThreadImpl.dumpAllThreads
+dump without stacks: true
+depth 0: 0, depth 2: 2
+info top: sun.management.ThreadImpl.getThreadInfo1 native
+other thread's stack: java.lang.Thread.sleepNanos0 native, java.lang.Object.wait0 native
+unknown id: null [null]
+id 0: java.lang.IllegalArgumentException: Invalid thread ID parameter: 0
+times off: -1 -1
+times on: enabled true waited >= 0 true blocked >= 0 true
+peak after reset: true
+toString: "sleeper" daemon prio=5 Id=N TIMED_WAITING

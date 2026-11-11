@@ -60,6 +60,17 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `ThreadMXBean` gives `ThreadInfo`, thread dumps and deadlock detection,
+  where each stopped at a missing native. A thread's info says what it blocks
+  or waits on and who owns that lock, how often it blocked and waited (with
+  times once contention monitoring is on), the monitors and ownable
+  synchronizers it holds, and its stack, the native it waits in on top as
+  HotSpot shows it (`Object.wait0`, `Thread.sleepNanos0`, `Unsafe.park`; so
+  does `Thread.getStackTrace` on another thread). `findMonitorDeadlockedThreads`
+  and `findDeadlockedThreads` find cycles of threads blocked on monitors and
+  parked on `ReentrantLock`s and the like. Taking a lock costs what it did:
+  a dump asking for locked monitors or synchronizers finds them by walking
+  the heap, as HotSpot finds synchronizers (`test/java/ThreadInfoCheck.java`).
 - Setting a file's creation time works on macOS (`BasicFileAttributeView.setTimes`
   through `setattrlist`), where it threw `UnsatisfiedLinkError`, so
   commons-io's `FileUtils.copyFile`, which keeps the source's times, works

@@ -137,8 +137,8 @@
 ;; Enough of sun.management for the Runtime, Memory, OperatingSystem and
 ;; ClassLoading beans and ThreadMXBean's counts: the VM's counters, from what
 ;; the runtime keeps, and zeros for the HotSpot-only ones (safepoints, JIT
-;; and class-verification times), and the threads' CPU times (Thread
-;; section). ThreadInfo and deadlock detection stay missing.
+;; and class-verification times), and the threads' CPU times, ThreadInfo
+;; and deadlock detection (Thread section).
 (define vm-start-ms (quotient (now-nanos) 1000000))
 (define vm-start-mono (current-time 'time-monotonic))   ; uptime survives a clock step
 (define (uptime-ms)
@@ -148,16 +148,18 @@
   (define cls "sun/management/VMManagementImpl")
   (define (def name proc) (define-native! (string-append cls "." name) proc))
   (def "getVersion0()Ljava/lang/String;" (lambda () (jstring "4.0")))
-  ;; the CPU times of the current thread and of others are measured (below);
+  ;; the CPU times of the current thread and of others are measured, and
+  ;; contention, monitor and synchronizer usage reported (Thread section);
   ;; the other optional supports stay off
   (def "initOptionalSupportFields()V"
        (lambda ()
-         (set-top-level-value! '|sun/management/VMManagementImpl:currentThreadCpuTimeSupport| 1)
-         (set-top-level-value! '|sun/management/VMManagementImpl:otherThreadCpuTimeSupport| 1)))
+         (for-each (lambda (f) (set-top-level-value! (string->symbol (string-append "sun/management/VMManagementImpl:" f)) 1))
+                   '("currentThreadCpuTimeSupport" "otherThreadCpuTimeSupport" "threadContentionMonitoringSupport"
+                     "objectMonitorUsageSupport" "synchronizerUsageSupport"))))
   (def "isThreadCpuTimeEnabled()Z" (lambda (this) thread-cpu-enabled))
+  (def "isThreadContentionMonitoringEnabled()Z" (lambda (this) contention-enabled))
   (for-each (lambda (n) (def n (lambda (this) 0)))
-            '("isThreadContentionMonitoringEnabled()Z"
-              "isThreadAllocatedMemoryEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
+            '("isThreadAllocatedMemoryEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
               "getUnloadedClassCount()J" "getTotalCompileTime()J" "getSafepointCount()J"
               "getTotalSafepointTime()J" "getSafepointSyncTime()J" "getTotalApplicationNonStoppedTime()J"
               "getLoadedClassSize()J" "getUnloadedClassSize()J" "getClassLoadingTime()J"
@@ -655,10 +657,11 @@
           hit))))
 (define (visible-frames frames) (filter (lambda (f) (not (frame-hidden? f))) frames))
 
-;; ste for cname.mname desc at pc, its format bits still to compute
+;; ste for cname.mname desc at pc, its format bits still to compute; pc -2
+;; is a native method's frame, whose line -2 prints as Native Method
 (define (fill-ste! ste cname mname desc pc)
-  (let* ([info (if frame-hook (frame-hook cname mname desc pc) (vector "" -1 ""))]
-         [file (vector-ref info 0)] [line (vector-ref info 1)] [module (vector-ref info 2)]
+  (let* ([info (if frame-hook (frame-hook cname mname desc (if (eqv? pc -2) -1 pc)) (vector "" -1 ""))]
+         [file (vector-ref info 0)] [line (if (eqv? pc -2) -2 (vector-ref info 1))] [module (vector-ref info 2)]
          [set (lambda (f v) (jslot-set! ste (slot-of "java/lang/StackTraceElement" f) v))])
     (set "declaringClassObject" (jmirror-of cname))
     (set "declaringClass" (jstring (slashes->dots cname)))
@@ -1628,27 +1631,33 @@
 ;; good elsewhere (the Reference Handler) would otherwise make every exit
 ;; take the GIL's mutex and broadcast, which cost 60% on synchronized code.
 
-(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked))
-  (sealed #t) (nongenerative champaca-jmonitor))
+(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked) (mutable seq))
+  (sealed #t) (nongenerative champaca-jmonitor-2))
 ;; An object keeps its monitor in its lock field; an array's sits in a weak
 ;; table. Only the GIL's owner runs Java code, so no other thread races the
 ;; first lock.
+;; seq orders the monitors a thread holds for a thread dump, the most
+;; recently entered first.
 (define monitors (make-weak-eq-hashtable))
+(define monitor-seq 0)
 (define (monitor-of o)
   (if (jobj? o)
       (or (jobj-lock o)
-          (let ([m (make-jmonitor #f 0 '() 0)]) (jobj-lock-set! o m) m))
+          (let ([m (make-jmonitor #f 0 '() 0 0)]) (jobj-lock-set! o m) m))
       (or (eq-hashtable-ref monitors o #f)
-          (let ([m (make-jmonitor #f 0 '() 0)]) (eq-hashtable-set! monitors o m) m))))
+          (let ([m (make-jmonitor #f 0 '() 0 0)]) (eq-hashtable-set! monitors o m) m))))
 
-;; wait, holding the GIL, until m is free, then own it with count n
-(define (monitor-acquire! m s n)
+;; wait, holding the GIL, until o's monitor m is free, then own it with
+;; count n
+(define (monitor-acquire! o m s n)
   (when (jmonitor-owner m)
     (jmonitor-blocked-set! m (fx+ (jmonitor-blocked m) 1))
-    (with-thread-status status-blocked (lambda () (gil-block! (lambda () (not (jmonitor-owner m))) #f)))
+    (with-thread-status status-blocked o (lambda () (gil-block! (lambda () (not (jmonitor-owner m))) #f)))
     (jmonitor-blocked-set! m (fx- (jmonitor-blocked m) 1)))
   (jmonitor-owner-set! m s)
-  (jmonitor-count-set! m n))
+  (jmonitor-count-set! m n)
+  (set! monitor-seq (fx+ monitor-seq 1))
+  (jmonitor-seq-set! m monitor-seq))
 
 (define (monitor-release! m)
   (jmonitor-owner-set! m #f)
@@ -1661,7 +1670,7 @@
   (let ([m (monitor-of (nn o))] [s gil-owner])
     (if (eq? (jmonitor-owner m) s)
         (jmonitor-count-set! m (fx+ (jmonitor-count m) 1))
-        (monitor-acquire! m s 1))))
+        (monitor-acquire! o m s 1))))
 
 ;; Unbalanced exits are ignored rather than thrown, as monitors predate threads here.
 (define (jmonitor-exit o)
@@ -1699,10 +1708,10 @@
     (when (take-interrupt! t) (jthrow "java/lang/InterruptedException" #f))
     (jmonitor-waiters-set! m (append (jmonitor-waiters m) (list w)))
     (monitor-release! m)
-    (with-thread-status (status-object-wait deadline)
+    (with-thread-status (status-object-wait deadline) this
       (lambda () (gil-block! (lambda () (or (vector-ref w 1) (interrupted? t))) deadline)))
     (jmonitor-waiters-set! m (remq w (jmonitor-waiters m)))
-    (monitor-acquire! m s count)
+    (monitor-acquire! this m s count)
     (when (and (not (vector-ref w 1)) (take-interrupt! t))
       (jthrow "java/lang/InterruptedException" #f))))
 
@@ -1741,20 +1750,49 @@
 (define (thread-status-set! t v)
   (let ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))])
     (jslot-set! holder (jfield-index "java/lang/Thread$FieldHolder" "threadStatus") v)))
+;; ThreadMXBean's per-thread contention figures, as HotSpot's
+;; ThreadStatistics keeps them: how often a thread blocked entering a
+;; monitor and how often it waited (Object.wait, sleep, park), the time each
+;; took while contention monitoring is on (nanoseconds here, milliseconds in
+;; a ThreadInfo), and the object it blocks or waits on now, if any (a parked
+;; thread's is its parkBlocker field, read when asked)
+(define-record-type thread-stat
+  (fields (mutable blocked) (mutable blocked-ns) (mutable waited) (mutable waited-ns) (mutable blocker))
+  (sealed #t) (nongenerative champaca-thread-stat))
+(define thread-stats (make-weak-eq-hashtable))   ; java.lang.Thread -> thread-stat
+(define (thread-stat-of t)
+  (or (eq-hashtable-ref thread-stats t #f)
+      (let ([st (make-thread-stat 0 0 0 0 #f)]) (eq-hashtable-set! thread-stats t st) st)))
+(define contention-enabled 0)
 ;; run thunk with the current Java thread's status set to v, as HotSpot
 ;; sets it around a wait, so Thread.getState says what the thread waits
-;; for; the status it had comes back after, however thunk leaves. A thread
-;; outside Java (no current Java thread) has no status to set
-(define (with-thread-status v thunk)
+;; for, counting the wait (and timing it while contention monitoring is on)
+;; with blocker as what it waits on; the status it had comes back after,
+;; however thunk leaves. A thread outside Java (no current Java thread) has
+;; no status to set
+(define (with-thread-status v blocker thunk)
   (let ([t current-jthread])
     (if (jobj? t)
         (let* ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))]
                [i (jfield-index "java/lang/Thread$FieldHolder" "threadStatus")]
-               [before (jslot holder i)])
+               [before (jslot holder i)]
+               [st (thread-stat-of t)]
+               [blocked? (fx= v status-blocked)]
+               [start (and (fx= contention-enabled 1) (now-nanos))])
+          (if blocked?
+              (thread-stat-blocked-set! st (+ (thread-stat-blocked st) 1))
+              (thread-stat-waited-set! st (+ (thread-stat-waited st) 1)))
           (dynamic-wind
-            (lambda () (jslot-set! holder i v))
+            (lambda () (jslot-set! holder i v) (thread-stat-blocker-set! st blocker))
             thunk
-            (lambda () (jslot-set! holder i before))))
+            (lambda ()
+              (jslot-set! holder i before)
+              (thread-stat-blocker-set! st #f)
+              (when start
+                (let ([d (- (now-nanos) start)])
+                  (if blocked?
+                      (thread-stat-blocked-ns-set! st (+ (thread-stat-blocked-ns st) d))
+                      (thread-stat-waited-ns-set! st (+ (thread-stat-waited-ns st) d))))))))
         (thunk))))
 (define (thread-daemon? t)
   (let ([holder (jslot t (jfield-index "java/lang/Thread" "holder"))])
@@ -1786,7 +1824,7 @@
 (defnative "java/lang/Thread.sleepNanos0(J)V" (nanos)
   (let ([t current-jthread])
     (when (take-interrupt! t) (jthrow "java/lang/InterruptedException" "sleep interrupted"))
-    (when (with-thread-status status-sleeping
+    (when (with-thread-status status-sleeping #f
             (lambda () (gil-block! (lambda () (interrupted? t)) (deadline-after-nanos (max nanos 0)))))
       (take-interrupt! t)
       (jthrow "java/lang/InterruptedException" "sleep interrupted"))))
@@ -1806,7 +1844,7 @@
                                (make-time 'time-utc (remainder n 1000000000) (quotient n 1000000000)))]
                             [(> time 0) (deadline-after-nanos time)]
                             [else #f])])
-        (with-thread-status (status-parked deadline)
+        (with-thread-status (status-parked deadline) #f
           (lambda () (gil-block! (lambda () (or (jthread-state-permit s) (interrupted? t))) deadline)))))
     (jthread-state-permit-set! s #f)))
 
@@ -1927,9 +1965,17 @@
 (define (published-stack t)
   (let ([s (eq-hashtable-ref thread-states t #f)])
     (and s (jthread-state-stack s))))
+;; a thread waiting in a native the runtime wrote has no frame for it, so
+;; its status says which one, and that frame goes on top as HotSpot shows it
+(define (waiting-native-frame t)
+  (let ([v (thread-status-of t)])
+    (cond [(fx= (fxlogand v #x100) #x100) '(("java/lang/Object" "wait0" "(J)V" -2))]
+          [(fx= (fxlogand v #x40) #x40) '(("java/lang/Thread" "sleepNanos0" "(J)V" -2))]
+          [(fx= (fxlogand v #x200) #x200) '(("jdk/internal/misc/Unsafe" "park" "(ZJ)V" -2))]
+          [else '()])))
 (define (published-frames t)
   (let ([k (published-stack t)])
-    (if k (visible-frames (java-frames-of (raw-frames k))) '())))
+    (if k (append (waiting-native-frame t) (visible-frames (java-frames-of (raw-frames k)))) '())))
 (define (other-thread-stack t) (stack-trace-array (published-frames t)))
 ;; unformatted, as asyncGetStackTrace formats them; null for a thread that
 ;; published nothing, which it takes as no stack
@@ -1943,12 +1989,9 @@
   (make-jarr "[Ljava/lang/StackTraceElement;"
              (vector-map (lambda (t)
                            (if (eq? t current-jthread)
-                               (let ([arr (stack-trace-array
-                                           (cons (list "java/lang/Thread" "dumpThreads" "([Ljava/lang/Thread;)[[Ljava/lang/StackTraceElement;" -1)
-                                                 (visible-frames (java-frames-of (call/1cc (lambda (k) (raw-frames k)))))))])
-                                 ;; line -2 is how a StackTraceElement says Native Method
-                                 (jslot-set! (vector-ref (jarr-vec arr) 0) (slot-of "java/lang/StackTraceElement" "lineNumber") -2)
-                                 arr)
+                               (stack-trace-array
+                                (cons (list "java/lang/Thread" "dumpThreads" "([Ljava/lang/Thread;)[[Ljava/lang/StackTraceElement;" -2)
+                                      (visible-frames (java-frames-of (call/1cc (lambda (k) (raw-frames k)))))))
                                (other-thread-stack t)))
                          (jarr-vec (nn threads)))))
 
@@ -2025,6 +2068,160 @@
     (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length iv))) (vector-set! rv i (thread-cpu-ns (vector-ref iv i) user?)))))
 (defnative "sun/management/ThreadImpl.getThreadTotalCpuTime1([J[J)V" (ids result) (thread-cpu-times! ids result #f))
 (defnative "sun/management/ThreadImpl.getThreadUserCpuTime1([J[J)V" (ids result) (thread-cpu-times! ids result #t))
+
+;; ThreadInfo, thread dumps and deadlock detection, from what the runtime
+;; knows of each live thread: its status bits, the object it blocks or waits
+;; on (thread-stats) or its parkBlocker, a monitor's owner, the monitors it
+;; holds and the ownable synchronizers it holds (heap-locks). A held monitor's stack depth is -1, as for one a
+;; native locked: the runtime doesn't note which frame entered it.
+(define (thread-of-id id)
+  (let ([tid-slot (jfield-index "java/lang/Thread" "tid")])
+    (find (lambda (t) (eqv? id (jslot t tid-slot))) (live-jthreads))))
+(define (thread-status-of t)
+  (jslot (jslot t (jfield-index "java/lang/Thread" "holder")) (jfield-index "java/lang/Thread$FieldHolder" "threadStatus")))
+(define (state-of-thread t) (if (eq? t current-jthread) gil-owner (eq-hashtable-ref thread-states t #f)))
+;; the Thread owning o's monitor, without making a monitor for o
+(define (monitor-owner-thread o)
+  (let* ([m (if (jobj? o) (jobj-lock o) (eq-hashtable-ref monitors o #f))]
+         [s (and m (jmonitor-owner m))])
+    (and s (jthread-state-jthread s))))
+(define aos "java/util/concurrent/locks/AbstractOwnableSynchronizer")
+(define (synchronizer-owner o)
+  (and (jinstance? o aos) (jslot o (jfield-index aos "exclusiveOwnerThread"))))
+;; (lock . owner) for t: a monitor it blocks entering or waits on, with the
+;; monitor's owner, or the parkBlocker of a parked thread, with the owner of
+;; an ownable synchronizer; (#f . #f) for any other thread
+(define (thread-lock t)
+  (let ([v (thread-status-of t)])
+    (cond [(eq? t current-jthread) '(#f . #f)]
+          [(fx= (fxlogand v #x200) #x200)
+           (let ([b (jslot t (jfield-index "java/lang/Thread" "parkBlocker"))])
+             (cons b (and b (synchronizer-owner b))))]
+          [(fx= (fxlogand v #x500) 0) '(#f . #f)]
+          [else (let* ([st (eq-hashtable-ref thread-stats t #f)] [o (and st (thread-stat-blocker st))])
+                  (cons o (and o (monitor-owner-thread o))))])))
+
+;; The locks every thread holds, found as HotSpot finds ownable
+;; synchronizers, by walking the heap: a full collection with Chez's object
+;; backreferences on lists every object, so a dump asking for locked
+;; monitors or synchronizers costs a collection and a walk (about 120 ms for
+;; 4 million objects) and taking a lock costs nothing more. (monitors .
+;; synchronizers): each object with a monitor some thread owns, as (o owner
+;; . seq), and each ownable synchronizer with an owner, as (o . owner)
+(define (heap-locks)
+  (enable-object-backreferences #t)
+  (full-collect)
+  (enable-object-backreferences #f)
+  (let ([aos? (let ([memo (make-hashtable string-hash string=?)])
+                (lambda (x)
+                  (let ([c (class-name-of x)])
+                    (let ([v (hashtable-ref memo c 'none)])
+                      (if (eq? v 'none)
+                          (let ([v (class-assignable? c aos)]) (hashtable-set! memo c v) v)
+                          v)))))]
+        [mons '()] [syncs '()])
+    (define (note-monitor! o m)
+      (when (and m (jmonitor-owner m))
+        (set! mons (cons (cons o (cons (jmonitor-owner m) (jmonitor-seq m))) mons))))
+    (for-each (lambda (gen)
+                (for-each (lambda (p)
+                            (let ([x (car p)])
+                              (when (jobj? x)
+                                (note-monitor! x (jobj-lock x))
+                                (when (aos? x)
+                                  (let ([t (synchronizer-owner x)]) (when t (set! syncs (cons (cons x t) syncs))))))))
+                          gen))
+              (object-backreferences))
+    (vector-for-each note-monitor! (hashtable-keys monitors) (hashtable-values monitors))
+    (cons mons syncs)))
+;; the objects whose monitors s owns, the most recently entered first
+(define (held-monitors locks s)
+  (map car (list-sort (lambda (a b) (fx> (cddr a) (cddr b)))
+                      (filter (lambda (e) (eq? (cadr e) s)) (car locks)))))
+(define (held-synchronizers locks t)
+  (map car (filter (lambda (e) (eq? (cdr e) t)) (cdr locks))))
+
+;; t's stack for a ThreadInfo: the current thread's from the native's
+;; caller with the native's frame on top, as HotSpot shows it, another
+;; thread's as it published it; at most depth frames unless depth is -1
+(define (thread-info-stack t native depth)
+  (let* ([frames (if (eq? t current-jthread)
+                     (cons (list "sun/management/ThreadImpl" (car native) (cdr native) -2)
+                           (visible-frames (java-frames-of (call/1cc (lambda (k) (raw-frames k))))))
+                     (published-frames t))])
+    (stack-trace-array (if (and (fx>= depth 0) (fx< depth (length frames))) (list-head frames depth) frames))))
+(define (contention-ms ns) (if (fx= contention-enabled 1) (quotient ns 1000000) -1))
+;; locks is heap-locks's answer when monitors? or syncs?
+(define (thread-info t native depth monitors? syncs? locks)
+  (jinit "java/lang/management/ThreadInfo")
+  (let* ([lock (thread-lock t)]
+         [st (or (eq-hashtable-ref thread-stats t #f) (make-thread-stat 0 0 0 0 #f))]
+         [s (state-of-thread t)]
+         [held (if (and monitors? s) (held-monitors locks s) '())]
+         [info (jnew "java/lang/management/ThreadInfo")])
+    ((method-proc "java/lang/management/ThreadInfo"
+                  "<init>(Ljava/lang/Thread;ILjava/lang/Object;Ljava/lang/Thread;JJJJ[Ljava/lang/StackTraceElement;[Ljava/lang/Object;[I[Ljava/lang/Object;)V")
+     info t (thread-status-of t) (car lock) (cdr lock)
+     (thread-stat-blocked st) (contention-ms (thread-stat-blocked-ns st))
+     (thread-stat-waited st) (contention-ms (thread-stat-waited-ns st))
+     (thread-info-stack t native depth)
+     (make-jarr "Ljava/lang/Object;" (list->vector held))
+     (make-jarr "I" (make-vector (length held) -1))
+     (make-jarr "Ljava/lang/Object;" (list->vector (if syncs? (held-synchronizers locks t) '()))))
+    info))
+(defnative "sun/management/ThreadImpl.getThreadInfo1([JI[Ljava/lang/management/ThreadInfo;)V" (ids depth result)
+  (let ([iv (jarr-vec (nn ids))] [rv (jarr-vec (nn result))])
+    (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length iv)))
+      (let ([t (thread-of-id (vector-ref iv i))])
+        (vector-set! rv i (and t (thread-info t '("getThreadInfo1" . "([JI[Ljava/lang/management/ThreadInfo;)V") depth #f #f #f)))))))
+(defnative "sun/management/ThreadImpl.dumpThreads0([JZZI)[Ljava/lang/management/ThreadInfo;" (ids monitors syncs depth)
+  (let* ([ts (if ids (map thread-of-id (vector->list (jarr-vec ids))) (live-jthreads))]
+         [locks (and (or (eqv? monitors 1) (eqv? syncs 1)) (heap-locks))])
+    (make-jarr "Ljava/lang/management/ThreadInfo;"
+               (list->vector
+                (map (lambda (t)
+                       (and t (thread-info t '("dumpThreads0" . "([JZZI)[Ljava/lang/management/ThreadInfo;") depth
+                                           (eqv? monitors 1) (eqv? syncs 1) locks)))
+                     ts)))))
+
+;; the threads in a cycle of threads each waiting for the next: blocked
+;; entering a monitor (in Object.wait's re-entry too) another holds, or,
+;; with synchronizers, parked on an ownable synchronizer another owns; null
+;; for none, as HotSpot's find_deadlocks answers. A thread behind a cycle
+;; isn't in it.
+(define (deadlocked-threads syncs?)
+  (define (waits-for t)
+    (let ([v (thread-status-of t)])
+      (and (not (eq? t current-jthread))
+           (or (fx= v status-blocked) (and syncs? (fx= (fxlogand v #x200) #x200)))
+           (let ([o (cdr (thread-lock t))]) (and o (not (eq? o t)) o)))))
+  (let loop ([ts (live-jthreads)] [found '()])
+    (if (null? ts)
+        (and (pair? found) (make-jarr "Ljava/lang/Thread;" (list->vector (reverse found))))
+        (let walk ([t (car ts)] [path '()])
+          (cond [(memq t path)
+                 => (lambda (tail)
+                      ;; path is newest first: the cycle runs from the newest to t
+                      (let ([cycle (let take ([p path] [acc '()])
+                                     (if (eq? (car p) t) (cons t acc) (take (cdr p) (cons (car p) acc))))])
+                        (loop (cdr ts) (fold-left (lambda (acc x) (if (memq x acc) acc (cons x acc))) found cycle))))]
+                [(waits-for t) => (lambda (u) (walk u (cons t path)))]
+                [else (loop (cdr ts) found)])))))
+(defnative "sun/management/ThreadImpl.findMonitorDeadlockedThreads0()[Ljava/lang/Thread;" () (deadlocked-threads #f))
+(defnative "sun/management/ThreadImpl.findDeadlockedThreads0()[Ljava/lang/Thread;" () (deadlocked-threads #t))
+(defnative "sun/management/ThreadImpl.resetPeakThreadCount0()V" ()
+  (set! threads-peak (length (live-jthreads))))
+;; HotSpot starts the times again from zero when monitoring is turned on
+(defnative "sun/management/ThreadImpl.setThreadContentionMonitoringEnabled0(Z)V" (on)
+  (when (and (eqv? on 1) (fx= contention-enabled 0))
+    (vector-for-each (lambda (st) (thread-stat-blocked-ns-set! st 0) (thread-stat-waited-ns-set! st 0))
+                     (hashtable-values thread-stats)))
+  (set! contention-enabled on))
+(defnative "sun/management/ThreadImpl.resetContentionTimes0(J)V" (id)
+  (vector-for-each (lambda (t st)
+                     (when (or (eqv? id 0) (eqv? id (jslot t (jfield-index "java/lang/Thread" "tid"))))
+                       (thread-stat-blocked-ns-set! st 0) (thread-stat-waited-ns-set! st 0)))
+                   (hashtable-keys thread-stats) (hashtable-values thread-stats)))
 
 ;; The launcher's DestroyJavaVM: wait for every non-daemon thread, then run
 ;; the shutdown hooks.
