@@ -195,7 +195,26 @@
 (defnative "jdk/internal/reflect/ConstantPool.getDoubleAt0(Ljava/lang/Object;I)D" (this oop i) (cp-value oop i))
 (defnative "jdk/internal/reflect/ConstantPool.getClassAt0(Ljava/lang/Object;I)Ljava/lang/Class;" (this oop i)
   (jmirror-of (cp-value oop i)))
-(defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this) (no-classes))
+;; The classes this class's InnerClasses attribute says it declares, in the
+;; attribute's order, each loaded through this class's loader. As HotSpot's
+;; Reflection::check_for_inner_class, each must name this class as its outer
+;; one in its own attribute, else IncompatibleClassChangeError.
+(define (class-declared-classes c) (let ([r (meta-class-refl c)]) (and (fx> (length r) 9) (list-ref r 9))))
+(defnative "java/lang/Class.getDeclaredClasses0()[Ljava/lang/Class;" (this)
+  (let* ([c (mirror-class this)] [names (class-declared-classes c)])
+    (if names
+        (with-loader-of this (lambda ()
+          (make-jarr "Ljava/lang/Class;"
+                     (list->vector
+                      (map (lambda (n)
+                             (let* ([m (jmirror-of n)] [inner (class-inner (mirror-class m))])
+                               (unless (and inner (car inner) (string=? (car inner) (jclass-cname c)))
+                                 (jthrow "java/lang/IncompatibleClassChangeError"
+                                         (string-append (binary-name (jclass-cname c)) " and " (binary-name n)
+                                                        " disagree on InnerClasses attribute")))
+                               m))
+                           names)))))
+        (no-classes))))
 ;; Nests (JVMS 5.4.4): a class's host is the class its NestHost attribute
 ;; names, once that class loads, is in the same runtime package and lists
 ;; this one in its NestMembers; any other class is its own host. A hidden

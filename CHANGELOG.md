@@ -60,6 +60,9 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `Class.getDeclaredClasses` and `getClasses` list a class's member classes,
+  in the JVM's order, where they gave an empty array
+  (`test/java/DeclaredClassesCheck.java`).
 - `available()` on a pipe, a terminal or a socket's file descriptor counts
   the bytes waiting, as the JVM asks the kernel, where it was 0, and standard
   input's counts what champaca has buffered too

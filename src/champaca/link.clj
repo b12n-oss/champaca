@@ -507,11 +507,13 @@
 (defn- class-meta-text
   "The class's own reflection meta: (signature annotations inner
   enclosing-method record-components type-annotations nest-host
-  nest-members permitted-subclasses). inner is InnerClasses' entry for this
+  nest-members permitted-subclasses declared-classes). inner is InnerClasses'
+  entry for this
   class, (outer simple-name flags); enclosing-method is (class name desc);
   NestHost is the host's name and NestMembers their names;
-  PermittedSubclasses their names, () for a sealed class listing none."
-  [{:keys [inner enclosing-method record nest-members permitted-subclasses] :as reflection}]
+  PermittedSubclasses their names, () for a sealed class listing none;
+  declared-classes the names of the classes it declares, #f for none."
+  [{:keys [inner enclosing-method record nest-members permitted-subclasses declared-classes] :as reflection}]
   (cg/sx (refl-lit (:signature reflection)) (refl-lit (:annotations reflection))
          (if inner
            (cg/sx (refl-lit (:outer inner)) (refl-lit (:simple-name inner)) (str (:flags inner)))
@@ -524,7 +526,8 @@
          (refl-lit (:type-annotations reflection))
          (refl-lit (:nest-host reflection))
          (if nest-members (apply cg/sx (map cg/str-lit nest-members)) "#f")
-         (if permitted-subclasses (apply cg/sx (map cg/str-lit permitted-subclasses)) "#f")))
+         (if permitted-subclasses (apply cg/sx (map cg/str-lit permitted-subclasses)) "#f")
+         (if declared-classes (apply cg/sx (map cg/str-lit declared-classes)) "#f")))
 
 (defn- register-form
   "register-class! for the class: name, super, interfaces, template, vtable

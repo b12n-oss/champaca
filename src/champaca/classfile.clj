@@ -341,6 +341,15 @@
              :flags fl}))
         (partition 4 (rest (u2s (:info attr))))))
 
+(defn- declared-classes
+  "The classes an InnerClasses attribute says this class declares, in its
+  order: entries whose outer class is this one (JVM_GetDeclaredClasses)."
+  [attr cp this]
+  (vec (keep (fn [[ci oi _ _]]
+               (when (and (pos? ci) (pos? oi) (= this (:name (cp oi))))
+                 (:name (cp ci))))
+             (partition 4 (rest (u2s (:info attr)))))))
+
 (defn- enclosing-method-of
   "An EnclosingMethod attribute as {:class :name :desc}."
   [attr cp]
@@ -358,16 +367,18 @@
   {:class :name :desc} (name and desc nil outside a method), and its nest:
   the NestHost attribute's class, or the NestMembers attribute's classes;
   and a sealed class's PermittedSubclasses, an empty vector when it lists
-  none (sealed all the same)."
+  none (sealed all the same); and the classes it declares, when any."
   [attrs cp this]
   (let [inner (attr-value attrs "InnerClasses" #(own-inner-entry % cp this))
+        declared (attr-value attrs "InnerClasses" #(not-empty (declared-classes % cp this)))
         encl (attr-value attrs "EnclosingMethod" #(enclosing-method-of % cp))
         host (attr-value attrs "NestHost" #(:name (cp (first (u2s (:info %))))))
         members (attr-value attrs "NestMembers" #(class-names % cp))
         permitted (attr-value attrs "PermittedSubclasses" #(class-names % cp))]
     (cond-> {} inner (assoc :inner inner) encl (assoc :enclosing-method encl)
             host (assoc :nest-host host) members (assoc :nest-members members)
-            permitted (assoc :permitted-subclasses permitted))))
+            permitted (assoc :permitted-subclasses permitted)
+            declared (assoc :declared-classes declared))))
 
 (defn- read-member [r cp]
   (let [flags (u2 r)
