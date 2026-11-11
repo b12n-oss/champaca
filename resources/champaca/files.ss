@@ -166,6 +166,16 @@
 (deflibc libc-setattrlist (if fs-macos? "setattrlist" "no-setattrlist-here") #f (uptr uptr uptr unsigned-long unsigned-int) int)
 (deflibc libc-fsetattrlist (if fs-macos? "fsetattrlist" "no-fsetattrlist-here") #f (int uptr uptr unsigned-long unsigned-int) int)
 (deflibc libc-statvfs "statvfs" #f (uptr uptr) int)
+;; extended attributes on a descriptor: macOS's calls take a position and
+;; options after the others, which the JDK's native passes as 0
+(deflibc libc-fgetxattr-linux (if fs-linux? "fgetxattr" "no-fgetxattr-here") #f (int uptr uptr size_t) ssize_t)
+(deflibc libc-fgetxattr-macos (if fs-macos? "fgetxattr" "no-fgetxattr-here") #f (int uptr uptr size_t unsigned-32 int) ssize_t)
+(deflibc libc-fsetxattr-linux (if fs-linux? "fsetxattr" "no-fsetxattr-here") #f (int uptr uptr size_t int) int)
+(deflibc libc-fsetxattr-macos (if fs-macos? "fsetxattr" "no-fsetxattr-here") #f (int uptr uptr size_t unsigned-32 int) int)
+(deflibc libc-fremovexattr-linux (if fs-linux? "fremovexattr" "no-fremovexattr-here") #f (int uptr) int)
+(deflibc libc-fremovexattr-macos (if fs-macos? "fremovexattr" "no-fremovexattr-here") #f (int uptr int) int)
+(deflibc libc-flistxattr-linux (if fs-linux? "flistxattr" "no-flistxattr-here") #f (int uptr size_t) ssize_t)
+(deflibc libc-flistxattr-macos (if fs-macos? "flistxattr" "no-flistxattr-here") #f (int uptr size_t int) ssize_t)
 ;; Linux's birth time comes from statx, as the JDK's Linux native reads it
 (deflibc libc-statx (if fs-linux? "statx" "no-statx-here") #f (int uptr int unsigned-32 uptr) int)
 (define fs-statx? (and fs-linux? fs-libc-loaded (foreign-entry? "statx")))
@@ -616,12 +626,25 @@
   (syntax-rules () [(_ sig args body ...) (defnative (string-append und sig) args body ...)]))
 
 ;; capabilities: birth times where struct stat has them (macOS), no *at
-;; calls, no extended attributes. Without a layout table nothing in
+;; calls, no extended attributes advertised (the xattr natives below
+;; serve the copy path). Without a layout table nothing in
 ;; java.nio.file can work, so it fails here, once, rather than in every stat.
 (defund "init()I" ()
   (need-layout "java.nio.file")
   (if (or (fs-has? 'st_birthtime_sec) fs-statx?) (fxsll 1 16) 0))
 (defund "fchmodatNoFollowSupported0()Z" () 0)
+;; LinuxFileSystem copies a file's extended attributes on every copy with
+;; COPY_ATTRIBUTES, whatever init answered
+(defund "fgetxattr0(IJJI)I" (fd name value n)
+  (unix-check (if fs-macos? (libc-fgetxattr-macos fd name value n 0 0) (libc-fgetxattr-linux fd name value n))))
+(defund "fsetxattr0(IJJI)V" (fd name value n)
+  (unix-check (if fs-macos? (libc-fsetxattr-macos fd name value n 0 0) (libc-fsetxattr-linux fd name value n 0)))
+  (void))
+(defund "fremovexattr0(IJ)V" (fd name)
+  (unix-check (if fs-macos? (libc-fremovexattr-macos fd name 0) (libc-fremovexattr-linux fd name)))
+  (void))
+(defund "flistxattr(IJI)I" (fd list n)
+  (unix-check (if fs-macos? (libc-flistxattr-macos fd list n 0) (libc-flistxattr-linux fd list n))))
 
 (defund "getcwd()[B" ()
   (if (eqv? 0 (libc-getcwd fs-scratch 4096)) (unix-error) (cstring->bytes fs-scratch)))
