@@ -747,7 +747,37 @@
 ;; of another class an IllegalArgumentException, with the JDK's texts for
 ;; mode. These overrides replace Field's own
 ;; access check too, which reaches obj.getClass() first unless the field was
-;; made accessible, so a null receiver's text depends on that.
+;; made accessible, so a null receiver's text depends on that. A field not
+;; made accessible is checked as Field.get checks it, against the first Java
+;; frame that isn't reflection's (an override has no frame of its own), by
+;; AccessibleObject.checkAccess itself, after the null receiver test and
+;; before the receiver's class test; with no Java frame (jolt calling) it
+;; isn't checked.
+(define (field-caller)
+  (let loop ([fs (java-frames)])
+    (cond [(null? fs) #f]
+          [(reflection-frame? (caar fs)) (loop (cdr fs))]
+          [else (jmirror-of (caar fs))])))
+;; Reflection.verifyMemberAccess's quick answer: a public, non-protected
+;; member of a public class whose module exports its package to everyone is
+;; open to any caller, so the stack isn't walked for it. Only a yes is
+;; remembered, since a package can be exported later but never unexported.
+(define everywhere-classes (make-weak-eq-hashtable))
+(define (open-to-all? c mods)
+  (and (fx= (fxlogand mods #x5) #x1)
+       (fxpositive? (fxlogand (jclass-flags c) #x1))
+       (or (eq-hashtable-ref everywhere-classes c #f)
+           (let ([m (class-module c)])
+             (and m (eqv? 1 ((jvirt m "isExported(Ljava/lang/String;)Z") m (jstring (slashes->dots (class-package c)))))
+                  (begin (eq-hashtable-set! everywhere-classes c #t) #t))))))
+(define (check-field-access! f c mods obj static?)
+  (let ([caller (and (not (open-to-all? c mods)) (field-caller))])
+    (when caller
+      ((method-proc "java/lang/reflect/AccessibleObject"
+                    "checkAccess(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/Class;I)V")
+       f caller (jmirror c)
+       (if static? #f (jmirror-of (class-name-of obj)))
+       (jslot f (jfield-index "java/lang/reflect/Field" "modifiers"))))))
 (define (field-access f obj mode)
   (let* ([c (mirror-class (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))]
          [slot (jslot f (jfield-index "java/lang/reflect/Field" "slot"))]
@@ -763,6 +793,7 @@
                               (field-type-name desc) " field " qname)])
     (if static?
         (let ([sym (string->symbol (string-append cname ":" name))])
+          (unless override? (check-field-access! f c (caddr meta) obj #t))
           (jinit cname)
           (values (lambda () (top-level-value sym))
                   (lambda (v) (set-top-level-value! sym v))
@@ -773,6 +804,7 @@
                     (cond [(not override?) "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
                           [(eq? mode 'set) "Cannot invoke \"Object.getClass()\" because \"o\" is null"]
                           [else #f])))
+          (unless override? (check-field-access! f c (caddr meta) obj #f))
           (unless (jinstance? obj cname)
             (jthrow "java/lang/IllegalArgumentException"
                     (string-append "Can not " (if (eq? mode 'get) "get " "set ") what (if (eq? mode 'set) " to " " on ")

@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `Field.get`, `Field.set` and the typed accessors check access as the JVM
+  does when the field wasn't made accessible, with the JDK's
+  `IllegalAccessException` text: a private field of another class is refused,
+  and a protected one only a subclass may reach, on its own kind of object.
+  They used to read and write any field (`test/java/FieldAccessCheck.java`).
 - A JDK class file found as a resource has the JVM's `jrt:` URL, from
   `getResource` and `getResources` through any loader, where it had none.
   Byte Buddy's injection strategy needed it (`test/java/JrtResourceCheck.java`).
