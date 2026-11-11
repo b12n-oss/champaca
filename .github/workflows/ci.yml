@@ -20,9 +20,10 @@
 # battery jobs (site.yml builds the docs).
 #
 # `ci ok` is the one check to require: it passes when every battery job did,
-# or when there was nothing to run. A pull request run's summary has another
-# name, since GitHub counts a skipped job as passing, and this repository's own
-# pull requests skip theirs.
+# or when there was nothing to run. A fork's pull request run is its only run,
+# so its summary is `ci ok` too, and the merge button works under the rule. A
+# pull request from this repository skips its run, and GitHub counts a skipped
+# job as passing, so that summary is named `ci ok (pull request)` instead.
 name: ci
 on:
   push:
@@ -280,7 +281,7 @@ jobs:
   # the one check to require (see the top): every battery job passed, or there
   # was nothing to run
   ok:
-    name: ${{ github.event_name == 'pull_request' && 'ci ok (pull request)' || 'ci ok' }}
+    name: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 'ci ok (pull request)' || 'ci ok' }}
     needs: [plan, battery]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
