@@ -60,6 +60,12 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `native.encoding`, `sun.jnu.encoding` and the console streams' encodings
+  come from the locale's codeset (`nl_langinfo`) as the JDK's launcher reads
+  them, where they were always UTF-8. With no locale set, Linux gets
+  `ANSI_X3.4-1968` and `System.out` writes `?` for what ASCII can't hold, as
+  HotSpot does; macOS keeps UTF-8 unless `LANG` or `LC_*` names another
+  codeset (`test/encoding`, recorded from HotSpot on both systems).
 - `ThreadMXBean` gives `ThreadInfo`, thread dumps and deadlock detection,
   where each stopped at a missing native. A thread's info says what it blocks
   or waits on and who owns that lock, how often it blocked and waited (with

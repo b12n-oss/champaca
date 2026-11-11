@@ -481,6 +481,26 @@
                                                        (when-not ok (println (str "  exit " exit ", out " (pr-str out) ", err " (pr-str err))))
                                                        (not ok))]
                                          (str "modpath-" c)))
+                    ;; the encodings taken from the locale (test/encoding): each
+                    ;; <case>.env's assignments over an environment without LANG,
+                    ;; LC_ALL and LC_CTYPE, stdout HotSpot's on this OS
+                    ;; (<case>.macos.expected or .linux.expected, record.sh);
+                    ;; :env, since :extra-env can't remove a variable
+                    _ (fs/delete-tree "target/encoding")
+                    _ (shell "javac" "-d" "target/encoding" "test/encoding/Props.java")
+                    enc-os (if (str/includes? (str/lower-case (System/getProperty "os.name")) "mac") "macos" "linux")
+                    encoding-fails (vec (for [f (sort (map str (fs/glob "test/encoding" "*.env")))
+                                              :let [c (str/replace (fs/file-name f) ".env" "")
+                                                    env (into (apply dissoc (into {} (System/getenv)) ["LANG" "LC_ALL" "LC_CTYPE"])
+                                                              (for [l (str/split-lines (slurp f)) :when (str/includes? l "=")]
+                                                                (let [i (str/index-of l "=")] [(subs l 0 i) (subs l (inc i))])))
+                                                    {:keys [out exit]} (run-limited 300 {:label (str "encoding-" c) :err :string :in "" :env env}
+                                                                                    (jolt-bin) "-M" "-m" "champaca.main" "target/encoding" "Props")
+                                                    ok (and (= 0 exit) (= (slurp (str "test/encoding/" c "." enc-os ".expected")) out))]
+                                              :when (do (println (if ok "PASS" "FAIL") (str "encoding from the locale: " c))
+                                                        (when-not ok (println (str "  exit " exit ", out " (pr-str out))))
+                                                        (not ok))]
+                                          (str "encoding-" c)))
                     ;; a warm start whose boot loads classes the cached boot never
                     ;; did (the ISO-8859-1 encoder, for -Dstdout.encoding), then
                     ;; plain runs that use them, on a cache of their own
@@ -916,7 +936,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails boot-fails save-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

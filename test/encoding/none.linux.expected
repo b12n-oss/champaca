@@ -1,0 +1,6 @@
+native.encoding=ANSI_X3.4-1968
+sun.jnu.encoding=ANSI_X3.4-1968
+stdout.encoding=ANSI_X3.4-1968
+stderr.encoding=ANSI_X3.4-1968
+file.encoding=UTF-8
+h?llo

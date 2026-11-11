@@ -1320,6 +1320,33 @@
       (linux-locales)))
 ;; java.io.tmpdir: macOS's per-user directory (confstr's
 ;; _CS_DARWIN_USER_TEMP_DIR), else P_tmpdir, as the JDK
+;; native.encoding as the JDK's launcher finds it (java_props_md.c
+;; ParseLocale): the codeset of the user's LC_CTYPE, setlocale(LC_ALL, "")
+;; and nl_langinfo(CODESET), the process's own locale put back afterwards.
+;; A locale named .ISO8859-15 keeps that name, Solaris's 646 is ISO646-US,
+;; an empty codeset ISO8859-1, Linux's EUC-JP the JDK's EUC-JP-LINUX, and on
+;; macOS US-ASCII with none of LANG, LC_ALL, LC_CTYPE set is UTF-8 (a
+;; program launched from the Finder). So a Linux shell with no locale gets
+;; ANSI_X3.4-1968, as HotSpot does.
+(define (host-encoding)
+  (let* ([setlocale (foreign-procedure "setlocale" (int string) string)]
+         [langinfo (foreign-procedure "nl_langinfo" (int) string)]
+         [lc-all (if natives-macos? 0 6)] [lc-ctype (if natives-macos? 2 0)]
+         [saved (setlocale lc-all #f)]
+         [_ (setlocale lc-all "")]
+         [ctype (or (setlocale lc-ctype #f) "C")]
+         [codeset (or (langinfo (if natives-macos? 0 14)) "")])
+    (setlocale lc-all saved)
+    (let* ([dot (let loop ([i 0]) (cond [(fx= i (string-length ctype)) #f] [(char=? (string-ref ctype i) #\.) i] [else (loop (fx+ i 1))]))]
+           [named (and dot (let ([at (let loop ([i dot]) (if (or (fx= i (string-length ctype)) (char=? (string-ref ctype i) #\@)) i (loop (fx+ i 1))))])
+                             (substring ctype (fx+ dot 1) at)))]
+           [p (if (equal? named "ISO8859-15") named codeset)]
+           [p (if (string=? p "646") "ISO646-US" p)]
+           [enc (if (string=? p "") "ISO8859-1" p)]
+           [unset? (lambda (v) (let ([x (getenv v)]) (or (not x) (string=? x ""))))])
+      (cond [(and (not natives-macos?) (string=? enc "EUC-JP")) "EUC-JP-LINUX"]
+            [(and natives-macos? (string=? enc "US-ASCII") (unset? "LANG") (unset? "LC_ALL") (unset? "LC_CTYPE")) "UTF-8"]
+            [else enc]))))
 (define (host-tmpdir)
   (if natives-macos?
       (let* ([confstr (foreign-procedure "confstr" (int uptr size_t) size_t)]
@@ -1369,10 +1396,13 @@
     (set "_file_separator_NDX" "/")
     (set "_path_separator_NDX" ":")
     (set "_line_separator_NDX" "\n")
-    (set "_native_encoding_NDX" "UTF-8")
-    (set "_sun_jnu_encoding_NDX" "UTF-8")
-    (set "_stdout_encoding_NDX" "UTF-8")
-    (set "_stderr_encoding_NDX" "UTF-8")
+    ;; the console streams take it only on a terminal; elsewhere the JDK
+    ;; falls back to native.encoding itself; file names are UTF-8 on macOS
+    (let ([enc (host-encoding)])
+      (set "_native_encoding_NDX" enc)
+      (set "_sun_jnu_encoding_NDX" (if natives-macos? "UTF-8" enc))
+      (for-each (lambda (fd f) (when (fx= 1 (libc-isatty fd)) (set f enc)))
+                '(0 1 2) '("_stdin_encoding_NDX" "_stdout_encoding_NDX" "_stderr_encoding_NDX")))
     ;; as the JVM names them: x86_64 is "amd64" on Linux, "x86_64" on macOS
     (set "_os_name_NDX" (if (memq (machine-type) '(tarm64osx arm64osx ta6osx a6osx)) "Mac OS X" "Linux"))
     ;; anything else isn't supported; it reports Chez's own machine name
