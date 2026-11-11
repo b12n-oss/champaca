@@ -85,7 +85,7 @@ Every program shares the cache, but since the files go by the jar's or directory
 
 ### When it's rebuilt
 
-The directory name is a hash of everything the compiled code depends on: the JDK (its `release` file plus the size and mtime of `lib/modules`; in an [app bundle](app-bundles.md), where a copy changes every mtime, a CRC-32 of the image's index instead, which names every resource with its offset and sizes), the translator's own source, the jolt version (`*jolt-version*`: a release's tag, or a local build's `git describe` string) and the Chez Scheme version under it, and whether `CHAMPACA_BT` is on. The runtime and the compiled methods call jolt's own procedures, so a cache is never shared between two jolt versions, even on one Chez. Change any of them and the next run builds a fresh cache in a new directory.
+The directory name is a hash of everything the compiled code depends on: the JDK (its `release` file plus the size and mtime of `lib/modules`; in an [app bundle](app-bundles.md), where a copy changes every mtime, a CRC-32 of the image's index instead, which names every resource with its offset and sizes), the translator's own source, the jolt version (`*jolt-version*`: a release's tag, or a local build's `git describe` string) and the Chez Scheme version under it, and whether `CHAMPACA_BT` is on. The runtime and the compiled methods call jolt's own procedures, so a cache is never shared between two jolt versions, even on one Chez. The price is a cold start after every jolt upgrade, and after every new local build, whose version names its commit: run `jolt warm` once after switching to get the common JDK paths back. Change any of them and the next run builds a fresh cache in a new directory.
 
 Two switches control it:
 
