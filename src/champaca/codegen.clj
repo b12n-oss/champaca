@@ -1297,10 +1297,8 @@
   (let [cp (:cp e)
         [_rec _names-idx & getters] (:args bsm)
         fields (for [g getters :let [{:keys [class name desc]} (cp (:ref-idx (cp g)))]]
-                 (sx "list" (str-lit name) (str ((:field-index (:resolve e)) class name)) (str-lit desc)))
-        rec-class (:name (cp (first (:args bsm))))
-        simple (last (str/split rec-class #"[/$]"))]
-    (apply sx "jrecord-op" (str-lit name) (str-lit simple)
+                 (sx "list" (str-lit name) (str ((:field-index (:resolve e)) class name)) (str-lit desc)))]
+    (apply sx "jrecord-op" (str-lit name)
            (str "(list " (str/join " " fields) ")") argv)))
 
 (defn- indy-call

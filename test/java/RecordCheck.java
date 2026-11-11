@@ -123,5 +123,10 @@ public class RecordCheck {
         System.out.println(ne + " " + ne.hashCode() + " " + ne.equals(Holder.class.getDeclaredField("name").getAnnotatedType().getAnnotations()[0]));
         Set<Annotation> set = new HashSet<>(List.of(left));
         System.out.println(set.contains(left2) + " " + set.contains(who));
+
+        // a local record's toString uses its simple name, without javac's $1
+        record Local(int x) {}
+        java.util.function.Supplier<Object> inLambda = () -> { record InLambda(String s) {} return new InLambda("y"); };
+        System.out.println(new Local(1) + " " + inLambda.get());
     }
 }

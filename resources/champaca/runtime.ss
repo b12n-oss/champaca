@@ -1946,9 +1946,18 @@
               (i32 (logxor b (ash b -32))))]
     [else v]))
 (define (record-slot o f) (vector-ref (jobj-slots o) (cadr f)))
+;; the record class's getSimpleName, as ObjectMethods' toString takes it (a
+;; local record's simple name drops javac's $1 prefix), once per class
+(define record-simple-names (make-weak-eq-hashtable))
+(define (record-simple-name this)
+  (let ([c (jobj-cls this)])
+    (or (eq-hashtable-ref record-simple-names c #f)
+        (let ([s (jstring->scheme ((method-proc "java/lang/Class" "getSimpleName()Ljava/lang/String;") (jmirror c)))])
+          (eq-hashtable-set! record-simple-names c s)
+          s))))
 ;; "Name[a=1, b=x]"
-(define (record-to-string simple fields this)
-  (jstring (string-append simple "["
+(define (record-to-string fields this)
+  (jstring (string-append (record-simple-name this) "["
                           (let loop ([fs fields] [acc ""])
                             (if (null? fs) acc
                                 (loop (cdr fs)
@@ -1966,9 +1975,9 @@
   (if (and o (jobj? o) (eq? (jobj-cls o) (jobj-cls this))
            (for-all (lambda (f) (record-field-equal? f (record-slot this f) (record-slot o f))) fields))
       1 0))
-(define (jrecord-op op simple fields this . rest)
+(define (jrecord-op op fields this . rest)
   (cond
-    [(string=? op "toString") (record-to-string simple fields this)]
+    [(string=? op "toString") (record-to-string fields this)]
     [(string=? op "hashCode") (record-hash fields this)]
     [(string=? op "equals") (record-equals fields this (car rest))]
     [else (error 'champaca "record op" op)]))

@@ -60,6 +60,9 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A local record's `toString` starts with its simple name, `Local[x=1]`,
+  where it gave javac's binary suffix, `1Local[x=1]`
+  (`test/java/RecordCheck.java`).
 - A lambda's class name holds `$$Lambda`, as the JVM's do, so a framework
   that tells lambdas by it (Spring's `ClassUtils.isLambdaClass`) does here
   too: `champaca.$$Lambda$...`, was `champaca.Lambda$...`.

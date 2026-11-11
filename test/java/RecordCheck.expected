@@ -33,3 +33,4 @@ java.lang.String path
 true false false false 1336837896 true 1335749809 Tag left
 @NonEmpty() 0 true
 true false
+Local[x=1] InLambda[s=y]
