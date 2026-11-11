@@ -340,6 +340,11 @@
             [(let same ([j 0]) (or (fx= j m) (and (char=? (string-ref s (fx+ i j)) (string-ref sub j)) (same (fx+ j 1))))) i]
             [else (loop (fx+ i 1))]))))
 
+;; champaca's own classes (lambda and annotation classes) are in the
+;; package champaca itself; a program's champaca.x.Y is a class like any other
+(define (generated-class-name? cname)
+  (and (fx> (string-length cname) 9) (string=? (substring cname 0 9) "champaca/")
+       (not (string-find cname #\/ 9))))
 ;; a code name -> (cname mname desc block?), or #f for a frame that isn't a
 ;; Java method's; block? for a "#B", "#E" or "#T" procedure of the method
 ;; rather than its own lambda. An inlined leaf is "Caller#I:Callee@pc" (one
@@ -363,7 +368,7 @@
            (and dot
                 (let ([cname (substring name 0 dot)]
                       [end (cond [(and hash at) (fxmin hash at)] [hash hash] [at at] [else (string-length name)])])
-                  (and (not (and (fx>= (string-length cname) 9) (string=? (substring cname 0 9) "champaca/")))
+                  (and (not (generated-class-name? cname))
                        (list cname (substring name (fx+ dot 1) paren)
                              (substring name paren end)
                              (and hash #t)))))))))

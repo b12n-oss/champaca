@@ -60,6 +60,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A class of your own in a package named `champaca.something` has its frames
+  in stack traces and is the caller `MethodHandles.lookup()`, `Class.forName`
+  and the other caller-sensitive methods see. Only champaca's generated
+  classes, in the package `champaca` itself, are left out.
 - `MethodHandles.Lookup`'s `find*`, `unreflect*` and `findVarHandle` check
   access as the JVM does, with its `IllegalAccessException` texts, where any
   lookup reached any member: a private member of another class, a package
