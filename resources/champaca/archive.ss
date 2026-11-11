@@ -200,6 +200,19 @@
              '("jdk.module.path" "jdk.module.upgrade.path" "jdk.module.patch.0" "jdk.module.limitmods"
                "jdk.module.addmods.0" "jdk.module.main" "jdk.module.showModuleResolution"))))
 
+;; What a warm boot calls on the archived graph (ArchivedModuleGraph.get and
+;; ModuleBootstrap.boot2), called once on the dumped one so the dumping boot
+;; compiles them into boot.so: the dump's own boot2 found the static null and
+;; called none of them, and a warm boot would otherwise compile them into a
+;; generation (test/bundlecache's copied bundle compiles nothing)
+(define (module-graph-warm-up! g)
+  (let ([c "jdk/internal/module/ArchivedModuleGraph"])
+    (for-each (lambda (k) ((method-proc c k) g))
+              '("finder()Ljava/lang/module/ModuleFinder;" "configuration()Ljava/lang/module/Configuration;"
+                "classLoaderFunction()Ljava/util/function/Function;" "hasSplitPackages()Z" "hasIncubatorModules()Z"))
+    ((method-proc c "sameAddModules(Ljava/util/Set;)Z")
+     (vector-ref (jobj-slots g) (jfield-index c "addModules")))))
+
 ;; initPhase2 for a cold boot: dumping when the boot is the plain one. Any
 ;; other doesn't archive, so it compiles SystemModules as before (jit.clj
 ;; reads module-graph-dumping)
@@ -222,6 +235,6 @@
                                                         [(condition? e) (condition-text e)]
                                                         [else e])))
                                         #f])
-                               (module-graph-dump g))))))
+                               (let ([d (module-graph-dump g)]) (module-graph-warm-up! g) d))))))
             r)))
       (run)))
