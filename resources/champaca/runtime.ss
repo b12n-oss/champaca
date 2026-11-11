@@ -29,7 +29,8 @@
 ;; defined, since compiling one method can compile another (a loader's
 ;; findClass runs Java code)
 (define (jit! c m d)
-  (parameterize ([resolving-loader (hashtable-ref class-loaders c #f)]) (call-unbounded (lambda () (jit-hook c m d)))))
+  (parameterize ([resolving-loader (hashtable-ref class-loaders c #f)])
+    (call-unbounded (lambda () (uncharged (lambda () (jit-hook c m d)))))))
 
 ;; --- numbers ---------------------------------------------------------------
 
@@ -573,7 +574,7 @@
                          => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))]
                         [(and (not (jobj? e)) (linkage-error-of e))
                          => (lambda (x) (jthrow (car x) (cdr x)))])
-                (call-unbounded (lambda () (load-hook name))))
+                (call-unbounded (lambda () (uncharged (lambda () (load-hook name))))))
               (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
 
 ;; the class a failed load says isn't there: name itself when its bytes are
