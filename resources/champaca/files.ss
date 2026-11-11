@@ -769,6 +769,90 @@
 (defnative "sun/nio/fs/BsdFileSystem.directCopy0(IIJ)I" (dst src cancel) (copy-fd-to-fd dst src) 0)
 (defnative "sun/nio/fs/UnixFileSystem.bufferedCopy0(IIJIJ)V" (dst src buf size cancel) (copy-fd-to-fd dst src))
 
+;; --- mounted file systems: Files.getFileStore, FileSystem.getFileStores ----------
+
+;; a UnixMountEntry's byte[] fields, as the JDK's natives fill them
+(define (mount-entry-set! entry name dir fstype opts)
+  (for-each (lambda (f v) (jslot-set! entry (jfield-index "sun/nio/fs/UnixMountEntry" f) v))
+            '("name" "dir" "fstype" "opts")
+            (list name dir fstype opts)))
+
+;; macOS: getfsstat's array of struct statfs (64-bit inode form, 2168 bytes:
+;; f_fstypename at 72, f_mntonname at 88, f_mntfromname at 1112, f_flags at
+;; 64), walked by an iterator the Java side holds as a long. Options are
+;; "ro" for a read-only mount and empty otherwise, as the JDK's
+;; BsdNativeDispatcher.c makes them; dev stays 0.
+(define statfs-size 2168)
+(deflibc libc-getfsstat (if (memq (machine-type) '(ta6osx a6osx)) "getfsstat$INODE64" "getfsstat") #f (uptr int int) int)
+(deflibc libc-statfs (if (memq (machine-type) '(ta6osx a6osx)) "statfs$INODE64" "statfs") #f (uptr uptr) int)
+(define fsstat-iters (make-eqv-hashtable))
+(define fsstat-next-id 1)
+(defnative "sun/nio/fs/BsdNativeDispatcher.getfsstat()J" ()
+  (let* ([n (unix-check (libc-getfsstat 0 0 2))]          ; MNT_NOWAIT
+         [buf (foreign-alloc (* (max n 1) statfs-size))]
+         [got (libc-getfsstat buf (* (max n 1) statfs-size) 2)])
+    (when (< got 0) (let ([e (errno)]) (foreign-free buf) (raise (construct "sun/nio/fs/UnixException" "(I)V" e))))
+    (let ([id fsstat-next-id])
+      (set! fsstat-next-id (+ id 1))
+      (hashtable-set! fsstat-iters id (vector buf got 0))
+      id)))
+(defnative "sun/nio/fs/BsdNativeDispatcher.fsstatEntry(JLsun/nio/fs/UnixMountEntry;)I" (iter entry)
+  (let ([it (hashtable-ref fsstat-iters iter #f)])
+    (if (or (not it) (fx>= (vector-ref it 2) (vector-ref it 1)))
+        -1
+        (let ([p (+ (vector-ref it 0) (* (vector-ref it 2) statfs-size))])
+          (vector-set! it 2 (fx+ (vector-ref it 2) 1))
+          (mount-entry-set! entry (cstring->bytes (+ p 1112)) (cstring->bytes (+ p 88)) (cstring->bytes (+ p 72))
+                            (make-jarr "B" (if (odd? (foreign-ref 'unsigned-32 p 64)) (vector 114 111) (vector)))) ; MNT_RDONLY: "ro"
+          0))))
+(defnative "sun/nio/fs/BsdNativeDispatcher.endfsstat(J)V" (iter)
+  (let ([it (hashtable-ref fsstat-iters iter #f)])
+    (when it (foreign-free (vector-ref it 0)) (hashtable-delete! fsstat-iters iter))))
+;; statfs's f_mntonname: the directory the file's file system is mounted on
+(defnative "sun/nio/fs/BsdNativeDispatcher.getmntonname0(J)[B" (path)
+  (let ([buf (foreign-alloc statfs-size)])
+    (if (< (libc-statfs path buf) 0)
+        (let ([e (errno)]) (foreign-free buf) (raise (construct "sun/nio/fs/UnixException" "(I)V" e)))
+        (let ([dir (cstring->bytes (+ buf 88))]) (foreign-free buf) dir))))
+
+;; Linux: a mount table (/proc/mounts, /etc/mtab) through setmntent and
+;; getmntent_r, whose struct mntent starts with four char pointers (fsname,
+;; dir, type, opts); getlinelen and rewind are UnixNativeDispatcher's, as
+;; LinuxFileSystem.getMountEntries sizes its buffer by the longest line
+(deflibc libc-setmntent "setmntent" #f (uptr uptr) uptr)
+(deflibc libc-getmntent-r "getmntent_r" #f (uptr uptr uptr int) uptr)
+(deflibc libc-endmntent "endmntent" #f (uptr) int)
+(deflibc libc-getline "getline" #f (uptr uptr uptr) ssize_t)
+(deflibc libc-rewind "rewind" #f (uptr) void)
+(deflibc libc-feof "feof" #f (uptr) int)
+(deflibc libc-ferror "ferror" #f (uptr) int)
+(deflibc libc-free "free" #f (uptr) void)
+(defnative "sun/nio/fs/LinuxNativeDispatcher.setmntent0(JJ)J" (path type)
+  (let ([fp (libc-setmntent path type)])
+    (if (= fp 0) (unix-error) fp)))
+(defnative "sun/nio/fs/LinuxNativeDispatcher.getmntent0(JLsun/nio/fs/UnixMountEntry;JI)I" (fp entry buf len)
+  (let* ([ent (foreign-alloc 40)] [m (libc-getmntent-r fp ent buf len)])
+    (if (= m 0)
+        (begin (foreign-free ent) -1)
+        (let ([field (lambda (i) (cstring->bytes (foreign-ref 'uptr m (* 8 i))))])
+          (mount-entry-set! entry (field 0) (field 1) (field 2) (field 3))
+          (foreign-free ent)
+          0))))
+(defnative "sun/nio/fs/LinuxNativeDispatcher.endmntent(J)V" (fp) (libc-endmntent fp) (void))
+(defund "getlinelen(J)I" (fp)
+  (let ([cell (foreign-alloc 16)])
+    (foreign-set! 'uptr cell 0 0)
+    (foreign-set! 'uptr cell 8 0)
+    (let* ([r (libc-getline cell (+ cell 8) fp)] [e (errno)])
+      (libc-free (foreign-ref 'uptr cell 0))
+      (foreign-free cell)
+      (cond [(not (fx= 0 (libc-feof fp))) -1]
+            [(< r 0) (raise (construct "sun/nio/fs/UnixException" "(I)V" e))]
+            [else r]))))
+(defund "rewind(J)V" (fp)
+  (libc-rewind fp)
+  (unless (fx= 0 (libc-ferror fp)) (unix-error)))
+
 ;; Chez's buffered console output goes out before a raw write to fd 1 or 2
 (define (console-flush fd)
   (when (or (fx= fd 1) (fx= fd 2))

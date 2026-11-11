@@ -60,6 +60,9 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `Files.getFileStore` and `FileSystem.getFileStores` work, on macOS and
+  Linux, with the JVM's mount entries. They failed with an
+  `UnsatisfiedLinkError` (`test/java/FileStoreCheck.java`).
 - `Thread.getStackTrace()` on another thread, and `Thread.getAllStackTraces()`,
   give that thread's frames, line numbers included, where they were empty
   (or, for `getStackTrace`, an `UnsatisfiedLinkError`). A thread waiting in

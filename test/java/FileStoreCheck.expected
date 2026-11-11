@@ -1,0 +1,13 @@
+store: true
+name and type: true
+toString names it: true
+sizes: true
+attribute totalSpace: true
+writable: true
+file's store is its directory's: true
+basic view: true
+posix view: true
+owner view: true
+root store: true
+stores listed: true
+missing path: java.nio.file.NoSuchFileException
