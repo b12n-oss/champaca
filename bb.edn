@@ -81,7 +81,10 @@
                   (fs/delete f)
                   (println "REFUSED" f ": SHA-256" got "is not the pinned" sha)
                   (System/exit 1)))
-              (shell "docker build --platform" (str "linux/" arch) "--build-arg" (str "JDK_FILE=" file)
+              ;; on the host's network, so apt-get resolves through the host's DNS:
+              ;; GitHub's runners couldn't resolve the Ubuntu mirrors from the build
+              ;; network on 2026-11-11 while the host could
+              (shell "docker build --network host --platform" (str "linux/" arch) "--build-arg" (str "JDK_FILE=" file)
                      "--build-arg" (str "JDK_SHA256=" sha) "-t" (str "champaca-linux:" arch) "ci/linux")))
           ;; the jolt programs in examples/, each with what it shows; each is a
           ;; namespace of tests that jolt test and jolt example run
