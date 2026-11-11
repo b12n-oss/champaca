@@ -21,7 +21,7 @@
 ;; field: an object some other static holds (an enum constant, an empty
 ;; collection, a loader) is that object, never a copy.
 
-(define module-graph-format 'champaca-module-graph-1)
+(define module-graph-format 'champaca-module-graph-2)
 (define module-graph-root "jdk/internal/module/ArchivedModuleGraph:archivedModuleGraph")
 (define module-graph-archive #f)        ; the rows a warm boot read, or #f
 (define module-graph-dumped #f)         ; what a cold boot wrote, or #f
@@ -64,19 +64,33 @@
       (vector-for-each (lambda (k v) (eq-hashtable-set! t v k)) ks vs))
     t))
 
+;; an object whose identity the JVM's own structures hold: a copy would be a
+;; second, disconnected one, so only a constant may refer to it
+(define (identity-class? c)
+  (let loop ([c c])
+    (and c
+         (or (member (jclass-cname c) '("java/lang/Class" "java/lang/Thread" "java/lang/ClassLoader" "java/lang/Module"
+                                        "java/lang/ModuleLayer" "java/lang/module/ModuleReader"))
+             (and (jclass-super c) (loop (find-class (jclass-super c))))))))
+
 ;; root's graph as a datum to write, or raises module-graph-refused
 (define (module-graph-dump root)
   (let ([statics (module-graph-statics module-graph-root)]
         [interns (module-graph-interned)]
         [ids (make-eq-hashtable)]
         [rows '()]
+        [static-hashes '()]   ; ("C:f" . hash): a constant's hash archived sets were laid out by
         [n 0])
     (define (enc x)
       (cond [(or (fixnum? x) (bignum? x) (flonum? x)) x]
             [(not x) #f]
             [(or (jobj? x) (jarr? x))
              (let ([s (eq-hashtable-ref statics x #f)])
-               (if s (cons 's s) (cons 'r (visit x))))]
+               (if s
+                   (begin (let ([h (eq-hashtable-ref id-hashes x #f)])
+                            (when (and h (not (assoc s static-hashes))) (set! static-hashes (cons (cons s h) static-hashes))))
+                          (cons 's s))
+                   (cons 'r (visit x))))]
             [else (module-graph-refuse (format "a ~s in a slot" x))]))
     (define (visit x)
       (or (eq-hashtable-ref ids x #f)
@@ -86,30 +100,50 @@
             (let ([h (eq-hashtable-ref id-hashes x #f)])
               (cond
                 [(eq-hashtable-ref interns x #f)
-                 => (lambda (k) (set! rows (cons (vector id 's "" h k) rows)))]
+                 => (lambda (k) (add-row! (vector id 's "" h k)))]
                 [(jarr? x)
-                 (let ([e (jarr-elem x)])
-                   (set! rows (cons (vector id 'a e h (if (member e '("B" "C" "I" "J" "S" "Z" "F" "D"))
-                                                         (vector-copy (jarr-vec x))
-                                                         (vector-map enc (jarr-vec x))))
-                                    rows)))]
+                 ;; the payload first: enc visits children, which add rows
+                 (let* ([e (jarr-elem x)]
+                        [p (if (member e '("B" "C" "I" "J" "S" "Z" "F" "D"))
+                               (vector-copy (jarr-vec x))
+                               (vector-map enc (jarr-vec x)))])
+                   (add-row! (vector id 'a e h p)))]
                 [else
                  (let ([cn (jclass-cname (jobj-cls x))])
-                   (when (or (string=? cn "java/lang/Class") (string=? cn "java/lang/Thread"))
-                     (module-graph-refuse (string-append "a " cn)))
+                   (when (identity-class? (jobj-cls x))
+                     (module-graph-refuse (string-append "a " cn " no constant holds")))
                    (when (jobj-lock x) (module-graph-refuse (string-append "a locked " cn)))
-                   (set! rows (cons (vector id 'o cn h (vector-map enc (jobj-slots x))) rows)))]))
+                   (let ([p (vector-map enc (jobj-slots x))])
+                     (add-row! (vector id 'o cn h p))))]))
             id)))
+    (define (add-row! r) (set! rows (cons r rows)))
     (let ([root-id (visit root)])
-      (vector module-graph-format root-id (list->vector (reverse rows))))))
+      (vector module-graph-format root-id (list->vector (reverse rows)) static-hashes))))
 
 ;; the object a datum describes, or #f when it can't be rebuilt
+(define module-graph-path #f)           ; where the archive was read, deleted when it fails
 (define (module-graph-load datum)
-  (guard (e [#t (when (getenv "CHAMPACA_BT")
-                  (format (current-error-port) "module graph archive not used: ~a\n"
-                          (if (condition? e) (condition-text e) e)))
-                #f])
-    (unless (and (vector? datum) (eq? (vector-ref datum 0) module-graph-format)) (error 'champaca "format"))
+  (guard (e [(not (java-halt? e))
+             (when (getenv "CHAMPACA_BT")
+               (format (current-error-port) "module graph archive not used: ~a\n"
+                       (if (condition? e) (condition-text e) e)))
+             ;; a later boot doesn't try it again (it compiles SystemModules
+             ;; into a generation instead)
+             (when module-graph-path (guard (_ [#t #f]) (delete-file module-graph-path)))
+             (set! module-graph-archive #f)
+             #f])
+    (unless (and (vector? datum) (fx= (vector-length datum) 4) (eq? (vector-ref datum 0) module-graph-format))
+      (error 'champaca "format"))
+    ;; a constant an archived set holds hashes as it did at the dump, or the
+    ;; set is laid out for another hash
+    (for-each (lambda (sh)
+                (let* ([s (car sh)] [i (char-index-of s #\:)])
+                  (jinit (substring s 0 i))
+                  (let* ([o (top-level-value (string->symbol s))] [now (and o (eq-hashtable-ref id-hashes o #f))])
+                    (cond [(not o) (error 'champaca "null static" s)]
+                          [(not now) (eq-hashtable-set! id-hashes o (cdr sh))]
+                          [(not (eqv? now (cdr sh))) (error 'champaca "constant hashed otherwise" s)]))))
+              (vector-ref datum 3))
     (let* ([rows (vector-ref datum 2)]
            [objs (make-vector (vector-length rows) #f)])
       (define (dec x)
@@ -152,9 +186,11 @@
   (when module-graph-dumped
     (call-with-output-file path (lambda (p) (write module-graph-dumped p)) 'replace)))
 (define (module-graph-read! path)
+  (set! module-graph-path path)
   (set! module-graph-archive
         (and (file-exists? path)
-             (guard (e [#t #f]) (call-with-input-file path read)))))
+             ;; an unreadable file (cut short, say) is deleted, as a failed load's is
+             (guard (e [#t (guard (_ [#t #f]) (delete-file path)) #f]) (call-with-input-file path read)))))
 
 ;; the plain boot only: no module path, upgrade path, patch, limit, added
 ;; module, main module or resolution trace, which ModuleBootstrap would read
@@ -178,9 +214,13 @@
             (when (eqv? r 0)
               (let ([g (top-level-value (string->symbol module-graph-root))])
                 (set! module-graph-dumped
-                      (and g (guard (e [(and (pair? e) (eq? (car e) 'module-graph-refused))
+                      ;; any failure means no archive, never a failed boot
+                      (and g (guard (e [(not (java-halt? e))
                                         (when (getenv "CHAMPACA_BT")
-                                          (format (current-error-port) "module graph not archived: ~a\n" (cadr e)))
+                                          (format (current-error-port) "module graph not archived: ~a\n"
+                                                  (cond [(and (pair? e) (eq? (car e) 'module-graph-refused)) (cadr e)]
+                                                        [(condition? e) (condition-text e)]
+                                                        [else e])))
                                         #f])
                                (module-graph-dump g))))))
             r)))
