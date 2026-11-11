@@ -208,6 +208,8 @@
                     _ (shell "java test/gen/ClassFormatGen.java target/classes")
                     ;; OldConcat: a concatenation handed an array and a null raw, as javac before 19 emits
                     _ (shell "java test/gen/OldConcatGen.java target/classes")
+                    ;; JsrCheck's Jsr: a version 49 class with jsr, jsr_w and ret, as javac 1.4 compiled finally
+                    _ (shell "java test/gen/JsrGen.java target/classes")
                     ;; IcceCheck's IcCaller: calls of the wrong kind (invokevirtual of a static method...)
                     _ (shell "java test/gen/IcceGen.java target/classes")
                     ;; ClassDefCheck's classes the JVM refuses to define (a final superclass...)

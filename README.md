@@ -32,7 +32,7 @@ Methods are found by name, and the overload is picked from the arguments the way
 
 ## What it runs
 
-- **Eight common libraries** (commons-lang3, gson, jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML) give the same output as on HotSpot, which `jolt libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
+- **Nine common libraries** (commons-lang3, commons-lang 2.4, gson, jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML) give the same output as on HotSpot, which `jolt libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
 - **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
 - **Compiled Java programs** run from the command line as with `java`: `-cp`, `-jar`, `-D` options, `-p` and `-m` for modules, source files, and the JDK's own rules for finding `main` ([running-java-programs](docs/guide/running-java-programs.md)).
 - **Many JDK areas**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each checked against HotSpot ([compatibility](docs/guide/compatibility.md)).

@@ -105,7 +105,7 @@
     185 [:invokeinterface :iface] 186 [:invokedynamic :indy]
     187 [:new :u2] 188 [:newarray :u1] 189 [:anewarray :u2] 192 [:checkcast :u2]
     193 [:instanceof :u2] 196 [:wide :wide] 197 [:multianewarray :multi]
-    198 [:ifnull :branch] 199 [:ifnonnull :branch] 200 [:goto_w :branch4]}
+    198 [:ifnull :branch] 199 [:ifnonnull :branch] 200 [:goto_w :branch4] 201 [:jsr_w :branch4]}
    ;; xload_n / xstore_n: the slot number is folded into the args
    (into {} (for [[base op] [[26 :iload] [30 :lload] [34 :fload] [38 :dload] [42 :aload]
                              [59 :istore] [63 :lstore] [67 :fstore] [71 :dstore] [75 :astore]]
@@ -195,7 +195,7 @@
       (read code pc)
       (throw (ex-info "no reader for operand format" {:pc pc :format fmt})))))
 
-(defn decode
+(defn- decode-insns
   "Code bytes -> vector of {:pc :op :args :len}."
   [code]
   (let [n (count code)]
@@ -214,15 +214,61 @@
     :if_icmpgt :if_icmple :if_acmpeq :if_acmpne :ifnull :ifnonnull})
 (def ^:private terminal-ops
   #{:goto :goto_w :ireturn :lreturn :freturn :dreturn :areturn :return :athrow
-    :tableswitch :lookupswitch})
+    :tableswitch :lookupswitch :jsr :jsr_w :ret})
 
-(defn- successors [{:keys [op args pc len]}]
+(defn- successors
+  "The pcs control can go to next. A jsr goes to its subroutine, and the
+  subroutine's ret to the instructions after the jsrs that reach it (decode's
+  :targets), never straight to the jsr's next instruction."
+  [{:keys [op args pc len targets]}]
   (cond
     (branch-ops op) [(first args) (+ pc len)]
-    (#{:goto :goto_w} op) [(first args)]
+    (#{:goto :goto_w :jsr :jsr_w} op) [(first args)]
     (#{:tableswitch :lookupswitch} op) (cons (first args) (map second (second args)))
+    (= op :ret) (vec targets)
     (terminal-ops op) []
     :else [(+ pc len)]))
+
+(defn- subroutine-rets
+  "The pcs of the rets a subroutine starting at pc can return with: those
+  reached from it, a jsr inside it counted as coming back to its next
+  instruction, so a nested subroutine's own rets aren't its."
+  [at pc]
+  (loop [todo [pc] seen #{} rets #{}]
+    (if-let [p (peek todo)]
+      (let [todo (pop todo)
+            {:keys [op len] :as i} (at p)]
+        (cond (or (seen p) (nil? i)) (recur todo seen rets)
+              (= op :ret) (recur todo (conj seen p) (conj rets p))
+              (#{:jsr :jsr_w} op) (recur (conj todo (+ p len)) (conj seen p) rets)
+              :else (recur (into todo (successors i)) (conj seen p) rets)))
+      rets)))
+
+(defn- with-ret-targets
+  "insns with each ret's :targets, the sorted pcs right after the jsrs whose
+  subroutine returns with it (the pcs a returnAddress in its local can
+  hold). A ret no subroutine's walk reaches (one in a handler that covers a
+  subroutine's code) can return after any jsr; its dispatch is on the value,
+  so a wider set is only more code. A method with no jsr is returned as it
+  is."
+  [insns]
+  (let [jsrs (filter (comp #{:jsr :jsr_w} :op) insns)]
+    (if (empty? jsrs)
+      insns
+      (let [at (into {} (map (juxt :pc identity)) insns)
+            after (fn [js] (into (sorted-set) (map #(+ (:pc %) (:len %))) js))
+            targets (apply merge-with into
+                           (for [[sub js] (group-by (comp first :args) jsrs)
+                                 r (subroutine-rets at sub)]
+                             {r (after js)}))
+            any (after jsrs)]
+        (mapv (fn [i] (if (= (:op i) :ret) (assoc i :targets (vec (get targets (:pc i) any))) i)) insns)))))
+
+(defn decode
+  "Code bytes -> vector of {:pc :op :args :len}, each ret with its :targets
+  (with-ret-targets)."
+  [code]
+  (with-ret-targets (decode-insns code)))
 
 (defn- backward-ranges
   "[target pc] of every jump to an earlier or the same instruction: a loop's
@@ -1094,6 +1140,23 @@
 
 (defn- emit-goto [e {:keys [args]} _] (terminate! e (jump-to e (first args))))
 
+(defn- emit-jsr
+  "jsr and jsr_w: the returnAddress is the pc of the next instruction, a
+  fixnum, pushed before the jump into the subroutine."
+  [e {:keys [args pc len]} _]
+  (push! e (str (+ pc len)) "A")
+  (terminate! e (jump-to e (first args))))
+
+(defn- emit-ret
+  "ret: a dispatch on the local's returnAddress over the pcs decode found it
+  can hold (with-ret-targets). Any other value is an error rather than a jump
+  to one of them, so a target set that missed a path shows."
+  [e {:keys [args targets pc]} _]
+  (let [v (str "l" (first args))]
+    (terminate! e (apply sx "case" v
+                         (concat (map (fn [t] (sx (str "(" t ")") (jump-to e t))) targets)
+                                 [(sx "else" (sx "error" "'ret" (str-lit (str "no known return address at pc " pc ", got ~s")) v))])))))
+
 (defn- emit-switch [e {:keys [args]} _]
   (let [k (pop! e) [dflt targets] args]
     (terminate! e (apply sx "case" k
@@ -1331,13 +1394,14 @@
    (zipmap [:lshl :lshr :lushr] (repeat emit-long-shift))
    (zipmap (concat (keys cmp0) (keys cmp2) [:if_acmpeq :if_acmpne :ifnull :ifnonnull]) (repeat emit-branch))
    (zipmap [:goto :goto_w] (repeat emit-goto))
+   (zipmap [:jsr :jsr_w] (repeat emit-jsr))
    (zipmap [:tableswitch :lookupswitch] (repeat emit-switch))
    (zipmap [:ireturn :lreturn :freturn :dreturn :areturn :return :athrow] (repeat emit-end))
    (zipmap [:monitorenter :monitorexit] (repeat emit-monitor))
    (zipmap [:getstatic :putstatic :getfield :putfield] (repeat emit-field))
    (zipmap [:invokevirtual :invokeinterface :invokespecial :invokestatic] (repeat emit-invoke))
    {:nop (fn [_ _ _] nil)
-    :iinc emit-iinc :aastore emit-aastore
+    :iinc emit-iinc :aastore emit-aastore :ret emit-ret
     :lneg emit-lneg :lcmp emit-lcmp :i2l emit-i2l :l2i emit-l2i
     :invokedynamic emit-indy :new emit-new :newarray emit-newarray
     :anewarray emit-anewarray :multianewarray emit-multianewarray
@@ -1437,7 +1501,7 @@
   (let [use-def (into {} (for [[pc blk] blks]
                            [pc (reduce (fn [[u d] {:keys [op args]}]
                                          (let [i (first args)]
-                                           [(if (and (load-ops op) (not (d i))) (conj u i) u)
+                                           [(if (and (or (load-ops op) (= op :ret)) (not (d i))) (conj u i) u)
                                             (if (store-ops op) (conj d i) d)]))
                                        [#{} #{}] blk)]))
         ;; live-in = use + (normal successors' live-in - def) + every covering

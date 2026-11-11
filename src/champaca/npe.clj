@@ -149,7 +149,7 @@
       :invokedynamic (let [{:keys [args ret]} (cg/parse-desc (:desc entry))]
                        [(reduce + 0 (map words args)) (if (= ret "V") 0 (words ret))])
       :multianewarray [(second args) 1]
-      :jsr [0 1]
+      (:jsr :jsr_w) [0 1]
       (if (invoke-ops op)
         (invoke-words op entry)
         (throw (ex-info "no stack effect for op" {:op op}))))))
@@ -181,8 +181,10 @@
     (cond
       (branch-ops op) [[(first args) after] [next-pc after]]
       (#{:goto :goto_w} op) [[(first args) after]]
-      ;; a subroutine returns to the instruction after its jsr
-      (= op :jsr) [[(first args) after] [next-pc st]]
+      ;; only into the subroutine: like HotSpot's analysis, nothing carries
+      ;; a state to the instruction after a jsr, so a null met past one has
+      ;; no source to name (JsrCheck's jsrNpe, wideNpe)
+      (#{:jsr :jsr_w} op) [[(first args) after]]
       (#{:tableswitch :lookupswitch} op)
       (let [[default targets] args]
         (map #(vector % after) (cons default (map second targets))))

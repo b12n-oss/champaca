@@ -32,8 +32,12 @@ The first public version. Champaca is still experimental: the
   downcalls and upcalls through `java.lang.foreign`, helpful
   NullPointerException messages, and HotSpot's error texts for linkage,
   class format and cast failures.
-- **Libraries and frameworks**: commons-lang3, gson, jsoup, Jackson,
-  Caffeine, Guava, SLF4J and SnakeYAML match HotSpot's output (`jolt libs`),
+- **Class files from before Java 6**: `jsr`, `jsr_w` and `ret`, which javac
+  1.4 and earlier compiled every `finally` into, so old jars such as
+  commons-lang 2.4 run (its `SerializationUtils` failed with "opcode not in
+  spike: jsr").
+- **Libraries and frameworks**: commons-lang3, commons-lang 2.4, gson,
+  jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML match HotSpot's output (`jolt libs`),
   and Spring Boot 4.1.2 and Quarkus 3.40.1 applications start in every
   packaging (`jolt bench`).
 - **Caches**: a startup cache for the JDK's boot and compiled methods, and a

@@ -1,0 +1,30 @@
+fin 4: 25, count 1
+fin 0: threw java.lang.ArithmeticException: / by zero, count 2
+fin -5: -20, count 3
+two 1: 32
+two -10: 10
+nested 0: 111
+nested 1000: 1111
+wide 5: 12
+loop []: 0
+loop [1..10]: 55
+loop 1000: 1498500
+loop null: threw java.lang.NullPointerException: Cannot read the array length because "<parameter1>" is null
+longs 0: 4294967297
+longs -1: -4294967297
+longs max: -4294967297
+longs 0xffffffff: 12884901887
+noReturn 7: 21
+stack 37: 42
+throwOut 3: 7
+throwOut 0: threw java.lang.ArithmeticException: / by zero
+throwIn 3: 7
+throwIn 0: -1
+stackNested 33: 42
+staleLocal 1: 6
+wideNpe abc: 3
+wideNpe null: threw java.lang.NullPointerException: Cannot invoke "String.length()"
+jsrNpe null: threw java.lang.NullPointerException: Cannot invoke "String.length()"
+npeBeforeJsr null: threw java.lang.NullPointerException: Cannot invoke "String.length()" because "<parameter1>" is null
+reuse 1: 8
+repeated: 87900
