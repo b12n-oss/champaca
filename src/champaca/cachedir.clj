@@ -261,14 +261,24 @@
   "Keep code for the startup cache when origin, a cache-origin, says it may
   be: {:text t} to compile when the cache is written, or {:fasl bv}, object
   code already compiled (compile-unit). unit says what it defines: [cname]
-  a class's registration, [cname key] one method body."
+  a class's registration, [cname key] one method body. Text is kept as
+  UTF-8 bytes until written: a jolt program records every method it
+  compiles as text until its first save-cache!, and a Chez string takes
+  four bytes a character (Jackson's probe held 22 million characters of it,
+  about 90 MB, against 22 MB as bytes)."
   [origin unit code]
   (when-let [rec (:recording @state)]
     (when origin
       ;; the jar whose library file the save rewrites
       (when (= origin :user)
         (swap! state (fn [st] (update st :library-dirty (fnil conj #{}) (get-in st [:classes (first unit) :src-jar])))))
-      (vswap! rec conj (assoc code :unit unit)))))
+      (vswap! rec conj (cond-> (assoc code :unit unit)
+                         (string? (:text code)) (update :text #(.getBytes ^String % "UTF-8")))))))
+
+(defn- unit-text
+  "A recorded unit's text (record! keeps it as UTF-8 bytes)."
+  ^String [{:keys [text]}]
+  (if (string? text) text (String. ^bytes text "UTF-8")))
 
 (defn compile-to-cache?
   "Whether a JDK method should compile straight to object code kept for the
@@ -292,7 +302,7 @@
                  (reduce (fn [acc run]
                            (if (:fasl (first run))
                              (into acc (map #(s/call "add-fasl!" (:fasl %)) run))
-                             (let [start (s/call "add-unit!" (str/join "\n" (map :text run)) (boolean (some :inspect run)))]
+                             (let [start (s/call "add-unit!" (str/join "\n" (map unit-text run)) (boolean (some :inspect run)))]
                                (into acc (repeat (count run) start)))))
                          [] runs)
                  (catch Exception e
