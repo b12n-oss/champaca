@@ -1216,27 +1216,38 @@
     (or (hashtable-ref t s #f)
         (let ([o (jstring s)]) (hashtable-set! t s o) o))))
 
+(define (latin1-chars->string v n)
+  (let ([s (make-string n)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i n) s)
+      (string-set! s i (integer->char (fxlogand (vector-ref v i) #xff))))))
+
+;; the UTF-16 unit at byte index i of a String's value: two bytes, low first
+(define-syntax utf16-unit-at
+  (syntax-rules () [(_ v i) (fxlogor (fxlogand (vector-ref v i) #xff) (fxsll (fxlogand (vector-ref v (fx+ i 1)) #xff) 8))]))
+(define-syntax unit-within?
+  (syntax-rules () [(_ u lo hi) (let ([x u]) (and (fx>= x lo) (fx< x hi)))]))
+
+;; a surrogate pair becomes one char; a lone surrogate has no Scheme char, so
+;; it becomes U+FFFD, as an encoder would write it
+(define (utf16-chars->string v n)
+  (let loop ([i 0] [acc '()])
+    (if (fx>= i n)
+        (list->string (reverse acc))
+        (let ([u (utf16-unit-at v i)])
+          (cond
+            [(not (unit-within? u #xd800 #xe000)) (loop (fx+ i 2) (cons (integer->char u) acc))]
+            [(and (fx< u #xdc00) (fx< (fx+ i 2) n) (unit-within? (utf16-unit-at v (fx+ i 2)) #xdc00 #xe000))
+             (let ([lo (utf16-unit-at v (fx+ i 2))])
+               (loop (fx+ i 4) (cons (integer->char (fx+ #x10000 (fxsll (fx- u #xd800) 10) (fx- lo #xdc00))) acc)))]
+            [else (loop (fx+ i 2) (cons (integer->char #xfffd) acc))])))))
+
 (define (jstring->scheme o)
   (string-slots!)
   (let* ([v (jarr-vec (vector-ref (jobj-slots o) string-value-slot))]
          [n (vector-length v)])
     (if (eqv? 0 (vector-ref (jobj-slots o) string-coder-slot))
-        (let ([s (make-string n)])
-          (do ([i 0 (fx+ i 1)]) ((fx= i n) s)
-            (string-set! s i (integer->char (fxlogand (vector-ref v i) #xff)))))
-        (let loop ([i 0] [acc '()])
-          (if (fx>= i n)
-              (list->string (reverse acc))
-              (let ([u (fxlogor (fxlogand (vector-ref v i) #xff) (fxsll (fxlogand (vector-ref v (fx+ i 1)) #xff) 8))])
-                (if (and (fx>= u #xd800) (fx< u #xdc00) (fx< (fx+ i 2) n))
-                    (let ([lo (fxlogor (fxlogand (vector-ref v (fx+ i 2)) #xff)
-                                       (fxsll (fxlogand (vector-ref v (fx+ i 3)) #xff) 8))])
-                      (if (and (fx>= lo #xdc00) (fx< lo #xe000))
-                          (loop (fx+ i 4) (cons (integer->char (fx+ #x10000 (fxsll (fx- u #xd800) 10) (fx- lo #xdc00))) acc))
-                          (loop (fx+ i 2) (cons (integer->char #xfffd) acc))))
-                    ;; a lone surrogate has no Scheme char; U+FFFD, as an
-                    ;; encoder would write it
-                    (loop (fx+ i 2) (cons (if (and (fx>= u #xd800) (fx< u #xe000)) (integer->char #xfffd) (integer->char u)) acc)))))))))
+        (latin1-chars->string v n)
+        (utf16-chars->string v n))))
 
 ;; a java.lang.String's UTF-16 code units, as a list
 (define (jstring-units o)
