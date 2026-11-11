@@ -325,9 +325,12 @@
 ;; lookup: the Lookup asking (find*Getter/Setter), whose setters refuse a
 ;; final field, or #f (unreflect, a method handle constant)
 (define (field-mh c fname type static? setter? . lookup)
-  (member-mh (field-mh* c fname type static? setter? lookup) 'field))
-(define (field-mh* c fname type static? setter? lookup)
-  (let ([hit (resolve-field c fname type static? setter? (pair? lookup) (and (pair? lookup) (car lookup)))])
+  (let* ([l (and (pair? lookup) (car lookup))]
+         [hit (resolve-field c fname type static? setter? (and l #t) l)]
+         [mh (field-mh* c fname static? setter? hit)])
+    (member-mh (if static? mh (restrict-protected l hit mh)) 'field)))
+(define (field-mh* c fname static? setter? hit)
+  (let ()
     (let* ([dc (jclass-cname (car hit))] [desc (cadr (cdr hit))]
            [recv (cname->desc (jclass-cname c))])
       (if static?
@@ -354,13 +357,100 @@
             [(eq? m 'field) (make-jarr "Ljava/lang/Class;" (vector))]
             [else (with-loader-of (jmirror (car m)) (lambda () (exception-mirrors (cdr m))))]))))
 
+;; Access checks for the Lookup methods, in the JDK's order, through the
+;; JDK's own Java: Lookup.checkSymbolicClass on the class named (find* only,
+;; as the JDK's resolveOrFail), then for a method or constructor HotSpot's
+;; resolution check (MethodHandleNatives.resolve refuses a member the lookup
+;; class can't reach, which the JDK reports as IllegalAccessException "no
+;; such method: ..."), then Lookup.checkAccess with a MemberName carrying
+;; the member's modifiers, which gives the "member is private: ..., from ..."
+;; texts. A TRUSTED lookup (the JDK's own IMPL_LOOKUP) passes everything, as
+;; there.
 (define mh-lookup-class "java/lang/invoke/MethodHandles$Lookup")
+(define (lookup-slot l name) (jslot l (jfield-index mh-lookup-class name)))
+(define (trusted-lookup? l) (eqv? -1 (lookup-slot l "allowedModes")))
+(define (lookup-call name desc . args)
+  (apply (method-proc mh-lookup-class (string-append name desc)) args))
+;; a MemberName for member name of declaring class dc with modifiers mods,
+;; its type a Class for a field (ref-kind 1-4), else a MethodType
+(define (access-member-name dc name type ref-kind mods)
+  (let ([m (construct "java/lang/invoke/MemberName"
+                      (if (fx<= ref-kind 4)
+                          "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;B)V"
+                          "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;B)V")
+                      (jmirror dc) (jstring name) type ref-kind)]
+        [i (jfield-index "java/lang/invoke/MemberName" "flags")])
+    (jslot-set! m i (fxior (jslot m i) (fxlogand mods #xffff)))
+    m))
+(define (check-symbolic-class! l refc)
+  (unless (trusted-lookup? l)
+    (lookup-call "checkSymbolicClass" "(Ljava/lang/Class;)V" l (jmirror refc))))
+;; HotSpot's resolution-time check of a method or constructor, JVMS 5.4.4
+;; from the lookup class (a public lookup's is Object)
+(define (resolution-access! l refc dc mods mn ctor?)
+  (unless (eqv? 1 ((method-proc "sun/invoke/util/VerifyAccess"
+                                "isMemberAccessible(Ljava/lang/Class;Ljava/lang/Class;ILjava/lang/Class;Ljava/lang/Class;I)Z")
+                   (jmirror refc) (jmirror dc) (fxlogand mods #xffff) (lookup-slot l "lookupClass") #f #x1f))
+    (jthrow "java/lang/IllegalAccessException"
+            (string-append (if ctor? "no such constructor: " "no such method: ")
+                           (jstring->scheme ((jvirt mn "toString()Ljava/lang/String;") mn))))))
+;; the checks for a resolved member hit, (declaring class name desc flags
+;; ...), reached as ref-kind through refc. An unreflected member isn't
+;; resolved again, so only checkAccess runs, on a MemberName as
+;; MemberName(Method) leaves it: a statically bound method (final, private,
+;; or of a final class) is invokeSpecial, and its type is still the VM's
+;; Object[] of return and parameter types, which is what HotSpot's message
+;; prints
+(define (lookup-access! l ref-kind refc hit . unreflected?)
+  (when (and l (not (trusted-lookup? l)))
+    (let* ([dc (car hit)] [meta (cdr hit)] [name (car meta)] [desc (cadr meta)] [mods (caddr meta)]
+           [field? (fx<= ref-kind 4)]
+           [own-kind (if (and (pair? unreflected?) (fx= ref-kind 5)
+                              (or (fxpositive? (fxlogand mods #x12)) (fxpositive? (fxlogand (jclass-flags dc) #x10))))
+                         7 ref-kind)]
+           [mn (access-member-name dc name (if field? (desc->mirror desc) (desc->method-type desc)) own-kind mods)])
+      (cond
+        [field? #f]
+        [(pair? unreflected?)
+         (jslot-set! mn (jfield-index "java/lang/invoke/MemberName" "type")
+                     (make-jarr "Ljava/lang/Object;"
+                                (vector (desc->mirror (desc-ret desc)) (mirror-array (desc-args desc)))))]
+        [else (resolution-access! l refc dc mods mn (fx= ref-kind 8))])
+      (lookup-call "checkAccess" "(BLjava/lang/Class;Ljava/lang/invoke/MemberName;)V" l ref-kind (jmirror refc) mn))))
+;; Lookup.restrictProtectedReceiver: a protected instance member of a class
+;; in another package takes the lookup class as its receiver (checkAccess
+;; passed, so the lookup class is a subclass of the declaring one); an
+;; array's clone keeps its array receiver
+(define (restrict-protected l hit mh)
+  (let* ([dc (car hit)] [mods (caddr (cdr hit))] [lc (and l (lookup-slot l "lookupClass"))])
+    (if (or (not l) (trusted-lookup? l) (not (fxpositive? (fxlogand mods #x4))) (static-flag? mods)
+            (eq? (jmirror dc) lc)
+            (string=? (package-dir (jclass-cname dc)) (package-dir (jclass-cname (mirror-class lc)))))
+        mh
+        (let* ([caller (jclass-cname (mirror-class lc))] [desc (mh-info-desc (mh-info-of mh))] [args (desc-args desc)])
+          (if (or (char=? #\[ (string-ref (car args) 0)) (subclass? (desc->class-name (car args)) caller))
+              mh
+              (as-type mh (desc->method-type (args->desc (cons (cname->desc caller) (cdr args)) (desc-ret desc)))))))))
 (define (def-lookup name desc proc) (define-override! (string-append mh-lookup-class "." name desc) proc))
+;; a method handle from make, made for lookup l as ref-kind through refc:
+;; the class check (find* only), then make resolves (NoSuchMethodException),
+;; then the member's access; a protected instance method's receiver narrowed
+(define (checked-method l ref-kind refc make . unreflected?)
+  (when (and l (null? unreflected?)) (check-symbolic-class! l refc))
+  (let* ([mh (make)] [hit (eq-hashtable-ref mh-members mh #f)])
+    (apply lookup-access! l ref-kind refc hit unreflected?)
+    (if (memv ref-kind '(5 9)) (member-mh (restrict-protected l hit mh) hit) mh)))
+(define (virtual-kind c) (if (eq? (jclass-kind c) 'interface) 9 5))
+;; the lookup an unreflect* checks against: none for a member made accessible
+(define (unreflect-lookup l member)
+  (if (eqv? 1 (jslot member (jfield-index "java/lang/reflect/AccessibleObject" "override"))) #f l))
 (define mh-ret "Ljava/lang/invoke/MethodHandle;")
 (define (str-of s) (jstring->scheme (nn s)))
 
 (def-lookup "findStatic" (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)" mh-ret)
-  (lambda (this c name mt) (static-mh (mirror-class (nn c)) (str-of name) (mt-desc mt))))
+  (lambda (this c name mt)
+    (let ([c (mirror-class (nn c))])
+      (checked-method this 6 c (lambda () (static-mh c (str-of name) (mt-desc mt)))))))
 ;; on MethodHandle, invoke and invokeExact are the invokers of the type asked
 ;; for, and on VarHandle an access mode's name is its invoker, as the JDK's
 ;; findVirtualForMH and findVirtualForVH
@@ -371,7 +461,7 @@
              (invoker-of desc (string=? name "invokeExact"))]
             [(and (string=? (jclass-cname c) "java/lang/invoke/VarHandle") (vh-mode-name? name))
              (vh-invoker name desc #f)]
-            [else (virtual-mh c name desc)]))))
+            [else (checked-method this (virtual-kind c) c (lambda () (virtual-mh c name desc)))]))))
 ;; bind: the method as invokeSpecial finds it in the receiver's class (no
 ;; virtual dispatch beyond that), the receiver bound; a static one is
 ;; refused as the JDK's resolution refuses it
@@ -390,22 +480,32 @@
         (member-mh (make-mh desc (lambda xs (apply (top-level-value sym) receiver xs)) #f (varargs-flag? (cdr hit)))
                    hit)))))
 (def-lookup "findSpecial" (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)" mh-ret)
-  (lambda (this c name mt caller) (special-mh (mirror-class (nn c)) (str-of name) (mt-desc mt) (mirror-class (nn caller)))))
+  (lambda (this c name mt caller)
+    (let ([c (mirror-class (nn c))] [sc (mirror-class (nn caller))])
+      (unless (trusted-lookup? this)
+        (lookup-call "checkSpecialCaller" "(Ljava/lang/Class;Ljava/lang/Class;)V" this (jmirror sc) (jmirror c)))
+      (checked-method this 7 c (lambda () (special-mh c (str-of name) (mt-desc mt) sc))))))
 (def-lookup "findConstructor" (string-append "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)" mh-ret)
-  (lambda (this c mt) (constructor-mh (mirror-class (nn c)) (mt-desc mt))))
+  (lambda (this c mt)
+    (let ([c (mirror-class (nn c))])
+      (checked-method this 8 c (lambda () (constructor-mh c (mt-desc mt)))))))
 (for-each
  (lambda (spec)
    (def-lookup (car spec) (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)" mh-ret)
-     (lambda (this c name type) (field-mh (mirror-class (nn c)) (str-of name) (nn type) (cadr spec) (caddr spec) this))))
+     (lambda (this c name type)
+       (let ([c (mirror-class (nn c))])
+         (check-symbolic-class! this c)
+         (field-mh c (str-of name) (nn type) (cadr spec) (caddr spec) this)))))
  '(("findGetter" #f #f) ("findSetter" #f #t) ("findStaticGetter" #t #f) ("findStaticSetter" #t #t)))
 
 ;; reflective objects carry their class and their index in its meta list
 (def-lookup "unreflect" (string-append "(Ljava/lang/reflect/Method;)" mh-ret)
   (lambda (this m)
     (let-values ([(c meta) (reflected-member "java/lang/reflect/Method" (nn m))])
-      (if (static-flag? (caddr meta))
-          (static-mh c (car meta) (cadr meta))
-          (virtual-mh c (car meta) (cadr meta))))))
+      (let ([l (unreflect-lookup this m)])
+        (if (static-flag? (caddr meta))
+            (checked-method l 6 c (lambda () (static-mh c (car meta) (cadr meta))) #t)
+            (checked-method l (virtual-kind c) c (lambda () (virtual-mh c (car meta) (cadr meta))) #t))))))
 (def-lookup "unreflectSpecial" (string-append "(Ljava/lang/reflect/Method;Ljava/lang/Class;)" mh-ret)
   (lambda (this m caller)
     (let-values ([(c meta) (reflected-member "java/lang/reflect/Method" (nn m))])
@@ -413,14 +513,14 @@
 (def-lookup "unreflectConstructor" (string-append "(Ljava/lang/reflect/Constructor;)" mh-ret)
   (lambda (this k)
     (let-values ([(c meta) (reflected-member "java/lang/reflect/Constructor" (nn k))])
-      (constructor-mh c (cadr meta)))))
+      (checked-method (unreflect-lookup this k) 8 c (lambda () (constructor-mh c (cadr meta))) #t))))
 (for-each
  (lambda (spec)
    (def-lookup (car spec) (string-append "(Ljava/lang/reflect/Field;)" mh-ret)
      (lambda (this f)
        (let* ([c (mirror-class (jslot (nn f) (jfield-index "java/lang/reflect/Field" "clazz")))]
               [meta (list-ref (meta-fields c) (jslot f (jfield-index "java/lang/reflect/Field" "slot")))])
-         (field-mh c (car meta) (desc->mirror (cadr meta)) (static-flag? (caddr meta)) (cadr spec))))))
+         (field-mh c (car meta) (desc->mirror (cadr meta)) (static-flag? (caddr meta)) (cadr spec) (unreflect-lookup this f))))))
  '(("unreflectGetter" #f) ("unreflectSetter" #t)))
 
 ;; --- MethodHandle's own methods ------------------------------------------------------

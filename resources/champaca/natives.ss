@@ -3359,10 +3359,13 @@
       (when (and setter? final-checked? (fxpositive? (fxlogand (list-ref hit 3) #x10))
                  (not (eqv? -1 (jslot lookup (jfield-index "java/lang/invoke/MethodHandles$Lookup" "allowedModes")))))
         (access "unexpected set of a final field" (car hit) (field-kind static? setter?)))
+      (when lookup
+        (lookup-access! lookup (if static? (if setter? 4 2) (if setter? 3 1)) c hit))
       hit)))
 
 (define (field-vh recv name type static? lookup)
   (let* ([c (mirror-class (nn recv))] [fname (jstring->scheme (nn name))]
+         [_ (when lookup (check-symbolic-class! lookup c))]
          [hit (resolve-field c fname (nn type) static? #f #f lookup)])
     (let ([dc (car hit)] [desc (cadr (cdr hit))] [final? (fxpositive? (fxlogand (caddr (cdr hit)) #x10))])
       (if static?

@@ -60,6 +60,12 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `MethodHandles.Lookup`'s `find*`, `unreflect*` and `findVarHandle` check
+  access as the JVM does, with its `IllegalAccessException` texts, where any
+  lookup reached any member: a private member of another class, a package
+  member from outside, a public lookup on a non-public class and `findSpecial`
+  for another class are refused, and a protected method from another package
+  takes the lookup class as its receiver (`test/java/LookupAccessCheck.java`).
 - A process keeps the parsed class files of its 256 most recently used
   classes rather than all of them, parsing any other again when more of its
   methods compile: Jackson's probe's live heap after `main` went from 292 to
