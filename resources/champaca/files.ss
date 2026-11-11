@@ -411,11 +411,31 @@
                  (vector-set! v (fx+ off i) (i2b (bytevector-u8-ref bv i)))))))]
       [else (let ([r (fd-read-into fd bytes off len)]) (if (fx= r 0) -1 r))])))
 
+;; Bytes a read can take without waiting, as io_util_md.c handleAvailable
+;; counts them: ioctl FIONREAD for a terminal or other character device, a
+;; pipe or a socket, a regular file's size past the position. Anything else,
+;; or a failed ioctl, is 0. Standard input adds what its port has buffered.
+(define s-ifchr #o020000)
+(define s-ifsock #o140000)
+(define (fd-fionread fd)
+  (let ([buf (foreign-alloc 4)])
+    (foreign-set! 'int buf 0 0)
+    (let* ([r (libc-ioctl fd (net-const 'FIONREAD) buf)] [n (foreign-ref 'int buf 0)])
+      (foreign-free buf)
+      (if (< r 0) 0 n))))
+(define (fd-available fd what)
+  (let ([type (and fs-stat-layout? (let ([b (fd-stat fd)]) (and b (mode-type (stat-mode b)))))])
+    (cond
+      [(memv type (list s-ifchr s-ififo s-ifsock)) (fd-fionread fd)]
+      [(fd-regular? fd) (max 0 (min #x7fffffff (- (fd-size fd what) (libc-lseek fd 0 seek-cur))))]
+      [else 0])))
 (defnative "java/io/FileInputStream.available0()I" (this)
   (let ([fd (holder-fd this fis)])
-    (if (and (fx> fd 0) (fd-regular? fd))
-        (max 0 (min #x7fffffff (- (fd-size fd "Available error") (libc-lseek fd 0 seek-cur))))
-        0)))
+    (if (fx= fd 0)
+        ;; read without the stdin mutex: a reader holds it while it waits
+        ;; for input, so taking it here could wait as long
+        (min #x7fffffff (+ (port-input-count stdin-port) (fd-available 0 "Available error")))
+        (fd-available fd "Available error"))))
 ;; as the JDK: seek from the current position, past the end if asked
 (defnative "java/io/FileInputStream.skip0(J)J" (this n)
   (let* ([fd (holder-fd this fis)] [cur (libc-lseek fd 0 seek-cur)])
@@ -938,10 +958,7 @@
   (when (< (full-fsync (fdo-fd this)) 0) (jthrow "java/io/SyncFailedException" "sync failed")))
 (defnative "java/io/FileCleanable.cleanupClose0(IJ)V" (fd handle) (fd-close fd))
 (defufd "available0(Ljava/io/FileDescriptor;)I" (fdo)
-  (let ([fd (fdo-fd fdo)])
-    (if (fd-regular? fd)
-        (max 0 (min #x7fffffff (- (fd-size fd "Available failed") (libc-lseek fd 0 seek-cur))))
-        0)))
+  (fd-available (fdo-fd fdo) "Available failed"))
 (defufd "isOther0(Ljava/io/FileDescriptor;)Z" (fdo)
   (need-layout "isOther")
   (let ([b (fd-stat (fdo-fd fdo))])

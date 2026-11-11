@@ -60,6 +60,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `available()` on a pipe, a terminal or a socket's file descriptor counts
+  the bytes waiting, as the JVM asks the kernel, where it was 0, and standard
+  input's counts what champaca has buffered too
+  (`test/java/AvailableCheck.java`).
 - A class's `Package` is the one its class loader defines, so the
   application loader's `getDefinedPackage`, `getDefinedPackages` and
   `Package.getPackage` find your packages, and a `URLClassLoader`'s class
