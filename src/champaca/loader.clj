@@ -95,7 +95,8 @@
   "The synthetic class implementing ifaces for lambdas whose abstract
   method keys (\"name(desc)\", the SAM plus any bridges) are sam-keys.
   Slot 0 holds the closure; every SAM key maps to champaca/Lambda.invoke,
-  which calls it. Its vtable takes the interfaces' default methods, so its
+  which calls it, and is a public method for reflection (getDeclaredMethods
+  lists it, Method.invoke runs it through the vtable). Its vtable takes the interfaces' default methods, so its
   name carries the fingerprints of every classpath interface among them
   and their superinterfaces (user-deps), a loader-defined interface's too: an
   interface that changes between runs gets a class of its own instead of an
@@ -109,7 +110,12 @@
     (if (get-in @state [:classes n])
       (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet
       (let [info (cond-> {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011 :origin :jdk
-                          :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}] :methods []}
+                          :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}]
+                          ;; for reflection only, public as the JVM's: no code,
+                          ;; so the vtable entries below are what runs
+                          :methods (mapv (fn [k] (let [i (str/index-of k "(")]
+                                                   {:name (subs k 0 i) :desc (subs k i) :flags 0x1 :virtual true}))
+                                         sam-keys)}
                    (nil? deps) (assoc :no-cache true))
             linked (reduce #(assoc-in %1 [:vtable %2] "champaca/Lambda.invoke") (link info) sam-keys)]
         (swap! state assoc-in [:classes n] linked)

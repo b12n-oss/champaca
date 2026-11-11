@@ -94,6 +94,9 @@ The first public version. Champaca is still experimental: the
   mode, over heap, direct, sliced and read-only buffers, with the JDK's own
   bounds, alignment and read-only checks. Its handles threw
   `UnsupportedOperationException` (`test/java/ByteBufferViewCheck.java`).
+- A lambda's class lists the interface method it implements, so
+  `getDeclaredMethods` and `getMethod` find it and `Method.invoke` runs it,
+  as on the JVM. The list was empty (`test/java/LambdaReflectCheck.java`).
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm

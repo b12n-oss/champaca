@@ -1,0 +1,12 @@
+supplier: [public Object get[]]
+function: [public Object apply[class java.lang.Object]]
+runnable: [public void run[]]
+own interface: [public String shout[class java.lang.String]]
+bifunction: [public Object apply[class java.lang.Object, class java.lang.Object]]
+invoke: x
+invoke function: 4
+getMethod: HI
+default via getMethod: Shout AA
+synthetic: true
+final: true
+interfaces: [interface LambdaReflectCheck$Shout]
