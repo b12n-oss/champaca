@@ -47,9 +47,6 @@ The first public version. Champaca is still experimental: the
   site tasks, and `jolt warm`.
 - Guides under `docs/guide/`, `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
-- `ThreadMXBean`'s allocated-bytes counters (`getThreadAllocatedBytes`,
-  `getCurrentThreadAllocatedBytes`, `getTotalThreadAllocatedBytes`), so a
-  benchmark can count what a piece of Java code allocates.
 - **`jolt warm`**, a training run for the startup cache. It compiles the JDK
   paths programs reach early, so a first `String.format`, `SecureRandom` or
   time zone no longer costs seconds. A program using all three went from
