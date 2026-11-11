@@ -16,13 +16,17 @@
 #
 # A pull request's checks come from its branch's push run, since checks follow
 # the commit. pull_request runs only for a fork's pull request, whose branch
-# pushes here never see. A push that changes only docs/** or Markdown runs
-# nothing (site.yml builds the docs).
+# pushes here never see. A push that changes only docs/ or Markdown plans no
+# battery jobs (site.yml builds the docs).
+#
+# `ci ok` is the one check to require: it passes when every battery job did,
+# or when there was nothing to run. A pull request run's summary has another
+# name, since GitHub counts a skipped job as passing, and this repository's own
+# pull requests skip theirs.
 name: ci
 on:
   push:
     branches: ['**']
-    paths-ignore: ['docs/**', '**.md']
   pull_request:
   schedule:
     - cron: '0 16 * * *'   # 03:00 in Sydney (AEDT)
@@ -60,15 +64,37 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      run: ${{ steps.plan.outputs.run }}
     steps:
       - id: plan
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+          DEFAULT: ${{ github.event.repository.default_branch }}
           EVENT: ${{ github.event_name }}
           IN_MODES: ${{ inputs.modes }}
           IN_PLATFORMS: ${{ inputs.platforms }}
           IN_REPEAT: ${{ inputs.repeat }}
           IN_FULL: ${{ inputs.full }}
         run: |
+          # a push whose changes are all docs/ or Markdown runs no battery: the
+          # files from the commit before it (a new branch: from the default
+          # branch), all 300 the compare API lists, else it counts as code
+          if [ "$EVENT" = push ]; then
+            base=$BEFORE
+            case "$base" in ''|0000000000000000000000000000000000000000) base=$DEFAULT ;; esac
+            files=$(gh api "repos/$REPO/compare/$base...$SHA" --jq '.files[].filename') || files=CODE
+            n=$(printf '%s\n' "$files" | grep -c . || true)
+            code=$(printf '%s\n' "$files" | grep -v -E '^docs/|\.md$' | grep -c . || true)
+            echo "changed files: $n, outside docs/ and Markdown: $code"
+            if [ "$n" -lt 300 ] && [ "$code" -eq 0 ]; then
+              echo "docs only: no battery"
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
           full=false
           if [ "$EVENT" = schedule ] || [ "$IN_FULL" = true ]; then full=true; fi
           platforms=${IN_PLATFORMS:-amd64,arm64,macos}
@@ -105,9 +131,11 @@ jobs:
           matrix="{\"include\":[${entries%,}]}"
           echo "$matrix" | jq .
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "run=true" >> "$GITHUB_OUTPUT"
 
   battery:
     needs: plan
+    if: needs.plan.outputs.run == 'true'
     name: ${{ matrix.label }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
@@ -241,3 +269,23 @@ jobs:
             target/battery/**/target/hangs/
             target/hangs/
           if-no-files-found: ignore
+
+  # the one check to require (see the top): every battery job passed, or there
+  # was nothing to run
+  ok:
+    name: ${{ github.event_name == 'pull_request' && 'ci ok (pull request)' || 'ci ok' }}
+    needs: [plan, battery]
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          PLAN: ${{ needs.plan.result }}
+          RUN: ${{ needs.plan.outputs.run }}
+          BATTERY: ${{ needs.battery.result }}
+        run: |
+          echo "plan $PLAN, run $RUN, battery $BATTERY"
+          if [ "$PLAN" = success ] && { [ "$BATTERY" = success ] || { [ "$RUN" = false ] && [ "$BATTERY" = skipped ]; }; }; then
+            exit 0
+          fi
+          exit 1
