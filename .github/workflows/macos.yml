@@ -1,7 +1,8 @@
 # champaca on macOS arm64: the battery's cold and warm modes and the eight real
 # libraries, the same `jolt battery` as on a workstation. The pinned jolt is
-# built with its own Chez (the runner has no system Chez), on OpenJDK 25.0.2,
-# the JDK the Linux image uses.
+# built over Homebrew's Chez, as on a developer's Mac, on OpenJDK 25.0.2, the
+# JDK the Linux image uses. Without a system Chez, jolt's make build provisions
+# its own with an xPack GCC whose fixed stdio.h fails against the runner's SDK.
 # Runs on a push to main, on every pull request, and by hand from the Actions
 # tab or `gh workflow run macos`.
 name: macos
@@ -42,6 +43,8 @@ jobs:
         with:
           path: ~/.cache/champaca/jolt/*/jolt
           key: jolt-macos-arm64-${{ hashFiles('deps.edn', 'tools/build-jolt.sh') }}
+      - name: install Chez Scheme
+        run: brew install chezscheme && chez --version
       - name: build the pinned jolt
         run: sh tools/build-jolt.sh
       - name: save the jolt build
