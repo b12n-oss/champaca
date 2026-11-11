@@ -2482,25 +2482,48 @@
     (cond [(fx= i (string-length s)) (reverse (cons (substring s start i) acc))]
           [(char=? (string-ref s i) #\newline) (loop (fx+ i 1) (fx+ i 1) (cons (substring s start i) acc))]
           [else (loop (fx+ i 1) start acc)])))
+;; the hook's version attributes and seal base for a user package, as Java
+;; values: (spec-title spec-version spec-vendor impl-title impl-version
+;; impl-vendor seal-base), each null when absent
+(define (package-attributes info)
+  (let ([given (lambda (s) (and (char=? (string-ref s 0) #\+) (substring s 1 (string-length s))))])
+    (append (map (lambda (s) (let ([v (given s)]) (and v (jstring v)))) (list-head (cdr info) 6))
+            (list (let ([u (given (list-ref info 7))])
+                    (and u (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring u))))))))
+;; A class with a class loader has the Package that loader defined under
+;; its name, as ClassLoader.definePackage(Class) answers: one a loader of the
+;; program's own defined before defining the class (URLClassLoader does,
+;; from its jar's manifest), else one defined now through
+;; ClassLoader.definePackage with the hook's attributes, the way
+;; BuiltinClassLoader defines a classpath class's from its jar's manifest.
+;; So getDefinedPackage, getDefinedPackages and Package.getPackage find it.
+;; Another thread can define the name between the two calls (Java code runs
+;; in both), and definePackage then refuses it: that one is the answer.
+(define (loader-package ld pn cn)
+  (let ([defined (lambda () ((method-proc "java/lang/ClassLoader" "getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;")
+                             ld (jstring pn)))])
+    (or (defined)
+        (guard (e [(and (jobj? e) (jinstance? e "java/lang/IllegalArgumentException") (defined))])
+          (apply (method-proc "java/lang/ClassLoader"
+                              "definePackage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;)Ljava/lang/Package;")
+                 ld (jstring pn) (package-attributes (text-lines (jpackage-hook cn))))))))
 (define (jpackage-of cn)
   (let* ([dir (package-dir cn)]   ; hidden-class aware: Name/0x1 is in Name's package
-         [pn (slashes->dots dir)])
-    (or (hashtable-ref jpackage-table pn #f)
+         [pn (slashes->dots dir)]
+         [ld (and (not (hashtable-ref package-modules dir #f)) (class-loader-of (find-class cn)))])
+    (or (and ld (loader-package ld pn cn))
+        (hashtable-ref jpackage-table pn #f)
         (let ([p (jdk-module-package pn)]) (when p (hashtable-set! jpackage-table pn p)) p)
         (let* ([info (text-lines (jpackage-hook cn))]
-               [given (lambda (s) (and (char=? (string-ref s 0) #\+) (substring s 1 (string-length s))))]
                [module (and (not (string=? dir "")) (string=? (car info) "jdk") (hashtable-ref package-modules dir #f))]
                [attrs (if (string=? (car info) "jdk")
-                          (make-list 6 #f)
-                          (map (lambda (s) (let ([v (given s)]) (and v (jstring v)))) (list-head (cdr info) 6)))]
-               [seal (and (string=? (car info) "user")
-                          (let ([u (given (list-ref info 7))])
-                            (and u (construct "java/net/URL" "(Ljava/lang/String;)V" (jstring u)))))]
+                          (make-list 7 #f)
+                          (package-attributes info))]
                [p (if module
                       (construct "java/lang/Package" "(Ljava/lang/String;Ljava/lang/Module;)V" (jstring pn) module)
                       (apply construct "java/lang/Package"
                              "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;Ljava/lang/ClassLoader;)V"
-                             (jstring pn) (append attrs (list seal #f))))])
+                             (jstring pn) (append attrs (list #f))))])
           ;; constructing ran Java code, which can let another thread in to
           ;; define the same package first: keep whichever got there. A JDK
           ;; package asked for before its module and the boot loader object

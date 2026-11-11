@@ -10,3 +10,13 @@ array: null
 toString: package champaca.lib
 split: name=champaca.split specT=null specV=null specVendor=null implT=the second jar implV=null implVendor=null
 split same: true
+app getDefinedPackage: true
+Package.getPackage: true
+unnamed package: true
+app getDefinedPackages: true
+Package.getPackages: true
+platform loader: null
+never loaded: null
+own loader: name=pkgcheck.own specT=spec specV=1.2 specVendor=spec vendor implT=impl implV=3.4 implVendor=impl vendor
+own loader same: true
+own loader not app's: null

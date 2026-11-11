@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A class's `Package` is the one its class loader defines, so the
+  application loader's `getDefinedPackage`, `getDefinedPackages` and
+  `Package.getPackage` find your packages, and a `URLClassLoader`'s class
+  reports the package it defined from its jar's manifest
+  (`test/java/PackageCheck.java`).
 - `Field.get`, `Field.set` and the typed accessors check access as the JVM
   does when the field wasn't made accessible, with the JDK's
   `IllegalAccessException` text: a private field of another class is refused,
