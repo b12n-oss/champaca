@@ -24,11 +24,24 @@
 
 (defn sx [& parts] (str "(" (str/join " " (remove nil? parts)) ")"))
 
+(defn- hex-escaped-sym
+  "s as a bare Scheme symbol with every character but an ASCII letter written
+  as \\xN; (Chez's own way to print such a symbol, read back as written)."
+  [s]
+  (apply str (map (fn [c] (if (or (<= (int \a) (int c) (int \z)) (<= (int \A) (int c) (int \Z)))
+                            c
+                            (str "\\x" (Integer/toHexString (int c)) ";")))
+                  s)))
+
 (defn sym
   "A Scheme symbol literal for a JVM-ish name, bar-quoted so / ( ) ; < > [ $
-  all survive."
+  all survive. Chez reads no escape between bars, so a name holding | or \\
+  (legal in the JVM; Scala and Kotlin emit them) is written bare with hex
+  escapes instead."
   [s]
-  (str "|" s "|"))
+  (if (or (str/includes? s "|") (str/includes? s "\\"))
+    (hex-escaped-sym s)
+    (str "|" s "|")))
 
 (defn str-lit
   "A Scheme string literal, or for a constant holding a lone surrogate (a

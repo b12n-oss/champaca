@@ -69,6 +69,10 @@ The first public version. Champaca is still experimental: the
   `TIMED_WAITING` while it sleeps, `WAITING` or `TIMED_WAITING` in
   `Object.wait` and `LockSupport.park`, `BLOCKED` while it waits to enter a
   monitor. It said `RUNNABLE` for all of them.
+- A class, method or field name holding `|` or `\` runs, as the JVM allows
+  and Scala and Kotlin emit. Codegen bar-quoted every name as a Scheme
+  symbol, and Chez reads no escape between bars, so such a class failed to
+  load (`test/java/OddNameCheck.java`).
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm

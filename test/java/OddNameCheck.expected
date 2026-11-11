@@ -1,0 +1,7 @@
+class: Odd|Na\me
+run: s|f=42 tag=<x|y\z>
+methods: [boom|\it, run, tag\it, twice|it]
+fields: [i\f, s|f]
+s|f read: 42
+twice|it(5): 10
+thrown: java.lang.IllegalStateException: odd at Odd|Na\me.boom|\it
