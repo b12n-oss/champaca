@@ -155,7 +155,9 @@
      ;; (under CHAMPACA_BT too: the exception line names a
      ;; champaca fault, a missing native say, and BT must not
      ;; change what the program prints)
-     (unless (eqv? 0 ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 0))
+     ;; a cold boot archives the module graph there (archive.ss)
+     (unless (eqv? 0 (module-graph-phase2 (lambda () ((method-proc \"java/lang/System\" \"initPhase2(ZZ)I\") 0 0))
+                                          module-graph-dumping))
        (raise (make-java-halt 1)))
      ;; from here the boot layer decides which JDK classes
      ;; the built-in loaders see (builtin-loader-sees?)
@@ -193,6 +195,9 @@
     ;; only the root is read-only
     (when (and dir (not (:cache-unusable @state)))
       (swap! state assoc :recording (volatile! []) :cache-dir dir))
+    ;; the archived module graph: read on a hit, made on a recorded miss
+    (when hit? (s/call "module-graph-read!" (str (io/file dir "module-graph.img"))))
+    (s/call "module-graph-dumping!" (boolean (and dir (not hit?) (not (:cache-unusable @state)))))
     (run! ensure-loaded! ["java/lang/Object" "java/lang/String" "java/lang/Class"])
     (let [status (s/eval-string boot-phases)]
       (finish-recording! dir hit? status)

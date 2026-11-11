@@ -358,6 +358,7 @@
           (timed :cache-write-runtime #(s/call "quiet-compile-file" (str src) (str (io/file tmp "runtime.so"))))
           (.delete src)))
     (timed :cache-write-state #(dump-classes! (io/file tmp "state.img")))
+    (s/call "module-graph-write!" (str (io/file tmp "module-graph.img")))
     ;; a directory missing a file (a crash mid-write, a load that failed) would
     ;; block the rename forever, so it goes first
     (when (and (.exists dir) (not-every? #(.exists (io/file dir %)) ["boot.so" "state.img" "runtime.so"]))

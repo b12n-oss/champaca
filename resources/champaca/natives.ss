@@ -1145,8 +1145,12 @@
 (defnative "jdk/internal/misc/CDS.isDumpingArchive0()Z" () 0)
 (defnative "jdk/internal/misc/CDS.isSharingEnabled0()Z" () 0)
 (defnative "jdk/internal/misc/CDS.getCDSConfigStatus()I" () 0)
-(defnative "jdk/internal/misc/CDS.getRandomSeedForDumping()J" () 0)
-(defnative "jdk/internal/misc/CDS.initializeFromArchive(Ljava/lang/Class;)V" (c) (void))
+(defnative "jdk/internal/misc/CDS.getRandomSeedForDumping()J" () (module-graph-seed-now))
+;; archive.ss: the module graph a warm boot read, for ArchivedModuleGraph
+(defnative "jdk/internal/misc/CDS.initializeFromArchive(Ljava/lang/Class;)V" (c)
+  (when (and module-graph-archive (string=? (jclass-cname (mirror-class c)) "jdk/internal/module/ArchivedModuleGraph"))
+    (let ([g (module-graph-load module-graph-archive)])
+      (when g (set-top-level-value! (string->symbol module-graph-root) g)))))
 
 ;; --- system properties ------------------------------------------------------------
 

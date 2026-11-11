@@ -1,0 +1,184 @@
+;; Copyright (C) 2026  champaca contributors
+;; Derived from OpenLDK, Copyright (C) 2024, 2025, 2026
+;;   Anthony Green <green@moxielogic.com>
+;;
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+;; See COPYING and COPYING.CLASSPATH-EXCEPTION.
+
+;; The archived module graph (ROADMAP 12). A cold boot runs initPhase2 with
+;; CDS's configStatus saying "dumping a static archive", so ModuleBootstrap's
+;; step 8 fills ArchivedModuleGraph.archivedModuleGraph itself; that object's
+;; graph is then written to the cache as rows, and a warm boot's
+;; CDS.initializeFromArchive(ArchivedModuleGraph.class) rebuilds it, so boot2
+;; takes the finder and configuration from it and never runs
+;; SystemModules$default.
+;;
+;; A row is #(id kind name hash payload): kind o an object of class name, a
+;; vector of its slots; a an array of element descriptor name, a vector of its
+;; elements; s an interned string, payload its intern key. hash is the
+;; identity hash the object had, or #f. A slot or element is a number, #f
+;; (null), (r . id) another row, or (s . "C:f") the live value of that static
+;; field: an object some other static holds (an enum constant, an empty
+;; collection, a loader) is that object, never a copy.
+
+(define module-graph-format 'champaca-module-graph-1)
+(define module-graph-root "jdk/internal/module/ArchivedModuleGraph:archivedModuleGraph")
+(define module-graph-archive #f)        ; the rows a warm boot read, or #f
+(define module-graph-dumped #f)         ; what a cold boot wrote, or #f
+(define module-graph-dumping #f)        ; this boot archives the graph (set by boot.clj)
+(define (module-graph-dumping! on) (set! module-graph-dumping on))
+;; ImmutableCollections places a SetN's or MapN's elements by a salt made
+;; from CDS.getRandomSeedForDumping, else the clock: archived sets probe
+;; right only under the dump's salt, so a boot that archives or reads the
+;; graph gets this one (Set.of iteration is then the same every run, which
+;; the spec allows)
+(define module-graph-seed #x5eed0f1a2b3c4d5)
+(define (module-graph-seed-now) (if (or module-graph-dumping module-graph-archive) module-graph-seed 0))
+
+(define (module-graph-refuse why) (raise (list 'module-graph-refused why)))
+
+;; every static of constant style (an upper-case field name, as the JDK
+;; names what its <clinit> sets for good) holding a Java object or array, by
+;; value. Another static may be a lazily filled cache (Builder.cachedVersion
+;; is null when a warm boot reads it), so what only such a static holds is
+;; copied
+(define (module-graph-statics skip)
+  (let ([t (make-eq-hashtable)])
+    (define (constant-style? n)
+      (let ([i (char-index-of n #\:)])
+        (and i (fx< (fx+ i 1) (string-length n)) (char-upper-case? (string-ref n (fx+ i 1))))))
+    (for-each (lambda (s)
+                (let ([n (symbol->string s)])
+                  (when (and (champaca-global-name? s) (not (string=? n skip)) (constant-style? n) (top-level-bound? s))
+                    (let ([v (top-level-value s)])
+                      (when (and (or (jobj? v) (jarr? v)) (not (eq-hashtable-ref t v #f)))
+                        (eq-hashtable-set! t v n))))))
+              (oblist))
+    t))
+
+(define (module-graph-interned)
+  (let ([t (make-eq-hashtable)])
+    (let-values ([(ks vs) (hashtable-entries interned)])
+      (vector-for-each (lambda (k v) (eq-hashtable-set! t v k)) ks vs))
+    (let-values ([(ks vs) (hashtable-entries interned-units)])
+      (vector-for-each (lambda (k v) (eq-hashtable-set! t v k)) ks vs))
+    t))
+
+;; root's graph as a datum to write, or raises module-graph-refused
+(define (module-graph-dump root)
+  (let ([statics (module-graph-statics module-graph-root)]
+        [interns (module-graph-interned)]
+        [ids (make-eq-hashtable)]
+        [rows '()]
+        [n 0])
+    (define (enc x)
+      (cond [(or (fixnum? x) (bignum? x) (flonum? x)) x]
+            [(not x) #f]
+            [(or (jobj? x) (jarr? x))
+             (let ([s (eq-hashtable-ref statics x #f)])
+               (if s (cons 's s) (cons 'r (visit x))))]
+            [else (module-graph-refuse (format "a ~s in a slot" x))]))
+    (define (visit x)
+      (or (eq-hashtable-ref ids x #f)
+          (let ([id n])
+            (set! n (fx+ n 1))
+            (eq-hashtable-set! ids x id)
+            (let ([h (eq-hashtable-ref id-hashes x #f)])
+              (cond
+                [(eq-hashtable-ref interns x #f)
+                 => (lambda (k) (set! rows (cons (vector id 's "" h k) rows)))]
+                [(jarr? x)
+                 (let ([e (jarr-elem x)])
+                   (set! rows (cons (vector id 'a e h (if (member e '("B" "C" "I" "J" "S" "Z" "F" "D"))
+                                                         (vector-copy (jarr-vec x))
+                                                         (vector-map enc (jarr-vec x))))
+                                    rows)))]
+                [else
+                 (let ([cn (jclass-cname (jobj-cls x))])
+                   (when (or (string=? cn "java/lang/Class") (string=? cn "java/lang/Thread"))
+                     (module-graph-refuse (string-append "a " cn)))
+                   (when (jobj-lock x) (module-graph-refuse (string-append "a locked " cn)))
+                   (set! rows (cons (vector id 'o cn h (vector-map enc (jobj-slots x))) rows)))]))
+            id)))
+    (let ([root-id (visit root)])
+      (vector module-graph-format root-id (list->vector (reverse rows))))))
+
+;; the object a datum describes, or #f when it can't be rebuilt
+(define (module-graph-load datum)
+  (guard (e [#t (when (getenv "CHAMPACA_BT")
+                  (format (current-error-port) "module graph archive not used: ~a\n"
+                          (if (condition? e) (condition-text e) e)))
+                #f])
+    (unless (and (vector? datum) (eq? (vector-ref datum 0) module-graph-format)) (error 'champaca "format"))
+    (let* ([rows (vector-ref datum 2)]
+           [objs (make-vector (vector-length rows) #f)])
+      (define (dec x)
+        (cond [(pair? x)
+               (if (eq? (car x) 'r)
+                   (vector-ref objs (cdr x))
+                   (let* ([s (cdr x)] [i (char-index-of s #\:)])
+                     (jinit (substring s 0 i))
+                     (or (top-level-value (string->symbol s)) (error 'champaca "null static" s))))]
+              [else x]))
+      ;; objects first, then their slots, since rows refer forward and back
+      (vector-for-each
+       (lambda (r)
+         (let ([id (vector-ref r 0)] [kind (vector-ref r 1)] [name (vector-ref r 2)] [p (vector-ref r 4)])
+           (vector-set! objs id
+                        (case kind
+                          [(s) (jstring-lit p)]
+                          [(a) (make-jarr name (make-vector (vector-length p) 0))]
+                          [(o) (let ([c (find-class name)])
+                                 (unless (fx= (vector-length (jclass-template c)) (vector-length p))
+                                   (error 'champaca "field count changed" name))
+                                 (make-jobj c (make-vector (vector-length p) #f)))]))))
+       rows)
+      (vector-for-each
+       (lambda (r)
+         (let ([o (vector-ref objs (vector-ref r 0))] [kind (vector-ref r 1)] [h (vector-ref r 3)] [p (vector-ref r 4)])
+           (case kind
+             [(a) (let ([v (jarr-vec o)]) (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length p))) (vector-set! v i (dec (vector-ref p i)))))]
+             [(o) (let ([v (jobj-slots o)]) (do ([i 0 (fx+ i 1)]) ((fx= i (vector-length p))) (vector-set! v i (dec (vector-ref p i)))))]
+             [else (void)])
+           (when (and h (not (eq? kind 's)) (not (eq-hashtable-ref id-hashes o #f)))
+             (eq-hashtable-set! id-hashes o h))))
+       rows)
+      ;; a class initializes before its first object is used, as it would
+      ;; have for the boot that made them
+      (vector-for-each (lambda (r) (when (eq? (vector-ref r 1) 'o) (jinit (vector-ref r 2)))) rows)
+      (vector-ref objs (vector-ref datum 1)))))
+
+(define (module-graph-write! path)
+  (when module-graph-dumped
+    (call-with-output-file path (lambda (p) (write module-graph-dumped p)) 'replace)))
+(define (module-graph-read! path)
+  (set! module-graph-archive
+        (and (file-exists? path)
+             (guard (e [#t #f]) (call-with-input-file path read)))))
+
+;; the plain boot only: no module path, upgrade path, patch, limit, added
+;; module, main module or resolution trace, which ModuleBootstrap would read
+(define (module-graph-plain-boot?)
+  (let ([get (method-proc "java/lang/System" "getProperty(Ljava/lang/String;)Ljava/lang/String;")])
+    (for-all (lambda (p) (not (get (jstring p))))
+             '("jdk.module.path" "jdk.module.upgrade.path" "jdk.module.patch.0" "jdk.module.limitmods"
+               "jdk.module.addmods.0" "jdk.module.main" "jdk.module.showModuleResolution"))))
+
+;; initPhase2 for a cold boot: dumping when the boot is the plain one
+(define (module-graph-phase2 run dumping?)
+  (if (and dumping? (module-graph-plain-boot?))
+      (let ([status-sym (string->symbol "jdk/internal/misc/CDS:configStatus")])
+        (jinit "jdk/internal/misc/CDS")
+        (let ([old (top-level-value status-sym)])
+          (set-top-level-value! status-sym 4)        ; IS_DUMPING_STATIC_ARCHIVE
+          (let ([r (dynamic-wind void run (lambda () (set-top-level-value! status-sym old)))])
+            (when (eqv? r 0)
+              (let ([g (top-level-value (string->symbol module-graph-root))])
+                (set! module-graph-dumped
+                      (and g (guard (e [(and (pair? e) (eq? (car e) 'module-graph-refused))
+                                        (when (getenv "CHAMPACA_BT")
+                                          (format (current-error-port) "module graph not archived: ~a\n" (cadr e)))
+                                        #f])
+                               (module-graph-dump g))))))
+            r)))
+      (run)))

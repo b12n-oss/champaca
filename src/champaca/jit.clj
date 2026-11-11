@@ -150,6 +150,13 @@
           missing (or missing no-method bad-format icce refused)]
       (cond
         missing (timed :chez-compile #(scheme! text :compile (lines? cname info)))
+        ;; the boot that archives the module graph (archive.ss) runs the
+        ;; image's generated SystemModules classes once, interpreted: a warm
+        ;; boot takes the graph from the archive and never calls them, and
+        ;; compiling moduleDescriptors alone was about a second of a cold one
+        (and (str/starts-with? cname "jdk/internal/module/SystemModules$")
+             (true? (s/eval-string "module-graph-dumping")))
+        (timed :chez-compile #(scheme! text :interpret))
         ;; compiled once: the same object code runs now and goes in the cache
         (compile-to-cache? origin)
         (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
