@@ -137,7 +137,7 @@ jobs:
   battery:
     needs: plan
     if: needs.plan.outputs.run == 'true'
-    name: ${{ matrix.label }}
+    name: ${{ matrix.label || 'battery' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
