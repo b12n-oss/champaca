@@ -1142,6 +1142,17 @@
           [else (set-car! ic #f) (set-cdr! ic k) (set-car! ic e)])))
 (define-syntax array-length
   (syntax-rules () [(_ a tag pc) (let ([arr a]) (if arr (#3%vector-length (jarr-vec arr)) (npe-at tag pc)))]))
+;; The same four as calls, for a method over codegen's ic-vector-limit. Every
+;; inline copy carries Chez's sealed-record checks for the array (and, for a
+;; store, the value), and the JDK's locale tables are methods of thousands of
+;; array stores: FormatData.getContents compiled to 959 KB in 5.2 s inline and
+;; to 374 KB in 0.8 s through these. Such methods run once, and a giant
+;; method's loops aren't versioned anyway, so the call costs nothing that
+;; matters.
+(define (big-array-ref a i tag pc) (array-ref a i tag pc))
+(define (big-array-set! a i x tag pc) (array-set! a i x tag pc))
+(define (big-array-store! ic a i x tag pc) (array-store! ic a i x tag pc))
+(define (big-array-length a tag pc) (array-length a tag pc))
 (define-syntax wrap-byte (syntax-rules () [(_ x) (ix- (ix-xor (ix-and x #xff) #x80) #x80)]))
 (define-syntax wrap-short (syntax-rules () [(_ x) (ix- (ix-xor (ix-and x #xffff) #x8000) #x8000)]))
 

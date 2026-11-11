@@ -224,6 +224,12 @@
     (terminal-ops op) []
     :else [(+ pc len)]))
 
+(defn- backward-ranges
+  "[target pc] of every jump to an earlier or the same instruction: a loop's
+  body lies inside one of them."
+  [insns]
+  (vec (for [{:keys [pc] :as i} insns, t (successors i) :when (<= t pc)] [t pc])))
+
 (defn- leaders [insns handlers]
   (into (sorted-set 0)
         (concat
@@ -885,20 +891,29 @@
 
 (def ^:private array-load-types {:laload "J" :faload "F" :daload "D" :aaload "A"})
 
+(defn- array-op
+  "The name of the array access at pc in e's method: runtime.ss's inline
+  macro, or in a method over ic-vector-limit, outside its loops, the
+  procedure of the same name with big-."
+  [e pc op]
+  (if (and (:big? e) (not (some (fn [[lo hi]] (<= lo pc hi)) (:loop-ranges e))))
+    (str "big-" op)
+    op))
+
 (defn- emit-array-load [e {:keys [op pc]} _]
   (let [hv (hoisted e (- (stack-depth e) 2))]
-    (bin! e (fn [a i] (if-let [[v n] hv] (sx "vec-ref" v n i (site pc)) (sx "array-ref" a i (site pc))))
+    (bin! e (fn [a i] (if-let [[v n] hv] (sx "vec-ref" v n i (site pc)) (sx (array-op e pc "array-ref") a i (site pc))))
           (array-load-types op "I"))))
 
 (defn- emit-aastore [e {:keys [pc]} _]
   (let [[a i v] (popn! e 3)]
-    (stmt! e (sx "array-store!" ((:ic! e)) a i v (site pc)))))
+    (stmt! e (sx (array-op e pc "array-store!") ((:ic! e)) a i v (site pc)))))
 
 (defn- emit-array-store [e {:keys [op pc]} _]
   (let [hv (hoisted e (- (stack-depth e) 3))
         [a i v] (popn! e 3)
         x (case op :bastore (sx "wrap-byte" v) :castore (sx "ix-and" v "#xffff") :sastore (sx "wrap-short" v) v)]
-    (stmt! e (if-let [[vv n] hv] (sx "vec-set!" vv n i x (site pc)) (sx "array-set!" a i x (site pc))))))
+    (stmt! e (if-let [[vv n] hv] (sx "vec-set!" vv n i x (site pc)) (sx (array-op e pc "array-set!") a i x (site pc))))))
 
 (defn- below-top-cat2?
   "Whether the value n below the top of the stack is a long or double."
@@ -1284,7 +1299,7 @@
 (defn- emit-arraylength [e {:keys [pc]} _]
   (if-let [[_ n] (hoisted e (dec (stack-depth e)))]
     (do (pop! e) (push! e n "I"))
-    (un! e #(sx "array-length" % (site pc)) "I")))
+    (un! e #(sx (array-op e pc "array-length") % (site pc)) "I")))
 
 (defn- emit-checkcast [e {:keys [args pc]} _]
   (let [c (:name ((:cp e) (first args)))]
@@ -1698,6 +1713,12 @@
         cover (into {} (map (fn [pc] [pc (covering handlers pc)]) (keys blks)))
         boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})]
     {:cls cls :resolve resolve :ic! ic! :inline! inline!
+     ;; a giant method's array accesses are calls (runtime.ss big-array-ref),
+     ;; but not inside a loop: every backward jump's [target jump] range
+     ;; keeps the inline form, so a lexer's scanning loop in a giant method
+     ;; runs as fast as before (a loop took 117 ms through calls, 50 inline)
+     :big? (> (count code) ic-vector-limit)
+     :loop-ranges (when (> (count code) ic-vector-limit) (backward-ranges insns))
      :handlers handlers :blks blks :cover cover :boxed boxed
      :params params :param-set param-set
      :next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
@@ -1740,8 +1761,8 @@
 
 (defn- block-ctx
   "emit-block's context for the block at pc, jumping through jump."
-  [{:keys [cls resolve next-pc live boxed split ic! inline!]} pc jump]
-  {:cls cls :resolve resolve :next-pc (next-pc pc)
+  [{:keys [cls resolve next-pc live boxed split ic! inline! big? loop-ranges]} pc jump]
+  {:cls cls :resolve resolve :next-pc (next-pc pc) :big? big? :loop-ranges loop-ranges
    :live live :boxed boxed :split split :jump jump :ic! ic! :inline! inline!})
 
 (defn- emit-blocks

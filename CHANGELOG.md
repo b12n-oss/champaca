@@ -56,6 +56,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A method over 4,000 bytes of bytecode does its array accesses outside
+  loops through calls instead of inline checks, which made the JDK's locale
+  tables slow to compile: on a cache holding only the boot a first
+  `String.format` took 5.2 s instead of 12.0 s.
 - The repo's tasks run on jolt: `jolt test`, `jolt battery`, `jolt linux` and the
   rest, from the same `bb.edn`, so babashka is no longer needed. The pinned jolt
   is built by `tools/build-jolt.sh`, which needs only git and make, and the

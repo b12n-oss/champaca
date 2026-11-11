@@ -1,0 +1,26 @@
+values: 300 value299 7 -56 x 4464 1099511627776 1.5 2.25 true s 3 3 2
+iaload past the end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 at table:322
+iastore at -1: java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 3 at table:323
+baload on null: java.lang.NullPointerException: Cannot load from byte/boolean array because "<parameter3>" is null at table:324
+castore on null: java.lang.NullPointerException: Cannot store to char array because "<parameter4>" is null at table:325
+sastore past the end: java.lang.ArrayIndexOutOfBoundsException: Index 6 out of bounds for length 3 at table:326
+laload at -5: java.lang.ArrayIndexOutOfBoundsException: Index -5 out of bounds for length 3 at table:327
+dastore on null: java.lang.NullPointerException: Cannot store to double array because "<parameter8>" is null at table:328
+aaload past the end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 at table:329
+aastore of the wrong type: java.lang.ArrayStoreException: java.lang.Integer at table:330
+aastore on null: java.lang.NullPointerException: Cannot store to object array because "<parameter10>" is null at table:331
+arraylength of null: java.lang.NullPointerException: Cannot read the array length because "<parameter2>" is null at table:332
+aaload of the table past the end: java.lang.ArrayIndexOutOfBoundsException: Index 300 out of bounds for length 300 at table:333
+baload of a boolean array past the end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 at table:334
+fastore past the end: java.lang.ArrayIndexOutOfBoundsException: Index 9 out of bounds for length 3 at table:335
+a loop running past the end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 at table:349
+iaload on null: java.lang.NullPointerException: Cannot load from int array because "<parameter2>" is null at table:336
+lastore on null: java.lang.NullPointerException: Cannot store to long array because "<parameter6>" is null at table:337
+saload on null: java.lang.NullPointerException: Cannot load from short array because "<parameter5>" is null at table:338
+baload of a boolean array on null: java.lang.NullPointerException: Cannot load from byte/boolean array because "<parameter9>" is null at table:339
+aaload on null: java.lang.NullPointerException: Cannot load from object array because "<parameter10>" is null at table:340
+aastore at -2: java.lang.ArrayIndexOutOfBoundsException: Index -2 out of bounds for length 3 at table:341
+aastore past the end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 at table:342
+aastore of null: null stored
+faload on null: java.lang.NullPointerException: Cannot load from float array because "<parameter7>" is null at table:344
+iastore on null: java.lang.NullPointerException: Cannot store to int array because "<parameter2>" is null at table:345
