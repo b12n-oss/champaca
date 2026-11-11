@@ -28,6 +28,7 @@ jolt test      # every test program against the JVM, plus the examples
 - `jolt test` passes.
 - The battery passes on your final commit: `jolt battery <ref>` runs the suite cold, warm, with the cache off and with `CHAMPACA_BT=1`, then the eight libraries. It takes half an hour or more, and only one may run at a time.
 - If you can run Docker, `jolt linux` passes too.
+- CI runs on every pull request on Linux x86_64, Linux arm64 and macOS arm64: the suite and the eight libraries on each, the battery's cold, warm and `CHAMPACA_BT=1` modes on x86_64, and cold and warm on macOS. The cache-off mode runs only on main, so run it yourself when a change touches the cache-off path.
 - Docs ship with the change: a new behavior goes in the guide page that covers its area, and a new gap in [limitations](limitations.md).
 - The pull request says what changed and how it was checked: which tests, which comparison, which numbers.
 - Commit messages and the pull request description carry no AI assistant attribution (a `Co-Authored-By: Claude` line, a session link, a "Generated with" footer). CI checks with `tools/attributioncheck.sh`, which you can run yourself: `sh tools/attributioncheck.sh origin/main..HEAD`.
