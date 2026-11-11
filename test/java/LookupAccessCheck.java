@@ -33,6 +33,9 @@ public class LookupAccessCheck {
     row("publicLookup nestmate private", () -> pub.findStatic(Nest.class, "sp", MethodType.methodType(int.class)));
     row("publicLookup ArrayList.size field", () -> pub.findGetter(ArrayList.class, "size", int.class));
     row("publicLookup public method", () -> pub.findStatic(LookupAccessCheck.class, "answer", MethodType.methodType(int.class)).invoke());
+    row("bind private", () -> l.bind("str", "coder", MethodType.methodType(byte.class)));
+    row("bind public", () -> l.bind("str", "length", MethodType.methodType(int.class)).invoke());
+    row("bind nestmate private", () -> l.bind(new Nest(), "toString", MethodType.methodType(String.class)) != null);
     row("findSpecial other class", () -> l.findSpecial(Object.class, "toString", MethodType.methodType(String.class), String.class));
     row("unreflect private", () -> l.unreflect(String.class.getDeclaredMethod("coder")));
     row("unreflectGetter private", () -> l.unreflectGetter(Integer.class.getDeclaredField("value")));

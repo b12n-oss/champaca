@@ -472,12 +472,13 @@
     (unless receiver
       (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"receiver\" is null"))
     (let* ([c (find-class (class-name-of receiver))] [name (str-of name)] [desc (mt-desc mt)]
-           [hit (find-method c name desc)])
+           [hit (begin (check-symbolic-class! this c) (find-method c name desc))])
       (unless hit (no-such-method c name desc "invokeSpecial"))
       (when (static-flag? (caddr (cdr hit)))
         (jthrow "java/lang/IllegalAccessException"
                 (string-append "no such method: " (slashes->dots (jclass-cname c)) "." name
                                (type-text (desc-args desc) (desc-ret desc)) "/invokeSpecial")))
+      (lookup-access! this 7 c hit)
       (let ([sym (method-sym (jclass-cname (car hit)) (string-append name desc))])
         (member-mh (make-mh desc (lambda xs (apply (top-level-value sym) receiver xs)) #f (varargs-flag? (cdr hit)))
                    hit)))))
