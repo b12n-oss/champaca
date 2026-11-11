@@ -3226,6 +3226,41 @@
            [d (vh-access-type-desc t at)])
       (make-mh d (lambda args (apply vh-call this mode d args)) #f))))
 
+;; MethodHandles.varHandleInvoker and varHandleExactInvoker, and findVirtual
+;; on VarHandle for an access mode's name: a handle taking the VarHandle
+;; first, then the mode's arguments as type has them. The exact one wants
+;; the VarHandle's access type to be type, as invokeExact would; the other
+;; converts as a call site would (vh-call)
+(define (vh-invoker mode desc exact?)
+  (let ([vh-args (cons "Ljava/lang/invoke/VarHandle;" (desc-args desc))])
+    (make-mh (args->desc vh-args (desc-ret desc))
+             (lambda (vh . xs)
+               (unless vh
+                 (jthrow "java/lang/NullPointerException"
+                         "Cannot invoke \"java.lang.invoke.VarHandle.asDirect()\" because \"handle\" is null"))
+               (let* ([e (vh-parts (vh-target-of vh mode) (op-access-type (car (vh-mode-info mode))))]
+                      [targs (vector-ref e 0)] [tret (vector-ref e 1)]
+                      [their (lambda () (method-type-text (cons "Ljava/lang/invoke/VarHandle;" targs) tret))])
+                 (if exact?
+                     (unless (and (equal? targs (desc-args desc)) (string=? tret (desc-ret desc)))
+                       (jthrow "java/lang/invoke/WrongMethodTypeException"
+                               (string-append "handle's method type " (their)
+                                              " but found " (method-type-text vh-args (desc-ret desc)))))
+                     ;; the access type asType'd to the invoker's, as the JDK's
+                     (unless (and (fx= (length targs) (length (desc-args desc)))
+                                  (for-all as-type-ok? (desc-args desc) targs)
+                                  (as-type-ok? tret (desc-ret desc)))
+                       (jthrow "java/lang/invoke/WrongMethodTypeException"
+                               (string-append "cannot convert MethodHandle" (their)
+                                              " to " (method-type-text vh-args (desc-ret desc)))))))
+               (apply vh-call vh mode desc xs))
+             #f)))
+(define (vh-mode-name? name) (and (hashtable-ref vh-mode-ops name #f) #t))
+(define-override! "java/lang/invoke/MethodHandles.varHandleInvoker(Ljava/lang/invoke/VarHandle$AccessMode;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;"
+  (lambda (m mt) (vh-invoker (access-mode-name m) (mt-desc (nn mt)) #f)))
+(define-override! "java/lang/invoke/MethodHandles.varHandleExactInvoker(Ljava/lang/invoke/VarHandle$AccessMode;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;"
+  (lambda (m mt) (vh-invoker (access-mode-name m) (mt-desc (nn mt)) #t)))
+
 ;; the field named fname in class c or a superclass: (declaring-class . meta)
 
 ;; A field by name and descriptor as JVMS 5.4.3.2 resolves one: the class's

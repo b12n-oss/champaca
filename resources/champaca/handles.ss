@@ -264,7 +264,8 @@
 
 (define (no-such-method c name desc how)
   (jthrow "java/lang/NoSuchMethodException"
-          (string-append "no such method: " (slashes->dots (jclass-cname c)) "." name desc "/" how)))
+          (string-append "no such method: " (slashes->dots (jclass-cname c)) "." name
+                         (type-text (desc-args desc) (desc-ret desc)) "/" how)))
 
 (define (varargs-flag? meta) (fxpositive? (fxlogand (caddr meta) #x80)))
 
@@ -354,8 +355,34 @@
 
 (def-lookup "findStatic" (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)" mh-ret)
   (lambda (this c name mt) (static-mh (mirror-class (nn c)) (str-of name) (mt-desc mt))))
+;; on MethodHandle, invoke and invokeExact are the invokers of the type asked
+;; for, and on VarHandle an access mode's name is its invoker, as the JDK's
+;; findVirtualForMH and findVirtualForVH
 (def-lookup "findVirtual" (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)" mh-ret)
-  (lambda (this c name mt) (virtual-mh (mirror-class (nn c)) (str-of name) (mt-desc mt))))
+  (lambda (this c name mt)
+    (let ([c (mirror-class (nn c))] [name (str-of name)] [desc (mt-desc mt)])
+      (cond [(and (string=? (jclass-cname c) "java/lang/invoke/MethodHandle") (member name '("invoke" "invokeExact")))
+             (invoker-of desc (string=? name "invokeExact"))]
+            [(and (string=? (jclass-cname c) "java/lang/invoke/VarHandle") (vh-mode-name? name))
+             (vh-invoker name desc #f)]
+            [else (virtual-mh c name desc)]))))
+;; bind: the method as invokeSpecial finds it in the receiver's class (no
+;; virtual dispatch beyond that), the receiver bound; a static one is
+;; refused as the JDK's resolution refuses it
+(def-lookup "bind" (string-append "(Ljava/lang/Object;Ljava/lang/String;Ljava/lang/invoke/MethodType;)" mh-ret)
+  (lambda (this receiver name mt)
+    (unless receiver
+      (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"receiver\" is null"))
+    (let* ([c (find-class (class-name-of receiver))] [name (str-of name)] [desc (mt-desc mt)]
+           [hit (find-method c name desc)])
+      (unless hit (no-such-method c name desc "invokeSpecial"))
+      (when (static-flag? (caddr (cdr hit)))
+        (jthrow "java/lang/IllegalAccessException"
+                (string-append "no such method: " (slashes->dots (jclass-cname c)) "." name
+                               (type-text (desc-args desc) (desc-ret desc)) "/invokeSpecial")))
+      (let ([sym (method-sym (jclass-cname (car hit)) (string-append name desc))])
+        (member-mh (make-mh desc (lambda xs (apply (top-level-value sym) receiver xs)) #f (varargs-flag? (cdr hit)))
+                   hit)))))
 (def-lookup "findSpecial" (string-append "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Ljava/lang/Class;)" mh-ret)
   (lambda (this c name mt caller) (special-mh (mirror-class (nn c)) (str-of name) (mt-desc mt) (mirror-class (nn caller)))))
 (def-lookup "findConstructor" (string-append "(Ljava/lang/Class;Ljava/lang/invoke/MethodType;)" mh-ret)

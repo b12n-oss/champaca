@@ -83,6 +83,13 @@ The first public version. Champaca is still experimental: the
   converted as `asType` does, so narrowing gave garbage or an
   `ArrayIndexOutOfBoundsException`, a null threw instead of becoming zero,
   and a cast to an interface was checked (`test/java/ExplicitCastCheck.java`).
+- `Lookup.bind`, `findVirtual` on `MethodHandle`'s `invoke` and `invokeExact`
+  or on a `VarHandle` access mode, and `MethodHandles.varHandleInvoker` and
+  `varHandleExactInvoker` work, with the JDK's texts. They failed with an
+  `IllegalAccessException`, a `NoSuchMethodException`, an `InternalError`
+  or a `NoClassDefFoundError`. A method lookup that finds nothing names the
+  method by its type, `nope()int`, as HotSpot does
+  (`test/java/InvokerCheck.java`).
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm

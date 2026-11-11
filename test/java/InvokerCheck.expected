@@ -1,0 +1,20 @@
+bind missing: java.lang.NoSuchMethodException: no such method: InvokerCheck.nope()String/invokeSpecial
+bind static: java.lang.IllegalAccessException: no such method: InvokerCheck.shello(String)String/invokeSpecial
+bind type: (String)String
+bind sub: sub x
+bind private: secret
+bind null: java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "receiver" is null
+bind toString: true
+ie type: (MethodHandle,int)int
+inv type: (MethodHandle,String)Object
+ie mismatch: java.lang.invoke.WrongMethodTypeException: handle's method type (long)long but found (int)int
+inv converts: 5
+vh findVirtual get: (VarHandle)int 7
+vh findVirtual cas: (VarHandle,InvokerCheck,long,long)boolean true 9
+vh findVirtual bad: java.lang.NoSuchMethodException: no such method: java.lang.invoke.VarHandle.nope()int/invokeVirtual
+vh exact type: (VarHandle)int
+vh exact mismatch: java.lang.invoke.WrongMethodTypeException: handle's method type (VarHandle)int but found (VarHandle)long
+vh invoker converts: 3
+vh invoker getAndAdd: 3 7
+vh invoker null vh: java.lang.NullPointerException: Cannot invoke "java.lang.invoke.VarHandle.asDirect()" because "handle" is null
+vh invoker unsupported: java.lang.invoke.WrongMethodTypeException: cannot convert MethodHandle(VarHandle,int)int to (VarHandle,String)int
