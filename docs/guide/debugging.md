@@ -18,6 +18,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | `CHAMPACA_USER_CACHE_DIR=<dir>` | where a bundle whose own cache can't be written keeps a writable copy of it, one directory per bundle path and one copy per version of its cache (default `~/.cache/champaca/bundles`; `off` for none: the bundle's cache is then only read) ([app-bundles](app-bundles.md#read-only-bundles)) |
 | `CHAMPACA_CLASSPATH=<entries>` | the class path `init!` uses when it's given no `:classpath`, separated as a class path is; a `--jolt` bundle's launcher sets it ([app-bundles](app-bundles.md)) |
 | `CHAMPACA_LINES=all` | keeps line numbers for the frames of classes from jars and of classes a loader of the program's own defines, not just for classes from a class directory, at about the memory their code takes ([performance](performance.md#memory)); `off` drops them for your directory classes too. Part of the cache key |
+| `CHAMPACA_PARSED_LIMIT=<n>` | how many parsed class files the process keeps for compiling more of their methods, the most recently used (default 256); a dropped one is parsed again from its bytes when needed, so 1 exercises that path on nearly every compile ([performance](performance.md#memory)) |
 | `CHAMPACA_CALL_CACHE=off` | chooses the overload again on every call ([performance](performance.md#the-call-site-cache)) |
 
 ## Java stack traces

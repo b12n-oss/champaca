@@ -60,6 +60,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A process keeps the parsed class files of its 256 most recently used
+  classes rather than all of them, parsing any other again when more of its
+  methods compile: Jackson's probe's live heap after `main` went from 292 to
+  263 MB at the same speed (`CHAMPACA_PARSED_LIMIT` sets the number).
 - `Class.getDeclaredClasses` and `getClasses` list a class's member classes,
   in the JVM's order, where they gave an empty array
   (`test/java/DeclaredClassesCheck.java`).

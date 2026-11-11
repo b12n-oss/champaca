@@ -20,7 +20,7 @@
             [champaca.libcache :refer [library-cache-keys restore-defined-class! restore-user-class!
                                        uncheckable-dep user-deps]]
             [champaca.link :refer [check-definition! class-map dotted final-sealed? link linkage-error
-                                   normalize registration-text thaw!]]
+                                   normalize note-parsed! registration-text thaw!]]
             [champaca.state :refer [state trace? timed scheme! *reads* ensure-loaded-fn]]))
 
 (declare ensure-loaded!)
@@ -74,6 +74,7 @@
         (let [reads (when (= :user (:origin info)) (volatile! #{}))
               linked (binding [*reads* reads] (timed :link #(link info)))]
           (swap! state assoc-in [:classes cname] linked)
+          (note-parsed! cname)
           (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
                 linked (if-let [ks (when reads (library-cache-keys cname @reads))]
                          (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])

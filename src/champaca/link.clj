@@ -98,6 +98,38 @@
   [info]
   (when info (or (:methods info) (class-methods (:name info)))))
 
+;; Parsed class files are kept for compiling a class's next method, but a
+;; whole run's of them were nearly a quarter of Jackson's probe's heap (66 of 292 MB,
+;; the constant pools 48). Only the most recently used parsed-limit of those
+;; that can be parsed again from their bytes stay: a JDK or classpath class,
+;; not hidden (renamed after parsing) and not generated (no bytes). A dropped
+;; one is read again by parsed, as a class restored from a cache is.
+;; CHAMPACA_PARSED_LIMIT changes it: 1 makes nearly every compile parse its
+;; class again, which is how the re-reading path is tested
+(def ^:private parsed-limit
+  (or (some-> (System/getenv "CHAMPACA_PARSED_LIMIT") parse-long) 256))
+(def ^:private parsed-clock (atom 0))
+
+(defn- reparseable? [cname info]
+  (and (map? info) (:parsed info) (#{:jdk :user} (:origin info))
+       (not (str/includes? cname "/0x")) (not (str/starts-with? cname "champaca/"))))
+
+(defn- drop-old-parsed [st]
+  (let [ticks (:parsed-ticks st)
+        holders (for [[n info] (:classes st) :when (reparseable? n info)] n)
+        keep (set (take parsed-limit (sort-by #(- (get ticks % 0)) holders)))
+        gone (remove keep holders)]
+    (-> (reduce (fn [st n] (update-in st [:classes n] dissoc :parsed)) st gone)
+        (update :parsed-ticks #(apply dissoc % gone)))))
+
+(defn note-parsed!
+  "Notes a use of cname's parsed class file; every parsed-limit uses, all
+  but the parsed-limit most recently used reparseable ones are dropped."
+  [cname]
+  (let [t (swap! parsed-clock inc)]
+    (swap! state assoc-in [:parsed-ticks cname] t)
+    (when (zero? (mod t parsed-limit)) (swap! state drop-old-parsed))))
+
 (defn parsed
   "The parsed classfile for cname. A class restored from the boot cache
   carries no bytecode, so it is re-read on the first method compile; a
@@ -106,6 +138,7 @@
   ones it has. A directory's class does, from the bytes it kept; a jar
   changed in place under the run is an error."
   [cname]
+  (note-parsed! cname)
   (or (:parsed (thaw! cname))
       (let [bs (class-bytes cname)
             fp (get-in @state [:classes cname :src-fp])
