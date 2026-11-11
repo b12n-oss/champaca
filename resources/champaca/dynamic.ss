@@ -711,9 +711,12 @@
 ;; (type-desc (element . value) ...), a value an element_value (JVMS
 ;; 4.7.16.1) as a list: (tag n) for a primitive (boolean as 0 or 1),
 ;; ("s" string), ("e" enum-desc constant), ("c" class-desc), ("@"
-;; annotation), ("[" value ...); ctor-anns ((desc . anns) ...)
-(define (class-file-bytes name super ifaces fields ctors methods class-anns ctor-anns)
-  (let ([pool '()] [count 0] [index (make-hashtable equal-hash equal?)])
+;; annotation), ("[" value ...); anns as a jolt-class-spec's, of which the
+;; class's annotations (the first) and the constructors' ((desc . anns) ...,
+;; the fourth) are read here
+(define (class-file-bytes name super ifaces fields ctors methods anns)
+  (let ([pool '()] [count 0] [index (make-hashtable equal-hash equal?)]
+        [class-anns (car anns)] [ctor-anns (cadddr anns)])
     (define (entry key octets . wide)   ; a long or double takes two slots
       (or (hashtable-ref index key #f)
           (let ([i (fx+ count 1)])
@@ -915,12 +918,21 @@
 ;; #f; anns (class field method ctor): the class's annotations, then
 ;; ((field-name . anns) ...), ((key . anns) ...) for a key of fns or sfns,
 ;; on every method it implements, and ((desc . anns) ...) for constructors,
-;; each annotation as class-file-bytes takes it. Answers the Class.
-(define (dyn-define-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init anns)
+;; each annotation as class-file-bytes takes it. A jolt-class-spec holds the
+;; twelve, in that order (fields as ifields). Answers the Class.
+(define-record-type jolt-class-spec
+  (fields name super ifaces ifields fns sfields sfns init own-ctors ctor-init post-init anns)
+  (sealed #t))
+;; the spec with name, super and ifaces slashed
+(define (jolt-class-spec-slashed s)
+  (make-jolt-class-spec (slashes (jolt-class-spec-name s)) (slashes (jolt-class-spec-super s))
+                        (map slashes (jolt-class-spec-ifaces s))
+                        (jolt-class-spec-ifields s) (jolt-class-spec-fns s) (jolt-class-spec-sfields s)
+                        (jolt-class-spec-sfns s) (jolt-class-spec-init s) (jolt-class-spec-own-ctors s)
+                        (jolt-class-spec-ctor-init s) (jolt-class-spec-post-init s) (jolt-class-spec-anns s)))
+(define (dyn-define-class spec)
   (with-java-errors
-   (lambda ()
-     (define-jolt-class (slashes name) (slashes super) (map slashes ifaces) fields fns sfields sfns init
-                        own-ctors ctor-init post-init anns))))
+   (lambda () (define-jolt-class (jolt-class-spec-slashed spec)))))
 
 ;; A constructor of the class's own: a native <init> (champaca calls it as
 ;; any constructor; HotSpot would want code) that hands its arguments to
@@ -1075,17 +1087,21 @@
               (define-native! (string-append name "." (car m) (cadr m))
                 (defined-static-proc (string-append (dotted name) "." (car m) (cadr m)) (cadr m) (caddr m))))
             statics))
-(define (jolt-class-bytes name super ifaces fields sfields ctors own-ctors own statics clinit natives-ctors anns)
-  (list->vector (class-file-bytes name super ifaces
-                                  (append (map (lambda (f) (list (car f) (cdr f) 1 (jolt-class-anns (car f) (cadr anns)))) fields)
-                                          (map (lambda (f) (list (car f) (cdr f) 9 (jolt-class-anns (car f) (cadr anns)))) sfields))
-                                  (if own-ctors '() ctors)
-                                  (append (map (lambda (m) (list (car m) (cadr m) #x0101 (cadddr m))) own)
-                                          (map (lambda (m) (list (car m) (cadr m) #x0109 (cadddr m))) statics)
-                                          (map (lambda (m) (list (car m) (cadr m) #x0108 '())) clinit)
-                                          (map (lambda (m) (list (car m) (cadr m) #x0101 (jolt-class-anns (cadr m) (cadddr anns))))
-                                               natives-ctors))
-                                  (car anns) (cadddr anns))))
+;; the class file of spec, with what define-jolt-class worked out from it
+(define (jolt-class-bytes spec ctors own statics clinit natives-ctors)
+  (let ([anns (jolt-class-spec-anns spec)]
+        [fields (jolt-class-spec-ifields spec)]
+        [sfields (jolt-class-spec-sfields spec)])
+    (list->vector (class-file-bytes (jolt-class-spec-name spec) (jolt-class-spec-super spec) (jolt-class-spec-ifaces spec)
+                                    (append (map (lambda (f) (list (car f) (cdr f) 1 (jolt-class-anns (car f) (cadr anns)))) fields)
+                                            (map (lambda (f) (list (car f) (cdr f) 9 (jolt-class-anns (car f) (cadr anns)))) sfields))
+                                    (if (jolt-class-spec-own-ctors spec) '() ctors)
+                                    (append (map (lambda (m) (list (car m) (cadr m) #x0101 (cadddr m))) own)
+                                            (map (lambda (m) (list (car m) (cadr m) #x0109 (cadddr m))) statics)
+                                            (map (lambda (m) (list (car m) (cadr m) #x0108 '())) clinit)
+                                            (map (lambda (m) (list (car m) (cadr m) #x0101 (jolt-class-anns (cadr m) (cadddr anns))))
+                                                 natives-ctors))
+                                    anns))))
 ;; the natives must be there when the class registers; a definition that
 ;; fails takes them back, so a later class of the name can't pick them up
 (define (jolt-class-register! name super ifaces bytes natives-defined)
@@ -1096,26 +1112,30 @@
     (hashtable-set! defined-supers name (cons super ifaces))
     m))
 
-(define (define-jolt-class name super ifaces fields fns sfields sfns init own-ctors ctor-init post-init anns)
-  (jolt-class-check-name! name)
-  (jolt-class-check-fields! name (append fields sfields))
-  (jolt-class-check-implements! ifaces)
-  (when (jdk-package? name) (jolt-class-fail (dotted name) " is in a package of the JDK's"))
-  (let ([s (find-class super)])
-    (jolt-class-check-supertypes! s super ifaces)
-    (let* ([ms (overridable-methods super ifaces)]
-           [ctors (jolt-class-super-ctors s)]
-           [exact (filter (lambda (f) (jolt-class-full-key? (car f))) fns)]
-           [own (jolt-class-instance-methods fns exact ms super ifaces (caddr anns))])
-      (jolt-class-check-ctors! super ctors own-ctors ctor-init)
-      (jolt-class-check-annotation-targets! anns own exact own-ctors ctors)
-      (let* ([statics (jolt-class-static-methods sfns own ms (caddr anns))]
-             [natives-ctors (jolt-class-ctor-natives name super own-ctors ctor-init post-init)]
-             [clinit (jolt-class-clinit init)])
-        (jolt-class-define-natives! name clinit natives-ctors own statics)
-        (jolt-class-register! name super ifaces
-                              (jolt-class-bytes name super ifaces fields sfields ctors own-ctors own statics clinit natives-ctors anns)
-                              (append own statics clinit natives-ctors))))))
+(define (define-jolt-class spec)
+  (let ([name (jolt-class-spec-name spec)] [super (jolt-class-spec-super spec)] [ifaces (jolt-class-spec-ifaces spec)]
+        [fields (jolt-class-spec-ifields spec)] [fns (jolt-class-spec-fns spec)] [sfields (jolt-class-spec-sfields spec)]
+        [sfns (jolt-class-spec-sfns spec)] [init (jolt-class-spec-init spec)] [own-ctors (jolt-class-spec-own-ctors spec)]
+        [ctor-init (jolt-class-spec-ctor-init spec)] [post-init (jolt-class-spec-post-init spec)] [anns (jolt-class-spec-anns spec)])
+    (jolt-class-check-name! name)
+    (jolt-class-check-fields! name (append fields sfields))
+    (jolt-class-check-implements! ifaces)
+    (when (jdk-package? name) (jolt-class-fail (dotted name) " is in a package of the JDK's"))
+    (let ([s (find-class super)])
+      (jolt-class-check-supertypes! s super ifaces)
+      (let* ([ms (overridable-methods super ifaces)]
+             [ctors (jolt-class-super-ctors s)]
+             [exact (filter (lambda (f) (jolt-class-full-key? (car f))) fns)]
+             [own (jolt-class-instance-methods fns exact ms super ifaces (caddr anns))])
+        (jolt-class-check-ctors! super ctors own-ctors ctor-init)
+        (jolt-class-check-annotation-targets! anns own exact own-ctors ctors)
+        (let* ([statics (jolt-class-static-methods sfns own ms (caddr anns))]
+               [natives-ctors (jolt-class-ctor-natives name super own-ctors ctor-init post-init)]
+               [clinit (jolt-class-clinit init)])
+          (jolt-class-define-natives! name clinit natives-ctors own statics)
+          (jolt-class-register! name super ifaces
+                                (jolt-class-bytes spec ctors own statics clinit natives-ctors)
+                                (append own statics clinit natives-ctors)))))))
 
 ;; obj's superclass's method name (public or protected) that fits args,
 ;; called on obj without virtual dispatch, as super.name(args) in Java; an

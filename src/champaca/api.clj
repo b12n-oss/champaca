@@ -561,7 +561,7 @@
                     {:class dotted}))))
 
 (defn- scm-annotations
-  "The class's annotations as dyn-define-class takes them: a list of the
+  "The class's annotations as a jolt-class-spec holds them: a list of the
   class's, then an alist for each of fields, methods and constructors."
   [[canns fanns manns cnanns]]
   (let [alist (fn [m] (scm-list (map (fn [[k v]] [k (apply s/call "list" (map scm-annotation v))]) m)))]
@@ -578,10 +578,11 @@
         icell (when sinit (s/call "box" sinit))
         ccell (when cinit (s/call "box" cinit))
         pcell (when post (s/call "box" post))
-        c (s/call "dyn-define-class" cname extends (apply s/call "list" implements)
-                  (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
-                  (if ctors (scm-list ctors) false) (or ccell false) (or pcell false)
-                  (scm-annotations anns))]
+        c (s/call "dyn-define-class"
+                  (s/call "make-jolt-class-spec" cname extends (apply s/call "list" implements)
+                          (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
+                          (if ctors (scm-list ctors) false) (or ccell false) (or pcell false)
+                          (scm-annotations anns)))]
     (swap! jolt-classes assoc dotted {:shape shape :cells cells :scells scells :icell icell
                                       :ccell ccell :pcell pcell :class c})
     c))
