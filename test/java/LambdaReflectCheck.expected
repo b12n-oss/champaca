@@ -10,3 +10,4 @@ default via getMethod: Shout AA
 synthetic: true
 final: true
 interfaces: [interface LambdaReflectCheck$Shout]
+a framework's lambda test: true

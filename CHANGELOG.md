@@ -60,6 +60,9 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A lambda's class name holds `$$Lambda`, as the JVM's do, so a framework
+  that tells lambdas by it (Spring's `ClassUtils.isLambdaClass`) does here
+  too: `champaca.$$Lambda$...`, was `champaca.Lambda$...`.
 - `Files.getFileStore` and `FileSystem.getFileStores` work, on macOS and
   Linux, with the JVM's mount entries. They failed with an
   `UnsatisfiedLinkError` (`test/java/FileStoreCheck.java`).

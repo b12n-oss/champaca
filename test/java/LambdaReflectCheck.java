@@ -35,5 +35,8 @@ public class LambdaReflectCheck {
         t("synthetic", () -> sup.getClass().isSynthetic());
         t("final", () -> Modifier.isFinal(sup.getClass().getModifiers()));
         t("interfaces", () -> Arrays.toString(shout.getClass().getInterfaces()));
+        // Spring Framework's ClassUtils.isLambdaClass
+        t("a framework's lambda test", () -> sup.getClass().isSynthetic() && sup.getClass().getSuperclass() == Object.class
+            && sup.getClass().getInterfaces().length > 0 && sup.getClass().getName().contains("$$Lambda"));
     }
 }

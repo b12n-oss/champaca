@@ -105,7 +105,9 @@
   [ifaces sam-keys]
   (run! ensure-loaded! ifaces)
   (let [deps (user-deps ifaces true)
-        n (str "champaca/Lambda$" (str/replace (first ifaces) "/" "$") "$"
+        ;; "$$Lambda" in the name, as the JVM's lambda classes have it:
+        ;; frameworks tell a lambda by it (Spring's ClassUtils.isLambdaClass)
+        n (str "champaca/$$Lambda$" (str/replace (first ifaces) "/" "$") "$"
                (Math/abs (hash (if (empty? deps) [ifaces sam-keys] [ifaces sam-keys deps]))))]
     (if (get-in @state [:classes n])
       (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet

@@ -2455,7 +2455,7 @@
 ;; ClassLoader.definePackage(Class) does (the boot loader's BootClassLoader
 ;; for a boot module), so Package.getPackage and getDefinedPackage answer the
 ;; same object. A
-;; lambda class is champaca/Lambda$..., shared by every call site with the
+;; lambda class is champaca/$$Lambda$..., shared by every call site with the
 ;; same interface, so its package is champaca, in step with its getName (the
 ;; JVM's lambda lives in its caller's package).
 (define jpackage-hook #f)
