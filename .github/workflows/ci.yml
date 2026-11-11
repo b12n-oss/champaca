@@ -253,7 +253,14 @@ jobs:
           for f in target/battery/*-*.log; do
             [ -f "$f" ] || continue
             m=$(basename "$f" .log)
-            grep -E '^FAIL' "$f" | head -n 8 | while IFS= read -r l; do echo "::error title=$m::$l"; done
+            # a FAIL line with what follows it (the exit code and the start of
+            # the diff, indented), 25 lines at most, %0A between them
+            awk -v t="$m" '
+              function out() { if (msg != "") { print "::error title=" t "::" msg; n++ } msg = "" }
+              /^FAIL/ { out(); if (n < 8) { msg = $0; k = 0 }; next }
+              /^(PASS|[0-9]+\/[0-9]+ )/ { out(); next }
+              msg != "" && k < 24 { gsub(/%/, "%25"); msg = msg "%0A" $0; k++ }
+              END { out() }' "$f"
             echo "::notice title=$m::$(tail -n 1 "$f")"
           done
           for h in target/hangs/* target/battery/*/target/hangs/*; do
