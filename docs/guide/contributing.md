@@ -26,7 +26,7 @@ jolt test      # every test program against the JVM, plus the examples
 ## Before a pull request
 
 - `jolt test` passes.
-- The battery passes on your final commit: `jolt battery <ref>` runs the suite cold, warm, with the cache off and with `CHAMPACA_BT=1`, then the ten libraries. It takes half an hour or more, and only one may run at a time.
+- The battery passes on your final commit: `jolt battery <ref>` runs the suite cold, warm, with the cache off and with `CHAMPACA_BT=1`, then the eleven libraries. It takes half an hour or more, and only one may run at a time.
 - If you can run Docker, `jolt linux` passes too.
 - CI (`.github/workflows/ci.yml`) runs `jolt battery` on Linux x86_64, Linux arm64 and macOS arm64 for every push to a branch, and a pull request shows the checks of its branch's commit. Each push runs the fast lane: cold, warm and the libraries on each platform (arm64 skips warm) and `CHAMPACA_BT=1` on x86_64. A push that changes only `docs/` or Markdown runs no battery jobs. The `ci ok` check sums up a run: it passes when every battery job passed or there was nothing to run, so it's the one check a rule on main would require. The full lane adds every mode everywhere, cache-off included, and runs every night on main. Either lane, or any part of one, runs by hand:
 

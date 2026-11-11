@@ -19,4 +19,6 @@
   ;; built for Java 1.2: SerializationUtils keeps its finally blocks as jsr/ret
   {:main "Lang2" :jars [["commons-lang:commons-lang:2.4" "16313e02a793435009f1e458fa4af5d879f6fb11"]]}
   ;; annotations read by reflection, a Proxy for an interface command
-  {:main "Pico" :jars [["info.picocli:picocli:4.7.6" "77c2cb87814b6a03d431fc856024a9f8ff605ad4"]]}]}
+  {:main "Pico" :jars [["info.picocli:picocli:4.7.6" "77c2cb87814b6a03d431fc856024a9f8ff605ad4"]]}
+  ;; an in-memory database: SQL, JDBC, java.sql types, threads
+  {:main "H2" :jars [["com.h2database:h2:2.3.232" "4fcc05d966ccdb2812ae8b9a718f69226c0cf4e2"]]}]}

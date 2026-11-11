@@ -1,6 +1,6 @@
 # Limitations
 
-Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the ten checked libraries (commons-lang3, commons-lang 2.4, gson, jsoup, Jackson, Caffeine, Guava, SLF4J, SnakeYAML, picocli) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
+Champaca is a spike. It runs the JDK's own code, but only along the paths its tests and the eleven checked libraries (commons-lang3, commons-lang 2.4, gson, jsoup, Jackson, Caffeine, Guava, SLF4J, SnakeYAML, picocli, H2) have exercised. Code outside those paths can hit a missing native or one of the shortcuts below. This page lists the ones known so far, roughly in the order a real program meets them.
 
 ## Threads take turns
 
