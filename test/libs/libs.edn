@@ -17,4 +17,6 @@
           ["org.slf4j:slf4j-simple:2.0.16" "56d3d8e59293543780ad35af4ee4a5d9c111a588"]]}
   {:main "Yml" :jars [["org.yaml:snakeyaml:2.3" "936b36210e27320f920536f695cf1af210c44586"]]}
   ;; built for Java 1.2: SerializationUtils keeps its finally blocks as jsr/ret
-  {:main "Lang2" :jars [["commons-lang:commons-lang:2.4" "16313e02a793435009f1e458fa4af5d879f6fb11"]]}]}
+  {:main "Lang2" :jars [["commons-lang:commons-lang:2.4" "16313e02a793435009f1e458fa4af5d879f6fb11"]]}
+  ;; annotations read by reflection, a Proxy for an interface command
+  {:main "Pico" :jars [["info.picocli:picocli:4.7.6" "77c2cb87814b6a03d431fc856024a9f8ff605ad4"]]}]}

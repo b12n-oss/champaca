@@ -60,6 +60,8 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- picocli 4.7.6 joins the libraries `jolt libs` checks against the JVM,
+  making ten (`test/libs/Pico.java`).
 - A local record's `toString` starts with its simple name, `Local[x=1]`,
   where it gave javac's binary suffix, `1Local[x=1]`
   (`test/java/RecordCheck.java`).
