@@ -104,9 +104,15 @@ public class ForeignCheck {
       var started = new java.util.concurrent.CountDownLatch(1);
       Thread t = new Thread(() -> { try { started.countDown(); nap.invokeExact(500_000); } catch (Throwable e) { throw new RuntimeException(e); } });
       t.start(); started.await();
+      // Main ticks every 10 ms while the 500 ms nap runs: about 40 times, and
+      // 6 on HotSpot too when macOS throttles the process's timers (background
+      // QoS, as a loaded CI runner showed). A downcall keeping the GIL would
+      // leave main at one or two ticks, so 3 tells them apart; a count under 10
+      // goes to stderr, which isn't compared.
       int ticks = 0;
       while (t.isAlive()) { Thread.sleep(10); ticks++; }
-      return ticks >= 10;
+      if (ticks < 10) System.err.println("blocking call: main ticked only " + ticks + " times");
+      return ticks >= 3;
     });
     var PI = MemoryLayout.structLayout(JAVA_INT, MemoryLayout.paddingLayout(4), JAVA_INT);
     var C3 = MemoryLayout.structLayout(JAVA_BYTE, JAVA_BYTE, JAVA_BYTE);

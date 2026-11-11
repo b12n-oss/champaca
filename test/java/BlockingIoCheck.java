@@ -8,8 +8,10 @@ import java.nio.file.*;
 // writer sleeps halfway. jolt test makes the FIFO. Main ticks every 20 ms
 // while the reader lives, at least 600 ms (27 to 40 times on HotSpot); were
 // a blocked thread to keep the GIL, main would tick once or hang, so 3 ticks
-// is "kept running". A loaded CI runner got fewer than 10 once in a first,
-// uncompiled Files.copy; a count under 10 goes to stderr, which isn't compared.
+// is "kept running". When macOS throttles the process's timers (background
+// QoS, as a loaded CI runner showed) HotSpot's own count drops to 7 or 8 for
+// Files.copy, below the old 10; a count under 10 goes to stderr, which isn't
+// compared.
 public class BlockingIoCheck {
     static final String FIFO = "target/blocking-io.fifo";
     static final String COPY = "target/blocking-io.copy";
