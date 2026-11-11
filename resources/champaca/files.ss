@@ -1013,26 +1013,45 @@
   (let ([code (step)])
     (values (fx- in-len (foreign-ref 'unsigned-32 strm 8)) (fx- out-len (foreign-ref 'unsigned-32 strm 32)) code)))
 
-;; the four shapes of each call: input and output each a byte[] slice or an
-;; address. f takes native pointers and answers (values read written result
-;; failure), failure being #f or a thunk that throws. The output written so
-;; far reaches the byte[] before a failure is thrown, as with the JDK's C code
-;; writing in place, and the copies are freed however the call ends.
-(define (with-z-buffers in-arr in-off in-addr in-len out-arr out-off out-addr out-len f)
-  (let ([in #f] [out #f])
-    (dynamic-wind
-      (lambda ()
-        (set! in (if in-arr (bytes->native in-arr in-off in-len) in-addr))
-        (set! out (if out-arr (foreign-alloc (fxmax out-len 1)) out-addr)))
-      (lambda ()
-        (let-values ([(read written result failure) (f in out)])
-          (when out-arr (native->bytes! out out-arr out-off written))
-          (if failure (failure) result)))
-      (lambda ()
-        (when (and in-arr in) (foreign-free in))
-        (when (and out-arr out) (foreign-free out))
-        (set! in #f)
-        (set! out #f)))))
+;; One side of a zlib call: a byte[] slice (arr from offset pos) or, when
+;; arr is #f, the native address pos; len bytes either way.
+(define (z-buf arr pos len) (vector arr pos len))
+
+;; k gets the input as a native pointer: the address itself, or a copy of the
+;; byte[] slice freed however k ends.
+(define (with-z-input in k)
+  (let ([arr (vector-ref in 0)] [pos (vector-ref in 1)] [len (vector-ref in 2)])
+    (if arr
+        (let ([p #f])
+          (dynamic-wind
+            (lambda () (set! p (bytes->native arr pos len)))
+            (lambda () (k p))
+            (lambda () (when p (foreign-free p)) (set! p #f))))
+        (k pos))))
+
+;; f gets the output as a native pointer and answers (values read written
+;; result failure), failure being #f or a thunk that throws. For a byte[]
+;; slice f writes into a native buffer, and what it wrote reaches the byte[]
+;; before a failure is thrown, as with the JDK's C code writing in place; the
+;; buffer is freed however the call ends.
+(define (with-z-output out f)
+  (let ([arr (vector-ref out 0)] [pos (vector-ref out 1)] [len (vector-ref out 2)])
+    (if arr
+        (let ([p #f])
+          (dynamic-wind
+            (lambda () (set! p (foreign-alloc (fxmax len 1))))
+            (lambda ()
+              (let-values ([(read written result failure) (f p)])
+                (native->bytes! p arr pos written)
+                (if failure (failure) result)))
+            (lambda () (when p (foreign-free p)) (set! p #f))))
+        (let-values ([(read written result failure) (f pos)])
+          (if failure (failure) result)))))
+
+;; the four shapes of each call, input and output each a z-buf: f takes
+;; native pointers and answers as with-z-output's f
+(define (with-z-buffers in out f)
+  (with-z-input in (lambda (i) (with-z-output out (lambda (o) (f i o))))))
 
 ;; bad data: like Inflater.c, the bytes used so far go to inputConsumed and
 ;; outputConsumed, which Inflater reads to advance its position, then throw
@@ -1055,13 +1074,13 @@
   (let ([strm (new-z-stream)])
     (z-init strm (zlib-inflate-init2 strm (if (eqv? nowrap 1) -15 15) (zlib-version-string) z-stream-size))))
 (defnative (string-append zi "inflateBytesBytes(J[BII[BII)J") (this strm in off len out ooff olen)
-  (with-z-buffers in off 0 len out ooff 0 olen (lambda (i o) (inflate-step this strm i len o olen))))
+  (with-z-buffers (z-buf in off len) (z-buf out ooff olen) (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "inflateBytesBuffer(J[BIIJI)J") (this strm in off len oaddr olen)
-  (with-z-buffers in off 0 len #f 0 oaddr olen (lambda (i o) (inflate-step this strm i len o olen))))
+  (with-z-buffers (z-buf in off len) (z-buf #f oaddr olen) (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "inflateBufferBytes(JJI[BII)J") (this strm iaddr len out ooff olen)
-  (with-z-buffers #f 0 iaddr len out ooff 0 olen (lambda (i o) (inflate-step this strm i len o olen))))
+  (with-z-buffers (z-buf #f iaddr len) (z-buf out ooff olen) (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "inflateBufferBuffer(JJIJI)J") (this strm iaddr len oaddr olen)
-  (with-z-buffers #f 0 iaddr len #f 0 oaddr olen (lambda (i o) (inflate-step this strm i len o olen))))
+  (with-z-buffers (z-buf #f iaddr len) (z-buf #f oaddr olen) (lambda (i o) (inflate-step this strm i len o olen))))
 (defnative (string-append zi "getAdler(J)I") (strm) (i32 (foreign-ref 'unsigned-64 strm 96)))
 (defnative (string-append zi "reset(J)V") (strm)
   (unless (fx= 0 (zlib-inflate-reset strm)) (jthrow "java/lang/InternalError" #f)))
@@ -1099,13 +1118,13 @@
     ;; method Z_DEFLATED 8, memLevel 8 as the JDK uses
     (z-init strm (zlib-deflate-init2 strm level 8 (if (eqv? nowrap 1) -15 15) 8 strategy (zlib-version-string) z-stream-size))))
 (defnative (string-append zd "deflateBytesBytes(J[BII[BIIII)J") (this strm in off len out ooff olen flush params)
-  (with-z-buffers in off 0 len out ooff 0 olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+  (with-z-buffers (z-buf in off len) (z-buf out ooff olen) (lambda (i o) (deflate-step strm i len o olen flush params))))
 (defnative (string-append zd "deflateBytesBuffer(J[BIIJIII)J") (this strm in off len oaddr olen flush params)
-  (with-z-buffers in off 0 len #f 0 oaddr olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+  (with-z-buffers (z-buf in off len) (z-buf #f oaddr olen) (lambda (i o) (deflate-step strm i len o olen flush params))))
 (defnative (string-append zd "deflateBufferBytes(JJI[BIIII)J") (this strm iaddr len out ooff olen flush params)
-  (with-z-buffers #f 0 iaddr len out ooff 0 olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+  (with-z-buffers (z-buf #f iaddr len) (z-buf out ooff olen) (lambda (i o) (deflate-step strm i len o olen flush params))))
 (defnative (string-append zd "deflateBufferBuffer(JJIJIII)J") (this strm iaddr len oaddr olen flush params)
-  (with-z-buffers #f 0 iaddr len #f 0 oaddr olen (lambda (i o) (deflate-step strm i len o olen flush params))))
+  (with-z-buffers (z-buf #f iaddr len) (z-buf #f oaddr olen) (lambda (i o) (deflate-step strm i len o olen flush params))))
 (defnative (string-append zd "getAdler(J)I") (strm) (i32 (foreign-ref 'unsigned-64 strm 96)))
 (defnative (string-append zd "reset(J)V") (strm)
   (unless (fx= 0 (zlib-deflate-reset strm)) (jthrow "java/lang/InternalError" #f)))
