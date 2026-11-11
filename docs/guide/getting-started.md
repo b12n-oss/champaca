@@ -17,7 +17,7 @@ From the repo root:
 jolt -M -e "(require '[champaca.api :as ldk]) (ldk/init!) (println (ldk/invoke \"champaca\" \"toUpperCase\"))"
 ```
 
-That prints `CHAMPACA`. `init!` boots the JDK, which takes six or seven seconds the first time and about 0.4 s once the startup cache exists. After that every call goes straight into compiled code.
+That prints `CHAMPACA`. `init!` boots the JDK, which takes four or five seconds the first time and about 0.4 s once the startup cache exists. After that every call goes straight into compiled code.
 
 A file works the same way. This is a cut-down `examples/dynamic.clj`:
 

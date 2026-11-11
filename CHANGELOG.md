@@ -60,6 +60,13 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- The startup cache archives the module graph, as HotSpot's class data
+  sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
+  `ArchivedModuleGraph` and writes that object graph to the cache; a warm
+  boot rebuilds it in under 4 ms, and the JDK then skips the generated
+  `SystemModules$default` and the module resolution. That class runs once,
+  interpreted, when the archive is built, instead of being compiled: a cold
+  `Hello` went from 5.3 s to 4.4 s, a warm one is unchanged.
 - A method over 4,000 bytes of bytecode does its array accesses outside
   loops through calls instead of inline checks, which made the JDK's locale
   tables slow to compile: on a cache holding only the boot a first

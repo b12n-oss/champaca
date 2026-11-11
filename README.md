@@ -36,7 +36,7 @@ Methods are found by name, and the overload is picked from the arguments the way
 - **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
 - **Compiled Java programs** run from the command line as with `java`: `-cp`, `-jar`, `-D` options, `-p` and `-m` for modules, source files, and the JDK's own rules for finding `main` ([running-java-programs](docs/guide/running-java-programs.md)).
 - **Many JDK areas**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each checked against HotSpot ([compatibility](docs/guide/compatibility.md)).
-- **A startup cache** keeps what a run compiled, so a warm `Hello` takes 0.39 s from exec to exit on an M1 Pro, where the first run took 6.5 s ([performance](docs/guide/performance.md#the-startup-cache)).
+- **A startup cache** keeps what a run compiled, so a warm `Hello` takes 0.39 s from exec to exit on an M1 Pro, where the first run took 4.3 s ([performance](docs/guide/performance.md#the-startup-cache)).
 - **App bundles**: `jolt bundle` makes a directory that runs a program on a machine with no JDK ([app-bundles](docs/guide/app-bundles.md)).
 
 ## Getting started
