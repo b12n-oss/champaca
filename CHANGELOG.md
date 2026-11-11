@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- Setting a file's creation time works on macOS (`BasicFileAttributeView.setTimes`
+  through `setattrlist`), where it threw `UnsatisfiedLinkError`, so
+  commons-io's `FileUtils.copyFile`, which keeps the source's times, works
+  too. commons-io 2.17.0 is the thirteenth library `jolt libs` checks
+  (`test/java/FileTimesCheck.java`, `test/libs/Cio.java`).
 - A class of your own in a package named `champaca.something` has its frames
   in stack traces and is the caller `MethodHandles.lookup()`, `Class.forName`
   and the other caller-sensitive methods see. Only champaca's generated

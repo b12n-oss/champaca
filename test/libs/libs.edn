@@ -24,4 +24,7 @@
   {:main "H2" :jars [["com.h2database:h2:2.3.232" "4fcc05d966ccdb2812ae8b9a718f69226c0cf4e2"]]}
   ;; classes generated at run time, loaded by each strategy (Unsafe
   ;; injection's warnings go to stderr, which isn't compared)
-  {:main "Buddy" :jars [["net.bytebuddy:byte-buddy:1.17.5" "88450f120903b7e72470462cdbd2b75a3842223c"]]}]}
+  {:main "Buddy" :jars [["net.bytebuddy:byte-buddy:1.17.5" "88450f120903b7e72470462cdbd2b75a3842223c"]]}
+  ;; files: copies that keep their times (setattrlist on macOS), listings,
+  ;; filters, BOMs, counting and tee streams
+  {:main "Cio" :jars [["commons-io:commons-io:2.17.0" "ddcc8433eb019fb48fe25207c0278143f3e1d7e2"]]}]}

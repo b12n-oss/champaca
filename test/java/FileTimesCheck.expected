@@ -1,0 +1,9 @@
+mod and access: mod=2001-09-09T01:46:40.123456789Z acc=2004-11-09T11:33:20Z
+access only: mod=2001-09-09T01:46:40.123456789Z acc=2008-01-10T21:20:00.000000005Z
+creation set: true
+creation left the rest: mod=2001-09-09T01:46:40.123456789Z acc=2008-01-10T21:20:00.000000005Z
+all three: mod=2011-03-13T07:06:40Z acc=2011-03-13T07:06:41Z true
+before 1970: 1969-12-31T00:00:00Z
+copy keeps: true
+link itself: 2014-05-13T16:53:20Z target kept: true
+missing: java.nio.file.NoSuchFileException

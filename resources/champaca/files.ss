@@ -163,6 +163,8 @@
 (deflibc libc-getpwuid "getpwuid" #f (unsigned-32) uptr)
 (deflibc libc-getgrgid "getgrgid" #f (unsigned-32) uptr)
 (deflibc libc-clonefile (if fs-macos? "clonefile" "no-clonefile-here") #f (uptr uptr int) int)
+(deflibc libc-setattrlist (if fs-macos? "setattrlist" "no-setattrlist-here") #f (uptr uptr uptr unsigned-long unsigned-int) int)
+(deflibc libc-fsetattrlist (if fs-macos? "fsetattrlist" "no-fsetattrlist-here") #f (int uptr uptr unsigned-long unsigned-int) int)
 (deflibc libc-statvfs "statvfs" #f (uptr uptr) int)
 ;; Linux's birth time comes from statx, as the JDK's Linux native reads it
 (deflibc libc-statx (if fs-linux? "statx" "no-statx-here") #f (int uptr int unsigned-32 uptr) int)
@@ -763,6 +765,35 @@
 (defnative "sun/nio/fs/BsdNativeDispatcher.clonefile0(JJI)I" (src dst flags)
   (unix-check (libc-clonefile src dst flags))
   0)
+;; setattrlist(2) and fsetattrlist(2) for the times macOS sets that way,
+;; creation time included, as BsdNativeDispatcher.c lays them out: a struct
+;; attrlist (bitmapcount 5, then the common attributes, 24 bytes) and one
+;; timespec per attribute asked for, creation then modification then access
+;; time, seconds and nanoseconds split as C's / and % split them
+(define attr-cmn-crtime #x200)
+(define attr-cmn-modtime #x400)
+(define attr-cmn-acctime #x1000)
+(define (attrlist-call call commonattr times options)
+  (let ([al (foreign-alloc 24)] [buf (foreign-alloc 48)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i 24)) (foreign-set! 'unsigned-8 al i 0))
+    (foreign-set! 'unsigned-16 al 0 5)
+    (foreign-set! 'unsigned-32 al 4 commonattr)
+    (let ([n (fold-left (lambda (n bit t)
+                          (if (fxzero? (fxlogand commonattr bit))
+                              n
+                              (begin (put-timespec! buf (fx* n 16) (quotient t 1000000000) (remainder t 1000000000))
+                                     (fx+ n 1))))
+                        0
+                        (list attr-cmn-crtime attr-cmn-modtime attr-cmn-acctime)
+                        times)])
+      (let* ([r (call al buf (fx* n 16) options)] [e (errno)])
+        (foreign-free al)
+        (foreign-free buf)
+        (when (< r 0) (raise (construct "sun/nio/fs/UnixException" "(I)V" e)))))))
+(defnative "sun/nio/fs/BsdNativeDispatcher.setattrlist0(JIJJJJ)V" (path commonattr mod acc create options)
+  (attrlist-call (lambda (l b n o) (libc-setattrlist path l b n o)) commonattr (list create mod acc) options))
+(defnative "sun/nio/fs/BsdNativeDispatcher.fsetattrlist0(IIJJJJ)V" (fd commonattr mod acc create options)
+  (attrlist-call (lambda (l b n o) (libc-fsetattrlist fd l b n o)) commonattr (list create mod acc) options))
 ;; a plain read/write loop; with a pipe or FIFO on either side it runs
 ;; without the GIL, in a buffer of its own
 (define (copy-fd-to-fd dst src)
