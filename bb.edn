@@ -1084,6 +1084,10 @@
                  (linux-image! arch)
                  (shell runner "libs:fetch")
                  (shell "docker run --rm --platform" (str "linux/" arch)
+                        ;; a UTF-8 locale, as a desktop has: the image has none
+                        ;; installed, so the JVM would write stdout as ASCII
+                        ;; and the libraries' output differ from champaca's
+                        "-e" "LANG=C.UTF-8"
                         "-v" (str (fs/cwd) ":/champaca")
                         ;; the jolt build and champaca's caches persist per architecture,
                         ;; in a volume, or in CHAMPACA_LINUX_HOME's directory (CI caches
