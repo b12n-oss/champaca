@@ -1565,8 +1565,9 @@
   "The label of a copy of decl.name desc (ctag) translated for the call site
   *inline-site* of the method tag, its definition added to defs, or nil when
   the callee isn't a leaf. A callee that fails to translate (a class missing
-  at run time, say) stays a plain call, so it fails only if called."
-  [cls resolve ic! tag defs decl name desc ctag]
+  at run time, say) stays a plain call, so it fails only if called. The
+  caller's side comes as a map: its class map cls, resolve, ic!, tag, defs."
+  [{:keys [cls resolve ic! tag defs]} decl name desc ctag]
   (let [{c :cls m :method} ((:inline-candidate resolve) (:name cls) decl name desc)]
     (when (and m (leaf? c m))
       (when-let [text (try (binding [*method-tag* ctag]
@@ -1582,14 +1583,15 @@
   site for stack traces, and none under CHAMPACA_BT."
   [cls resolve ic! tag defs]
   (let [inlined (volatile! {})          ; [callee tag, site] -> label, or false
-        bt? (System/getenv "CHAMPACA_BT")]
+        bt? (System/getenv "CHAMPACA_BT")
+        caller {:cls cls :resolve resolve :ic! ic! :tag tag :defs defs}]
     (fn [decl name desc]
       (when-not bt?
         (let [ctag (str decl "." name desc)
               key [ctag (first *inline-site*)]]
           (if (contains? @inlined key)
             (get @inlined key)
-            (let [lbl (inline-label cls resolve ic! tag defs decl name desc ctag)]
+            (let [lbl (inline-label caller decl name desc ctag)]
               (vswap! inlined assoc key (or lbl false))
               lbl)))))))
 
