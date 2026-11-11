@@ -60,6 +60,9 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A JDK class file found as a resource has the JVM's `jrt:` URL, from
+  `getResource` and `getResources` through any loader, where it had none.
+  Byte Buddy's injection strategy needed it (`test/java/JrtResourceCheck.java`).
 - picocli 4.7.6 and the H2 database 2.3.232 join the libraries `jolt libs`
   checks against the JVM, making eleven (`test/libs/Pico.java`,
   `test/libs/H2.java`).

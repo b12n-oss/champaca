@@ -2290,9 +2290,8 @@
 ;; then its findResource, which a URLClassLoader answers from its URLs
 ;; through the JDK's code; the built-in loaders answer from the classpath and
 ;; the image. A class such a loader defined asks it for its resources, as
-;; Class.getResource does through its class's loader. The boot loader has no
-;; URLs here (JDK resources are streams only), so through a loader with no
-;; parent a JDK resource is found by that loader alone.
+;; Class.getResource does through its class's loader. Through a loader with
+;; no parent, the boot loader answers a JDK class file (jdk-class-url).
 (define (own-loader? l) (and l (not (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))))
 ;; the platform loader has no class path: it sees the JDK's resources alone,
 ;; as streams, so a loader isolated under it doesn't see the application's
@@ -2339,7 +2338,9 @@
   (let ([l (jslot this (jfield-index "java/lang/Class" "classLoader"))]) (and (own-loader? l) l)))
 (define (own-get-resource l name)
   (let* ([parent (jslot l (jfield-index "java/lang/ClassLoader" "parent"))]
-         [up (and parent ((jvirt parent "getResource(Ljava/lang/String;)Ljava/net/URL;") parent name))])
+         [up (if parent
+                 ((jvirt parent "getResource(Ljava/lang/String;)Ljava/net/URL;") parent name)
+                 (jdk-class-url (jstring->scheme name)))])
     (or up ((jvirt l "findResource(Ljava/lang/String;)Ljava/net/URL;") l name))))
 (define (own-get-resource-stream l name)
   (let ([u ((jvirt l "getResource(Ljava/lang/String;)Ljava/net/URL;") l name)])
@@ -2350,7 +2351,7 @@
   (let* ([parent (jslot l (jfield-index "java/lang/ClassLoader" "parent"))]
          [up (if parent
                  ((jvirt parent "getResources(Ljava/lang/String;)Ljava/util/Enumeration;") parent name)
-                 (resource-enumeration-of '()))]
+                 (let ([j (jdk-class-url (jstring->scheme name))]) (resource-enumeration-of (if j (list j) '()))))]
          [mine ((jvirt l "findResources(Ljava/lang/String;)Ljava/util/Enumeration;") l name)])
     (construct "java/lang/CompoundEnumeration" "([Ljava/util/Enumeration;)V"
                (make-jarr "Ljava/util/Enumeration;" (vector up mine)))))
@@ -2370,9 +2371,24 @@
 (define-override! "java/lang/ClassLoader.getSystemResourceAsStream(Ljava/lang/String;)Ljava/io/InputStream;"
   (lambda (name) (builtin-resource-stream #f (jstring->scheme (nn name)))))
 
-;; URLs, for classpath resources only (file: and jar:, which the JDK opens
-;; with its own handlers)
+;; URLs: a class file of a JDK module's package is jrt:/<module>/<path>, which
+;; the JDK's own jrt handler opens, as BuiltinClassLoader.findResource gives
+;; it (only a .class name: no JDK package is open, and the JDK hides any other
+;; resource of a package that isn't), and first, since the JVM's loaders ask
+;; their parents first; the rest are the classpath's (file: and jar:, which
+;; the JDK opens with its own handlers)
+(define (jdk-class-url path)
+  (let ([n (string-length path)])
+    (and (fx> n 6) (string=? (substring path (fx- n 6) n) ".class")
+         (let ([m (hashtable-ref package-modules (package-dir path) #f)])
+           (and m (not (eq? (module-loader m) (app-loader)))   ; a java -p module is the classpath's business
+                (jdk-resource-hook path)
+                (construct "java/net/URL" "(Ljava/lang/String;)V"
+                           (jstring (string-append "jrt:/" (module-name-of m) "/" path))))))))
 (define (resource-url-list path)
+  (let ([j (jdk-class-url path)] [cp (classpath-url-list path)])
+    (if j (cons j cp) cp)))
+(define (classpath-url-list path)
   (let ([text (resource-urls-hook path)])
     (if (string=? text "")
         '()
@@ -2404,9 +2420,9 @@
        [else (first-resource-url p)]))))
 (define-override! "java/lang/ClassLoader.getResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (this name)
-    (if (own-loader? this)
-        (own-get-resource this (nn name))
-        (and (not (platform-loader? this)) (first-resource-url (jstring->scheme (nn name)))))))
+    (cond [(own-loader? this) (own-get-resource this (nn name))]
+          [(platform-loader? this) (jdk-class-url (jstring->scheme (nn name)))]
+          [else (first-resource-url (jstring->scheme (nn name)))])))
 (define-override! "java/lang/ClassLoader.getSystemResource(Ljava/lang/String;)Ljava/net/URL;"
   (lambda (name) (first-resource-url (jstring->scheme (nn name)))))
 (define-override! "java/lang/ClassLoader.getResources(Ljava/lang/String;)Ljava/util/Enumeration;"
@@ -2414,7 +2430,7 @@
     (if (own-loader? this)
         (own-get-resources this (nn name))
         (if (platform-loader? this)
-            (resource-enumeration-of '())
+            (let ([j (jdk-class-url (jstring->scheme (nn name)))]) (resource-enumeration-of (if j (list j) '())))
             (resource-enumeration (jstring->scheme (nn name)))))))
 
 ;; Class.getProtectionDomain: a field the VM sets when it defines a class. A

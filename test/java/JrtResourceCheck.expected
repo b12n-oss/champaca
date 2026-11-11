@@ -1,0 +1,20 @@
+system stream: class bytes
+system url: jrt:/java.base/java/lang/Object.class
+app loader stream: class bytes
+app loader url: jrt:/java.base/java/lang/Object.class
+class stream: class bytes
+class url: jrt:/java.base/java/lang/Object.class
+class abs stream: class bytes
+platform stream: class bytes
+platform url: jrt:/java.sql/java/sql/Connection.class
+url open: class bytes
+resources enum: 1
+jrt url: class bytes
+module stream: class bytes
+url loader, no parent: jrt:/java.base/java/lang/String.class
+url loader, no parent, list: [jrt:/java.base/java/util/List.class]
+url loader under the app: jrt:/java.base/java/util/Map.class
+platform list: [jrt:/java.sql/java/sql/Date.class]
+not a class: null
+missing class: null
+own url: file
