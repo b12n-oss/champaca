@@ -5,7 +5,11 @@ import java.nio.file.*;
 // keep running meanwhile, as on the JVM: the reader's open waits for the
 // writer, which first sleeps; the writer's writes wait on the full pipe while
 // the first reader sleeps; and every reader waits on the empty pipe while the
-// writer sleeps halfway. jolt test makes the FIFO.
+// writer sleeps halfway. jolt test makes the FIFO. Main ticks every 20 ms
+// while the reader lives, at least 600 ms (27 to 40 times on HotSpot); were
+// a blocked thread to keep the GIL, main would tick once or hang, so 3 ticks
+// is "kept running". A loaded CI runner got fewer than 10 once in a first,
+// uncompiled Files.copy; a count under 10 goes to stderr, which isn't compared.
 public class BlockingIoCheck {
     static final String FIFO = "target/blocking-io.fifo";
     static final String COPY = "target/blocking-io.copy";
@@ -44,8 +48,9 @@ public class BlockingIoCheck {
         while (reader.isAlive()) { Thread.sleep(20); ticks++; }
         reader.join();
         writer.join();
+        if (ticks < 10) System.err.println(name + ": main ticked only " + ticks + " times");
         System.out.println(name + ": read " + got[0][0] + " bytes, hash " + got[0][1]
-                           + ", main kept running: " + (ticks >= 10));
+                           + ", main kept running: " + (ticks >= 3));
     }
 
     public static void main(String[] args) throws Exception {
