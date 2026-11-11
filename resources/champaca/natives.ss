@@ -189,10 +189,51 @@
   (if (eqv? heap 1)
       (let ([used (bytes-allocated)]) (memory-usage -1 used (max used (current-memory-bytes)) -1))
       (memory-usage -1 0 0 -1)))
+;; One memory pool and one collector, as Chez has one heap and one
+;; collector: the pool "Chez heap" (heap type) with Chez's allocated and
+;; committed bytes, its peak the most memory Chez has held, no usage or
+;; collection thresholds; the collector "Chez" managing it, jdk.management's
+;; GarbageCollectorExtImpl as on HotSpot (java.management's own when that
+;; module isn't in the layer), counting Chez's collections and the real
+;; time they took. It gives no GcInfo and no notifications. Made once, as
+;; MemoryImpl asks once.
+(define memory-beans #f)   ; (pool . collector)
+(define (memory-beans!)
+  (or memory-beans
+      (let* ([pool (begin (jinit "sun/management/MemoryPoolImpl") (jnew "sun/management/MemoryPoolImpl"))]
+             [ext? (guard (e [#t #f]) (find-class "com/sun/management/internal/GarbageCollectorExtImpl") #t)]
+             [gc-class (if ext? "com/sun/management/internal/GarbageCollectorExtImpl" "sun/management/GarbageCollectorImpl")]
+             [gc (begin (jinit gc-class) (jnew gc-class))])
+        ((method-proc "sun/management/MemoryPoolImpl" "<init>(Ljava/lang/String;ZJJ)V") pool (jstring "Chez heap") 1 -1 -1)
+        ((method-proc gc-class "<init>(Ljava/lang/String;)V") gc (jstring "Chez"))
+        (set! memory-beans (cons pool gc))
+        memory-beans)))
 (defnative "sun/management/MemoryImpl.getMemoryPools0()[Ljava/lang/management/MemoryPoolMXBean;" ()
-  (make-jarr "Ljava/lang/management/MemoryPoolMXBean;" (vector)))
+  (make-jarr "Ljava/lang/management/MemoryPoolMXBean;" (vector (car (memory-beans!)))))
 (defnative "sun/management/MemoryImpl.getMemoryManagers0()[Ljava/lang/management/MemoryManagerMXBean;" ()
-  (make-jarr "Ljava/lang/management/MemoryManagerMXBean;" (vector)))
+  (make-jarr "Ljava/lang/management/MemoryManagerMXBean;" (vector (cdr (memory-beans!)))))
+(defnative "sun/management/MemoryPoolImpl.getMemoryManagers0()[Ljava/lang/management/MemoryManagerMXBean;" (this)
+  (make-jarr "Ljava/lang/management/MemoryManagerMXBean;" (vector (cdr (memory-beans!)))))
+(defnative "sun/management/MemoryManagerImpl.getMemoryPools0()[Ljava/lang/management/MemoryPoolMXBean;" (this)
+  (make-jarr "Ljava/lang/management/MemoryPoolMXBean;" (vector (car (memory-beans!)))))
+(define (heap-usage)
+  (let ([used (bytes-allocated)]) (memory-usage -1 used (max used (current-memory-bytes)) -1)))
+(defnative "sun/management/MemoryPoolImpl.getUsage0()Ljava/lang/management/MemoryUsage;" (this) (heap-usage))
+(defnative "sun/management/MemoryPoolImpl.getPeakUsage0()Ljava/lang/management/MemoryUsage;" (this)
+  (let ([peak (max (maximum-memory-bytes) (current-memory-bytes))]) (memory-usage -1 peak peak -1)))
+;; null, which the bean answers when the pool doesn't give it
+(defnative "sun/management/MemoryPoolImpl.getCollectionUsage0()Ljava/lang/management/MemoryUsage;" (this) #f)
+(defnative "sun/management/MemoryPoolImpl.resetPeakUsage0()V" (this) (reset-maximum-memory-bytes!))
+(defnative "sun/management/MemoryPoolImpl.setPoolUsageSensor(Lsun/management/Sensor;)V" (this s) (void))
+(defnative "sun/management/MemoryPoolImpl.setPoolCollectionSensor(Lsun/management/Sensor;)V" (this s) (void))
+(defnative "sun/management/GarbageCollectorImpl.getCollectionCount()J" (this) (collections))
+(defnative "sun/management/GarbageCollectorImpl.getCollectionTime()J" (this)
+  (let ([t (sstats-gc-real (statistics))])
+    (+ (* 1000 (time-second t)) (quotient (time-nanosecond t) 1000000))))
+(defnative "com/sun/management/internal/GarbageCollectorExtImpl.setNotificationEnabled(Ljava/lang/management/GarbageCollectorMXBean;Z)V" (this gc on) (void))
+(defnative "com/sun/management/internal/GcInfoBuilder.getNumGcExtAttributes(Ljava/lang/management/GarbageCollectorMXBean;)I" (this gc) 0)
+(defnative "com/sun/management/internal/GcInfoBuilder.fillGcAttributeInfo(Ljava/lang/management/GarbageCollectorMXBean;I[Ljava/lang/String;[C[Ljava/lang/String;)V" (this gc n names types descs) (void))
+(defnative "com/sun/management/internal/GcInfoBuilder.getLastGcInfo0(Ljava/lang/management/GarbageCollectorMXBean;I[Ljava/lang/Object;[C[Ljava/lang/management/MemoryUsage;[Ljava/lang/management/MemoryUsage;)Lcom/sun/management/GcInfo;" (this gc n values types before after) #f)
 (defnative "sun/management/MemoryImpl.setVerboseGC(Z)V" (this on) (void))
 (defnative "sun/management/ClassLoadingImpl.setVerboseClass(Z)V" (on) (void))
 ;; OperatingSystemMXBean.getSystemLoadAverage: the 1, 5 and 15 minute figures

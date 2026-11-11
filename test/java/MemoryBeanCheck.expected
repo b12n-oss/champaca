@@ -1,0 +1,17 @@
+gcs>0 true pools>0 true
+gc counted true time>=0 true
+gc pools exist true
+gc valid true
+gc emitter true
+gc ext true
+heap pool true
+usage sane true
+peak sane true
+pool managers true
+reset peak true
+names unique true
+threshold unsupported somewhere
+object names true
+server true
+platform gc beans true
+buffer pools [direct, mapped, mapped - 'non-volatile memory']

@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `ManagementFactory` lists a memory pool, `Chez heap`, and a garbage
+  collector, `Chez`, where both lists were empty: the pool reports Chez's
+  heap usage and peak, the collector Chez's collection count and time, and
+  the MBean server lists them (`test/java/MemoryBeanCheck.java`). GC
+  notifications and `getLastGcInfo` aren't there yet.
 - `native.encoding`, `sun.jnu.encoding` and the console streams' encodings
   come from the locale's codeset (`nl_langinfo`) as the JDK's launcher reads
   them, where they were always UTF-8. With no locale set, Linux gets
