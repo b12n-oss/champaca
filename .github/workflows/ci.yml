@@ -1,0 +1,243 @@
+# champaca's tests on Linux x86_64, Linux arm64 and macOS arm64, each through
+# `jolt battery`, the same task as on a workstation, so CI and local runs mean
+# the same thing. Linux runs inside ci/linux's image (`jolt linux <arch>`).
+#
+# Two lanes:
+# - fast, on a push to any branch: cold, warm and the libraries on each
+#   platform (arm64 skips warm), and CHAMPACA_BT=1 on x86_64
+# - full, every night on main and by hand with `full`: every mode on every
+#   platform, cache-off included (over 90 minutes on x86_64)
+#
+# By hand: `gh workflow run ci -r <branch>` with any of
+#   -f modes="cold,warm bt"     mode groups, one job each (space between groups)
+#   -f platforms=macos          amd64, arm64, macos, comma-separated
+#   -f repeat=10                each job that many times, to catch a rare hang
+#   -f full=true                the full lane
+#
+# A pull request's checks come from its branch's push run, since checks follow
+# the commit. pull_request runs only for a fork's pull request, whose branch
+# pushes here never see. A push that changes only docs/** or Markdown runs
+# nothing (site.yml builds the docs).
+name: ci
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['docs/**', '**.md']
+  pull_request:
+  schedule:
+    - cron: '0 16 * * *'   # 03:00 in Sydney (AEDT)
+  workflow_dispatch:
+    inputs:
+      modes:
+        description: 'Mode groups, e.g. "cold,warm bt" (empty: the lane''s)'
+        type: string
+        default: ''
+      platforms:
+        description: 'amd64, arm64, macos (comma-separated)'
+        type: string
+        default: 'amd64,arm64,macos'
+      repeat:
+        description: 'Runs of each job (1 to 20)'
+        type: number
+        default: 1
+      full:
+        description: 'The full lane: every mode, cache-off included'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+# A new push to a branch cancels the branch's older run. main's pushes, the
+# nightly run and each run by hand are never cancelled, and they don't wait
+# on each other.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main') && github.run_id || 'latest' }}
+  cancel-in-progress: true
+jobs:
+  plan:
+    # a pull request from this repository already has its push run
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          IN_MODES: ${{ inputs.modes }}
+          IN_PLATFORMS: ${{ inputs.platforms }}
+          IN_REPEAT: ${{ inputs.repeat }}
+          IN_FULL: ${{ inputs.full }}
+        run: |
+          full=false
+          if [ "$EVENT" = schedule ] || [ "$IN_FULL" = true ]; then full=true; fi
+          platforms=${IN_PLATFORMS:-amd64,arm64,macos}
+          repeat=${IN_REPEAT:-1}
+          case "$repeat" in ''|*[!0-9]*) echo "::error::repeat is a number, not $repeat"; exit 1;; esac
+          if [ "$repeat" -lt 1 ] || [ "$repeat" -gt 20 ]; then echo "::error::repeat is 1 to 20, not $repeat"; exit 1; fi
+          groups() {
+            if [ -n "$IN_MODES" ]; then echo "$IN_MODES"; return; fi
+            case "$1:$full" in
+              amd64:false) echo "cold,warm,libs bt" ;;
+              arm64:false) echo "cold,libs" ;;
+              macos:false) echo "cold,warm,libs" ;;
+              amd64:true|macos:true) echo "cold,warm,libs bt cache-off" ;;
+              arm64:true) echo "cold,warm,libs bt" ;;
+            esac
+          }
+          entries=""
+          for p in $(echo "$platforms" | tr ',' ' '); do
+            case "$p" in
+              amd64) runner=ubuntu-24.04 ;;
+              arm64) runner=ubuntu-24.04-arm ;;
+              macos) runner=macos-15 ;;
+              *) echo "::error::platforms are amd64, arm64 and macos, not $p"; exit 1 ;;
+            esac
+            for g in $(groups "$p"); do
+              for a in $(seq 1 "$repeat"); do
+                label="$p $g"
+                if [ "$repeat" -gt 1 ]; then label="$label #$a"; fi
+                case "$g" in *cache-off*) t=240 ;; *) t=120 ;; esac
+                entries="$entries{\"platform\":\"$p\",\"runner\":\"$runner\",\"modes\":\"$g\",\"label\":\"$label\",\"timeout\":$t},"
+              done
+            done
+          done
+          matrix="{\"include\":[${entries%,}]}"
+          echo "$matrix" | jq .
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  battery:
+    needs: plan
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      BATTERY_MODES: ${{ matrix.modes }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Linux: the host's tasks (the image, the jars, docker) run on jolt's
+      # release binary on x86_64 and on babashka on arm64, which jolt has no
+      # release for; inside the container the pinned jolt, built by
+      # tools/build-jolt.sh, runs the battery
+      - if: matrix.platform == 'amd64'
+        uses: jlt-commons/setup-jolt@v1
+        with:
+          version: "0.8.26"
+      - name: install babashka
+        if: matrix.platform == 'arm64'
+        run: |
+          v=1.13.220
+          f=babashka-$v-linux-aarch64-static.tar.gz
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://github.com/babashka/babashka/releases/download/v$v/$f"
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      # the pinned jolt binary, built once per deps.edn, build script and image
+      # (build-jolt.sh skips the build when it is there); everything else in
+      # the container's home starts fresh. The key is computed before the run:
+      # jolt linux downloads the JDK into ci/linux/cache/, so a hash over all
+      # of ci/linux would differ by the save.
+      - name: restore the jolt build (Linux)
+        if: matrix.platform != 'macos'
+        id: jolt-linux
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
+          key: jolt-linux-${{ matrix.platform }}-${{ hashFiles('deps.edn', 'tools/build-jolt.sh', 'ci/linux/Dockerfile', 'ci/linux/layout.c') }}
+      - name: jolt battery in the Linux image
+        if: matrix.platform != 'macos'
+        env:
+          CHAMPACA_LINUX_HOME: ${{ runner.temp }}/linux-home
+          # git refuses a repository another user owns: /champaca is the
+          # runner's checkout, the container runs as root
+          CHAMPACA_LINUX_RUN: git config --global --add safe.directory '*' && BATTERY_MODES='${{ matrix.modes }}' "$J" battery
+        run: |
+          if [ "${{ matrix.platform }}" = arm64 ]; then bb linux arm64; else jolt linux amd64; fi
+      - name: own the container's files
+        if: always() && matrix.platform != 'macos'
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ runner.temp }}/linux-home"
+      - name: save the jolt build (Linux)
+        if: always() && matrix.platform != 'macos' && steps.jolt-linux.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/linux-home/.cache/champaca/jolt/*/jolt
+          key: ${{ steps.jolt-linux.outputs.cache-primary-key }}
+
+      # macOS: OpenJDK 25.0.2, the JDK the Linux image uses, and the pinned
+      # jolt built over Homebrew's Chez, as on a developer's Mac (without a
+      # system Chez, jolt's make build provisions one with an xPack GCC whose
+      # stdio.h fails against the runner's SDK: jolt-lang/jolt#1601)
+      - name: install OpenJDK 25.0.2
+        if: matrix.platform == 'macos'
+        run: |
+          f=openjdk-25.0.2_macos-aarch64_bin.tar.gz
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://download.java.net/java/GA/jdk25.0.2/b1e0dfa218384cb9959bdcb897162d4e/10/GPL/$f"
+          echo "7581b0d1752cd5acbf39e286c03f07b6cd6c205b562eb2fe753ff0253cf4c1bf  $RUNNER_TEMP/$f" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          home="$RUNNER_TEMP/jdk-25.0.2.jdk/Contents/Home"
+          echo "JAVA_HOME=$home" >> "$GITHUB_ENV"
+          echo "$home/bin" >> "$GITHUB_PATH"
+      # jolt's release binary runs the tasks; they need 0.8.26 for
+      # System/mapLibraryName
+      - if: matrix.platform == 'macos'
+        uses: jlt-commons/setup-jolt@v1
+        with:
+          version: "0.8.26"
+      - name: restore the jolt build (macOS)
+        if: matrix.platform == 'macos'
+        id: jolt-macos
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/champaca/jolt/*/jolt
+          key: jolt-macos-arm64-${{ hashFiles('deps.edn', 'tools/build-jolt.sh') }}
+      - name: build the pinned jolt
+        if: matrix.platform == 'macos'
+        run: |
+          brew install chezscheme && chez --version
+          sh tools/build-jolt.sh
+      - name: save the jolt build (macOS)
+        if: matrix.platform == 'macos' && steps.jolt-macos.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/champaca/jolt/*/jolt
+          key: ${{ steps.jolt-macos.outputs.cache-primary-key }}
+      - name: jolt battery
+        if: matrix.platform == 'macos'
+        run: |
+          case ",$BATTERY_MODES," in *,libs,*) jolt libs:fetch ;; esac
+          jolt battery
+
+      # jolt battery keeps each mode's output in target/battery/<tip>-<mode>.log,
+      # and a program that times out leaves target/hangs/<program>-<ms>/ with
+      # its partial output (and on macOS a sample)
+      - name: the failed mode's log
+        if: failure()
+        run: |
+          for f in target/battery/*-*.log; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"; grep -E '^FAIL|passed|matched' "$f" || true; tail -n 60 "$f"; echo "::endgroup::"
+          done
+          # each FAIL line and each log's last line as an annotation too, which
+          # the checks API serves without the job log
+          for f in target/battery/*-*.log; do
+            [ -f "$f" ] || continue
+            m=$(basename "$f" .log)
+            grep -E '^FAIL' "$f" | head -n 8 | while IFS= read -r l; do echo "::error title=$m::$l"; done
+            echo "::notice title=$m::$(tail -n 1 "$f")"
+          done
+          for h in target/hangs/* target/battery/*/target/hangs/*; do
+            if [ -e "$h" ]; then echo "::error title=hang::$(basename "$h")"; fi
+          done
+      - name: keep the logs and any hang
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: battery-${{ matrix.platform }}-${{ strategy.job-index }}
+          path: |
+            target/battery/*.log
+            target/battery/**/target/hangs/
+            target/hangs/
+          if-no-files-found: ignore

@@ -28,7 +28,15 @@ jolt test      # every test program against the JVM, plus the examples
 - `jolt test` passes.
 - The battery passes on your final commit: `jolt battery <ref>` runs the suite cold, warm, with the cache off and with `CHAMPACA_BT=1`, then the eight libraries. It takes half an hour or more, and only one may run at a time.
 - If you can run Docker, `jolt linux` passes too.
-- CI runs on every pull request on Linux x86_64, Linux arm64 and macOS arm64: the suite and the eight libraries on each, the battery's cold, warm and `CHAMPACA_BT=1` modes on x86_64, and cold and warm on macOS. The cache-off mode runs only on main, so run it yourself when a change touches the cache-off path.
+- CI (`.github/workflows/ci.yml`) runs `jolt battery` on Linux x86_64, Linux arm64 and macOS arm64 for every push to a branch, and a pull request shows the checks of its branch's commit. Each push runs the fast lane: cold, warm and the libraries on each platform (arm64 skips warm) and `CHAMPACA_BT=1` on x86_64. A push that changes only `docs/` or Markdown runs nothing. The full lane adds every mode everywhere, cache-off included, and runs every night on main. Either lane, or any part of one, runs by hand:
+
+  ```sh
+  gh workflow run ci -r my-branch -f full=true                          # the full lane
+  gh workflow run ci -r my-branch -f modes=cache-off -f platforms=amd64
+  gh workflow run ci -r my-branch -f modes=cold,warm -f platforms=macos -f repeat=10
+  ```
+
+  `modes` takes groups separated by spaces, one job each (`-f modes="cold,warm bt"`). A group without `cold` starts on an empty cache, so it runs cold anyway. `repeat` (up to 20) runs each job that many times, the way to catch a rare hang. A failed job names its failing programs in annotations and keeps its logs and any hang's sample as an artifact.
 - Docs ship with the change: a new behavior goes in the guide page that covers its area, and a new gap in [limitations](limitations.md).
 - The pull request says what changed and how it was checked: which tests, which comparison, which numbers.
 - Commit messages and the pull request description carry no AI assistant attribution (a `Co-Authored-By: Claude` line, a session link, a "Generated with" footer). CI checks with `tools/attributioncheck.sh`, which you can run yourself: `sh tools/attributioncheck.sh origin/main..HEAD`.
