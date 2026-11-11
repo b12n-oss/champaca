@@ -1011,20 +1011,24 @@
     (let* ([r (libc-getifaddrs head)] [e (errno)] [first (foreign-ref 'uptr head 0)])
       (foreign-free head)
       (when (< r 0) (socket-error e))
-      (let pass ([fams (if (net-ipv6?) (list 2 (net-const 'AF_INET6)) '(2))] [ifs '()])
-        (if (null? fams)
-            (begin (unless (= first 0) (libc-freeifaddrs first)) ifs)
-            (pass (cdr fams)
-                  (let loop ([p first] [ifs ifs])
-                    (if (= p 0)
-                        ifs
-                        (let ([addr (interface-entry p (car fams))] [next (foreign-ref 'uptr p 0)])
-                          (if (not addr)
-                              (loop next ifs)
-                              (let* ([name (c-string-text (foreign-ref 'uptr p 8))] [old (assoc name ifs)])
-                                (loop next (if old
-                                               (begin (set-cdr! old (cons addr (cdr old))) ifs)
-                                               (cons (list name addr) ifs))))))))))))))
+      (let ([ifs (fold-left (lambda (ifs fam) (interfaces-of-family first fam ifs))
+                            '()
+                            (if (net-ipv6?) (list 2 (net-const 'AF_INET6)) '(2)))])
+        (unless (= first 0) (libc-freeifaddrs first))
+        ifs))))
+;; ifs with the family's addresses from the getifaddrs list at p added, each
+;; interface (name addr ...) new to ifs in front
+(define (interfaces-of-family p fam ifs)
+  (if (= p 0)
+      ifs
+      (let ([addr (interface-entry p fam)] [next (foreign-ref 'uptr p 0)])
+        (interfaces-of-family next fam
+                              (if addr (add-interface-address ifs (c-string-text (foreign-ref 'uptr p 8)) addr) ifs)))))
+(define (add-interface-address ifs name addr)
+  (let ([old (assoc name ifs)])
+    (if old
+        (begin (set-cdr! old (cons addr (cdr old))) ifs)
+        (cons (list name addr) ifs))))
 
 (define (address-inet a) (if (pair? (car a)) (inet6 #f (caar a) (cdar a)) (inet4 #f (car a))))
 (define (interface-address a inet)
@@ -1152,33 +1156,41 @@
   (let* ([v6 (fx= (length addr) 16)]
          [fd (libc-socket (if v6 (net-const 'AF_INET6) 2) 1 0)])
     (when (< fd 0) (socket-error (errno)))
-    (let ([sa (foreign-alloc sockaddr6-size)])
+    (let ([sa (foreign-alloc sockaddr6-size)] [len (if v6 sockaddr6-size sockaddr-size)])
       (define (fill! bytes port) (if v6 (sockaddr-in6! sa bytes scope port) (sockaddr-in! sa (bytes->ip4 bytes) port)))
-      (define len (if v6 sockaddr6-size sockaddr-size))
-      (define (done v) (foreign-free sa) (libc-close fd) v)
-      (guard (e [#t (foreign-free sa) (libc-close fd) (raise e)])
-        (when (> ttl 0)
-          (let ([buf (foreign-alloc 4)])
-            (foreign-set! 'int buf 0 ttl)
-            ;; IP_TTL, or IPV6_UNICAST_HOPS (macOS 4, Linux 16)
-            (if v6 (libc-setsockopt fd 41 (if net-macos? 4 16) buf 4) (libc-setsockopt fd 0 (if net-macos? 4 2) buf 4))
-            (foreign-free buf)))
-        (if (and ifaddr (begin (fill! ifaddr 0) (< (libc-bind fd sa len) 0)))
-            (done 0)
-            (let ([flags (libc-fcntl-int fd 3 0)])
-              (libc-fcntl-int fd 4 (fxlogor flags (net-const 'O_NONBLOCK)))
-              (fill! addr 7)
-              (let* ([r (libc-connect fd sa len)] [e (if (< r 0) (errno) 0)])
-                (cond [(or (fx= r 0) (fx= e (net-const 'ECONNREFUSED))) (done 1)]
-                      [(memv e (append (list (net-const 'ENETUNREACH) (net-const 'EAFNOSUPPORT) (net-const 'EADDRNOTAVAIL))
-                                       (if net-macos? '() (list 22 (net-const 'EHOSTUNREACH)))))
-                       (done 0)]
-                      [(fx= e (net-const 'EINPROGRESS))
-                       (if (not (wait-writable fd timeout))
-                           (done 0)
-                           (let ([err (guard (x [#t -1]) (get-int-option fd (net-const 'SOL_SOCKET) (net-const 'SO_ERROR)))])
-                             (done (if (or (fx= err 0) (fx= err (net-const 'ECONNREFUSED))) 1 0))))]
-                      [else (jthrow "java/net/ConnectException" (string-append (strerror-text e) " (connect failed)"))]))))))))
+      (let ([r (guard (e [#t (foreign-free sa) (libc-close fd) (raise e)])
+                 (when (> ttl 0) (set-ping-ttl! fd v6 ttl))
+                 (if (and ifaddr (begin (fill! ifaddr 0) (< (libc-bind fd sa len) 0)))
+                     0
+                     (begin
+                       (libc-fcntl-int fd 4 (fxlogor (libc-fcntl-int fd 3 0) (net-const 'O_NONBLOCK)))
+                       (fill! addr 7)
+                       (ping-connect fd sa len timeout))))])
+        (foreign-free sa)
+        (libc-close fd)
+        r))))
+;; IP_TTL, or IPV6_UNICAST_HOPS (macOS 4, Linux 16)
+(define (set-ping-ttl! fd v6 ttl)
+  (let ([buf (foreign-alloc 4)])
+    (foreign-set! 'int buf 0 ttl)
+    (if v6 (libc-setsockopt fd 41 (if net-macos? 4 16) buf 4) (libc-setsockopt fd 0 (if net-macos? 4 2) buf 4))
+    (foreign-free buf)))
+;; the errors tcp_ping takes as no answer rather than a ConnectException
+(define (ping-unreachable? e)
+  (memv e (append (list (net-const 'ENETUNREACH) (net-const 'EAFNOSUPPORT) (net-const 'EADDRNOTAVAIL))
+                  (if net-macos? '() (list 22 (net-const 'EHOSTUNREACH))))))
+;; 1 when the host answered the non-blocking connect, 0 when it didn't
+(define (ping-connect fd sa len timeout)
+  (let* ([r (libc-connect fd sa len)] [e (if (< r 0) (errno) 0)])
+    (cond [(or (fx= r 0) (fx= e (net-const 'ECONNREFUSED))) 1]
+          [(ping-unreachable? e) 0]
+          [(fx= e (net-const 'EINPROGRESS)) (ping-answer fd timeout)]
+          [else (jthrow "java/net/ConnectException" (string-append (strerror-text e) " (connect failed)"))])))
+(define (ping-answer fd timeout)
+  (if (wait-writable fd timeout)
+      (let ([err (guard (x [#t -1]) (get-int-option fd (net-const 'SOL_SOCKET) (net-const 'SO_ERROR)))])
+        (if (or (fx= err 0) (fx= err (net-const 'ECONNREFUSED))) 1 0))
+      0))
 (define (jbytes-list a) (and a (map (lambda (b) (fxlogand b 255)) (vector->list (jarr-vec a)))))
 (defnative "java/net/Inet4AddressImpl.isReachable0([BI[BI)Z" (this addr timeout ifaddr ttl)
   (tcp-ping (jbytes-list addr) 0 timeout (jbytes-list ifaddr) ttl))
