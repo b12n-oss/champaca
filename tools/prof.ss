@@ -25,30 +25,43 @@
 (define prof-no-java 0)
 (define prof-depth 4)
 (define prof-own '("prof-sample!" "prof-handler"))
+;; a frame of the handler's own or of Chez's event dispatch ($...), skipped
+;; before the code names are taken
+(define (prof-own-frame? nm)
+  (or (not (string? nm)) (member nm prof-own)
+      (and (fx> (string-length nm) 1) (char=? (string-ref nm 0) #\$))))
+;; the innermost prof-depth code names under those frames, "a < b < c"
+(define (prof-code-chain raw)
+  (let skip ([raw raw])
+    (if (and (pair? raw) (prof-own-frame? (#%$code-name (caar raw))))
+        (skip (cdr raw))
+        (let loop ([raw raw] [chain '()] [n 0])
+          (if (or (null? raw) (fx= n prof-depth))
+              (apply string-append (reverse chain))
+              (let ([nm (#%$code-name (caar raw))])
+                (loop (cdr raw)
+                      (cons (string-append (if (string? nm) nm "?") (if (fx= (fx+ n 1) prof-depth) "" " < ")) chain)
+                      (fx+ n 1))))))))
+(define (prof-bump! t k) (hashtable-update! t k (lambda (n) (fx+ n 1)) 0))
+;; the innermost Java frame as self, every Java frame on the stack once as
+;; inclusive
+(define (prof-count-java! fs)
+  (if (null? fs)
+      (set! prof-no-java (fx+ prof-no-java 1))
+      (let ([name (lambda (f) (string-append (car f) "." (cadr f)))])
+        (prof-bump! prof-self (name (car fs)))
+        (let loop ([fs fs] [seen '()])
+          (unless (null? fs)
+            (let ([n (name (car fs))])
+              (unless (member n seen) (prof-bump! prof-incl n))
+              (loop (cdr fs) (cons n seen))))))))
+;; the continuation is taken here, so prof-own names this frame and the
+;; handler's; the helpers above run after it is taken
 (define (prof-sample!)
   (set! prof-samples (fx+ prof-samples 1))
-  (let* ([raw (call/1cc (lambda (k) (raw-frames k)))]
-         [fs (java-frames-of raw)]
-         [name (lambda (f) (string-append (car f) "." (cadr f)))]
-         [bump! (lambda (t k) (hashtable-update! t k (lambda (n) (fx+ n 1)) 0))])
-    ;; the code names below the handler's own frames and Chez's event dispatch ($...)
-    (let loop ([raw raw] [skipping #t] [chain '()] [n 0])
-      (cond [(or (null? raw) (fx= n prof-depth))
-             (bump! prof-code (apply string-append (reverse chain)))]
-            [else (let ([nm (#%$code-name (caar raw))])
-                    (cond [(and skipping (or (not (string? nm)) (member nm prof-own)
-                                             (and (fx> (string-length nm) 1) (char=? (string-ref nm 0) #\$))))
-                           (loop (cdr raw) #t chain n)]
-                          [else (loop (cdr raw) #f (cons (string-append (if (string? nm) nm "?") (if (fx= (fx+ n 1) prof-depth) "" " < ")) chain) (fx+ n 1))]))]))
-    (if (null? fs)
-        (set! prof-no-java (fx+ prof-no-java 1))
-        (begin
-          (bump! prof-self (name (car fs)))
-          (let loop ([fs fs] [seen '()])
-            (unless (null? fs)
-              (let ([n (name (car fs))])
-                (unless (member n seen) (bump! prof-incl n))
-                (loop (cdr fs) (cons n seen)))))))))
+  (let ([raw (call/1cc (lambda (k) (raw-frames k)))])
+    (prof-bump! prof-code (prof-code-chain raw))
+    (prof-count-java! (java-frames-of raw))))
 (define (prof-handler sig) (prof-sample!))
 (define prof-pthread-self (foreign-procedure "pthread_self" () uptr))
 (define prof-pthread-kill (foreign-procedure "pthread_kill" (uptr int) int))
