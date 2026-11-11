@@ -3556,8 +3556,10 @@
   '(("B" . "Bytes") ("C" . "Chars") ("S" . "Shorts") ("I" . "Ints") ("J" . "Longs")
     ("F" . "Floats") ("D" . "Doubles") ("Z" . "Booleans")))
 
-(define (segment-desc ty op ncoords)
-  (string-append "(Ljava/lang/invoke/VarHandle;Ljava/lang/Object;" (if (fx= ncoords 2) "J" "JJ")
+;; the descriptor of a form's static for op: the JDK's VarHandle, the object
+;; coordinate as Object, the other coordinates as they are, then the values
+(define (segment-desc ty op coords)
+  (string-append "(Ljava/lang/invoke/VarHandle;Ljava/lang/Object;" (apply string-append (cdr coords))
                  (case op [(get) ""] [(cas cax) (string-append ty ty)] [else ty])
                  ")" (case op [(set) "V"] [(cas) "Z"] [else ty])))
 
@@ -3582,7 +3584,7 @@
              [coords (if (eqv? constant? 1)
                          '("Ljava/lang/foreign/MemorySegment;" "J")
                          '("Ljava/lang/foreign/MemorySegment;" "J" "J"))]
-             [has? (lambda (op name) (and (find-method impl name (segment-desc d op (length coords))) #t))]
+             [has? (lambda (op name) (and (find-method impl name (segment-desc d op coords)) #t))]
              [jvh (jnew "java/lang/invoke/SegmentVarHandle")])
         ((method-proc "java/lang/invoke/SegmentVarHandle"
                       "<init>(Ljava/lang/invoke/VarForm;ZLjava/lang/foreign/MemoryLayout;JZ)V")
@@ -3599,12 +3601,38 @@
   (let* ([procs (or (eq-hashtable-ref segment-procs t #f)
                     (let ([h (make-weak-eq-hashtable)]) (eq-hashtable-set! segment-procs t h) h))]
          [proc (or (eq-hashtable-ref procs mode #f)
-                   (let* ([key (string-append mode (segment-desc (vh-target-type t) op (length (vh-target-coords t))))]
+                   (let* ([key (string-append mode (segment-desc (vh-target-type t) op (vh-target-coords t)))]
                           [m (find-method (vh-target-b t) mode (substring key (string-length mode) (string-length key)))]
                           [p (method-proc (jclass-cname (car m)) key)])
                      (eq-hashtable-set! procs mode p)
                      p))])
     (apply proc (vh-target-a t) args)))
+
+;; MethodHandles.byteBufferViewVarHandle: the JDK's own ByteBufferHandle for
+;; the view type, wrapped as a segment handle is, so each access mode calls
+;; its form's static and the JDK's bounds, alignment and read-only checks
+;; run as written
+(define byte-buffer-views
+  '(("J" . "Longs") ("I" . "Ints") ("S" . "Shorts") ("C" . "Chars") ("D" . "Doubles") ("F" . "Floats")))
+(define-override! "java/lang/invoke/VarHandles.makeByteBufferViewHandle(Ljava/lang/Class;Z)Ljava/lang/invoke/VarHandle;"
+  (lambda (cls be)
+    (let ([d (mirror->desc (nn cls))])
+      (unless (char=? (string-ref d 0) #\[)
+        (jthrow "java/lang/IllegalArgumentException"
+                (string-append "not an array: " (jstring->scheme ((jvirt cls "toString()Ljava/lang/String;") cls)))))
+      (let* ([e (substring d 1 (string-length d))]
+             [view (or (assoc e byte-buffer-views) (jthrow "java/lang/UnsupportedOperationException" #f))]
+             [hc (string-append "java/lang/invoke/VarHandleByteArrayAs" (cdr view) "$ByteBufferHandle")]
+             [_ (jinit hc)]
+             [jvh (let ([o (jnew hc)]) ((method-proc hc "<init>(Z)V") o be) o)]
+             [impl (find-class hc)]
+             [coords '("Ljava/nio/ByteBuffer;" "I")]
+             [has? (lambda (op name) (and (find-method impl name (segment-desc e op coords)) #t))])
+        (vh-of (make-vh-target 'segment jvh impl e coords
+                               (map car (filter (lambda (m) (has? (car m) (cdr m))) segment-op-modes))
+                               (not (has? 'get "getVolatile"))
+                               (make-vector 5 #f))
+               #f)))))
 
 (define-override! "java/lang/invoke/MethodHandles.byteArrayViewVarHandle(Ljava/lang/Class;Ljava/nio/ByteOrder;)Ljava/lang/invoke/VarHandle;"
   (lambda (cls order)

@@ -1,0 +1,68 @@
+heap BE int: 01020304 1020304
+heap BE long: 0102030405060708 102030405060708
+heap BE short: 01fffe04 -2
+heap BE char: Z 01ff005a
+heap BE float: 1.5 3fc00000
+heap BE double: -2.25 c002000000000000
+heap BE unaligned int: 7
+heap BE cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap BE getAndAdd: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap BE long getAndBitwiseOr: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap BE double cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap BE unaligned cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap BE out of bounds: java.lang.IndexOutOfBoundsException: Index 13 out of bounds for length 13
+heap BE negative: java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 13
+heap LE int: 04030201 1020304
+heap LE long: 0807060504030201 102030405060708
+heap LE short: 04feff01 -2
+heap LE char: Z 04fe5a00
+heap LE float: 1.5 0000c03f
+heap LE double: -2.25 00000000000002c0
+heap LE unaligned int: 7
+heap LE cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap LE getAndAdd: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap LE long getAndBitwiseOr: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap LE double cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap LE unaligned cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+heap LE out of bounds: java.lang.IndexOutOfBoundsException: Index 13 out of bounds for length 13
+heap LE negative: java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 13
+direct BE int: 01020304 1020304
+direct BE long: 0102030405060708 102030405060708
+direct BE short: 01fffe04 -2
+direct BE char: Z 01ff005a
+direct BE float: 1.5 3fc00000
+direct BE double: -2.25 c002000000000000
+direct BE unaligned int: 7
+direct BE cas: true 6
+direct BE getAndAdd: 6 16
+direct BE long getAndBitwiseOr: 1 7
+direct BE double cas: false
+direct BE unaligned cas: java.lang.IllegalStateException: Misaligned access at index: 2
+direct BE out of bounds: java.lang.IndexOutOfBoundsException: Index 13 out of bounds for length 13
+direct BE negative: java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 13
+direct LE int: 04030201 1020304
+direct LE long: 0807060504030201 102030405060708
+direct LE short: 04feff01 -2
+direct LE char: Z 04fe5a00
+direct LE float: 1.5 0000c03f
+direct LE double: -2.25 00000000000002c0
+direct LE unaligned int: 7
+direct LE cas: true 6
+direct LE getAndAdd: 6 16
+direct LE long getAndBitwiseOr: 1 7
+direct LE double cas: false
+direct LE unaligned cas: java.lang.IllegalStateException: Misaligned access at index: 2
+direct LE out of bounds: java.lang.IndexOutOfBoundsException: Index 13 out of bounds for length 13
+direct LE negative: java.lang.IndexOutOfBoundsException: Index -1 out of bounds for length 13
+slice get: a0b0c0d
+slice set: 99
+read-only get: a0b0c0d
+read-only set: java.nio.ReadOnlyBufferException
+read-only cas: java.lang.IllegalStateException: Atomic access not supported for heap buffer
+null buffer: java.lang.NullPointerException
+varType: int [class java.nio.ByteBuffer, int]
+modes: true false false
+not an array: java.lang.IllegalArgumentException: not an array: class java.lang.String
+byte view: java.lang.UnsupportedOperationException
+boolean view: java.lang.UnsupportedOperationException
+null order: java.lang.NullPointerException

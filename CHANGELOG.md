@@ -90,6 +90,10 @@ The first public version. Champaca is still experimental: the
   or a `NoClassDefFoundError`. A method lookup that finds nothing names the
   method by its type, `nope()int`, as HotSpot does
   (`test/java/InvokerCheck.java`).
+- `MethodHandles.byteBufferViewVarHandle` works, every view type and access
+  mode, over heap, direct, sliced and read-only buffers, with the JDK's own
+  bounds, alignment and read-only checks. Its handles threw
+  `UnsupportedOperationException` (`test/java/ByteBufferViewCheck.java`).
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm
