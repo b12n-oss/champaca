@@ -1,0 +1,9 @@
+not started: 0
+sleeping: [innerSleep:35, outerSleep:34, sleeper:33]
+waiting: [waiter:37]
+parked: [parker:38]
+blocked on a monitor: [blocked:39]
+in accept: [acceptor:40, lambda$main$0:48]
+all stack traces: [innerSleep:35, outerSleep:34, sleeper:33] [waiter:37] [parker:38] [blocked:39] [acceptor:40, lambda$main$0:48] [main:64]
+own stack still: [main:67]
+finished: 0 0

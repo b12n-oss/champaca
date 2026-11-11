@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `Thread.getStackTrace()` on another thread, and `Thread.getAllStackTraces()`,
+  give that thread's frames, line numbers included, where they were empty
+  (or, for `getStackTrace`, an `UnsatisfiedLinkError`). A thread waiting in
+  `sleep`, `wait`, `park`, a contended monitor or blocking I/O reads as on
+  the JVM, but for the native frame on top (`test/java/OtherStackCheck.java`).
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm

@@ -668,13 +668,18 @@
     (set "moduleName" (and (fx> (string-length module) 0) (jstring module)))
     ste))
 
-(define (stack-trace-array frames)
+;; the elements filled in, their format still to compute (computeFormat
+;; clears declaringClassObject, so it runs once: Thread.asyncGetStackTrace
+;; runs it itself on what getStackTrace0 answers)
+(define (stack-trace-elements frames)
   (jinit "java/lang/StackTraceElement")
-  (let ([arr (make-jarr "Ljava/lang/StackTraceElement;"
-                        (list->vector (map (lambda (f) (fill-ste! (jnew "java/lang/StackTraceElement") (car f) (cadr f) (caddr f) (cadddr f)))
-                                           frames)))])
-    ;; of() computes each element's format: how the module and loader print
-    ((method-proc "java/lang/StackTraceElement" "of([Ljava/lang/StackTraceElement;)[Ljava/lang/StackTraceElement;") arr)))
+  (make-jarr "Ljava/lang/StackTraceElement;"
+             (list->vector (map (lambda (f) (fill-ste! (jnew "java/lang/StackTraceElement") (car f) (cadr f) (caddr f) (cadddr f)))
+                                frames))))
+(define (stack-trace-array frames)
+  ;; of() computes each element's format: how the module and loader print
+  ((method-proc "java/lang/StackTraceElement" "of([Ljava/lang/StackTraceElement;)[Ljava/lang/StackTraceElement;")
+   (stack-trace-elements frames)))
 
 (define-override! "java/lang/Throwable.getOurStackTrace()[Ljava/lang/StackTraceElement;"
   (lambda (this)
@@ -1440,13 +1445,13 @@
 
 (define-record-type jthread-state
   (fields (mutable jthread) (mutable jstack) (mutable svc) (mutable permit) (mutable depth) (mutable tid)
-          (mutable no-yield))
-  (sealed #t) (nongenerative champaca-jthread-state-2))
+          (mutable no-yield) (mutable stack))
+  (sealed #t) (nongenerative champaca-jthread-state-3))
 ;; This Chez thread's jthread-state. A forked Chez thread inherits its parent's
 ;; value, so a thread jolt started (a future, say) would see its parent's
 ;; state: gil-enter! checks the thread id before trusting it.
 (define self (make-thread-parameter #f))
-(define main-state (make-jthread-state #f '() #f #f 1 (get-thread-id) 0))
+(define main-state (make-jthread-state #f '() #f #f 1 (get-thread-id) 0 #f))
 (self main-state)
 
 (define gil (make-mutex))
@@ -1498,14 +1503,38 @@
                 (condition-wait gil-cv gil))
             (loop go))))))
 
+;; Another thread's stack (Thread.getStackTrace, getAllStackTraces): a Java
+;; thread that gives the GIL up does so inside a call/1cc receiver whose
+;; continuation it puts in its state's stack field first, and clears only
+;; after it holds the GIL again. Every other Java thread is in such a call
+;; while one runs, and it can't return into those frames before it has the
+;; GIL, so the thread holding it can walk them (raw-frames) safely. The field
+;; is set and cleared under the GIL; a raise in the middle can only come from
+;; gil-released's thunk, whose handler clears it after taking the GIL back.
+;; thread-states finds a java.lang.Thread's state, filled once per thread.
+(define thread-states (make-weak-eq-hashtable))
+(define (bind-jthread! s t)
+  (jthread-state-jthread-set! s t)
+  (when t (eq-hashtable-set! thread-states t s)))
+(define-syntax with-published-stack
+  (syntax-rules ()
+    [(_ s e ...)
+     (call/1cc
+      (lambda (k)
+        (jthread-state-stack-set! s k)
+        (let ([r (begin e ...)])
+          (jthread-state-stack-set! s #f)
+          r)))]))
+
 ;; The running thread blocks: give the GIL up until (ready?) or the deadline.
 (define (gil-block! ready? deadline)
   (let ([s (self)])
     (gil-save! s)
-    (let ([r (with-mutex gil
-               (set! gil-owner #f)
-               (condition-broadcast gil-cv)
-               (gil-wait! s ready? deadline))])
+    (let ([r (with-published-stack s
+              (with-mutex gil
+                (set! gil-owner #f)
+                (condition-broadcast gil-cv)
+                (gil-wait! s ready? deadline)))])
       (gil-restore! s)
       r)))
 
@@ -1516,7 +1545,7 @@
 (define (gil-enter!)
   (let* ([s0 (self)]
          [known (and s0 (eqv? (jthread-state-tid s0) (get-thread-id)))]
-         [s (if known s0 (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id) 0)]) (self s) s))])
+         [s (if known s0 (let ([s (make-jthread-state #f '() #f #f 0 (get-thread-id) 0 #f)]) (self s) s))])
     (if (eq? gil-owner s)
         (jthread-state-depth-set! s (fx+ (jthread-state-depth s) 1))
         (begin
@@ -1541,13 +1570,14 @@
 (define (gil-released thunk)
   (let ([s (self)])
     (gil-save! s)
-    (with-mutex gil
-      (set! gil-owner #f)
-      (condition-broadcast gil-cv))
-    (let ([retake (lambda () (with-mutex gil (gil-wait! s (lambda () #t) #f)) (gil-restore! s))])
-      (let ([r (guard (e [#t (retake) (raise e)]) (thunk))])
-        (retake)
-        r))))
+    (with-published-stack s
+     (with-mutex gil
+       (set! gil-owner #f)
+       (condition-broadcast gil-cv))
+     (let ([retake (lambda () (with-mutex gil (gil-wait! s (lambda () #t) #f)) (gil-restore! s))])
+       (let ([r (guard (e [#t (retake) (jthread-state-stack-set! s #f) (raise e)]) (thunk))])
+         (retake)
+         r)))))
 
 ;; Tell blocked threads to look again at what they wait for.
 (define (gil-poke!)
@@ -1780,7 +1810,7 @@
   (thread-terminated! main-thread (lambda () (set! main-ended #t)))
   (eq-hashtable-delete! jthread-states main-thread)
   (let ([t (jnew "java/lang/Thread")])
-    (jthread-state-jthread-set! main-state t)
+    (bind-jthread! main-state t)
     (set! current-jthread t)
     (eq-hashtable-set! jthread-states t main-state)
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
@@ -1813,7 +1843,8 @@
 (define threads-started 0)   ; for the management beans; main isn't counted
 (define threads-peak 1)
 (defnative "java/lang/Thread.start0()V" (this)
-  (let ([s (make-jthread-state this '() #f #f 0 #f 0)])
+  (let ([s (make-jthread-state this '() #f #f 0 #f 0 #f)])
+    (eq-hashtable-set! thread-states this s)
     (eq-hashtable-set! jthread-states this s)
     (thread-alive! this #t)
     (set! java-live-threads (cons this java-live-threads))
@@ -1837,7 +1868,7 @@
 ;; answers it before its constructor has run.
 (define (attach-jthread! s)
   (let ([t (jnew "java/lang/Thread")])
-    (jthread-state-jthread-set! s t)
+    (bind-jthread! s t)
     (set! current-jthread t)
     (eq-hashtable-set! jthread-states t s)
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")
@@ -1854,10 +1885,24 @@
     (if main-ended (cons destroy-jthread others) (cons main-thread others))))
 (defnative "java/lang/Thread.getThreads()[Ljava/lang/Thread;" ()
   (make-jarr "Ljava/lang/Thread;" (list->vector (live-jthreads))))
+;; another thread's Java frames, from the stack it published when it gave the
+;; GIL up; none for a thread that hasn't (not started, finished, or a thread
+;; outside Java)
+(define (published-stack t)
+  (let ([s (eq-hashtable-ref thread-states t #f)])
+    (and s (jthread-state-stack s))))
+(define (published-frames t)
+  (let ([k (published-stack t)])
+    (if k (visible-frames (java-frames-of (raw-frames k))) '())))
+(define (other-thread-stack t) (stack-trace-array (published-frames t)))
+;; unformatted, as asyncGetStackTrace formats them; null for a thread that
+;; published nothing, which it takes as no stack
+(defnative "java/lang/Thread.getStackTrace0()Ljava/lang/Object;" (this)
+  (and (published-stack this) (stack-trace-elements (published-frames this))))
 ;; Thread.getAllStackTraces: the current thread's stack, from the native's
-;; caller down, with the native's own frame on top as the JVM shows it; no
-;; other thread's stack can be read here, which the method's contract allows
-;; as a zero-length array
+;; caller down, with the native's own frame on top as the JVM shows it; each
+;; other thread's from where it gave the GIL up, its natives (Thread.sleep0,
+;; say) having no frame of their own
 (defnative "java/lang/Thread.dumpThreads([Ljava/lang/Thread;)[[Ljava/lang/StackTraceElement;" (threads)
   (make-jarr "[Ljava/lang/StackTraceElement;"
              (vector-map (lambda (t)
@@ -1868,7 +1913,7 @@
                                  ;; line -2 is how a StackTraceElement says Native Method
                                  (jslot-set! (vector-ref (jarr-vec arr) 0) (slot-of "java/lang/StackTraceElement" "lineNumber") -2)
                                  arr)
-                               (make-jarr "Ljava/lang/StackTraceElement;" (vector))))
+                               (other-thread-stack t)))
                          (jarr-vec (nn threads)))))
 
 ;; ThreadMXBean's CPU times, measured as HotSpot measures them. On macOS that
@@ -1971,7 +2016,7 @@
     (jinit "java/lang/Thread")
     (set! main-thread (jnew "java/lang/Thread"))
     (set! current-jthread main-thread)
-    (jthread-state-jthread-set! main-state main-thread)
+    (bind-jthread! main-state main-thread)
     (eq-hashtable-set! jthread-states main-thread main-state)
     (set! interrupted-slot (jfield-index "java/lang/Thread" "interrupted"))
     ((method-proc "java/lang/Thread" "<init>(Ljava/lang/ThreadGroup;Ljava/lang/String;)V")

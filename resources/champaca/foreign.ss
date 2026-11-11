@@ -387,16 +387,17 @@
 (define (ffi-released thunk)
   (let ([s (self)])
     (gil-save! s)
-    (mutex-acquire gil)
-    (set! gil-owner #f)
-    (when (fx> gil-blocked 0) (condition-broadcast gil-cv))
-    (mutex-release gil)
-    (let ([r (thunk)])
-      (mutex-acquire gil)
-      (gil-wait! s (lambda () #t) #f)
-      (mutex-release gil)
-      (gil-restore! s)
-      r)))
+    (with-published-stack s
+     (mutex-acquire gil)
+     (set! gil-owner #f)
+     (when (fx> gil-blocked 0) (condition-broadcast gil-cv))
+     (mutex-release gil)
+     (let ([r (thunk)])
+       (mutex-acquire gil)
+       (gil-wait! s (lambda () #t) #f)
+       (mutex-release gil)
+       (gil-restore! s)
+       r))))
 (define (seg-copy! from from-off to to-off n)
   ((ffi-static "java/lang/foreign/MemorySegment"
                "copy(Ljava/lang/foreign/MemorySegment;JLjava/lang/foreign/MemorySegment;JJ)V")
@@ -705,10 +706,10 @@
 (define (upcall-attach! p)
   ;; depth 1, as any Java thread's: a jolt fn the upcall reaches enters and
   ;; leaves the GIL re-entrantly (with-gil), which must not give it up
-  (let ([s (make-jthread-state #f '() #f #f 1 (get-thread-id) 0)])
+  (let ([s (make-jthread-state #f '() #f #f 1 (get-thread-id) 0 #f)])
     (upcall-take! s)   ; the GIL serializes making the key
     (let ([t (jnew "java/lang/Thread")])
-      (jthread-state-jthread-set! s t)
+      (bind-jthread! s t)
       (set! current-jthread t)
       (eq-hashtable-set! jthread-states t s)
       ;; this == currentThread(): the constructor's attaching case, so no

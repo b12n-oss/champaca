@@ -1169,8 +1169,11 @@
     :athrow (terminate! e (sx "jathrow-at" (pop! e) (site pc)))
     (terminate! e (pop! e))))
 
+;; monitorenter's call carries its pc like any call (at): a thread blocked
+;; entering a contended monitor waits inside it, and another thread reading
+;; its stack (Thread.getStackTrace) reads the line off that frame
 (defn- emit-monitor [e {:keys [op pc]} _]
-  (stmt! e (sx (if (= op :monitorenter) "jmonitor-enter" "jmonitor-exit") (sx "nn-at" (pop! e) (site pc)))))
+  (stmt! e (sx (if (= op :monitorenter) (at pc "jmonitor-enter") "jmonitor-exit") (sx "nn-at" (pop! e) (site pc)))))
 
 ;; --- fields ------------------------------------------------------------------------
 
