@@ -64,9 +64,10 @@ The first public version. Champaca is still experimental: the
   rest, from the same `bb.edn`, so babashka is no longer needed. The pinned jolt
   is built by `tools/build-jolt.sh`, which needs only git and make, and the
   Linux image and CI use it.
-- The jolt that `jolt test` and the other tasks build is jolt's main at
-  3db8a534, the first commit with `System/mapLibraryName`, until a release
-  carries it; champaca still needs jolt 0.8.24 or later.
+- The jolt that `jolt test` and the other tasks build is the v0.8.26 tag,
+  the first release with `System/mapLibraryName`, and running the tasks
+  under jolt needs 0.8.26 or later; champaca still needs jolt 0.8.24 or
+  later.
 - The largest functions were split into named steps, guided by
   jolt-metrics (`jolt metrics`): codegen's `emit-block`, `compile-method`,
   `decode` and `render-steps`, the launcher's option parsing, the boot,

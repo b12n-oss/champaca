@@ -4,7 +4,7 @@ Champaca's rule for a change is that it behaves as HotSpot does, and the way to 
 
 ## Set up
 
-You need jolt 0.8.24 or later and JDK 25 with `JAVA_HOME` set; jolt runs the tasks in `bb.edn`. Then:
+You need jolt 0.8.26 or later and JDK 25 with `JAVA_HOME` set; jolt runs the tasks in `bb.edn`, and they need 0.8.26's `System/mapLibraryName`. Champaca itself runs on 0.8.24 or later. Then:
 
 ```sh
 jolt jolt      # build the jolt commit deps.edn pins (about 45 s, once per pin)

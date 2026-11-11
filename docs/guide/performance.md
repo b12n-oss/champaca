@@ -135,14 +135,14 @@ The table holds at most 4096 entries and empties itself when full, so a call sit
 
 ## The pinned jolt
 
-Inside this repo, `deps.edn` names a jolt commit, jolt's main at the merge that added `System/mapLibraryName` (which `jolt test` needs), until a release carries it:
+Inside this repo, `deps.edn` names a jolt commit, the v0.8.26 tag, the first release with `System/mapLibraryName` (which `jolt test` needs):
 
 ```clojure
 :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                :git/sha "3db8a5343ebacfe8596bec8fa872f471f2673f84"}
+                :git/sha "84008f560276b9a417c9bab0f0421ae90bdcdf17"}
 ```
 
-It's built from source, not taken from a release binary. Built that way, v0.8.24 ran a warm `Hello` in 0.42 s (median of eight, interleaved, on a loaded machine), where the installed release binary of the same version took 0.59 s and started jolt itself 70 ms slower. The same held for 0.8.23 (0.32 s against 0.45 s), and a local build of v0.8.23 runs a warm `Hello` as fast as one of v0.8.24, so the gap comes from how the release binaries are built, not from jolt's code.
+It's built from source, not taken from a release binary. Built that way, v0.8.24 ran a warm `Hello` in 0.42 s (median of eight, interleaved, on a loaded machine), where the installed release binary of the same version took 0.59 s and started jolt itself 70 ms slower. The same held for 0.8.23 (0.32 s against 0.45 s), and a local build of v0.8.23 runs a warm `Hello` as fast as one of v0.8.24, so the gap comes from how the release binaries are built, not from jolt's code. The cause: from 0.8.21 on, the macOS release workflow configures Chez with `CFLAGS=`, which drops Chez's own `-O2`, so the C runtime in those binaries (the collector, the fasl reader) is unoptimized. A jolt linked over each kind of Chez starts in 0.215 s against 0.164 s, and collects 2 to 3 times more slowly ([jolt#1597](https://github.com/jolt-lang/jolt/issues/1597), fixed by [jolt#1598](https://github.com/jolt-lang/jolt/pull/1598)).
 
 0.8.24 is the minimum because it's the first release where `String(byte[], offset, length, charset)` copies only the slice ([jolt#1413](https://github.com/jolt-lang/jolt/pull/1413)). Champaca reads the runtime image's string table that way, and on an older jolt each read cost the whole table. It also has `java.io.RandomAccessFile` ([jolt#1375](https://github.com/jolt-lang/jolt/pull/1375), since 0.8.23) and a shutdown watcher that no longer ends the process when a profiling signal arrives ([jolt#1462](https://github.com/jolt-lang/jolt/pull/1462)). Its Chez Scheme patches 0006 and 0007 fix foreign calls with arguments on the stack ([jolt#1502](https://github.com/jolt-lang/jolt/pull/1502)), but `make build` only uses them when it builds its own Chez. A system Chez, such as Homebrew's, is used as it is, so champaca keeps refusing the signatures an unpatched Chez gets wrong (see the foreign function notes in [limitations](limitations.md)).
 
@@ -155,7 +155,7 @@ jolt test        # prints which jolt it picked
 
 It makes a detached worktree of a jolt checkout (`$JOLT_SRC`, else `~/dev/jolt`, cloned from the URL if neither exists) at `~/.cache/champaca/jolt/<sha8>/src` (`<sha8>` being the commit's first eight characters), runs `make build` there and copies the binary next to it. `jolt test` uses `$JOLT` when it's set, then the pinned build, then whatever `jolt` is on your `PATH`.
 
-The pin only affects this repo's jolt tasks that run jolt (`test`, `libs`, `example`, `nrepl`, `bench`). Champaca works on any released 0.8.24 or later.
+The pin only affects this repo's jolt tasks that run jolt (`test`, `libs`, `example`, `nrepl`, `bench`). Champaca works on any released 0.8.24 or later, but running the repo's tasks under jolt needs 0.8.26 or later, for `System/mapLibraryName`. A new pin starts the startup cache cold, since the cache is per jolt version, so run `jolt warm` after switching.
 
 ## The generated code
 
