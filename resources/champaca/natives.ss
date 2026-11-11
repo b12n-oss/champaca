@@ -1509,22 +1509,31 @@
 ;; after it holds the GIL again. Every other Java thread is in such a call
 ;; while one runs, and it can't return into those frames before it has the
 ;; GIL, so the thread holding it can walk them (raw-frames) safely. The field
-;; is set and cleared under the GIL; a raise in the middle can only come from
-;; gil-released's thunk, whose handler clears it after taking the GIL back.
-;; thread-states finds a java.lang.Thread's state, filled once per thread.
-(define thread-states (make-weak-eq-hashtable))
+;; is set and put back under the GIL, back to what it held before, since a
+;; downcall can upcall into Java that blocks again on the same thread (the
+;; outer stack is published again once the inner call is done); a raise
+;; leaving the body puts it back too, so no stale continuation stays
+;; published for a thread that has returned into it. thread-states finds a
+;; java.lang.Thread's state, filled once per thread; an ephemeron table,
+;; since a state holds its Thread and a weak one would keep both.
+(define thread-states (make-ephemeron-eq-hashtable))
 (define (bind-jthread! s t)
   (jthread-state-jthread-set! s t)
   (when t (eq-hashtable-set! thread-states t s)))
 (define-syntax with-published-stack
   (syntax-rules ()
     [(_ s e ...)
-     (call/1cc
-      (lambda (k)
-        (jthread-state-stack-set! s k)
-        (let ([r (begin e ...)])
-          (jthread-state-stack-set! s #f)
-          r)))]))
+     (let ([before (jthread-state-stack s)])
+       (call/1cc
+        (lambda (k)
+          (jthread-state-stack-set! s k)
+          ;; a handler rather than a guard: it puts the field back before
+          ;; the raise goes on outward, without the guard's continuation
+          (let ([r (with-exception-handler
+                    (lambda (x) (jthread-state-stack-set! s before) (raise x))
+                    (lambda () e ...))])
+            (jthread-state-stack-set! s before)
+            r))))]))
 
 ;; The running thread blocks: give the GIL up until (ready?) or the deadline.
 (define (gil-block! ready? deadline)
@@ -1575,7 +1584,7 @@
        (set! gil-owner #f)
        (condition-broadcast gil-cv))
      (let ([retake (lambda () (with-mutex gil (gil-wait! s (lambda () #t) #f)) (gil-restore! s))])
-       (let ([r (guard (e [#t (retake) (jthread-state-stack-set! s #f) (raise e)]) (thunk))])
+       (let ([r (guard (e [#t (retake) (raise e)]) (thunk))])
          (retake)
          r)))))
 
@@ -1809,6 +1818,7 @@
 (define (main-thread-exit!)
   (thread-terminated! main-thread (lambda () (set! main-ended #t)))
   (eq-hashtable-delete! jthread-states main-thread)
+  (eq-hashtable-delete! thread-states main-thread)
   (let ([t (jnew "java/lang/Thread")])
     (bind-jthread! main-state t)
     (set! current-jthread t)
