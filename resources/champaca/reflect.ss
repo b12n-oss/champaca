@@ -735,6 +735,17 @@
   (if (eq? (nest-host (mirror-class a)) (nest-host (mirror-class b))) 1 0))
 
 ;; --- field access (overrides of java.lang.reflect.Field) -----------------------------
+;; The slots of a Field object, looked up once: jfield-index finds the
+;; class and appends a name per call, about a fifth of a Field.get.
+(define (field-slot-of name)
+  (let ([i #f])
+    (lambda (f)
+      (unless i (set! i (jfield-index "java/lang/reflect/Field" name)))
+      (jslot f i))))
+(define field-clazz (field-slot-of "clazz"))
+(define field-slot (field-slot-of "slot"))
+(define field-override (field-slot-of "override"))
+(define field-modifiers (field-slot-of "modifiers"))
 
 ;; -> (values getter setter field-descriptor what qname read-only?) for
 ;; field f on obj, as mode ('get, 'set for Field.set, 'set-typed for setInt
@@ -742,7 +753,7 @@
 ;; a final one not made accessible, and a record's or hidden class's final
 ;; field, which Field refuses to set with IllegalAccessException.
 ;; what names the field as the JDK's messages do ("static final int field
-;; A.x"), qname is "A.x".
+;; A.x"), qname is "A.x"; both are thunks, since only an error reads them.
 ;; A null receiver for an instance field is a NullPointerException and one
 ;; of another class an IllegalArgumentException, with the JDK's texts for
 ;; mode. These overrides replace Field's own
@@ -777,28 +788,41 @@
                     "checkAccess(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/Class;I)V")
        f caller (jmirror c)
        (if static? #f (jmirror-of (class-name-of obj)))
-       (jslot f (jfield-index "java/lang/reflect/Field" "modifiers"))))))
+       (field-modifiers f)))))
+;; where a class's field lives, per declared slot: its index in an
+;; object's slots, or a static field's global symbol, found once per class
+;; and slot (a class is never unloaded, so the table only saves the lookups)
+(define field-places (make-weak-eq-hashtable))
+(define (field-place c slot static? cname name)
+  (let ([v (or (eq-hashtable-ref field-places c #f)
+               (let ([v (make-vector (length (meta-fields c)) #f)])
+                 (eq-hashtable-set! field-places c v)
+                 v))])
+    (or (vector-ref v slot)
+        (let ([p (if static? (string->symbol (string-append cname ":" name)) (jfield-index cname name))])
+          (vector-set! v slot p)
+          p))))
 (define (field-access f obj mode)
-  (let* ([c (mirror-class (jslot f (jfield-index "java/lang/reflect/Field" "clazz")))]
-         [slot (jslot f (jfield-index "java/lang/reflect/Field" "slot"))]
+  (let* ([c (mirror-class (field-clazz f))]
+         [slot (field-slot f)]
          [meta (list-ref (meta-fields c) slot)]
          [cname (jclass-cname c)] [name (car meta)] [desc (cadr meta)]
          [static? (static-flag? (caddr meta))]
          [final? (fxpositive? (fxlogand (caddr meta) #x10))]
-         [override? (eqv? 1 (jslot f (jfield-index "java/lang/reflect/Field" "override")))]
+         [override? (eqv? 1 (field-override f))]
          [read-only? (and final? (or static? (not override?) (equal? (jclass-super c) "java/lang/Record")
                                      (string-search "/0x" cname)))]
-         [qname (string-append (binary-name cname) "." name)]
-         [what (string-append (if static? "static " "") (if final? "final " "")
-                              (field-type-name desc) " field " qname)])
+         [qname (lambda () (string-append (binary-name cname) "." name))]
+         [what (lambda () (string-append (if static? "static " "") (if final? "final " "")
+                                         (field-type-name desc) " field " (qname)))])
     (if static?
-        (let ([sym (string->symbol (string-append cname ":" name))])
+        (let ([sym (field-place c slot #t cname name)])
           (unless override? (check-field-access! f c (caddr meta) obj #t))
           (jinit cname)
           (values (lambda () (top-level-value sym))
                   (lambda (v) (set-top-level-value! sym v))
                   desc what qname read-only?))
-        (let ([i (jfield-index cname name)])
+        (let ([i (field-place c slot #f cname name)])
           (unless obj
             (jthrow "java/lang/NullPointerException"
                     (cond [(not override?) "Cannot invoke \"Object.getClass()\" because \"obj\" is null"]
@@ -807,7 +831,7 @@
           (unless override? (check-field-access! f c (caddr meta) obj #f))
           (unless (jinstance? obj cname)
             (jthrow "java/lang/IllegalArgumentException"
-                    (string-append "Can not " (if (eq? mode 'get) "get " "set ") what (if (eq? mode 'set) " to " " on ")
+                    (string-append "Can not " (if (eq? mode 'get) "get " "set ") (what) (if (eq? mode 'set) " to " " on ")
                                    (binary-name (class-name-of obj)))))
           (values (lambda () (vector-ref (jobj-slots obj) i))
                   (lambda (v) (vector-set! (jobj-slots obj) i v))
@@ -831,7 +855,7 @@
   (lambda (this obj v)
     (let-values ([(get set desc what qname read-only?) (field-access this obj 'set)])
       (define (refuse cname)
-        (jthrow cname (string-append "Can not set " what " to " (if v (binary-name (class-name-of v)) "null value"))))
+        (jthrow cname (string-append "Can not set " (what) " to " (if v (binary-name (class-name-of v)) "null value"))))
       (when read-only? (refuse "java/lang/IllegalAccessException"))
       (set (cond
              [(prim-desc? desc)
@@ -852,7 +876,7 @@
          (let-values ([(get set desc what qname read-only?) (field-access this obj 'get)])
            (unless (and (prim-desc? desc) (prim-widens? desc t))
              (jthrow "java/lang/IllegalArgumentException"
-                     (string-append "Attempt to get " (field-type-name desc) " field \"" qname
+                     (string-append "Attempt to get " (field-type-name desc) " field \"" (qname)
                                     "\" with illegal data type conversion to " tname)))
            (widen desc t (get)))))
      (define-override! (string-append "java/lang/reflect/Field.set" name "(Ljava/lang/Object;" t ")V")
@@ -860,10 +884,10 @@
          (let-values ([(get set desc what qname read-only?) (field-access this obj 'set-typed)])
            (when read-only?
              (jthrow "java/lang/IllegalAccessException"
-                     (string-append "Can not set " what " to (" tname ")" (jstring-of (jbox t v)))))
+                     (string-append "Can not set " (what) " to (" tname ")" (jstring-of (jbox t v)))))
            (unless (and (prim-desc? desc) (prim-widens? t desc))
              (jthrow "java/lang/IllegalArgumentException"
-                     (string-append "Can not set " what " to (" tname ")" (jstring-of (jbox t v)))))
+                     (string-append "Can not set " (what) " to (" tname ")" (jstring-of (jbox t v)))))
            (set (widen t desc v)))))))
  '(("Boolean" . "Z") ("Byte" . "B") ("Char" . "C") ("Short" . "S")
    ("Int" . "I") ("Long" . "J") ("Float" . "F") ("Double" . "D")))
