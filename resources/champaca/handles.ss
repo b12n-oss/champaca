@@ -107,7 +107,8 @@
 ;; v has type `from` and is wanted as `to`. explicitCastArguments passes
 ;; loose? to unbox any wrapper, which asType rejects when it would narrow.
 (define (adapt from to v . loose?)
-  (cond [(string=? from to) v]
+  (cond [(pair? loose?) (explicit-adapt from to v)]
+        [(string=? from to) v]
         [(string=? to "V") v]
         [(string=? from "V") (if (prim-desc? to) (elem-default to) #f)]
         [(prim-desc? from) (if (prim-desc? to) (widen from to v) (jbox from v))]
@@ -117,7 +118,7 @@
              (jthrow "java/lang/ClassCastException"
                      (string-append "Cannot cast " (class-name-of v) " to " (cdr (assoc to prim-names)))))
            ;; only a widening unbox: a Long is not an int
-           (unless (or (pair? loose?) (prim-convertible? p to))
+           (unless (prim-convertible? p to)
              (jthrow "java/lang/ClassCastException"
                      (string-append "Cannot cast " (slashes->dots (class-name-of v)) " to "
                                     (slashes->dots (cadr (assoc to box-classes))))))
@@ -128,6 +129,58 @@
         [else (jthrow "java/lang/ClassCastException"
                       (string-append "Cannot cast " (external-class-name (class-name-of v))
                                      " to " (external-class-name (desc->class-name to))))]))
+
+;; explicitCastArguments' conversions (MethodHandles' javadoc, the JDK's
+;; ValueConversions): a primitive to a primitive by Java's casting
+;; conversions, a boolean as the integer 1 or 0 and any value to boolean as
+;; its low bit (a float or double first cast to int); a reference to a
+;; primitive unboxed, null as zero or false, then cast the same way, through
+;; Number when the reference isn't a wrapper, so a String fails as the
+;; checkcast to Number does; a primitive to a reference boxed in its own
+;; wrapper, then cast; a reference cast to an interface not checked at all
+(define (explicit-adapt from to v)
+  (cond [(string=? from to) v]
+        [(string=? to "V") v]
+        [(string=? from "V") (if (prim-desc? to) (elem-default to) #f)]
+        [(prim-desc? from) (if (prim-desc? to) (prim-cast from to v) (explicit-ref-cast to (jbox from v)))]
+        [(prim-desc? to) (explicit-unbox to v)]
+        [else (explicit-ref-cast to v)]))
+
+(define (prim-cast from to v)
+  (let ([f (string-ref from 0)] [t (string-ref to 0)])
+    (cond [(char=? f t) v]
+          [(char=? t #\Z) (if (odd? (if (memv f '(#\F #\D)) (d2i v) v)) 1 0)]
+          [(char=? t #\F) (f32 (inexact v))]
+          [(char=? t #\D) (inexact v)]
+          [else
+           (let ([i (if (memv f '(#\F #\D)) (if (char=? t #\J) (d2l v) (d2i v)) v)])
+             (case t
+               [(#\J) (low-bits i 64 #t)]
+               [(#\I) (low-bits i 32 #t)]
+               [(#\S) (low-bits i 16 #t)]
+               [(#\C) (low-bits i 16 #f)]
+               [else (low-bits i 8 #t)]))])))
+(define (low-bits x bits signed?)
+  (let ([m (bitwise-bit-field x 0 bits)])
+    (if (and signed? (bitwise-bit-set? m (fx- bits 1))) (- m (expt 2 bits)) m)))
+
+(define (explicit-unbox to v)
+  (let ([p (and v (box-prim-of v))])
+    (cond [(not v) (elem-default to)]
+          [p (let ([x (junbox p v)]) (if (string=? p to) x (prim-cast (if (string=? p "Z") "I" p) to x)))]
+          ;; a Number that isn't a wrapper fails as Class.cast to the wanted
+          ;; wrapper, anything else as the checkcast to Number
+          [(jinstance? v "java/lang/Number")
+           (jthrow "java/lang/ClassCastException"
+                   (string-append "Cannot cast " (external-class-name (class-name-of v))
+                                  " to " (external-class-name (cadr (assoc to box-classes)))))]
+          [else (jthrow "java/lang/ClassCastException" (class-cast-message (class-name-of v) "java/lang/Number"))])))
+
+(define (explicit-ref-cast to v)
+  (let ([name (desc->class-name to)])
+    (if (and v (not (char=? #\[ (string-ref to 0))) (eq? (jclass-kind (find-class name)) 'interface))
+        v
+        (adapt obj-desc to v))))
 
 (define (adapt-all froms tos args)
   (if (equal? froms tos) args (map adapt froms tos args)))
@@ -474,7 +527,13 @@
                         (apply tp (map (lambda (i t) (adapt (list-ref nargs i) t (list-ref xs i))) order targs))))
                mt))))
 (def-mhs "explicitCastArguments" (string-append "(Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodType;)" mh-ret)
-  (lambda (mh mt) (as-type mh mt #t)))
+  (lambda (mh mt)
+    (let ([desc (mt-desc (nn mt))])
+      (unless (fx= (length (desc-args desc)) (length (mh-info-args (mh-info-of mh))))
+        (jthrow "java/lang/invoke/WrongMethodTypeException"
+                (string-append "cannot explicitly cast MethodHandle" (mh-type-text mh)
+                               " to " (type-text (desc-args desc) (desc-ret desc)))))
+      (as-type mh mt #t))))
 
 ;; a method type as MethodType.toString prints it, (int,int)int: simple names
 ;; by getSimpleName, so a local class is Local and an anonymous one empty

@@ -79,6 +79,10 @@ The first public version. Champaca is still experimental: the
   (`test/java/LoopHandleCheck.java`).
 - `MethodHandle.asSpreader` and `asCollector` take a position, so
   `InvocationHandler.invokeDefault`, which spreads at position 1, works.
+- `MethodHandles.explicitCastArguments` converts as the JVM's does. It
+  converted as `asType` does, so narrowing gave garbage or an
+  `ArrayIndexOutOfBoundsException`, a null threw instead of becoming zero,
+  and a cast to an interface was checked (`test/java/ExplicitCastCheck.java`).
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm

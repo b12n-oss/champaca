@@ -1,0 +1,49 @@
+long->int: 5
+int->byte: 44
+int->short: 4464
+int->char: A
+double->int: 3
+double->long: -9223372036854775808
+float->byte: -56
+int->boolean: false
+int->boolean odd: true
+boolean->int: 1
+boolean->double: 1.0
+Integer->byte: 44
+Object->short: 4464
+Object(null)->int: 0
+Object(null)->boolean: false
+Long->int: 5
+Object(Double)->int: 2
+Object(String)->int: java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number (java.lang.String and java.lang.Number are in module java.base of loader 'bootstrap')
+Object->Integer: java.lang.ClassCastException: Cannot cast java.lang.String to java.lang.Integer
+int->Object: 5
+byte->Integer: java.lang.ClassCastException: Cannot cast java.lang.Byte to java.lang.Integer
+long->Integer: java.lang.ClassCastException: Cannot cast java.lang.Long to java.lang.Integer
+Object->List (iface): notalist
+ret int->byte: 44
+ret double->char: B
+ret long->boolean: true
+void ret: 0
+char->byte: -1
+char->boolean: true
+double->float: Infinity
+double NaN->int: 0
+float->char: 65535
+long->short: -32767
+long->float: 9.223372E18
+double->boolean: true
+boolean->char: 1
+Character->int: 122
+Object(Character)->byte: 44
+Object(Boolean)->long: 1
+Object(Long)->boolean: true
+Number(BigInteger)->int: java.lang.ClassCastException: Cannot cast java.math.BigInteger to java.lang.Integer
+Object(BigInteger)->boolean: java.lang.ClassCastException: Cannot cast java.math.BigInteger to java.lang.Boolean
+boolean->Object: true
+int->Number: 7
+int->Comparable: 7
+Object->Runnable[]: java.lang.ClassCastException: Cannot cast java.lang.String to [Ljava.lang.Runnable;
+Object->String: java.lang.ClassCastException: Cannot cast java.lang.Integer to java.lang.String
+ret Object->int: 0
+arity: java.lang.invoke.WrongMethodTypeException: cannot explicitly cast MethodHandle(int)int to ()int
