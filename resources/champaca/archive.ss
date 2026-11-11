@@ -164,9 +164,12 @@
              '("jdk.module.path" "jdk.module.upgrade.path" "jdk.module.patch.0" "jdk.module.limitmods"
                "jdk.module.addmods.0" "jdk.module.main" "jdk.module.showModuleResolution"))))
 
-;; initPhase2 for a cold boot: dumping when the boot is the plain one
+;; initPhase2 for a cold boot: dumping when the boot is the plain one. Any
+;; other doesn't archive, so it compiles SystemModules as before (jit.clj
+;; reads module-graph-dumping)
 (define (module-graph-phase2 run dumping?)
-  (if (and dumping? (module-graph-plain-boot?))
+  (when (and dumping? (not (module-graph-plain-boot?))) (set! module-graph-dumping #f))
+  (if (and dumping? module-graph-dumping)
       (let ([status-sym (string->symbol "jdk/internal/misc/CDS:configStatus")])
         (jinit "jdk/internal/misc/CDS")
         (let ([old (top-level-value status-sym)])
