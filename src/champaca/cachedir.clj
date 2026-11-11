@@ -224,9 +224,15 @@
           ;; resource's name, offset and sizes, not their bytes), since a copy
           ;; of the bundle has new mtimes and must keep its cache; the image
           ;; there is the one the bundle shipped with
+          ;; img/runtime-version is the Chez version alone, so two jolt
+          ;; releases on one Chez shared a key; the cached runtime.so and
+          ;; method code call jolt's own procedures, which a release may
+          ;; change, hence jolt's version string too (a local build's is its
+          ;; git describe)
           key (hash [(when (.exists release) (slurp release)) (.length modules)
                      (if @bundle-root (image-index-crc) (.lastModified modules))
-                     (translator-fingerprint) (img/runtime-version) (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])
+                     (translator-fingerprint) (img/runtime-version) *jolt-version*
+                     (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])
           d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))
           ;; a bundle whose own cache can't be written runs on a copy in the
           ;; user's (user-copy)

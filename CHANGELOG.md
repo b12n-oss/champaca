@@ -38,7 +38,9 @@ The first public version. Champaca is still experimental: the
   packaging (`jolt bench`).
 - **Caches**: a startup cache for the JDK's boot and compiled methods, and a
   library cache for classes from jars, directories and class loaders, each
-  keyed by the bytes it was built from.
+  keyed by the bytes it was built from. The startup cache is also keyed by
+  the jolt version, so a jolt upgrade never runs code compiled against the
+  old one.
 - **App bundles**: `jolt bundle` builds a directory that runs a program with
   no JDK installed.
 - **Tasks**: `jolt test` (every test program against HotSpot's recorded

@@ -996,7 +996,7 @@
         :task (let [args *command-line-args*]
                 (when (< (count args) 2) (println "usage: jolt prof <classpath> <Main> [args...]") (System/exit 2))
                 (apply shell (jolt-bin) "-M" "tools/prof.clj" args))}
-  warm {:doc "A training run for the startup cache: run tools/warm/Warmup.java through champaca once, so the JDK paths programs reach early (SecureRandom, time zones, formatting, regex, streams, files, threads) are compiled and cached (jolt warm). The cache is per jolt build, so it warms the jolt on PATH, the one jolt -M -m champaca.main runs, not the pinned build jolt test uses; $JOLT names another, CHAMPACA_CACHE_DIR another cache. Other CHAMPACA_* settings stay out, since CHAMPACA_BT or CHAMPACA_LINES would warm a key ordinary runs never read"
+  warm {:doc "A training run for the startup cache: run tools/warm/Warmup.java through champaca once, so the JDK paths programs reach early (SecureRandom, time zones, formatting, regex, streams, files, threads) are compiled and cached (jolt warm). The cache is per jolt version, so it warms the jolt on PATH, the one jolt -M -m champaca.main runs, not the pinned build jolt test uses; $JOLT names another, CHAMPACA_CACHE_DIR another cache. Other CHAMPACA_* settings stay out, since CHAMPACA_BT or CHAMPACA_LINES would warm a key ordinary runs never read"
         :task (let [jolt (or (System/getenv "JOLT") "jolt")
                     env (into {} (remove (fn [[k _]] (and (str/starts-with? k "CHAMPACA_") (not= k "CHAMPACA_CACHE_DIR")))) (System/getenv))]
                 (fs/create-dirs "target/warm")
