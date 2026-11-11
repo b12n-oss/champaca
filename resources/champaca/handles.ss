@@ -386,11 +386,13 @@
   (unless (trusted-lookup? l)
     (lookup-call "checkSymbolicClass" "(Ljava/lang/Class;)V" l (jmirror refc))))
 ;; HotSpot's resolution-time check of a method or constructor, JVMS 5.4.4
-;; from the lookup class (a public lookup's is Object)
+;; from the lookup class with the lookup's modes (a public lookup reaches
+;; public members of public classes in packages exported to everyone)
 (define (resolution-access! l refc dc mods mn ctor?)
   (unless (eqv? 1 ((method-proc "sun/invoke/util/VerifyAccess"
                                 "isMemberAccessible(Ljava/lang/Class;Ljava/lang/Class;ILjava/lang/Class;Ljava/lang/Class;I)Z")
-                   (jmirror refc) (jmirror dc) (fxlogand mods #xffff) (lookup-slot l "lookupClass") #f #x1f))
+                   (jmirror refc) (jmirror dc) (fxlogand mods #xffff) (lookup-slot l "lookupClass")
+                   (lookup-slot l "prevLookupClass") (lookup-slot l "allowedModes")))
     (jthrow "java/lang/IllegalAccessException"
             (string-append (if ctor? "no such constructor: " "no such method: ")
                            (jstring->scheme ((jvirt mn "toString()Ljava/lang/String;") mn))))))

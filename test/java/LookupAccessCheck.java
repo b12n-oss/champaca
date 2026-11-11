@@ -16,6 +16,7 @@ public class LookupAccessCheck {
       return h.type();
     }
   }
+  public static int answer() { return 42; }
   interface Run { Object run() throws Throwable; }
   static void row(String n, Run r) { String o; try { o = String.valueOf(r.run()); } catch (Throwable t) { o = t.getClass().getName() + ": " + t.getMessage(); } System.out.println(n + " = " + o.replaceAll("@[0-9a-f]+", "@X")); }
   public static void main(String[] a) {
@@ -31,6 +32,7 @@ public class LookupAccessCheck {
     row("nestmate private static", () -> l.findStatic(Nest.class, "sp", MethodType.methodType(int.class)) != null);
     row("publicLookup nestmate private", () -> pub.findStatic(Nest.class, "sp", MethodType.methodType(int.class)));
     row("publicLookup ArrayList.size field", () -> pub.findGetter(ArrayList.class, "size", int.class));
+    row("publicLookup public method", () -> pub.findStatic(LookupAccessCheck.class, "answer", MethodType.methodType(int.class)).invoke());
     row("findSpecial other class", () -> l.findSpecial(Object.class, "toString", MethodType.methodType(String.class), String.class));
     row("unreflect private", () -> l.unreflect(String.class.getDeclaredMethod("coder")));
     row("unreflectGetter private", () -> l.unreflectGetter(Integer.class.getDeclaredField("value")));

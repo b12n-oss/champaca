@@ -8,6 +8,7 @@ nestmate private field = true
 nestmate private static = true
 publicLookup nestmate private = java.lang.IllegalAccessException: symbolic reference class is not accessible: class LookupAccessCheck$Nest, from public Lookup
 publicLookup ArrayList.size field = java.lang.IllegalAccessException: member is private: java.util.ArrayList.size/int/getField, from public Lookup
+publicLookup public method = 42
 findSpecial other class = java.lang.IllegalAccessException: no private access for invokespecial: class java.lang.String, from class LookupAccessCheck (unnamed module @X)
 unreflect private = java.lang.IllegalAccessException: member is private to package: java.lang.String.coder[Ljava.lang.Object;@X/invokeSpecial, from class LookupAccessCheck (unnamed module @X)
 unreflectGetter private = java.lang.IllegalAccessException: member is private: java.lang.Integer.value/int/getField, from class LookupAccessCheck (unnamed module @X)
