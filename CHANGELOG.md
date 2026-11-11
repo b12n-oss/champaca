@@ -63,9 +63,9 @@ The first public version. Champaca is still experimental: the
 - A JDK class file found as a resource has the JVM's `jrt:` URL, from
   `getResource` and `getResources` through any loader, where it had none.
   Byte Buddy's injection strategy needed it (`test/java/JrtResourceCheck.java`).
-- picocli 4.7.6 and the H2 database 2.3.232 join the libraries `jolt libs`
-  checks against the JVM, making eleven (`test/libs/Pico.java`,
-  `test/libs/H2.java`).
+- picocli 4.7.6, the H2 database 2.3.232 and Byte Buddy 1.17.5 join the
+  libraries `jolt libs` checks against the JVM, making twelve
+  (`test/libs/Pico.java`, `test/libs/H2.java`, `test/libs/Buddy.java`).
 - A local record's `toString` starts with its simple name, `Local[x=1]`,
   where it gave javac's binary suffix, `1Local[x=1]`
   (`test/java/RecordCheck.java`).

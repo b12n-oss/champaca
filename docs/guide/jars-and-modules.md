@@ -21,7 +21,7 @@ A module outside the JDK's default module graph, such as the Vector API's `jdk.i
 
 ### A real library
 
-Eleven libraries have been run this way and checked against the JVM, with identical output:
+Twelve libraries have been run this way and checked against the JVM, with identical output:
 
 | Library | What was exercised |
 |---|---|
@@ -33,11 +33,12 @@ Eleven libraries have been run this way and checked against the JVM, with identi
 | Caffeine 3.2.2 | size, weight, write- and access-based eviction against a fake clock, removal listeners, refresh, `getAll`, async and loading caches, stats |
 | Guava 33.4.8 | CRC32C, CRC32, Adler-32, Murmur3, FarmHash, SHA-256, SHA-512 and MD5 hashing, a Bloom filter, immutable multimaps, `Joiner`, `Splitter` |
 | SLF4J 2.0.16 with `slf4j-simple` | logging through the provider `ServiceLoader` finds in `slf4j-simple`'s jar |
+| Byte Buddy 1.17.5 | subclasses generated at run time and loaded by each strategy (a wrapper and a child-first loader, `Unsafe` injection into the application loader, `Lookup.defineClass`), fixed values, delegation to a static method, interception with `@SuperCall`, a field accessor implementing `Supplier`, a generated `toString` |
 | H2 2.3.232 | an in-memory database through JDBC: tables with keys, a batch of prepared inserts with decimals, dates, arrays and JSON, joins, grouping, window functions, a recursive query, a rolled-back transaction, constraint and syntax errors, metadata, four threads querying at once |
 | picocli 4.7.6 | annotated options and positional parameters with type conversion, split values, a map option, subcommands with a mixin and `@ParentCommand`, usage and version help, error messages, a command defined by an interface (a `Proxy`), `parseArgs` results |
 | SnakeYAML 2.3 | loading and dumping maps, beans with generic `List` and `Map` properties, public fields and enums, anchors and merge keys, multi-document streams, block style, timestamps, error messages with their line and column marks |
 
-`jolt libs` reruns all eleven, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `jolt libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `jolt libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `jolt test`, which needs no network.
+`jolt libs` reruns all twelve, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `jolt libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `jolt libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `jolt test`, which needs no network.
 
 To call one of them from jolt, with the jars in `~/.m2`:
 

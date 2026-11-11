@@ -21,4 +21,7 @@
   ;; annotations read by reflection, a Proxy for an interface command
   {:main "Pico" :jars [["info.picocli:picocli:4.7.6" "77c2cb87814b6a03d431fc856024a9f8ff605ad4"]]}
   ;; an in-memory database: SQL, JDBC, java.sql types, threads
-  {:main "H2" :jars [["com.h2database:h2:2.3.232" "4fcc05d966ccdb2812ae8b9a718f69226c0cf4e2"]]}]}
+  {:main "H2" :jars [["com.h2database:h2:2.3.232" "4fcc05d966ccdb2812ae8b9a718f69226c0cf4e2"]]}
+  ;; classes generated at run time, loaded by each strategy (Unsafe
+  ;; injection's warnings go to stderr, which isn't compared)
+  {:main "Buddy" :jars [["net.bytebuddy:byte-buddy:1.17.5" "88450f120903b7e72470462cdbd2b75a3842223c"]]}]}
