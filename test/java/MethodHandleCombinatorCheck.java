@@ -29,6 +29,9 @@ public class MethodHandleCombinatorCheck {
     static void note(int a) { System.out.println("note " + a); }
     static void noteS(String s) { System.out.println("noteS " + s); }
     static int len2(String s, int b) { return s.length() + b; }
+    static String join3(String a, String b, String c) { return a + "|" + b + "|" + c; }
+    static String head(String[] xs, String last) { return xs.length + ":" + String.join(",", xs) + ";" + last; }
+    interface Greeter { default String greet(String n) { return "hi " + n; } String name(); }
 
     public static void main(String[] args) throws Throwable {
         MethodHandles.Lookup L = MethodHandles.lookup();
@@ -162,5 +165,24 @@ public class MethodHandleCombinatorCheck {
         t("aget-null-long", () -> MethodHandles.arrayElementGetter(long[].class).invoke((long[]) null, 0));
         t("aset-null-byte", () -> { MethodHandles.arrayElementSetter(byte[].class).invoke((byte[]) null, 0, (byte) 1); return "ok"; });
         t("arrayLength-null", () -> MethodHandles.arrayLength(int[].class).invoke((int[]) null));
+        // asSpreader and asCollector at a position
+        MethodHandle j3 = L.findStatic(me, "join3", MethodType.methodType(String.class, String.class, String.class, String.class));
+        t("spreader-at0", () -> (String) j3.asSpreader(0, String[].class, 2).invoke(new String[]{"a", "b"}, "c"));
+        t("spreader-at1-type", () -> j3.asSpreader(1, String[].class, 2).type());
+        t("spreader-at1", () -> (String) j3.asSpreader(1, String[].class, 2).invoke("a", new String[]{"b", "c"}));
+        t("spreader-at-bad", () -> j3.asSpreader(2, String[].class, 2));
+        t("spreader-at-neg", () -> j3.asSpreader(-1, String[].class, 1));
+        MethodHandle hd = L.findStatic(me, "head", MethodType.methodType(String.class, String[].class, String.class));
+        t("collector-at0-type", () -> hd.asCollector(0, String[].class, 2).type());
+        t("collector-at0", () -> (String) hd.asCollector(0, String[].class, 2).invoke("x", "y", "z"));
+        t("collector-at0-none", () -> (String) hd.asCollector(0, String[].class, 0).invoke("z"));
+        t("collector-at-bad", () -> hd.asCollector(2, String[].class, 1));
+        t("collector-at-wrong", () -> hd.asCollector(1, String[].class, 1));
+        // InvocationHandler.invokeDefault, which spreads at position 1
+        t("invokeDefault", () -> {
+            Greeter g = (Greeter) java.lang.reflect.Proxy.newProxyInstance(Greeter.class.getClassLoader(), new Class<?>[] { Greeter.class },
+                (p, m, a) -> m.isDefault() ? java.lang.reflect.InvocationHandler.invokeDefault(p, m, a) : "n");
+            return g.greet("bob") + " " + g.name();
+        });
     }
 }

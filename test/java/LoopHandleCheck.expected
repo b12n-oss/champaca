@@ -1,0 +1,31 @@
+loop type: (int)int
+loop(3): 103
+order: [init_i, init_sum, i0, s100, i1, s101, i2]
+loop(0): 100
+order(0): [init_i, init_sum, i0]
+whileLoop type: (int)int
+whileLoop(5): 0
+whileLoop(-3): -3
+doWhileLoop(5): 0
+doWhileLoop(-3): -4
+countedLoop: v0123
+countedLoop zero: v
+countedLoop negative: v
+countedLoop void type: ()void
+countedLoop void: [c0, c1, c2]
+countedLoop range type: (String)int
+countedLoop range: 2345
+iteratedLoop: >[a][b][c]
+iteratedLoop empty: >
+throws: java.lang.IllegalStateException: at 2
+void clause type: (int)int
+void clause(2): 0
+void clause log: [tick]
+no clauses: java.lang.IllegalArgumentException: null or no clauses passed
+null clause: java.lang.IllegalArgumentException: null clauses are not allowed
+empty clause: java.lang.IllegalArgumentException: no predicate found: []
+init/step mismatch: java.lang.IllegalArgumentException: clause 0: init and step return types must match: int != class java.lang.String
+pred not boolean: java.lang.IllegalArgumentException: predicates must have boolean return type: [MethodHandle()int]
+while body/init: java.lang.IllegalArgumentException: loop initializer must match: ()String != (int)int
+counted iterations type: java.lang.IllegalArgumentException: start function must match: ()long != ()int
+iterated body null: java.lang.NullPointerException

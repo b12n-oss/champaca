@@ -89,3 +89,14 @@ aget-null-bool: java.lang.NullPointerException: Cannot load from byte/boolean ar
 aget-null-long: java.lang.NullPointerException: Cannot load from long array because "a" is null
 aset-null-byte: java.lang.NullPointerException: Cannot store to byte/boolean array because "a" is null
 arrayLength-null: java.lang.NullPointerException: Cannot read the array length because "a" is null
+spreader-at0: a|b|c
+spreader-at1-type: (String,String[])String
+spreader-at1: a|b|c
+spreader-at-bad: java.lang.IllegalArgumentException: bad spread position
+spreader-at-neg: java.lang.IllegalArgumentException: bad spread position
+collector-at0-type: (String,String,String)String
+collector-at0: 2:x,y;z
+collector-at0-none: 0:;z
+collector-at-bad: java.lang.IllegalArgumentException: bad collect position
+collector-at-wrong: java.lang.IllegalArgumentException: array type not assignable to argument: MethodHandle(String[],String)String, class [Ljava.lang.String;
+invokeDefault: hi bob n

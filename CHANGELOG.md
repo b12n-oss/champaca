@@ -73,6 +73,12 @@ The first public version. Champaca is still experimental: the
   and Scala and Kotlin emit. Codegen bar-quoted every name as a Scheme
   symbol, and Chez reads no escape between bars, so such a class failed to
   load (`test/java/OddNameCheck.java`).
+- The `MethodHandles` loop builders work: `loop`, `whileLoop`, `doWhileLoop`,
+  both `countedLoop`s and `iteratedLoop`, with the JDK's own checks and
+  texts. They failed with an `AbstractMethodError` for `MethodHandle.rebind`
+  (`test/java/LoopHandleCheck.java`).
+- `MethodHandle.asSpreader` and `asCollector` take a position, so
+  `InvocationHandler.invokeDefault`, which spreads at position 1, works.
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm
