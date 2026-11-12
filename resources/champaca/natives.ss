@@ -36,7 +36,10 @@
 ;; --- java.lang.System ------------------------------------------------------------
 
 (define (now-nanos) (let ([t (current-time 'time-utc)]) (+ (* (time-second t) 1000000000) (time-nanosecond t))))
-(defnative "java/lang/Shutdown.beforeHalt()V" () (void))
+;; set once Java's own exit sequence has begun (Shutdown.exit calls this first,
+;; holding its lock), so a signal arriving then leaves the hooks to it
+(define java-exit-begun #f)
+(defnative "java/lang/Shutdown.beforeHalt()V" () (set! java-exit-begun #t))
 ;; On the main thread the status unwinds to run-guarded, so it reaches whoever
 ;; started the Java code. Any other thread ends the process from where it is,
 ;; through jolt's jolt-exit-process: Chez's exit there would end only the thread.

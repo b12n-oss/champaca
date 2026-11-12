@@ -33,6 +33,18 @@
                         (n defined-changed) " changed, " (n defined-uncacheable) " of them uncacheable; "
                         (n cached-methods-dropped) " classes' cached methods dropped")))))))
 
+(defn- on-signal-shutdown!
+  "Registered with jolt, which runs it when SIGINT, SIGTERM or SIGHUP ends the
+  process (and at any exit): Java's shutdown hooks run as HotSpot runs them
+  on those signals, and the startup cache is saved as a normal end saves it,
+  so a server stopped with a signal (a Spring Boot app under kill) has run
+  its hooks and comes back warm. At a normal end Java has already run them
+  and this does nothing."
+  []
+  (s/call "gil-enter!")
+  (try (when (true? (s/call "java-signal-shutdown!")) (save-generation!))
+       (finally (s/call "gil-leave!"))))
+
 (defn run
   "Run cname's main method with classes found under the classpath dirs,
   after booting the JDK. Returns the exit status. With :version in the
@@ -45,7 +57,8 @@
         _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
     (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
-      (let [v (:version @state)
+      (let [_ (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable on-signal-shutdown!))
+            v (:version @state)
             vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)
             status (cond (not (and cname (zero? vs))) vs
                          (:launch-module @state) (apply s/call "run-module-main" cname args)
