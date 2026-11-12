@@ -10,6 +10,7 @@ license as champaca). Their sources here are upstream's, minus the
 ```bash
 jolt bench spring-boot          # build, then time (jolt bench spring-boot build|bench)
 jolt bench quarkus
+jolt bench petclinic          # a server: SERVER_RUNS (default 3) per variant
 RUNS=20 COLD_RUNS=5 jolt bench spring-boot bench
 ```
 
@@ -124,6 +125,38 @@ HotSpot rows are the yardstick.
 The maxima well above their medians (HotSpot's Quarkus fast-jar at 5378 ms,
 champaca's fat jar at 5968) are single slow runs each; the medians stand.
 
+## Spring PetClinic
+
+`jolt bench petclinic` times a server instead of a command. It clones
+[spring-petclinic](https://github.com/spring-projects/spring-petclinic) at
+`500158f`, the application upstream OpenLDK lists among the ones it runs,
+and builds it with Maven into `bench/petclinic/target`. Each run starts the
+jar on port 0 and waits for Tomcat's "started on port" line. Then it
+fetches eleven pages with curl (the owner list, a search, an owner, the
+add and edit forms, the vets, the error page and a 404) and stops the
+server with SIGTERM. The pages are compared byte for byte with HotSpot's.
+The table gives medians of `SERVER_RUNS` runs (default 3) for three times
+measured from exec: when Tomcat said it started, when the first page came
+back, and when the last one did.
+
+Measured 2026-11-13 on an Apple M1 Pro (10 CPUs, macOS 26.5.2), JDK 25.0.2,
+champaca `7f506ea`, load average about 6 before the runs:
+
+| Variant | Started | First page | All pages | Pages |
+|---|---|---|---|---|
+| HotSpot | 3875 ms | 4165 ms | 4746 ms | same |
+| champaca, cold | 118.4 s | 131.7 s | 145.5 s | same |
+| champaca | 26.2 s | 28.6 s | 30.4 s | same |
+
+A warm start is about 7x HotSpot's, well behind the Spring Boot command
+above, because PetClinic starts far more of the framework: Hibernate,
+Thymeleaf, the H2 database and its schema, and Tomcat itself. Each page
+also runs code the startup didn't, which champaca translates and compiles
+the first time it runs.
+The cache that the warm runs read is the one each SIGTERM saves, so a
+warm row was impossible before champaca ran Java's shutdown hooks on a
+signal (see below).
+
 ## What it took
 
 Running these applications turned up these gaps, now fixed:
@@ -145,3 +178,6 @@ Running these applications turned up these gaps, now fixed:
 - Classes a framework's own loader defines were compiled on every run; they
   are cached by their bytes now, with their dependencies checked through the
   loader (`test/libcache/def`).
+- A server stopped with SIGTERM, SIGINT or SIGHUP ran no Java shutdown hook
+  and saved nothing to the startup cache, so PetClinic started cold every
+  time (`test/signal`).
