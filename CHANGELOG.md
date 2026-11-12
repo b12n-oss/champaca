@@ -179,7 +179,7 @@ The first public version. Champaca is still experimental: the
   signed jar as a JCE provider, numerics, and an index searched through
   memory-mapped files (`test/libs/Bcp.java`, `Cmath.java`, `Luc.java`, the
   same on macOS and Linux).
-- Netty 4.1.115, Log4j 2.24.1 and Jackson's XML module 2.18.1 over
+- Netty 4.1.115, Log4j 2.24.3 and Jackson's XML module 2.18.1 over
   Woodstox join the libraries `jolt libs` checks against the JVM, making
   twenty: an NIO event loop with an echo server and pooled direct buffers,
   plugin-based logging, and XML through StAX (`test/libs/Nty.java`,

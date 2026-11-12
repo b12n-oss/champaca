@@ -59,9 +59,12 @@
                       ["io.netty:netty-resolver:4.1.115.Final" "e33b4d476c03975957f5d8d0319d592bf2bc5e96"]
                       ["io.netty:netty-transport-native-unix-common:4.1.115.Final" "dc96c67d06cd6b5eb677f2728f27bf2e3d9a7284"]]}
   ;; Log4j 2's plugins found from its jar, a built configuration, pattern
-  ;; layouts with markers, thread context and exceptions, another thread
-  {:main "L4j" :jars [["org.apache.logging.log4j:log4j-api:2.24.1" "7ebeb12c20606373005af4232cd0ecca72613dda"]
-                      ["org.apache.logging.log4j:log4j-core:2.24.1" "c85285146f28d8c8962384f786e2dff04172fb43"]]}
+  ;; layouts with markers, thread context and exceptions, another thread.
+  ;; 2.24.3: in 2.24.1 LoggerContext.getLogger kept the new logger only in a
+  ;; WeakReference before looking it up again, so a collection in between made
+  ;; it null (once in CI on champaca, which keeps no dead local alive)
+  {:main "L4j" :jars [["org.apache.logging.log4j:log4j-api:2.24.3" "b02c125db8b6d295adf72ae6e71af5d83bce2370"]
+                      ["org.apache.logging.log4j:log4j-core:2.24.3" "7f6a261243ca767c7f38fd4b542bcde626c8894e"]]}
   ;; XML through Jackson and Woodstox: StAX found by ServiceLoader,
   ;; attributes, wrapped lists, escaping, trees
   {:main "Jxml" :jars [["com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.18.1" "f85fc7ce244ab3e7de8e6a8f74fca99f7127d378"]

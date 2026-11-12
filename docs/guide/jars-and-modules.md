@@ -36,7 +36,7 @@ Twenty-three libraries have been run this way and checked against the JVM, with 
 | Joda-Time 2.13.0 | a daylight-saving gap in `America/New_York` from the jar's own zone data, the next transition, formatting in another zone and locale, ISO parsing, periods and their wording, day counts, intervals |
 | Kryo 5.6.2 | registered classes, a record, an enum and a map with an `int[]` written and read back through `Unsafe`, Objenesis and ReflectASM, the exact bytes, a deep copy |
 | Jackson XML 2.18.1 with Woodstox 7.0.0 | an annotated bean written as XML with an attribute, a wrapped list and escaped text, read back, a tree, pretty printing, the StAX factory `ServiceLoader` finds in Woodstox's jar |
-| Log4j 2.24.1 | a configuration built in code, plugins found from its jar, a pattern layout with level, logger, thread, marker and thread-context fields, an exception's message, a logger kept quiet by level, a second thread |
+| Log4j 2.24.3 | a configuration built in code, plugins found from its jar, a pattern layout with level, logger, thread, marker and thread-context fields, an exception's message, a logger kept quiet by level, a second thread |
 | Netty 4.1.115 | an NIO event loop running a line-based echo server and client over the loopback, UTF-8 frames, pooled direct and composite buffers |
 | Bouncy Castle 1.79 | a signed jar as a JCE provider: SHA-3 and BLAKE2 digests, AES-GCM with associated data, ECDSA keys and a signature the JDK's own SunEC verifies, HMAC, PBKDF2 |
 | Commons Math 3.6.1 | LU, eigenvalue and singular value decompositions, descriptive statistics, a regression, normal, t and gamma distributions, a root solver, an FFT, Mersenne Twister, big fractions |
