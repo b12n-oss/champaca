@@ -188,6 +188,11 @@ The first public version. Champaca is still experimental: the
 Behavior that now follows the JVM where champaca did something else, which a
 program may notice, and changes to the tasks.
 
+- `sun.misc.Unsafe` warns as on JDK 25: a library that touches memory through
+  it (Guava, Kryo) prints the JDK's deprecation warning on stderr, the same
+  text as HotSpot's, where champaca set `sun.misc.unsafe.memory.access` to
+  `allow` and nothing could change it. `-Dsun.misc.unsafe.memory.access=allow`
+  turns the warning off and `deny` makes the call throw, as on the JVM.
 - An annotation is a `java.lang.reflect.Proxy` over the JDK's
   `AnnotationInvocationHandler`, as on the JVM, where champaca generated a
   class of its own for it: `Proxy.isProxyClass` is true for it and a failed

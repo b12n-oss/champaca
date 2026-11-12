@@ -88,4 +88,4 @@ The module system boots on top of that, as on the JVM: `System.initPhase2()` bui
 
 ## `sun.misc.Unsafe`
 
-Some libraries still reach for `sun.misc.Unsafe`, which lives in `jdk.unsupported`. It works, and `Shelf.bumpThroughUnsafe` in the test jar uses it. Champaca sets `sun.misc.unsafe.memory.access=allow`, so the warning JDK 25 prints on stderr the first time a program touches memory through it (the default, `warn`) doesn't appear here, and a `-D` option can't change that.
+Some libraries still reach for `sun.misc.Unsafe`, which lives in `jdk.unsupported`. It works, and `Shelf.bumpThroughUnsafe` in the test jar uses it. JDK 25 prints a warning on stderr the first time a program touches memory through it (the default, `warn`), and champaca prints the same one, word for word; `-Dsun.misc.unsafe.memory.access=allow` turns it off and `deny` makes the call throw, as on the JVM.
