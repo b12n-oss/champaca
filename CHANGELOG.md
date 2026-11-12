@@ -267,6 +267,11 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A class generated at run time, defined with no code source location as
+  `ClassLoader.defineClass(name, b, off, len)` gives, keeps line numbers in
+  its frames, so a Clojure REPL's errors read `(REPL:1)` as on HotSpot, not
+  `(REPL:-1)`. Such classes have a library cache file of their own
+  (`test/java/GeneratedLinesCheck.java`).
 - A program ended by SIGTERM, SIGINT or SIGHUP runs its shutdown hooks and
   exits with 128 plus the signal, as on HotSpot, and the startup cache is
   saved: a server such as a Spring Boot app stopped with `kill` died on the

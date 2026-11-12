@@ -232,6 +232,12 @@
         (str "link " err "|" (:message (ex-data e)))
         (throw e)))))
 
+(defn- note-generated!
+  "Mark class n as generated at run time, so its code compiles with line
+  numbers (jit.clj lines?)."
+  [n]
+  (swap! state update :generated-classes (fnil conj #{}) n))
+
 (defn define-class!
   "ClassLoader.defineClass, Lookup.defineClass and defineHiddenClass, Proxy
   and Unsafe.defineClass0 (natives.ss define-class!): parse, link and
@@ -246,24 +252,33 @@
   own), the class is kept in the library cache like a jar's, keyed by its
   bytes' fingerprint under the class path's file (defined-jar), and an
   earlier run's entry for the same bytes is restored instead of parsing
-  (restore-defined-class!)."
-  [given text hidden? cacheable?]
+  (restore-defined-class!). With generated? (a domain with no code source
+  location: bytes made at run time, as a Clojure REPL's eval classes) the
+  class gets line numbers (jit.clj lines?) and its own cache file."
+  [given text hidden? cacheable? generated?]
   (let [bs (.getBytes ^String text "ISO-8859-1")
         fp (when (and cacheable? given) (timed :fingerprint #(bytes-fp bs)))
-        dj (when fp (defined-jar))]
-    (or (when (and fp (not (get-in @state [:classes given])))
-          (restore-defined-class! given bs fp dj))
-        (let [c (parse-defined bs given)]
-          (or (definition-refusal c given hidden?)
-              (define-parsed-class! c hidden? bs fp dj))))))
+        dj (when fp (defined-jar generated?))
+        answer (or (when (and fp (not (get-in @state [:classes given])))
+                     (restore-defined-class! given bs fp dj))
+                   (let [c (parse-defined bs given)]
+                     (or (definition-refusal c given hidden?)
+                         (do (when generated? (note-generated! (:name c)))
+                             (define-parsed-class! c hidden? bs fp dj)))))]
+    (when (and generated? (str/starts-with? answer "ok "))
+      (note-generated! (subs answer 3)))
+    answer))
 
 (defn- defined-jar
   "The library cache's key for the classes a program's own loaders define:
   one file per class path, the bytes having no path of their own. A
-  source-file run has its own (\"source:\"), since its defined classes
-  compile with line numbers (lines?) and other runs' don't."
-  []
-  (or (:defined-jar @state)
-      (let [j (str (if (:source-mode @state) "source:" "defined:") (str/join ":" (map jar-path (:classpath @state))))]
-        (swap! state assoc :defined-jar j)
-        j)))
+  source-file run has its own (\"source:\"), and so do generated classes
+  (\"generated:\"), since those compile with line numbers (lines?) and
+  other defined classes don't."
+  [generated?]
+  (let [k (if generated? :generated-jar :defined-jar)]
+    (or (get @state k)
+        (let [j (str (cond (:source-mode @state) "source:" generated? "generated:" :else "defined:")
+                     (str/join ":" (map jar-path (:classpath @state))))]
+          (swap! state assoc k j)
+          j))))

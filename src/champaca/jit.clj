@@ -86,7 +86,9 @@
   because the information costs about as much memory as the code itself (a
   warm Spring Boot: 100 of 460 MB live). A source-file run's defined
   classes do too: javac's source launcher defines the program's own classes
-  (their cache file is apart, defined-jar). CHAMPACA_LINES=all gives every
+  (their cache file is apart, defined-jar). So does a class generated at
+  run time, defined with no code source location (a Clojure REPL's eval
+  classes, loader.clj note-generated!). CHAMPACA_LINES=all gives every
   class but the JDK's lines, CHAMPACA_LINES=off none. Every compile path
   asks, cached or not, so a frame's line doesn't depend on the cache."
   [cname info]
@@ -95,7 +97,7 @@
     "off" false
     (case (:origin info)
       :user (boolean (when-let [src (class-source cname)] (not (jar-entry? (:entry src)))))
-      :defined (boolean (:source-mode @state))
+      :defined (boolean (or (:source-mode @state) (contains? (:generated-classes @state) cname)))
       false)))
 
 ;; the throws codegen leaves for what it couldn't resolve, scanned for in

@@ -630,7 +630,14 @@
 ;; itself: its nested definition threw ClassCircularityError) is that error,
 ;; as the JVM rethrows a failed resolution's error, when this definition's
 ;; own lookup (after stamp) recorded it.
-(define (definition-answer loader name v off len hidden? stamp)
+;; whether a class defined with domain pd was generated at run time: no code
+;; source, or one with no location, as ClassLoader.defineClass(name, b, off,
+;; len) gives (a Clojure REPL's eval classes); its frames get line numbers,
+;; where a class a loader reads from a jar keeps its code source's location
+(define (generated-domain? pd)
+  (let ([cs (and pd (jslot pd (jfield-index "java/security/ProtectionDomain" "codesource")))])
+    (or (not cs) (not (jslot cs (jfield-index "java/security/CodeSource" "location"))))))
+(define (definition-answer loader name v off len hidden? stamp pd)
   (guard (e [(and (not (jobj? e))
                   (let ([m (class-not-found-in e)])
                     (and m (fx> (hashtable-ref resolution-error-stamps m 0) stamp)
@@ -642,7 +649,8 @@
     (parameterize ([resolving-loader loader])
       (define-class-hook* name (bytes->latin1 v off len) hidden?
                          (and loader (not hidden?)
-                              (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))))))
+                              (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
+                         (generated-domain? pd)))))
 ;; the JVM's error for an answer that isn't "ok": "bad", "link
 ;; <error class>|<text>" (link.clj check-definition!), "wrong" (the JVM's
 ;; message keeps both names slashed) or "dup"
@@ -673,7 +681,7 @@
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
   (let* ([stamp resolution-error-count]
          [name (and given (slashes (jstring->scheme given)))]
-         [r (definition-answer loader name v off len hidden? stamp)]
+         [r (definition-answer loader name v off len hidden? stamp pd)]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])
