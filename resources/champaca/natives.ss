@@ -245,10 +245,13 @@
 (define gc-last #f)
 (define gc-pending '())      ; newest first, while notifications are on
 (define gc-notifying #f)     ; the Notification Thread, once a listener asked
-(define gc-cause (make-thread-parameter #f))   ; (action . cause) of an explicit collection
+;; (action . cause) of the explicit collection under way, a global and not a
+;; thread parameter: with other threads alive, jolt's full collection meets
+;; them at a rendezvous and the collect-request handler can run on any of them
+(define gc-cause #f)
 (define (note-gc! collect)
   (let ([n gc-index] [t0 (uptime-ms)] [ub (bytes-allocated)] [cb (current-memory-bytes)]
-        [why (or (gc-cause) '("end of minor GC" . "Allocation Failure"))])
+        [why (or gc-cause '("end of minor GC" . "Allocation Failure"))])
     (collect)
     (when (fx= n gc-index)   ; not noted already by the handler within
       (set! gc-index (fx+ gc-index 1))
@@ -261,7 +264,9 @@
 (let ([orig (collect-request-handler)])
   (collect-request-handler (lambda () (note-gc! orig))))
 (define (explicit-collect! action cause)
-  (parameterize ([gc-cause (cons action cause)]) (note-gc! full-collect))
+  (dynamic-wind (lambda () (set! gc-cause (cons action cause)))
+                (lambda () (note-gc! full-collect))
+                (lambda () (set! gc-cause #f)))
   (gil-poke!))
 
 ;; GcInfo as the VM builds it, through its private constructor, the one pool's

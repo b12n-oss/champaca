@@ -29,11 +29,15 @@ public class GcNotificationCheck {
         for (GarbageCollectorMXBean g : gcs) ((NotificationEmitter) g).addNotificationListener(l, null, null);
         System.gc();
         GarbageCollectionNotificationInfo info = null;
+        List<String> seen = new ArrayList<>();
         long until = System.nanoTime() + 10_000_000_000L;
         while (System.nanoTime() < until) {
             GarbageCollectionNotificationInfo i = q.poll(100, TimeUnit.MILLISECONDS);
             if (i != null && i.getGcCause().equals("System.gc()")) { info = i; break; }
+            if (i != null) seen.add(i.getGcAction() + " / " + i.getGcCause());
         }
+        // what came instead, for a failure on a slow machine (stderr isn't compared)
+        if (info == null) System.err.println("no System.gc() notification; got " + seen);
         System.out.println("notified: " + (info != null));
         if (info != null) {
             Set<String> pools = new TreeSet<>();
