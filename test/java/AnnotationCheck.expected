@@ -13,3 +13,6 @@ Box AnnotationCheck$Box AnnotationCheck true static
 private static |  AnnotationCheck
 Local true main true [] main
 AnnotationCheck null false
+proxy true sun.reflect.annotation.AnnotationInvocationHandler true true true true true
+same class for the same type true
+cast class $Proxy<n> cannot be cast to class java.lang.String ($Proxy<n> is in unnamed module of loader 'app'; java.lang.String is in module java.base of loader 'bootstrap')

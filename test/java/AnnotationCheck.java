@@ -67,5 +67,21 @@ public class AnnotationCheck {
     System.out.println(Local.class.getSimpleName() + " " + Local.class.isLocalClass() + " " + Local.class.getEnclosingMethod().getName()
         + " " + anon.getClass().isAnonymousClass() + " [" + anon.getClass().getSimpleName() + "] " + anon.getClass().getEnclosingMethod().getName());
     System.out.println(AnnotationCheck.class.getSimpleName() + " " + AnnotationCheck.class.getDeclaringClass() + " " + AnnotationCheck.class.isMemberClass());
+
+    // an annotation is a java.lang.reflect.Proxy over the JDK's
+    // AnnotationInvocationHandler; for a package-private annotation type the
+    // proxy class sits in that type's package and module
+    Annotation info = b.getAnnotation(Info.class);
+    Class<?> pc = info.getClass();
+    System.out.println("proxy " + java.lang.reflect.Proxy.isProxyClass(pc) + " "
+        + java.lang.reflect.Proxy.getInvocationHandler(info).getClass().getName() + " "
+        + pc.getSimpleName().startsWith("$Proxy") + " " + (pc.getModule() == Info.class.getModule()) + " "
+        + pc.getPackageName().equals(Info.class.getPackageName()) + " " + Arrays.asList(pc.getInterfaces()).contains(Info.class)
+        + " " + (pc.getClassLoader() == AnnotationCheck.class.getClassLoader()));
+    System.out.println("same class for the same type " + (b.getConstructor().getAnnotation(Info.class).getClass() == pc));
+    String cce;
+    try { Object o = info; cce = "no exception " + (String) o; }
+    catch (ClassCastException e) { cce = e.getMessage().replaceAll("\\$Proxy\\d+", "\\$Proxy<n>"); }
+    System.out.println("cast " + cce);
   }
 }

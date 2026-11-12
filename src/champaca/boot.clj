@@ -22,7 +22,7 @@
             [champaca.jit :refer [classpath-class-answer constant-value frame-info jit! npe-message]]
             [champaca.launcher :refer [module-properties]]
             [champaca.libcache :refer [load-cache! write-cache!]]
-            [champaca.loader :refer [define-class! ensure-loaded! lambda-class]]
+            [champaca.loader :refer [define-class! ensure-loaded!]]
             [champaca.state :refer [state env timed scheme! ensure-loaded-fn]]))
 
 (defn- check-lines-env!
@@ -105,10 +105,6 @@
   "The runtime's hooks into this namespace, after the launcher's state."
   []
   (s/call "set-define-class-hook!" (fn [& args] (timed :define #(apply define-class! args))))
-  ;; annotation instances: a synthetic class implementing the annotation
-  ;; interface, its element keys "name()desc" joined by |
-  (s/call "set-annotation-class-hook!" (fn [iface keys]
-                                         (lambda-class [iface] (if (= "" keys) [] (str/split keys #"\|")))))
   (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false))
           ;; URLs as one string, one per line
           (fn [path] (str/join "\n" (resource-urls path))))

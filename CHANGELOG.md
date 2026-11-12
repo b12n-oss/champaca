@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- An annotation is a `java.lang.reflect.Proxy` over the JDK's
+  `AnnotationInvocationHandler`, as on the JVM, where champaca generated a
+  class of its own for it: `Proxy.isProxyClass` is true for it and a failed
+  cast names the proxy class as HotSpot does. Spring Boot's start time is
+  unchanged, cold and warm.
 - `ManagementFactory.getCompilationMXBean()` answers, where it was null as on a
   JVM without a JIT: `sun.management.compiler` names champaca's JIT, and the
   total compilation time is the time spent translating and compiling methods
