@@ -31,7 +31,7 @@
 (def runtime-files
   "The Scheme runtime, in load order."
   ["champaca/runtime.ss" "champaca/natives.ss" "champaca/reflect.ss" "champaca/handles.ss" "champaca/files.ss"
-   "champaca/net.ss" "champaca/spawn.ss" "champaca/foreign.ss" "champaca/archive.ss"])
+   "champaca/net.ss" "champaca/netif.ss" "champaca/spawn.ss" "champaca/foreign.ss" "champaca/archive.ss"])
 
 (def ^:private translator-sources
   ["champaca/codegen.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"
