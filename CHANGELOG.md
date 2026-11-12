@@ -60,6 +60,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `-jar` applies the main jar's `Add-Opens`, `Add-Exports` and
+  `Enable-Native-Access` manifest attributes, as the `java` launcher does,
+  where they were ignored: a Quarkus fast-jar logged an
+  `IllegalAccessError` from its thread pool at shutdown (`test/jarmain`).
 - `Package.getPackage(String)`, `Package.getPackages()` and the application
   loader's `getDefinedPackage` and `getDefinedPackages` find a package of
   your class path as soon as one of its classes has loaded, as on the JVM,

@@ -1879,6 +1879,10 @@
 (define (run-main cname . args) (run-main-as cname args 1))
 ;; java -m module[/class] args
 (define (run-module-main what . args) (run-main-as what args 3))
+;; java -jar app.jar args: LauncherHelper's jar mode, which reads the main
+;; jar's manifest as HotSpot's launcher has it do (Main-Class, and the
+;; Add-Opens, Add-Exports and Enable-Native-Access its program needs)
+(define (run-jar-main jar . args) (run-main-as jar args 2))
 (define (run-main-as what args mode)
   (set! halted #f)
   (let ([status (run-guarded (lambda () (launch-main what args mode)))])

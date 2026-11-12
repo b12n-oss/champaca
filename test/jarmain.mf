@@ -1,2 +1,4 @@
 Main-Class: JarMain
 Class-Path: lib.jar
+Add-Opens: java.base/java.lang
+Add-Exports: java.base/jdk.internal.misc

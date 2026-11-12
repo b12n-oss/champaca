@@ -49,6 +49,7 @@
             vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)
             status (cond (not (and cname (zero? vs))) vs
                          (:launch-module @state) (apply s/call "run-module-main" cname args)
+                         (:launch-jar @state) (apply s/call "run-jar-main" (:launch-jar @state) args)
                          :else (apply s/call "run-main" cname args))]
         (when (env "CHAMPACA_PROF") (prof-report "run" (- (System/nanoTime) t0)))
         (when (env "CHAMPACA_STATS") (stats))
@@ -71,7 +72,9 @@
                        (= m ::corrupt) (str "Error: Invalid or corrupt jarfile " jar)
                        :else (str "no main manifest attribute, in " jar))))
       (System/exit 1))
-    (swap! state assoc :java-command (str/join " " (cons jar args)))
+    ;; :launch-jar: the JDK's LauncherHelper reads the manifest itself in its
+    ;; jar mode, so Add-Opens, Add-Exports and Enable-Native-Access apply
+    (swap! state assoc :java-command (str/join " " (cons jar args)) :launch-jar jar)
     (System/exit (run [jar] (str/replace (str/trim main) "." "/") (vec args)))))
 
 (defn- run-main-class!
