@@ -1449,25 +1449,33 @@
 ;; macOS US-ASCII with none of LANG, LC_ALL, LC_CTYPE set is UTF-8 (a
 ;; program launched from the Finder). So a Linux shell with no locale gets
 ;; ANSI_X3.4-1968, as HotSpot does.
-(define (host-encoding)
+;; (LC_CTYPE's locale name . its codeset) under the user's locale, the
+;; process's own put back after
+(define (locale-ctype-codeset)
   (let* ([setlocale (foreign-procedure "setlocale" (int string) string)]
          [langinfo (foreign-procedure "nl_langinfo" (int) string)]
-         [lc-all (if natives-macos? 0 6)] [lc-ctype (if natives-macos? 2 0)]
-         [saved (setlocale lc-all #f)]
-         [_ (setlocale lc-all "")]
-         [ctype (or (setlocale lc-ctype #f) "C")]
-         [codeset (or (langinfo (if natives-macos? 0 14)) "")])
-    (setlocale lc-all saved)
-    (let* ([dot (let loop ([i 0]) (cond [(fx= i (string-length ctype)) #f] [(char=? (string-ref ctype i) #\.) i] [else (loop (fx+ i 1))]))]
-           [named (and dot (let ([at (let loop ([i dot]) (if (or (fx= i (string-length ctype)) (char=? (string-ref ctype i) #\@)) i (loop (fx+ i 1))))])
-                             (substring ctype (fx+ dot 1) at)))]
-           [p (if (equal? named "ISO8859-15") named codeset)]
-           [p (if (string=? p "646") "ISO646-US" p)]
-           [enc (if (string=? p "") "ISO8859-1" p)]
-           [unset? (lambda (v) (let ([x (getenv v)]) (or (not x) (string=? x ""))))])
-      (cond [(and (not natives-macos?) (string=? enc "EUC-JP")) "EUC-JP-LINUX"]
-            [(and natives-macos? (string=? enc "US-ASCII") (unset? "LANG") (unset? "LC_ALL") (unset? "LC_CTYPE")) "UTF-8"]
-            [else enc]))))
+         [lc-all (if natives-macos? 0 6)]
+         [saved (setlocale lc-all #f)])
+    (setlocale lc-all "")
+    (let ([r (cons (or (setlocale (if natives-macos? 2 0) #f) "C") (or (langinfo (if natives-macos? 0 14)) ""))])
+      (setlocale lc-all saved)
+      r)))
+;; the encoding a locale name like "de_DE.ISO8859-15@euro" names, or #f
+(define (locale-name-encoding ctype)
+  (let ([dot (char-index-from ctype #\. 0)])
+    (and dot (substring ctype (fx+ dot 1) (or (char-index-from ctype #\@ dot) (string-length ctype))))))
+(define (char-index-from s c k)
+  (cond [(fx= k (string-length s)) #f] [(char=? (string-ref s k) c) k] [else (char-index-from s c (fx+ k 1))]))
+(define (env-unset? v) (let ([x (getenv v)]) (or (not x) (string=? x ""))))
+;; the JDK's name for the codeset (ParseLocale's mapping)
+(define (jdk-encoding-name ctype codeset)
+  (let* ([p (if (equal? (locale-name-encoding ctype) "ISO8859-15") "ISO8859-15" codeset)]
+         [p (cond [(string=? p "646") "ISO646-US"] [(string=? p "") "ISO8859-1"] [else p])])
+    (cond [(and (not natives-macos?) (string=? p "EUC-JP")) "EUC-JP-LINUX"]
+          [(and natives-macos? (string=? p "US-ASCII") (env-unset? "LANG") (env-unset? "LC_ALL") (env-unset? "LC_CTYPE")) "UTF-8"]
+          [else p])))
+(define (host-encoding)
+  (let ([cc (locale-ctype-codeset)]) (jdk-encoding-name (car cc) (cdr cc))))
 (define (host-tmpdir)
   (if natives-macos?
       (let* ([confstr (foreign-procedure "confstr" (int uptr size_t) size_t)]
@@ -2343,24 +2351,28 @@
 ;; with synchronizers, parked on an ownable synchronizer another owns; null
 ;; for none, as HotSpot's find_deadlocks answers. A thread behind a cycle
 ;; isn't in it.
+;; the thread t waits for: the owner of the monitor it blocks entering or,
+;; with synchronizers, of the ownable synchronizer it's parked on
+(define (thread-waits-for t syncs?)
+  (let ([v (thread-status-of t)])
+    (and (not (eq? t current-jthread))
+         (or (fx= v status-blocked) (and syncs? (fx= (fxlogand v #x200) #x200)))
+         (let ([o (cdr (thread-lock t))]) (and o (not (eq? o t)) o)))))
+;; path's members (newest first) from the newest back to t, oldest first
+(define (cycle-in path t)
+  (let take ([p path] [acc '()])
+    (if (eq? (car p) t) (cons t acc) (take (cdr p) (cons (car p) acc)))))
+;; the cycle t's chain of waits runs into, or ()
+(define (cycle-from t0 syncs?)
+  (let walk ([t t0] [path '()])
+    (cond [(memq t path) (cycle-in path t)]
+          [(thread-waits-for t syncs?) => (lambda (u) (walk u (cons t path)))]
+          [else '()])))
 (define (deadlocked-threads syncs?)
-  (define (waits-for t)
-    (let ([v (thread-status-of t)])
-      (and (not (eq? t current-jthread))
-           (or (fx= v status-blocked) (and syncs? (fx= (fxlogand v #x200) #x200)))
-           (let ([o (cdr (thread-lock t))]) (and o (not (eq? o t)) o)))))
-  (let loop ([ts (live-jthreads)] [found '()])
-    (if (null? ts)
-        (and (pair? found) (make-jarr "Ljava/lang/Thread;" (list->vector (reverse found))))
-        (let walk ([t (car ts)] [path '()])
-          (cond [(memq t path)
-                 => (lambda (tail)
-                      ;; path is newest first: the cycle runs from the newest to t
-                      (let ([cycle (let take ([p path] [acc '()])
-                                     (if (eq? (car p) t) (cons t acc) (take (cdr p) (cons (car p) acc))))])
-                        (loop (cdr ts) (fold-left (lambda (acc x) (if (memq x acc) acc (cons x acc))) found cycle))))]
-                [(waits-for t) => (lambda (u) (walk u (cons t path)))]
-                [else (loop (cdr ts) found)])))))
+  (let ([found (fold-left (lambda (acc t)
+                            (fold-left (lambda (acc x) (if (memq x acc) acc (cons x acc))) acc (cycle-from t syncs?)))
+                          '() (live-jthreads))])
+    (and (pair? found) (make-jarr "Ljava/lang/Thread;" (list->vector (reverse found))))))
 (defnative "sun/management/ThreadImpl.findMonitorDeadlockedThreads0()[Ljava/lang/Thread;" () (deadlocked-threads #f))
 (defnative "sun/management/ThreadImpl.findDeadlockedThreads0()[Ljava/lang/Thread;" () (deadlocked-threads #t))
 (defnative "sun/management/ThreadImpl.resetPeakThreadCount0()V" ()
