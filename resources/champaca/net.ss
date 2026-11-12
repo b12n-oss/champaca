@@ -691,7 +691,7 @@
 ;; both), the GIL given up while it waits on the resolver; the JDK's message is
 ;; "host: gai_strerror". An address is an ip number (IPv4) or (bytes . scope),
 ;; in the resolver's order, each once
-(define (lookup-addresses host family)
+(define (getaddrinfo-list host family)   ; the struct addrinfo list's head, 0 for none
   (let ([cname (c-string host)] [hints (foreign-alloc 48)] [res (foreign-alloc 8)])
     (do ([i 0 (fx+ i 1)]) ((fx= i 48)) (foreign-set! 'unsigned-8 hints i 0))
     (foreign-set! 'int hints 4 family)
@@ -699,21 +699,25 @@
     (foreign-set! 'uptr res 0 0)
     (let ([r (gil-released (lambda () (libc-getaddrinfo-blocking cname 0 hints res)))])
       (foreign-free cname) (foreign-free hints)
-      (if (not (fx= r 0))
-          (begin (foreign-free res)
-                 (jthrow "java/net/UnknownHostException" (string-append host ": " (libc-gai-strerror r))))
-          (let ([head (foreign-ref 'uptr res 0)])
-            (foreign-free res)
-            (let loop ([p head] [acc '()])
-              (if (= p 0)
-                  (begin (unless (= head 0) (libc-freeaddrinfo head))
-                         (reverse acc))
-                  (let* ([fam (foreign-ref 'int p 4)] [sa (foreign-ref 'uptr p (net-const 'ai-addr))]
-                         [a (cond [(= sa 0) #f]
-                                  [(fx= fam 2) (sockaddr-ip sa)]
-                                  [(fx= fam (net-const 'AF_INET6)) (cons (sockaddr6-bytes sa) (foreign-ref 'unsigned-32 sa 24))]
-                                  [else #f])])
-                    (loop (foreign-ref 'uptr p 40) (if (and a (not (member a acc))) (cons a acc) acc))))))))))
+      (let ([head (foreign-ref 'uptr res 0)])
+        (foreign-free res)
+        (unless (fx= r 0)
+          (jthrow "java/net/UnknownHostException" (string-append host ": " (libc-gai-strerror r))))
+        head))))
+(define (addrinfo-address p)   ; one entry's address, #f for another family
+  (let ([fam (foreign-ref 'int p 4)] [sa (foreign-ref 'uptr p (net-const 'ai-addr))])
+    (cond [(= sa 0) #f]
+          [(fx= fam 2) (sockaddr-ip sa)]
+          [(fx= fam (net-const 'AF_INET6)) (cons (sockaddr6-bytes sa) (foreign-ref 'unsigned-32 sa 24))]
+          [else #f])))
+(define (lookup-addresses host family)
+  (let ([head (getaddrinfo-list host family)])
+    (let loop ([p head] [acc '()])
+      (if (= p 0)
+          (begin (unless (= head 0) (libc-freeaddrinfo head))
+                 (reverse acc))
+          (let ([a (addrinfo-address p)])
+            (loop (foreign-ref 'uptr p 40) (if (and a (not (member a acc))) (cons a acc) acc)))))))
 (define (lookup-ipv4 host) (lookup-addresses host 2))
 (define (address->inet host a) (if (pair? a) (inet6 host (car a) (cdr a)) (inet4 host a)))
 ;; The JDK's macOS fallback (Inet4AddressImpl.c lookupIfLocalhost, JDK bug
