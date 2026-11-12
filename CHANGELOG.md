@@ -174,6 +174,11 @@ The first public version. Champaca is still experimental: the
 
 #### Libraries
 
+- Joda-Time 2.13.0, Guice 7.0.0, Kryo 5.6.2 and commons-compress 1.27.1
+  join the libraries `jolt libs` checks against the JVM, making seventeen:
+  time zones from a jar's own data, dependency injection, serialization
+  through `Unsafe` and Objenesis, and archives (`test/libs/Joda.java`,
+  `Guic.java`, `Kry.java`, `Comp.java`, the same on macOS and Linux).
 - picocli 4.7.6, the H2 database 2.3.232 and Byte Buddy 1.17.5 join the
   libraries `jolt libs` checks against the JVM, making twelve
   (`test/libs/Pico.java`, `test/libs/H2.java`, `test/libs/Buddy.java`).

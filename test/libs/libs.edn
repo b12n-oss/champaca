@@ -27,4 +27,25 @@
   {:main "Buddy" :jars [["net.bytebuddy:byte-buddy:1.17.5" "88450f120903b7e72470462cdbd2b75a3842223c"]]}
   ;; files: copies that keep their times (setattrlist on macOS), listings,
   ;; filters, BOMs, counting and tee streams
-  {:main "Cio" :jars [["commons-io:commons-io:2.17.0" "ddcc8433eb019fb48fe25207c0278143f3e1d7e2"]]}]}
+  {:main "Cio" :jars [["commons-io:commons-io:2.17.0" "ddcc8433eb019fb48fe25207c0278143f3e1d7e2"]]}
+  ;; time zones and their transitions from the jar's compiled tz data,
+  ;; formatting and parsing, periods
+  {:main "Joda" :jars [["joda-time:joda-time:2.13.0" "a4d4db9e91878d964a4544c8ea6d263dae2f37bc"]]}
+  ;; dependency injection: constructor and field injection, providers,
+  ;; scopes, multibindings, @Provides methods, generated classes
+  {:main "Guic" :jars [["com.google.inject:guice:7.0.0" "ccc518677b9367d45f99dfa592c9b039f07687d3"]
+                       ["jakarta.inject:jakarta.inject-api:2.0.1" "4c28afe1991a941d7702fe1362c365f0a8641d1e"]
+                       ["aopalliance:aopalliance:1.0" "0235ba8b489512805ac13a8f9ea77a1ca5ebe3e8"]
+                       ["com.google.guava:guava:33.4.8-jre" "e70a3268e6cd3e7d458aa15787ce6811c34e96ae"]
+                       ["com.google.guava:failureaccess:1.0.2" "c4a06a64e650562f30b7bf9aaec1bfed43aca12b"]]}
+  ;; binary serialization through Unsafe, Objenesis and ReflectASM (Unsafe's
+  ;; deprecation warnings go to stderr, which isn't compared)
+  {:main "Kry" :jars [["com.esotericsoftware:kryo:5.6.2" "c20a8ba517e93cb78001fd64da796f1ac5cd8214"]
+                      ["org.objenesis:objenesis:3.4" "675cbe121a68019235d27f6c34b4f0ac30e07418"]
+                      ["com.esotericsoftware:minlog:1.3.1" "a406e29d3a44d5f020d7b3218aee6d0952db4f73"]
+                      ["com.esotericsoftware:reflectasm:1.11.9" "fd51ad1705d5e27d8785550172a4ab0cb9b8ad23"]]}
+  ;; tar over gzip, bzip2, zip with UTF-8 names, in memory
+  {:main "Comp" :jars [["org.apache.commons:commons-compress:1.27.1" "a19151084758e2fbb6b41eddaa88e7b8ff4e6599"]
+                       ["commons-io:commons-io:2.17.0" "ddcc8433eb019fb48fe25207c0278143f3e1d7e2"]
+                       ["org.apache.commons:commons-lang3:3.17.0" "b17d2136f0460dcc0d2016ceefca8723bdf4ee70"]
+                       ["commons-codec:commons-codec:1.17.1" "973638b7149d333563584137ebf13a691bb60579"]]}]}
