@@ -543,13 +543,30 @@
 (define (ffi-variadic-index options)
   (and (ffi-option? options "isVariadicFunction()Z")
        ((jvirt options "firstVariadicArgIndex()I") options)))
-;; the signatures Chez would pass wrongly are refused, macOS arm64 first
+;; Whether this jolt's Chez places stack arguments right, as jolt's
+;; (jolt.ffi/stack-args-correct?) finds by compiling the cases 10.4.1 gets
+;; wrong (a Chez with jolt's patches 0006/0007, or a release with
+;; cisco/ChezScheme#1091): #t only when jolt answers true; false, nil (it
+;; can't tell) or a jolt without that function keep the refusals below. boot
+;; sets the hook; it's asked once, on the first signature that would be
+;; refused, so nothing else pays for the probe.
+(define ffi-stack-args-hook #f)
+(define (set-ffi-stack-args-hook! f) (set! ffi-stack-args-hook f))
+(define ffi-stack-args-ok 'unknown)
+(define (ffi-stack-args-correct?)
+  (when (eq? ffi-stack-args-ok 'unknown)
+    (set! ffi-stack-args-ok
+          (and ffi-stack-args-hook (eq? #t (guard (e [#t #f]) (ffi-stack-args-hook))))))
+  ffi-stack-args-ok)
+;; the signatures Chez would pass wrongly are refused, macOS arm64 first,
+;; unless this Chez is known to pass them right
 (define (ffi-refuse-misplaced! fd layouts variadic ret-struct)
-  (when (chez-misplaces? layouts variadic)
+  (when (and (chez-misplaces? layouts variadic) (not (ffi-stack-args-correct?)))
     (jthrow "java/lang/UnsupportedOperationException"
             (string-append "champaca: Chez Scheme would put an argument passed on the stack in the wrong place here on macOS arm64: "
                            (jstring-of fd))))
-  (when (sysv-stack-overrun? layouts (and ret-struct (eq? 'memory (car (sysv-eightbyte-classes ret-struct)))))
+  (when (and (sysv-stack-overrun? layouts (and ret-struct (eq? 'memory (car (sysv-eightbyte-classes ret-struct)))))
+             (not (ffi-stack-args-correct?)))
     (jthrow "java/lang/UnsupportedOperationException"
             (string-append "champaca: Chez Scheme would overwrite the argument after a struct passed on the stack here on x86_64: "
                            (jstring-of fd)))))

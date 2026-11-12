@@ -193,6 +193,11 @@ The first public version. Champaca is still experimental: the
 Behavior that now follows the JVM where champaca did something else, which a
 program may notice, and changes to the tasks.
 
+- A foreign call whose stack arguments Chez Scheme 10.4.1 would put in the
+  wrong place is made, not refused, when jolt says its Chez places them
+  right (`jolt.ffi/stack-args-correct?`, a jolt with Chez patches 0006/0007
+  or a Chez with the upstream fix). Asked once, on the first such signature;
+  a jolt that answers false, can't tell or is older keeps the refusals.
 - `sun.misc.Unsafe` warns as on JDK 25: a library that touches memory through
   it (Guava, Kryo) prints the JDK's deprecation warning on stderr, the same
   text as HotSpot's, where champaca set `sun.misc.unsafe.memory.access` to
