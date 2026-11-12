@@ -350,12 +350,13 @@
 ;; a direct handle's member's Exceptions (none for a field), null for any
 ;; other handle (unknown), so Linker.upcallStub refuses a target declaring
 ;; one and a VarHandle filter adapts only when it can't tell
+(define (mh-exception-types mh)
+  (let ([m (eq-hashtable-ref mh-members (nn mh) #f)])
+    (cond [(not m) #f]
+          [(eq? m 'field) (make-jarr "Ljava/lang/Class;" (vector))]
+          [else (with-loader-of (jmirror (car m)) (lambda () (exception-mirrors (cdr m))))])))
 (define-override! "java/lang/invoke/VarHandles.exceptionTypes(Ljava/lang/invoke/MethodHandle;)[Ljava/lang/Class;"
-  (lambda (mh)
-    (let ([m (eq-hashtable-ref mh-members (nn mh) #f)])
-      (cond [(not m) #f]
-            [(eq? m 'field) (make-jarr "Ljava/lang/Class;" (vector))]
-            [else (with-loader-of (jmirror (car m)) (lambda () (exception-mirrors (cdr m))))]))))
+  mh-exception-types)
 
 ;; Access checks for the Lookup methods, in the JDK's order, through the
 ;; JDK's own Java: Lookup.checkSymbolicClass on the class named (find* only,

@@ -1,0 +1,18 @@
+filterValue to declares checked: java.lang.IllegalArgumentException: Cannot adapt a var handle with a method handle which throws checked exceptions
+filterValue from declares checked: java.lang.IllegalArgumentException: Cannot adapt a var handle with a method handle which throws checked exceptions
+filterValue declares unchecked: ok 0
+filterCoordinates declares checked: java.lang.IllegalArgumentException: Cannot adapt a var handle with a method handle which throws checked exceptions
+collectCoordinates declares checked: java.lang.IllegalArgumentException: Cannot adapt a var handle with a method handle which throws checked exceptions
+screen before arity: java.lang.IllegalArgumentException: Cannot adapt a var handle with a method handle which throws checked exceptions
+screen before position: java.lang.IllegalArgumentException: Cannot adapt a var handle with a method handle which throws checked exceptions
+plain filters: 6 7
+adapted declares checked: ok 6
+set 1: ok 1
+set 13: java.lang.IllegalStateException: Adapter handle threw checked exception / cause java.lang.Exception: checked v
+set 14: java.lang.IllegalArgumentException: unchecked v
+get 13: java.lang.IllegalStateException: Adapter handle threw checked exception / cause java.lang.Exception: checked v
+compareAndSet 13: java.lang.IllegalStateException: Adapter handle threw checked exception / cause java.lang.Exception: checked v
+filterCoordinates 13: java.lang.Exception: checked v
+filterCoordinates 2: ok 5
+collectCoordinates 13: java.lang.IllegalStateException: Adapter handle threw checked exception / cause java.lang.Exception: checked c
+collectCoordinates 14: java.lang.IllegalArgumentException: unchecked c

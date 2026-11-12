@@ -453,6 +453,34 @@
                       (lambda (cs) (values (list-remove-range cs pos (length extra)) #f #f)))))))
 
 ;; filter i converts new coordinate pos+i into the base's
+;; A filter that may throw a checked exception, as VarHandles'
+;; adaptForCheckedExceptions screens it: a handle whose exceptions are known
+;; (a direct one, through the exceptionTypes override in handles.ss) and
+;; include a checked one is refused, and one whose exceptions are unknown gets
+;; its procedure wrapped so a checked exception it throws comes out as
+;; IllegalStateException("Adapter handle threw checked exception") with it as
+;; the cause, as handleCheckedExceptions does. filterCoordinates screens but
+;; doesn't wrap: the JDK builds the var handle from the unadapted filters.
+;; VarHandles.isCheckedException, by the class's name
+(define (checked-exception-name? n)
+  (not (or (class-assignable? n "java/lang/RuntimeException") (class-assignable? n "java/lang/Error"))))
+;; #t when the handle's exceptions are unknown; refuses a known checked one
+(define (screen-checked-filter mh)
+  (let ([types (mh-exception-types mh)])
+    (cond [(not types) #t]
+          [(exists (lambda (c) (checked-exception-name? (jclass-cname (mirror-class c)))) (vector->list (jarr-vec types)))
+           (vh-iae "Cannot adapt a var handle with a method handle which throws checked exceptions")]
+          [else #f])))
+(define (checked-wrapped p unknown?)
+  (if unknown?
+      (lambda xs
+        (guard (e [(and (jobj? e) (checked-exception-name? (class-name-of e)))
+                   (let ([ise (construct "java/lang/IllegalStateException" "(Ljava/lang/String;Ljava/lang/Throwable;)V"
+                                         (jstring-lit "Adapter handle threw checked exception") e)])
+                     (raise ise))])
+          (apply p xs)))
+      p))
+
 (define-override! "java/lang/invoke/MethodHandles.filterCoordinates(Ljava/lang/invoke/VarHandle;I[Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/VarHandle;"
   (lambda (vh pos filters)
     (let* ([t (vh-target-of (nn vh) "filterCoordinates")]
@@ -473,7 +501,7 @@
                                                  (cons ((vector-ref pv (fx- k pos)) (car cs)) (conv (cdr cs) (fx+ k 1)))]
                                                 [else (cons (car cs) (conv (cdr cs) (fx+ k 1)))]))
                                         #f #f))))
-                (let* ([f (nn (list-ref fs i))] [info (mh-info-of f)])
+                (let* ([f (nn (list-ref fs i))] [_ (screen-checked-filter f)] [info (mh-info-of f)])
                   (unless (fx= (length (mh-info-args info)) 1)
                     (vh-iae "Invalid filter type " (mh-type-text f)))
                   (unless (string=? (list-ref coords (fx+ pos i)) (mh-info-ret info))
@@ -507,8 +535,10 @@
 (define-override! "java/lang/invoke/MethodHandles.collectCoordinates(Ljava/lang/invoke/VarHandle;ILjava/lang/invoke/MethodHandle;)Ljava/lang/invoke/VarHandle;"
   (lambda (vh pos filter)
     (let* ([t (vh-target-of (nn vh) "collectCoordinates")]
+           [unknown? (screen-checked-filter (nn filter))]
            [ds (vh-target-coords t)]
            [info (mh-info-of (nn filter))]
+           [proc (checked-wrapped (mh-info-proc info) unknown?)]
            [k (length (mh-info-args info))]
            [void? (string=? (mh-info-ret info) "V")])
       (vh-check-pos pos ds)
@@ -519,7 +549,7 @@
       (vh-derived t (vh-target-type t)
                   (append (list-head ds pos) (mh-info-args info) (list-tail ds (if void? pos (fx+ pos 1))))
                   (lambda (cs)
-                    (let ([r (apply (mh-info-proc info) (list-head (list-tail cs pos) k))])
+                    (let ([r (apply proc (list-head (list-tail cs pos) k))])
                       (values (append (list-head cs pos)
                                       (if void? '() (list r))
                                       (list-tail cs (fx+ pos k)))
@@ -530,6 +560,8 @@
 (define-override! "java/lang/invoke/MethodHandles.filterValue(Ljava/lang/invoke/VarHandle;Ljava/lang/invoke/MethodHandle;Ljava/lang/invoke/MethodHandle;)Ljava/lang/invoke/VarHandle;"
   (lambda (vh to from)
     (let* ([t (vh-target-of (nn vh) "filterValue")]
+           [to-unknown? (screen-checked-filter (nn to))]
+           [from-unknown? (screen-checked-filter (nn from))]
            [ti (mh-info-of (nn to))] [fi (mh-info-of (nn from))]
            [tn (length (mh-info-args ti))] [fn (length (mh-info-args fi))]
            [last (lambda (xs) (list-ref xs (fx- (length xs) 1)))]
@@ -554,7 +586,8 @@
                                      (vh-iae "filterFromTarget and filterToTarget filter types do not match: " (both))))
                      extra (list-head (mh-info-args ti) (fx- tn 1)))
            (let ([nds (length (vh-target-coords t))]
-                 [top (mh-info-proc ti)] [fromp (mh-info-proc fi)])
+                 [top (checked-wrapped (mh-info-proc ti) to-unknown?)]
+                 [fromp (checked-wrapped (mh-info-proc fi) from-unknown?)])
              (vh-derived t (mh-info-ret fi) (append (vh-target-coords t) extra)
                          (lambda (cs)
                            (let ([base (list-head cs nds)] [ex (list-tail cs nds)])

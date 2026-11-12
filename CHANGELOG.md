@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- VarHandle combinators screen their filters for checked exceptions as the
+  JDK does: a direct handle declaring one is refused with the JDK's
+  `IllegalArgumentException`, and a checked exception from any other filter
+  becomes `IllegalStateException`, except under `filterCoordinates`
+  (`test/java/VarHandleFilterCheck.java`).
 - An annotation is a `java.lang.reflect.Proxy` over the JDK's
   `AnnotationInvocationHandler`, as on the JVM, where champaca generated a
   class of its own for it: `Proxy.isProxyClass` is true for it and a failed
