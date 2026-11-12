@@ -318,6 +318,9 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- `jolt test` runs thirteen feature-heavy programs again alone, each on a
+  fresh cache of its own, cold then warm, since the suite's shared cache
+  hid a bug only a program's own second run showed (#156).
 - The largest functions were split into named steps, guided by
   jolt-metrics (`jolt metrics`): codegen's `emit-block`, `compile-method`,
   `decode` and `render-steps`, the launcher's option parsing, the boot,
