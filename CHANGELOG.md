@@ -267,6 +267,12 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- `FileSystems.newFileSystem(jrt:/, {java.home: H})` with this JDK's own
+  home reads the image champaca runs on, where it failed with a duplicate
+  class definition for `JrtFileSystemProvider`: the JDK loads H's
+  `jrt-fs.jar` through a loader of its own. The Kotlin compiler opens its
+  JDK that way, and now compiles on champaca to the same class files as on
+  HotSpot (`test/java/JrtCheck.java`).
 - A class path entry that's a jar champaca can't open, one that isn't
   there or a file that isn't a zip, is skipped as the JDK skips it, instead
   of ending the run with `NoSuchFileException`; `java.class.path` still

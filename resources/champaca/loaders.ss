@@ -137,6 +137,24 @@
                 (jdk-resource-hook path)
                 (construct "java/net/URL" "(Ljava/lang/String;)V"
                            (jstring (string-append "jrt:/" (module-name-of m) "/" path))))))))
+;; FileSystems.newFileSystem(jrt:/, {java.home: H}) loads H's jrt-fs.jar through
+;; a JrtFsLoader of its own, so H's JrtFileSystemProvider is a second class of
+;; that name: a duplicate in champaca's one class table (Kotlin's compiler
+;; opens its JDK that way). When H is this JDK, the boot loader stands in
+;; (null), whose provider is the class already loaded, and the JDK's own code
+;; goes on to a JrtFileSystem over this image, which is what H's would read.
+;; Another JDK's jar still goes through a JrtFsLoader, as the JDK's
+;; newJrtFsLoader does, and still fails as a duplicate.
+(define-override! "jdk/internal/jrtfs/JrtFileSystemProvider.newJrtFsLoader(Ljava/nio/file/Path;)Ljava/net/URLClassLoader;"
+  (lambda (jrtfs)
+    (let ([given (jstring->scheme ((jvirt jrtfs "toString()Ljava/lang/String;") jrtfs))])
+      (if (guard (e [#t #f])
+            (string=? (canonical-path given) (canonical-path (string-append java-home-dir "/lib/jrt-fs.jar"))))
+          #f
+          (let* ([uri ((jvirt jrtfs "toUri()Ljava/net/URI;") jrtfs)]
+                 [url ((jvirt uri "toURL()Ljava/net/URL;") uri)])
+            (construct "jdk/internal/jrtfs/JrtFileSystemProvider$JrtFsLoader" "([Ljava/net/URL;)V"
+                       (make-jarr "[Ljava/net/URL;" (vector url))))))))
 (define (resource-url-list path)
   (let ([j (jdk-class-url path)] [cp (classpath-url-list path)])
     (if j (cons j cp) cp)))

@@ -1,0 +1,12 @@
+default: magic cafebabe
+default: /modules has java.base true
+default: java.lang in [/packages/java.lang/java.base, /packages/java.lang/java.instrument, /packages/java.lang/java.management]
+default: provider jdk.internal.jrtfs.JrtFileSystemProvider, scheme jrt
+default: is directory true
+java.home: magic cafebabe
+java.home: /modules has java.base true
+java.home: java.lang in [/packages/java.lang/java.base, /packages/java.lang/java.instrument, /packages/java.lang/java.management]
+java.home: provider jdk.internal.jrtfs.JrtFileSystemProvider, scheme jrt
+java.home: is directory true
+same Object.class bytes: true
+no jdk: java.io.IOException: /no/such/jdk/lib/jrt-fs.jar not exist
