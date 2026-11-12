@@ -16,5 +16,5 @@
  {;; Code metrics report (jolt metrics): jolt-metrics' CLI. Report only.
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
                          {:git/url "https://github.com/jlt-commons/jolt-metrics"
-                          :git/tag "v0.2.2" :git/sha "8568d4c"}}
+                          :git/tag "v0.4.0" :git/sha "e51804d"}}
             :main-opts ["-m" "metrics.cli"]}}}
