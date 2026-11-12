@@ -4,15 +4,17 @@ import java.util.prefs.*;
 
 // java.util.prefs through the platform's own store, as on the JVM: macOS's
 // CFPreferences (MacOSXPreferences), Linux's files under ~/.java
-// (FileSystemPreferences). A node of its own, three levels deep so macOS
-// gives it a file of its own too, written, flushed, read back, exported and
-// removed. Keys and children are printed sorted, since the stores keep
-// their own order.
+// (FileSystemPreferences). A node of its own, three levels deep, so that on
+// macOS its keys and children live in a file of their own rather than in the
+// shared com.apple.java.util.prefs, which other programs keep data in (only
+// creating and removing its ancestors touches that one, as on HotSpot):
+// written, flushed, read back, exported and removed. Keys and children are
+// printed sorted, since the stores keep their own order.
 public class PrefsCheck {
     static List<String> sorted(String[] a) { List<String> l = new ArrayList<>(Arrays.asList(a)); Collections.sort(l); return l; }
     public static void main(String[] args) throws Exception {
         Preferences root = Preferences.userRoot();
-        String base = "champaca-prefscheck";
+        String base = "champaca/prefscheck/node";
         if (root.nodeExists(base)) { root.node(base).removeNode(); root.flush(); }
         Preferences top = root.node(base);
         Preferences deep = top.node("a/b/c");
@@ -48,6 +50,8 @@ public class PrefsCheck {
         top.removeNode();
         root.flush();
         System.out.println("removed: " + root.nodeExists(base));
+        if (root.node("champaca/prefscheck").childrenNames().length == 0) root.node("champaca/prefscheck").removeNode();
+        root.flush();
         try { deep.get("s", "?"); } catch (IllegalStateException e) { System.out.println("removed node: " + e.getMessage()); }
     }
 }
