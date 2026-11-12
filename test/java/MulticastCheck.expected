@@ -1,0 +1,35 @@
+loopback found: true
+v4 key: true 239.255.42.99 true null true
+v4 same key: true
+v4 received: one
+v4 other group: none
+v4 dropped: false java.lang.IllegalStateException: key is no longer valid
+v4 after drop: none
+v4 rejoin: true true
+v4 rejoined: two
+v4 source join over any-source: java.lang.IllegalStateException: Already have source-specific membership
+v4 block as this system: yes
+v4 while blocked: none
+v4 after unblock: unblocked
+v4 ssm key: true 127.0.0.1
+v4 ssm received: from source
+v4 ssm any-source over it: java.lang.IllegalStateException: Already a member to receive all packets
+v4 ssm block: java.lang.IllegalStateException: key is source-specific
+v4 ssm two sources: true 127.0.0.2
+v4 ssm after drop: none
+dual v4 received: dual
+dual v4 after drop: none
+dual v4 ssm as this system: yes
+v6 key: true ff12:0:0:0:0:0:0:4242 null
+v6 received: six
+v6 after drop: none
+v6 ssm as this system: yes
+v6 block as this system: yes
+not multicast: java.lang.IllegalArgumentException: Group not a multicast address
+v6 group on v4: java.lang.IllegalArgumentException: Only IPv6 sockets can join IPv6 multicast group
+multicast source: java.lang.IllegalArgumentException: Source address is multicast address
+closed: no exception (false)
+multicast socket: classic
+join twice: java.net.SocketException: Already a member of group
+leave twice: java.net.SocketException: Not a member of group
+after leave: java.net.SocketTimeoutException: Receive timed out

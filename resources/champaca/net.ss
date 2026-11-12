@@ -37,13 +37,19 @@
     (SO_NOSIGPIPE . #x1022) (MSG_NOSIGNAL . 0) (FIONREAD . #x4004667f) (O_NONBLOCK . 4) (NI_NAMEREQD . 4)
     (EAGAIN . 35) (EINPROGRESS . 36) (EALREADY . 37) (EISCONN . 56) (ECONNREFUSED . 61) (ECONNRESET . 54)
     (ETIMEDOUT . 60) (ENOTCONN . 57) (EHOSTUNREACH . 65) (EADDRINUSE . 48) (EADDRNOTAVAIL . 49) (EPROTO . 100)
-    (ENETUNREACH . 51) (EAFNOSUPPORT . 47) (ai-addr . 32) (AF_INET6 . 30) (IPV6_V6ONLY . 27)))
+    (ENETUNREACH . 51) (EAFNOSUPPORT . 47) (ai-addr . 32) (AF_INET6 . 30) (IPV6_V6ONLY . 27)
+    (ENOPROTOOPT . 42) (EOPNOTSUPP . 102) (IP_ADD_MEMBERSHIP . 12) (IP_DROP_MEMBERSHIP . 13)
+    (IP_ADD_SOURCE_MEMBERSHIP . 70) (IP_DROP_SOURCE_MEMBERSHIP . 71) (IPV6_JOIN_GROUP . 12) (IPV6_LEAVE_GROUP . 13)))
 (define net-consts-linux
   '((SOL_SOCKET . 1) (SO_REUSEADDR . 2) (SO_REUSEPORT . 15) (SO_ERROR . 4) (SO_LINGER . 13)
     (SO_NOSIGPIPE . #f) (MSG_NOSIGNAL . #x4000) (FIONREAD . #x541b) (O_NONBLOCK . 2048) (NI_NAMEREQD . 8)
     (EAGAIN . 11) (EINPROGRESS . 115) (EALREADY . 114) (EISCONN . 106) (ECONNREFUSED . 111) (ECONNRESET . 104)
     (ETIMEDOUT . 110) (ENOTCONN . 107) (EHOSTUNREACH . 113) (EADDRINUSE . 98) (EADDRNOTAVAIL . 99) (EPROTO . 71)
-    (ENETUNREACH . 101) (EAFNOSUPPORT . 97) (ai-addr . 24) (AF_INET6 . 10) (IPV6_V6ONLY . 26)))
+    (ENETUNREACH . 101) (EAFNOSUPPORT . 97) (ai-addr . 24) (AF_INET6 . 10) (IPV6_V6ONLY . 26)
+    (ENOPROTOOPT . 92) (EOPNOTSUPP . 95) (IP_ADD_MEMBERSHIP . 35) (IP_DROP_MEMBERSHIP . 36)
+    (IP_ADD_SOURCE_MEMBERSHIP . 39) (IP_DROP_SOURCE_MEMBERSHIP . 40) (IP_BLOCK_SOURCE . 38) (IP_UNBLOCK_SOURCE . 37)
+    (IPV6_JOIN_GROUP . 20) (IPV6_LEAVE_GROUP . 21) (MCAST_JOIN_SOURCE_GROUP . 46) (MCAST_LEAVE_SOURCE_GROUP . 47)
+    (MCAST_BLOCK_SOURCE . 43) (MCAST_UNBLOCK_SOURCE . 44)))
 (define (net-const name)
   (cdr (or (assq name (if net-macos? net-consts-macos net-consts-linux)) (error 'champaca "no net constant" name))))
 ;; the same on both: AF_INET 2, SOCK_STREAM 1, SOCK_DGRAM 2, EINTR 4, EPIPE 32,
@@ -393,8 +399,11 @@
           [else (set-int-option! (net-fd fdo) level opt arg)])
     (void)))
 ;; IP_MULTICAST_IF (macOS 9, Linux 32) as a struct in_addr, the JDK's int in
-;; host order; 0 is any interface. Joining groups isn't done (joinOrDrop4)
+;; host order; 0 is any interface
 (define ip-multicast-if (if net-macos? 9 32))
+;; a struct in_addr at off from the JDK's host-order int
+(define (put-in4! buf off ip)
+  (do ([i 0 (fx+ i 1)]) ((fx= i 4)) (foreign-set! 'unsigned-8 buf (fx+ off i) (fxlogand (ash ip (fx* -8 (fx- 3 i))) 255))))
 (defnet "getInterface4(Ljava/io/FileDescriptor;)I"
   (lambda (fdo)
     (let ([buf (foreign-alloc 4)] [len (foreign-alloc 4)])
@@ -408,7 +417,7 @@
 (defnet "setInterface4(Ljava/io/FileDescriptor;I)V"
   (lambda (fdo interf)
     (let ([buf (foreign-alloc 4)])
-      (do ([i 0 (fx+ i 1)]) ((fx= i 4)) (foreign-set! 'unsigned-8 buf i (fxlogand (ash interf (fx* -8 (fx- 3 i))) 255)))
+      (put-in4! buf 0 interf)
       (let* ([r (libc-setsockopt (net-fd fdo) 0 ip-multicast-if buf 4)] [e (errno)])
         (foreign-free buf)
         (after-free r e socket-error)
@@ -419,6 +428,76 @@
   (lambda (fdo) (get-int-option (net-fd fdo) 41 ipv6-multicast-if)))
 (defnet "setInterface6(Ljava/io/FileDescriptor;I)V"
   (lambda (fdo index) (set-int-option! (net-fd fdo) 41 ipv6-multicast-if index) (void)))
+;; Group membership and source filters, as Net.c's joinOrDrop4/6 and
+;; blockOrUnblock4/6 set them. IPPROTO_IP's requests are struct ip_mreq (group,
+;; interface) and struct ip_mreq_source, whose three addresses macOS lays out
+;; group, source, interface and glibc group, interface, source. IPPROTO_IPV6's
+;; are struct ipv6_mreq (the address, the interface index at 16) and, on Linux,
+;; struct group_source_req (the index, then sockaddr_in6s for group and source
+;; at 8 and 136, 264 bytes). macOS's JDK filters sources only through an IPv4
+;; join on an IPv4 socket and answers IOS_UNAVAILABLE (-2) for the rest, which
+;; is also the answer to a join or a block the kernel has no option for
+;; (ENOPROTOOPT, EOPNOTSUPP). macOS retries one ENOMEM, a kernel bug the JDK
+;; works around. A failed join or drop says "<strerror> (setsockopt failed)",
+;; a failed block or unblock strerror's text alone.
+(define (zeroed-buf n)
+  (let ([b (foreign-alloc n)]) (do ([i 0 (fx+ i 1)]) ((fx= i n) b) (foreign-set! 'unsigned-8 b i 0))))
+(define (put-bytes! buf off bytes)
+  (let loop ([i off] [bs bytes]) (unless (null? bs) (foreign-set! 'unsigned-8 buf i (car bs)) (loop (fx+ i 1) (cdr bs)))))
+(define (membership! fdo level opt len fill! may-be-unavailable message)
+  (let ([buf (zeroed-buf len)] [fd (net-fd fdo)])
+    (fill! buf)
+    (let* ([r (libc-setsockopt fd level opt buf len)]
+           [r (if (and (< r 0) net-macos? (fx= (errno) 12)) (libc-setsockopt fd level opt buf len) r)]
+           [e (errno)])
+      (foreign-free buf)
+      (cond [(>= r 0) 0]
+            [(and may-be-unavailable (memv e (list (net-const 'ENOPROTOOPT) (net-const 'EOPNOTSUPP)))) -2]
+            [message (jthrow (socket-exception-class e) (string-append (strerror-text e) " (" message ")"))]
+            [else (socket-error e)]))))
+;; an ip_mreq_source: group at 0, then source and interface in the system's order
+(define (fill-mreq-source! buf group interf source)
+  (put-in4! buf 0 group)
+  (put-in4! buf (if net-macos? 4 8) source)
+  (put-in4! buf (if net-macos? 8 4) interf))
+(define (fill-group-source-req! buf group index source)
+  (foreign-set! 'unsigned-32 buf 0 index)
+  (foreign-set! 'unsigned-16 buf 8 (net-const 'AF_INET6))
+  (put-bytes! buf 16 (jbytes-list group))
+  (foreign-set! 'unsigned-16 buf 136 (net-const 'AF_INET6))
+  (put-bytes! buf 144 (jbytes-list source)))
+(defnet "joinOrDrop4(ZLjava/io/FileDescriptor;III)I"
+  (lambda (join fdo group interf source)
+    (let ([join (eqv? join 1)])
+      (if (eqv? source 0)
+          (membership! fdo 0 (net-const (if join 'IP_ADD_MEMBERSHIP 'IP_DROP_MEMBERSHIP)) 8
+                       (lambda (buf) (put-in4! buf 0 group) (put-in4! buf 4 interf)) join "setsockopt failed")
+          (membership! fdo 0 (net-const (if join 'IP_ADD_SOURCE_MEMBERSHIP 'IP_DROP_SOURCE_MEMBERSHIP)) 12
+                       (lambda (buf) (fill-mreq-source! buf group interf source)) join "setsockopt failed")))))
+(defnet "blockOrUnblock4(ZLjava/io/FileDescriptor;III)I"
+  (lambda (block fdo group interf source)
+    (if net-macos?
+        -2
+        (let ([block (eqv? block 1)])
+          (membership! fdo 0 (net-const (if block 'IP_BLOCK_SOURCE 'IP_UNBLOCK_SOURCE)) 12
+                       (lambda (buf) (fill-mreq-source! buf group interf source)) block #f)))))
+(defnet "joinOrDrop6(ZLjava/io/FileDescriptor;[BI[B)I"
+  (lambda (join fdo group index source)
+    (let ([join (eqv? join 1)])
+      (cond [(not source)
+             (membership! fdo 41 (net-const (if join 'IPV6_JOIN_GROUP 'IPV6_LEAVE_GROUP)) 20
+                          (lambda (buf) (put-bytes! buf 0 (jbytes-list group)) (foreign-set! 'unsigned-32 buf 16 index))
+                          join "setsockopt failed")]
+            [net-macos? -2]
+            [else (membership! fdo 41 (net-const (if join 'MCAST_JOIN_SOURCE_GROUP 'MCAST_LEAVE_SOURCE_GROUP)) 264
+                               (lambda (buf) (fill-group-source-req! buf group index source)) join "setsockopt failed")]))))
+(defnet "blockOrUnblock6(ZLjava/io/FileDescriptor;[BI[B)I"
+  (lambda (block fdo group index source)
+    (if net-macos?
+        -2
+        (let ([block (eqv? block 1)])
+          (membership! fdo 41 (net-const (if block 'MCAST_BLOCK_SOURCE 'MCAST_UNBLOCK_SOURCE)) 264
+                       (lambda (buf) (fill-group-source-req! buf group index source)) block #f)))))
 ;; the events that happened (0 on a timeout or an interrupt), as the JDK's poll answers
 (define (poll-fd fd events timeout)
   (let ([pfd (foreign-alloc 8)])

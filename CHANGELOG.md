@@ -60,6 +60,15 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- Multicast works: `DatagramChannel.join`, `MembershipKey.drop`, `block`
+  and `unblock`, and `MulticastSocket.joinGroup`/`leaveGroup`, for IPv4 and
+  IPv6 groups, source-specific joins included, with the JDK's refusals of
+  what macOS can't filter, where every join stopped at an
+  `UnsatisfiedLinkError` (`test/java/MulticastCheck.java`, the same as
+  HotSpot on a Mac and in a Linux container). Two of the socket layer's
+  platform answers now match HotSpot 25.0.2's: a socket's write side isn't
+  shut before close on macOS, and IPv6 options apply to an IPv6 socket bound
+  to an IPv4 address on Linux.
 - `java.util.prefs` works: on macOS through CFPreferences, in the layout
   HotSpot leaves in `~/Library/Preferences`, so each reads the other's
   nodes, and on Linux through `~/.java` with its lock files, where both
