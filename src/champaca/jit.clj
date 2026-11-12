@@ -28,6 +28,28 @@
 
 ;; --- resolution ----------------------------------------------------------------------
 
+(defn- method-named
+  "The method mname(desc) in methods, or nil."
+  [methods mname desc]
+  (first (filter #(and (= mname (:name %)) (= desc (:desc %))) methods)))
+
+(defn- inline-source?
+  "Whether decl's methods may be inlined into caller-cname's: the caller's
+  own class, or a JDK class already parsed in this run (reading one again
+  from the image costs a warm start more than the inlining saves; decided
+  first, so a restored class's methods aren't thawed for an inlining that
+  can't happen)."
+  [caller-cname decl info]
+  (or (= decl caller-cname) (and (= :jdk (:origin info)) (:parsed info))))
+
+(defn- leaf-sized?
+  "Whether im, from decl's class map, has code within codegen's leaf limit
+  and isn't one the runtime overrides; the class map answers it without
+  reading the class file again."
+  [decl im]
+  (and im (:code im) (<= (or (:code-len im) 0) cg/leaf-limit)
+       (not (overridden? decl im))))
+
 (defn- inline-candidate
   "The parsed class and method decl.mname(desc), for codegen to inline into a
   method of caller-cname, or nil. Only a method in the caller's own class or
@@ -37,17 +59,10 @@
   runtime overrides never qualifies."
   [caller-cname decl mname desc]
   (let [info (class-info decl)]
-    ;; only a class already parsed in this run: reading one again from the
-    ;; image costs a warm start more than the inlining saves; decided first,
-    ;; so a restored class's methods aren't thawed for an inlining that
-    ;; can't happen
-    (when (or (= decl caller-cname) (and (= :jdk (:origin info)) (:parsed info)))
-      (let [im (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (methods-of info)))]
-        ;; the class map answers most of it without reading the class file again
-        (when (and im (:code im) (<= (or (:code-len im) 0) cg/leaf-limit)
-                   (not (overridden? decl im)))
-          (when-let [p (if (= decl caller-cname) (parsed decl) (:parsed info))]
-            {:cls p :method (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))}))))))
+    (when (and (inline-source? caller-cname decl info)
+               (leaf-sized? decl (method-named (methods-of info) mname desc)))
+      (when-let [p (if (= decl caller-cname) (parsed decl) (:parsed info))]
+        {:cls p :method (method-named (:methods p) mname desc)}))))
 
 (def ^:private resolver
   {:ensure-loaded #(ensure-loaded! %)
@@ -274,24 +289,37 @@
                    :else (recur (ann-skip-annotation b i) (inc k)))))
          (catch Exception _ false))))
 
+(defn- parse-frame-class
+  "What a stack frame of class cname shows, from its class file's bytes: the
+  source file, the module of a JDK class, each method's line table and the
+  @Hidden methods."
+  [cname bytes]
+  (let [p (binding [cf/*lines* true] (cf/parse bytes))
+        slash (str/last-index-of cname "/")]
+    {:source (:source p)
+     :module (when (= :jdk (:origin (class-info cname)))
+               (package-module (if slash (subs cname 0 slash) "")))
+     :lines (into {} (for [m (:methods p) :when (:code m)]
+                       [(str (:name m) (:desc m)) (:lines (:code m))]))
+     :hidden (set (for [m (:methods p) :when (hidden-method? (:cp p) m)]
+                    (str (:name m) (:desc m))))}))
+
+(defn- read-frame-class
+  "parse-frame-class for cname, or nil when its bytes are gone or don't
+  parse (one stderr line under CHAMPACA_BT)."
+  [cname]
+  (try (when-let [bytes (class-bytes cname)]
+         (parse-frame-class cname bytes))
+       (catch Exception e
+         (when (env "CHAMPACA_BT")
+           (binding [*out* *err*] (println "champaca: no source lines for" cname (ex-message e))))
+         nil)))
+
 (defn- frame-class [cname]
   (let [cache (:frame-classes @state)]
     (if (contains? cache cname)
       (get cache cname)
-      (let [info (try (when-let [bytes (class-bytes cname)]
-                        (let [p (binding [cf/*lines* true] (cf/parse bytes))
-                              slash (str/last-index-of cname "/")]
-                          {:source (:source p)
-                           :module (when (= :jdk (:origin (class-info cname)))
-                                     (package-module (if slash (subs cname 0 slash) "")))
-                           :lines (into {} (for [m (:methods p) :when (:code m)]
-                                             [(str (:name m) (:desc m)) (:lines (:code m))]))
-                           :hidden (set (for [m (:methods p) :when (hidden-method? (:cp p) m)]
-                                          (str (:name m) (:desc m))))}))
-                      (catch Exception e
-                        (when (env "CHAMPACA_BT")
-                          (binding [*out* *err*] (println "champaca: no source lines for" cname (ex-message e))))
-                        nil))]
+      (let [info (read-frame-class cname)]
         (swap! state assoc-in [:frame-classes cname] info)
         info))))
 
