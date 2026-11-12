@@ -1495,7 +1495,12 @@
 ;; the unnamed module whatever their package, as a classpath class does on the
 ;; JVM, where one in a package a JDK module owns is never even loaded
 (define user-classes (make-hashtable string-hash string=?))
-(define (user-class! name) (hashtable-set! user-classes name #t))
+;; and the ones registered since the app loader's packages were last
+;; defined (natives.ss define-app-packages!), newest first
+(define user-classes-pending '())
+(define (user-class! name)
+  (hashtable-set! user-classes name #t)
+  (set! user-classes-pending (cons name user-classes-pending)))
 (define (user-class? name) (hashtable-contains? user-classes name))
 ;; classes defined at run time (ClassLoader.defineClass, natives.ss): the
 ;; loader that defined each, for Class.getClassLoader and findLoadedClass,

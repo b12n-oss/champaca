@@ -12,6 +12,14 @@ public class PackageCheck {
             + " implV=" + p.getImplementationVersion() + " implVendor=" + p.getImplementationVendor();
     }
     public static void main(String[] args) throws Exception {
+        // a loaded class's package is defined, by name, before any of its
+        // classes is asked for it
+        new champaca.lib.Shelf();
+        System.out.println("by name first: " + show(Package.getPackage("")) + " / " + show(Package.getPackage("champaca.lib")));
+        System.out.println("defined first: " + (PackageCheck.class.getClassLoader().getDefinedPackage("champaca.lib") != null));
+        System.out.println("listed first: " + java.util.Arrays.stream(Package.getPackages()).filter(p -> p.getName().equals("") || p.getName().equals("champaca.lib")).count()
+            + " " + java.util.Arrays.stream(PackageCheck.class.getClassLoader().getDefinedPackages()).filter(p -> p.getName().equals("champaca.lib")).count());
+        System.out.println("not loaded: " + Package.getPackage("champaca.nothing.here"));
         Package lib = champaca.lib.Greeter.class.getPackage();
         System.out.println("jar: " + show(lib));
         System.out.println("jar sealed: " + lib.isSealed());

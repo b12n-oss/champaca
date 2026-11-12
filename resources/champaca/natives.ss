@@ -2858,6 +2858,46 @@
           (apply (method-proc "java/lang/ClassLoader"
                               "definePackage(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/net/URL;)Ljava/lang/Package;")
                  ld (jstring pn) (package-attributes (text-lines (jpackage-hook cn))))))))
+;; HotSpot's application loader defines a class's package as it defines
+;; the class (BuiltinClassLoader.defineOrCheckPackage); champaca loads class
+;; path classes itself, so the app loader's packages are defined when they're
+;; looked up instead: getDefinedPackage, and packages() under
+;; getDefinedPackages, Package.getPackage(s) and the rest, first define the
+;; package of each class path class registered since the last look, in the
+;; order they were registered, so a split package takes its first class's
+;; manifest as before (each through loader-package).
+(define (define-app-packages!)
+  (let ([ld (app-loader)])
+    (when (and ld (pair? user-classes-pending))
+      (let ([names (reverse user-classes-pending)] [done (make-hashtable string-hash string=?)])
+        (set! user-classes-pending '())   ; defining runs Java, which may register more
+        (for-each
+         (lambda (cn)
+           (let ([dir (package-dir cn)])
+             (unless (or (hashtable-ref done dir #f) (hashtable-ref package-modules dir #f))
+               (hashtable-set! done dir #t)
+               (loader-package ld (slashes->dots dir) cn))))
+         names)))))
+(define (loader-named-packages ld) (jslot ld (jfield-index "java/lang/ClassLoader" "packages")))
+(define (named-package->package ld np)
+  ((method-proc "java/lang/ClassLoader" "definePackage(Ljava/lang/String;Ljava/lang/Module;)Ljava/lang/Package;")
+   ld ((jvirt np "packageName()Ljava/lang/String;") np) ((jvirt np "module()Ljava/lang/Module;") np)))
+(define-override! "java/lang/ClassLoader.getDefinedPackage(Ljava/lang/String;)Ljava/lang/Package;"
+  (lambda (this name)
+    (unless name (jthrow "java/lang/NullPointerException" "name cannot be null"))
+    (when (eq? this (app-loader)) (define-app-packages!))
+    (let* ([m (loader-named-packages this)]
+           [np ((jvirt m "get(Ljava/lang/Object;)Ljava/lang/Object;") m name)])
+      (and np (named-package->package this np)))))
+(define-override! "java/lang/ClassLoader.packages()Ljava/util/stream/Stream;"
+  (lambda (this)
+    (when (eq? this (app-loader)) (define-app-packages!))
+    (let* ([m (loader-named-packages this)]
+           [vs ((jvirt m "values()Ljava/util/Collection;") m)]
+           [arr ((jvirt vs "toArray()[Ljava/lang/Object;") vs)])
+      (jinit "java/util/Arrays")
+      ((method-proc "java/util/Arrays" "stream([Ljava/lang/Object;)Ljava/util/stream/Stream;")
+       (make-jarr "Ljava/lang/Package;" (vector-map (lambda (np) (named-package->package this np)) (jarr-vec arr)))))))
 (define (jpackage-of cn)
   (let* ([dir (package-dir cn)]   ; hidden-class aware: Name/0x1 is in Name's package
          [pn (slashes->dots dir)]

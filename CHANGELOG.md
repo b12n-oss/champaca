@@ -60,6 +60,11 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `Package.getPackage(String)`, `Package.getPackages()` and the application
+  loader's `getDefinedPackage` and `getDefinedPackages` find a package of
+  your class path as soon as one of its classes has loaded, as on the JVM,
+  where they found it only after something had asked one of its classes for
+  its package (`test/java/PackageCheck.java`).
 - GC notifications: a listener on a garbage collector bean hears each
   collection as the JDK's `GarbageCollectionNotificationInfo`, with its
   action, cause and `GcInfo`, on a daemon `Notification Thread`, as on
@@ -68,8 +73,7 @@ The first public version. Champaca is still experimental: the
 - `ManagementFactory` lists a memory pool, `Chez heap`, and a garbage
   collector, `Chez`, where both lists were empty: the pool reports Chez's
   heap usage and peak, the collector Chez's collection count and time, and
-  the MBean server lists them (`test/java/MemoryBeanCheck.java`). GC
-  notifications and `getLastGcInfo` aren't there yet.
+  the MBean server lists them (`test/java/MemoryBeanCheck.java`).
 - `native.encoding`, `sun.jnu.encoding` and the console streams' encodings
   come from the locale's codeset (`nl_langinfo`) as the JDK's launcher reads
   them, where they were always UTF-8. With no locale set, Linux gets
