@@ -9,7 +9,7 @@ jolt jolt                                               # build the pinned jolt 
 jolt test                                               # every test/java and test/aaa program vs the JVM, plus the examples/*.clj tests
                                                       # (a failing program's output goes to target/fails/, and the start of its diff is printed)
 JOLT=jolt jolt test                                     # the same suite on the jolt from your PATH
-jolt libs:fetch && jolt libs                              # the seventeen real libraries vs the JVM (jars into ~/.m2)
+jolt libs:fetch && jolt libs                              # the twenty real libraries vs the JVM (jars into ~/.m2)
 jolt battery [ref]                                      # before a merge: jolt test cold, warm, cache off and CHAMPACA_BT=1, then jolt libs (after jolt libs:fetch), on a worktree of HEAD
                                                       # with its own cache (kept until the next run of another ref), logs under target/battery/; about 30 min, more under load; BATTERY_MODES=cold,libs for a subset
 jolt linux                                              # jolt test and jolt libs on Linux, in Docker (jolt linux amd64 for x86_64)
@@ -41,7 +41,7 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 
 ## Before a merge
 
-A change merges once `jolt test`, the battery and the Linux run all pass. The battery runs the whole suite four ways on a worktree of the ref: cold, warm, with the cache off and with `CHAMPACA_BT=1`. Then it runs the seventeen libraries. It deletes every battery worktree and cache under `target/battery` when it starts, so each run starts cold, and a second battery started while one runs (even a `BATTERY_MODES` subset) pulls the first one's tree out from under it. `jolt linux` needs Docker: it builds the `ci/linux` image, fetches the library jars into `~/.m2` on this machine (`jolt libs:fetch`, which needs the network), then runs `jolt jolt`, `jolt test` and `jolt libs` in a container that mounts them read-only.
+A change merges once `jolt test`, the battery and the Linux run all pass. The battery runs the whole suite four ways on a worktree of the ref: cold, warm, with the cache off and with `CHAMPACA_BT=1`. Then it runs the twenty libraries. It deletes every battery worktree and cache under `target/battery` when it starts, so each run starts cold, and a second battery started while one runs (even a `BATTERY_MODES` subset) pulls the first one's tree out from under it. `jolt linux` needs Docker: it builds the `ci/linux` image, fetches the library jars into `~/.m2` on this machine (`jolt libs:fetch`, which needs the network), then runs `jolt jolt`, `jolt test` and `jolt libs` in a container that mounts them read-only.
 
 ```sh
 jolt battery <ref>

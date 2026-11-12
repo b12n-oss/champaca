@@ -48,4 +48,25 @@
   {:main "Comp" :jars [["org.apache.commons:commons-compress:1.27.1" "a19151084758e2fbb6b41eddaa88e7b8ff4e6599"]
                        ["commons-io:commons-io:2.17.0" "ddcc8433eb019fb48fe25207c0278143f3e1d7e2"]
                        ["org.apache.commons:commons-lang3:3.17.0" "b17d2136f0460dcc0d2016ceefca8723bdf4ee70"]
-                       ["commons-codec:commons-codec:1.17.1" "973638b7149d333563584137ebf13a691bb60579"]]}]}
+                       ["commons-codec:commons-codec:1.17.1" "973638b7149d333563584137ebf13a691bb60579"]]}
+  ;; an NIO event loop: a line-based echo server and client over loopback,
+  ;; pooled direct and composite buffers (Unsafe's warnings go to stderr)
+  {:main "Nty" :jars [["io.netty:netty-common:4.1.115.Final" "9da10a9f72e3f87e181d91b525174007a6fc4f11"]
+                      ["io.netty:netty-buffer:4.1.115.Final" "d5daf1030e5c36d198caf7562da2441a97ec0df6"]
+                      ["io.netty:netty-transport:4.1.115.Final" "39cef77c1a25908ac1abf4960c2e789f0bf70ff9"]
+                      ["io.netty:netty-codec:4.1.115.Final" "d326bf3a4c785b272da3db6941779a1bd5448378"]
+                      ["io.netty:netty-handler:4.1.115.Final" "d54dbf68b9d88a98240107758c6b63da5e46e23a"]
+                      ["io.netty:netty-resolver:4.1.115.Final" "e33b4d476c03975957f5d8d0319d592bf2bc5e96"]
+                      ["io.netty:netty-transport-native-unix-common:4.1.115.Final" "dc96c67d06cd6b5eb677f2728f27bf2e3d9a7284"]]}
+  ;; Log4j 2's plugins found from its jar, a built configuration, pattern
+  ;; layouts with markers, thread context and exceptions, another thread
+  {:main "L4j" :jars [["org.apache.logging.log4j:log4j-api:2.24.1" "7ebeb12c20606373005af4232cd0ecca72613dda"]
+                      ["org.apache.logging.log4j:log4j-core:2.24.1" "c85285146f28d8c8962384f786e2dff04172fb43"]]}
+  ;; XML through Jackson and Woodstox: StAX found by ServiceLoader,
+  ;; attributes, wrapped lists, escaping, trees
+  {:main "Jxml" :jars [["com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.18.1" "f85fc7ce244ab3e7de8e6a8f74fca99f7127d378"]
+                       ["com.fasterxml.woodstox:woodstox-core:7.0.0" "beb19c02e7e28a8a4acf4a9cc8c3280ec3b94722"]
+                       ["org.codehaus.woodstox:stax2-api:4.2.2" "b0d746cadea928e5264f2ea294ea9a1bf815bbde"]
+                       ["com.fasterxml.jackson.core:jackson-databind:2.18.1" "66547d0c6c2f9e022019499308f09bebbf30ab2e"]
+                       ["com.fasterxml.jackson.core:jackson-core:2.18.1" "9e2284c539e2dedd2aa1487c781e20a0f575d695"]
+                       ["com.fasterxml.jackson.core:jackson-annotations:2.18.1" "8f9aa97e7fb44d4bea829061625472b0f6199923"]]}]}

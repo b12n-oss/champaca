@@ -174,6 +174,11 @@ The first public version. Champaca is still experimental: the
 
 #### Libraries
 
+- Netty 4.1.115, Log4j 2.24.1 and Jackson's XML module 2.18.1 over
+  Woodstox join the libraries `jolt libs` checks against the JVM, making
+  twenty: an NIO event loop with an echo server and pooled direct buffers,
+  plugin-based logging, and XML through StAX (`test/libs/Nty.java`,
+  `L4j.java`, `Jxml.java`, the same on macOS and Linux).
 - Joda-Time 2.13.0, Guice 7.0.0, Kryo 5.6.2 and commons-compress 1.27.1
   join the libraries `jolt libs` checks against the JVM, making seventeen:
   time zones from a jar's own data, dependency injection, serialization

@@ -21,7 +21,7 @@ A module outside the JDK's default module graph, such as the Vector API's `jdk.i
 
 ### A real library
 
-Seventeen libraries have been run this way and checked against the JVM, with identical output:
+Twenty libraries have been run this way and checked against the JVM, with identical output:
 
 | Library | What was exercised |
 |---|---|
@@ -35,6 +35,9 @@ Seventeen libraries have been run this way and checked against the JVM, with ide
 | Guice 7.0.0 | constructor, field and provider injection, a `@Named` constant, a singleton scope, a `Multibinder` set, a `@Provides` method, a missing binding's error, the injector's bindings |
 | Joda-Time 2.13.0 | a daylight-saving gap in `America/New_York` from the jar's own zone data, the next transition, formatting in another zone and locale, ISO parsing, periods and their wording, day counts, intervals |
 | Kryo 5.6.2 | registered classes, a record, an enum and a map with an `int[]` written and read back through `Unsafe`, Objenesis and ReflectASM, the exact bytes, a deep copy |
+| Jackson XML 2.18.1 with Woodstox 7.0.0 | an annotated bean written as XML with an attribute, a wrapped list and escaped text, read back, a tree, pretty printing, the StAX factory `ServiceLoader` finds in Woodstox's jar |
+| Log4j 2.24.1 | a configuration built in code, plugins found from its jar, a pattern layout with level, logger, thread, marker and thread-context fields, an exception's message, a logger kept quiet by level, a second thread |
+| Netty 4.1.115 | an NIO event loop running a line-based echo server and client over the loopback, UTF-8 frames, pooled direct and composite buffers |
 | Caffeine 3.2.2 | size, weight, write- and access-based eviction against a fake clock, removal listeners, refresh, `getAll`, async and loading caches, stats |
 | Guava 33.4.8 | CRC32C, CRC32, Adler-32, Murmur3, FarmHash, SHA-256, SHA-512 and MD5 hashing, a Bloom filter, immutable multimaps, `Joiner`, `Splitter` |
 | SLF4J 2.0.16 with `slf4j-simple` | logging through the provider `ServiceLoader` finds in `slf4j-simple`'s jar |
@@ -43,7 +46,7 @@ Seventeen libraries have been run this way and checked against the JVM, with ide
 | picocli 4.7.6 | annotated options and positional parameters with type conversion, split values, a map option, subcommands with a mixin and `@ParentCommand`, usage and version help, error messages, a command defined by an interface (a `Proxy`), `parseArgs` results |
 | SnakeYAML 2.3 | loading and dumping maps, beans with generic `List` and `Map` properties, public fields and enums, anchors and merge keys, multi-document streams, block style, timestamps, error messages with their line and column marks |
 
-`jolt libs` reruns all seventeen, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `jolt libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `jolt libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `jolt test`, which needs no network.
+`jolt libs` reruns all twenty, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `jolt libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `jolt libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `jolt test`, which needs no network.
 
 To call one of them from jolt, with the jars in `~/.m2`:
 
