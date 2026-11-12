@@ -260,10 +260,11 @@ program may notice, and changes to the tasks.
   rest, from the same `bb.edn`, so babashka is no longer needed. The pinned jolt
   is built by `tools/build-jolt.sh`, which needs only git and make, and the
   Linux image and CI use it.
-- The jolt that `jolt test` and the other tasks build is the v0.8.26 tag,
-  the first release with `System/mapLibraryName`, and running the tasks
-  under jolt needs 0.8.26 or later; champaca still needs jolt 0.8.24 or
-  later.
+- The jolt that `jolt test` and the other tasks build is the v0.8.27 tag,
+  the first release with `jolt.ffi/stack-args-correct?`, and running the
+  tasks under jolt needs 0.8.26 or later, for `System/mapLibraryName`;
+  champaca still needs jolt 0.8.24 or later. On 0.8.27's release binary the
+  foreign calls an unpatched Chez misplaces are made with HotSpot's values.
 
 ### Fixed
 

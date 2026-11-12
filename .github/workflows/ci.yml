@@ -155,7 +155,7 @@ jobs:
       - if: matrix.platform == 'amd64'
         uses: jlt-commons/setup-jolt@v1
         with:
-          version: "0.8.26"
+          version: "0.8.27"
       - name: install babashka
         if: matrix.platform == 'arm64'
         run: |
@@ -209,9 +209,10 @@ jobs:
           key: ${{ steps.jolt-linux.outputs.cache-primary-key }}
 
       # macOS: OpenJDK 25.0.2, the JDK the Linux image uses, and the pinned
-      # jolt built over Homebrew's Chez, as on a developer's Mac (without a
-      # system Chez, jolt's make build provisions one with an xPack GCC whose
-      # stdio.h fails against the runner's SDK: jolt-lang/jolt#1601)
+      # jolt built over Homebrew's Chez, as on a developer's Mac. Without a
+      # system Chez, jolt's make build provisions its own, which works on the
+      # runner since jolt-lang/jolt#1602 (it failed against the SDK before:
+      # #1601), but Homebrew's bottle is faster than building one each run.
       - name: install OpenJDK 25.0.2
         if: matrix.platform == 'macos'
         run: |
@@ -222,12 +223,12 @@ jobs:
           home="$RUNNER_TEMP/jdk-25.0.2.jdk/Contents/Home"
           echo "JAVA_HOME=$home" >> "$GITHUB_ENV"
           echo "$home/bin" >> "$GITHUB_PATH"
-      # jolt's release binary runs the tasks; they need 0.8.26 for
+      # jolt's release binary runs the tasks; they need 0.8.26 or later for
       # System/mapLibraryName
       - if: matrix.platform == 'macos'
         uses: jlt-commons/setup-jolt@v1
         with:
-          version: "0.8.26"
+          version: "0.8.27"
       - name: restore the jolt build (macOS)
         if: matrix.platform == 'macos'
         id: jolt-macos
