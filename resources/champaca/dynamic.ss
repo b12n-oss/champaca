@@ -297,31 +297,45 @@
 (define (candidates-where cname name static? arity-ok?)
   (candidates-from (list cname) name static? arity-ok? public?)) ; jolt calls from outside the class
 
+;; a test of meta method m (name desc flags): the name, an accepted arity,
+;; the static-ness and access asked for, and not a bridge or synthetic
+(define (candidate-test name static? arity-ok? access-ok?)
+  (lambda (m)
+    (and (string=? (car m) name)
+         (arity-ok? (length (desc-args (cadr m))) (caddr m))
+         (eq? static? (static-flag? (caddr m)))
+         (access-ok? (caddr m))
+         (fxzero? (fxlogand (caddr m) #x1040)))))
+
+;; one candidate per parameter list: a covariant override (same params,
+;; narrower return) found first hides its parent's
+(define (params-taken? m acc)
+  (exists (lambda (a) (string=? (params-of (caddr a)) (params-of (cadr m)))) acc))
+
+;; acc with class o's candidates (o name desc flags) consed on
+(define (add-class-candidates o k wanted? acc)
+  (fold-left
+   (lambda (acc m)
+     (if (and (wanted? m) (not (params-taken? m acc)))
+         (cons (list o (car m) (cadr m) (caddr m)) acc)
+         acc))
+   acc (meta-methods k)))
+
+;; the classes searched after k: its superclass, then its interfaces unless static
+(define (class-supertypes k static?)
+  (append (if (jclass-super k) (list (jclass-super k)) '())
+          (if static? '() (jclass-interfaces k))))
+
 (define (candidates-from roots name static? arity-ok? access-ok?)
+  (define wanted? (candidate-test name static? arity-ok? access-ok?))
   (let loop ([todo roots] [seen '()] [acc '()])
-    (if (null? todo)
-        (reverse acc)
-        (let ([o (car todo)])
-          (if (member o seen)
-              (loop (cdr todo) seen acc)
-              (let ([k (find-class o)])
-                (loop (append (cdr todo)
-                              (if (jclass-super k) (list (jclass-super k)) '())
-                              (if static? '() (jclass-interfaces k)))
-                      (cons o seen)
-                      (fold-left
-                       (lambda (acc m)
-                         (if (and (string=? (car m) name)
-                                  (arity-ok? (length (desc-args (cadr m))) (caddr m))
-                                  (eq? static? (static-flag? (caddr m)))
-                                  (access-ok? (caddr m))
-                                  (fxzero? (fxlogand (caddr m) #x1040))
-                                  ;; one per parameter list: a covariant override
-                                  ;; (same params, narrower return) hides its parent's
-                                  (not (exists (lambda (a) (string=? (params-of (caddr a)) (params-of (cadr m)))) acc)))
-                             (cons (list o (car m) (cadr m) (caddr m)) acc)
-                             acc))
-                       acc (meta-methods k)))))))))
+    (cond [(null? todo) (reverse acc)]
+          [(member (car todo) seen) (loop (cdr todo) seen acc)]
+          [else
+           (let* ([o (car todo)] [k (find-class o)])
+             (loop (append (cdr todo) (class-supertypes k static?))
+                   (cons o seen)
+                   (add-class-candidates o k wanted? acc)))])))
 
 (define (score desc args)
   (let loop ([ds (desc-args desc)] [as args] [total 0])
