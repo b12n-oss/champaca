@@ -35,7 +35,7 @@ Methods are found by name, and the overload is picked from the arguments the way
 ## What it runs
 
 - **Twenty-three common libraries** (commons-lang3, commons-lang 2.4, commons-io, commons-compress, Commons Math, gson, jsoup, Jackson and its XML module, Caffeine, Guava, Guice, Joda-Time, Kryo, Netty, SLF4J, Log4j 2, SnakeYAML, picocli, the H2 database, Lucene, Bouncy Castle and Byte Buddy) give the same output as on HotSpot, which `jolt libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
-- **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
+- **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time, and Spring PetClinic serves its pages byte for byte as HotSpot does ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
 - **Compiled Java programs** run from the command line as with `java`: `-cp`, `-jar`, `-D` options, `-p` and `-m` for modules, source files, and the JDK's own rules for finding `main` ([running-java-programs](docs/guide/running-java-programs.md)).
 - **Many JDK areas**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each checked against HotSpot ([compatibility](docs/guide/compatibility.md)).
 - **A startup cache** keeps what a run compiled, so a warm `Hello` takes 0.39 s from exec to exit on an M1 Pro, where the first run took 4.3 s ([performance](docs/guide/performance.md#the-startup-cache)).
