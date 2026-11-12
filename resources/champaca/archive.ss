@@ -41,7 +41,11 @@
 ;; names what its <clinit> sets for good) holding a Java object or array, by
 ;; value. Another static may be a lazily filled cache (Builder.cachedVersion
 ;; is null when a warm boot reads it), so what only such a static holds is
-;; copied
+;; copied. global-bound?, not Chez's top-level-bound?: asked of a symbol that
+;; has no label yet (a static whose class hasn't registered), Chez's mints a
+;; gensym label, the class's own code is then compiled against it, and the
+;; next run, where the symbol is its own label, reads the static as unset
+;; (ValueLayout.JAVA_INT for errno capture was null on every warm run)
 (define (module-graph-statics skip)
   (let ([t (make-eq-hashtable)])
     (define (constant-style? n)
@@ -49,7 +53,7 @@
         (and i (fx< (fx+ i 1) (string-length n)) (char-upper-case? (string-ref n (fx+ i 1))))))
     (for-each (lambda (s)
                 (let ([n (symbol->string s)])
-                  (when (and (champaca-global-name? s) (not (string=? n skip)) (constant-style? n) (top-level-bound? s))
+                  (when (and (champaca-global-name? s) (not (string=? n skip)) (constant-style? n) (global-bound? s))
                     (let ([v (top-level-value s)])
                       (when (and (or (jobj? v) (jarr? v)) (not (eq-hashtable-ref t v #f)))
                         (eq-hashtable-set! t v n))))))

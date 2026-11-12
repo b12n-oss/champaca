@@ -540,6 +540,21 @@
                                           (finally (fs/delete-tree cache)))]
                                  (println (if ok "PASS" "FAIL") "a failed save leaves no class map without its code (test/cachesave)")
                                  (if ok [] ["cache save"]))
+                    ;; a static that Scheme code reads (errno capture's
+                    ;; ValueLayout.JAVA_INT) holds its value on a warm run too:
+                    ;; CaptureStateCheck on a fresh cache, cold then warm
+                    warm-static-fails (let [cache (str (fs/create-temp-dir {:prefix "champaca-warmstatic-"}))
+                                            run (fn [label]
+                                                  (run-limited 300 {:label label :extra-env {"CHAMPACA_CACHE_DIR" cache}}
+                                                               (jolt-bin) "-M" "-m" "champaca.main" "--enable-native-access=ALL-UNNAMED"
+                                                               "target/classes" "CaptureStateCheck"))
+                                            want (slurp "test/java/CaptureStateCheck.expected")
+                                            ok (try
+                                                 (every? (fn [label] (let [r (run label)] (and (zero? (:exit r)) (= want (:out r)))))
+                                                         ["warmstatic-cold" "warmstatic-warm"])
+                                                 (finally (fs/delete-tree cache)))]
+                                        (println (if ok "PASS" "FAIL") "a static Scheme code reads keeps its value on a warm run (CaptureStateCheck, cold then warm)")
+                                        (if ok [] ["warm static"]))
                     ;; an app bundle's cache moves with it (test/bundlecache): a
                     ;; java.base runtime from jlink and a jar in a bundle-shaped
                     ;; directory, warmed, then copied (new mtimes everywhere): the
@@ -938,7 +953,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails warm-static-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
