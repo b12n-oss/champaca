@@ -256,6 +256,13 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A static field that champaca's own runtime reads (`ValueLayout.JAVA_INT`
+  for a downcall's captured `errno`) keeps its value on a warm run. The
+  module-graph archive's walk over static fields gave one whose class hadn't
+  registered yet a label of its own, the class's code was compiled against
+  it, and the next run read the field as unset: `captureCallState` threw a
+  `NullPointerException` on every warm run from a fresh cache
+  (`test/java/CaptureStateCheck.java`, run cold then warm by `jolt test`).
 - A class on the class path in a package one of the JDK's modules owns no
   longer replaces the JDK's class or adds one to the package: an old jar
   carrying `javax.xml` classes gets `java.xml`'s, and a class the JDK doesn't
