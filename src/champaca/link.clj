@@ -246,6 +246,24 @@
                   polymorphic?)
       (throw (ex-info "no such method" {:class cname :method mname :desc desc})))))
 
+(defn- call-target
+  "[declaring class, method] a call of kind op resolves to: invokespecial and
+  invokestatic as resolve-method finds it, the others as resolve-virtual;
+  [nil nil] or a nil method when nothing does."
+  [op cname mname desc]
+  (if (#{:special :static} op)
+    (let [d (try (resolve-method cname mname desc) (catch Exception _ nil))]
+      [d (and d (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (class-methods d)))])
+    (resolve-virtual cname mname desc)))
+
+(defn- kind-mismatch
+  "HotSpot's text when method m doesn't fit a call of kind op, or nil."
+  [op m]
+  (let [static? (and m (cf/static? m))]
+    (cond (and m (= op :static) (not static?)) "Expected static method"
+          (and static? (= op :interface)) "Expected instance not static method"
+          (and static? (#{:virtual :special} op)) "Expecting non-static method")))
+
 (defn check-kind
   "Throws when the method a call resolves to doesn't match the instruction
   in static-ness, as a JVM's linking of the call does when it runs (JVMS
@@ -257,15 +275,8 @@
   resolve-method find it."
   [op cname mname desc]
   (when-not (or (str/starts-with? cname "[") (= mname "<init>") (= mname "<clinit>"))
-    (let [decl-of (fn [c] (some #(when (and (= mname (:name %)) (= desc (:desc %))) %) (class-methods c)))
-          [decl m] (if (#{:special :static} op)
-                     (let [d (try (resolve-method cname mname desc) (catch Exception _ nil))] [d (and d (decl-of d))])
-                     (resolve-virtual cname mname desc))
-          static? (and m (cf/static? m))
-          what (cond (and m (= op :static) (not static?)) "Expected static method"
-                     (and static? (= op :interface)) "Expected instance not static method"
-                     (and static? (#{:virtual :special} op)) "Expecting non-static method")]
-      (when what
+    (let [[decl m] (call-target op cname mname desc)]
+      (when-let [what (kind-mismatch op m)]
         (throw (ex-info "incompatible class change" {:class decl :method mname :desc desc :icce what}))))))
 
 (defn direct-target
@@ -307,51 +318,60 @@
   [c]
   (and (pos? (bit-and (:flags c) 0x0010)) (some? (:permitted-subclasses (:reflection c)))))
 
-(defn normalize
-  "Parse cname's classfile into the linker's class map."
+(defn- normalize-bytes
+  "[bytes from-class-path?] for cname: the class path's, else the JDK's for a
+  class of the boot layer (the JVM's loaders don't find one outside it,
+  outside-boot-layer?), else ::defined when a loader of the program's own
+  defines it (the class naming it is that loader's, natives.ss; the time is
+  that loader's own code and the define, from the cache or not), else
+  normalize's \"class not found\"."
   [cname]
-  (let [user (timed :class-bytes #(user-class-bytes cname))
-        ;; the JDK's bytes only for a class of the boot layer: the JVM's
-        ;; loaders don't find one outside it (outside-boot-layer?)
-        bytes (or user
-                  (when-not (outside-boot-layer? cname) (timed :class-bytes #(jdk-class-bytes cname)))
-                  ;; a loader of the program's own may define it, when the
-                  ;; class naming it is that loader's (natives.ss); nil then.
-                  ;; The time is the loader's own code running (reading its
-                  ;; jars) and the define, restored from the cache or not
-                  (when (boolean (timed :loader #(s/call "ask-resolving-loader" cname))) ::defined)
-                  (throw (ex-info (str "class not found: " cname) {:class cname})))]
+  (let [user (timed :class-bytes #(user-class-bytes cname))]
+    [(or user
+         (when-not (outside-boot-layer? cname) (timed :class-bytes #(jdk-class-bytes cname)))
+         (when (boolean (timed :loader #(s/call "ask-resolving-loader" cname))) ::defined)
+         (throw (ex-info (str "class not found: " cname) {:class cname})))
+     (boolean user)]))
+
+(defn- class-format-error [cname msg]
+  (ex-info (str "class format error in " cname ": " msg) {:class cname :class-format msg}))
+
+(defn- parse-class-bytes
+  "cname's bytes parsed. Bytes that aren't a class file are the JVM's
+  ClassFormatError for the code that needs the class (codegen, runtime.ss
+  find-class): the message ends with HotSpot's text, which find-class reads
+  off; a version this release refuses names the class asked for."
+  [cname bytes]
+  (try (timed :cf-parse #(cf/parse bytes))
+       (catch Exception e
+         (let [{:keys [class-format named class-version]} (ex-data e)]
+           (cond class-format (throw (class-format-error cname (if named (str class-format " " cname) class-format)))
+                 class-version (throw (linkage-error cname "java/lang/UnsupportedClassVersionError" (class-version cname)))
+                 :else (throw e))))))
+
+(defn- check-class-file!
+  "HotSpot's ClassFileParser refusals of a parsed class: a class file found
+  under a name that isn't its own (a file system that ignores case, a
+  renamed file) is not a second class, an interface's superclass is Object,
+  and a final class isn't sealed."
+  [cname p user?]
+  (when (and user? (not= (:name p) cname))
+    (throw (linkage-error cname "java/lang/NoClassDefFoundError" (str cname " (wrong name: " (:name p) ")"))))
+  (when (and (pos? (bit-and (:flags p) 0x0200)) (not= "java/lang/Object" (:super p)))
+    (throw (class-format-error cname (str "Interfaces must have java.lang.Object as superclass in class file " cname))))
+  (when (final-sealed? p)
+    (throw (class-format-error cname (str "PermittedSubclasses attribute in final class file " cname)))))
+
+(defn normalize
+  "Parse cname's classfile into the linker's class map. A classpath class is
+  cached only through the library cache (restore-user-class!), which checks
+  it hasn't changed."
+  [cname]
+  (let [[bytes user?] (normalize-bytes cname)]
     (when-not (= bytes ::defined)
-      ;; a classpath class is cached only through the library cache
-      ;; (restore-user-class!), which checks it hasn't changed
-      ;; bytes that aren't a class file are the JVM's ClassFormatError for
-      ;; the code that needs the class (codegen, runtime.ss find-class): the
-      ;; message ends with HotSpot's text, which find-class reads off
-      (let [p (try (timed :cf-parse #(cf/parse bytes))
-                   (catch Exception e
-                     (let [{:keys [class-format named class-version]} (ex-data e)]
-                       (cond class-format
-                             (let [msg (if named (str class-format " " cname) class-format)]
-                               (throw (ex-info (str "class format error in " cname ": " msg)
-                                               {:class cname :class-format msg})))
-                             ;; a version this release refuses names the class asked for
-                             class-version
-                             (throw (linkage-error cname "java/lang/UnsupportedClassVersionError" (class-version cname)))
-                             :else (throw e)))))]
-        ;; a class file found under a name that isn't its own (a file system
-        ;; that ignores case, a renamed file) is HotSpot's ClassFileParser
-        ;; refusal, not a second class
-        (when (and user (not= (:name p) cname))
-          (throw (linkage-error cname "java/lang/NoClassDefFoundError" (str cname " (wrong name: " (:name p) ")"))))
-        ;; HotSpot's format check: an interface's superclass is Object
-        (when (and (pos? (bit-and (:flags p) 0x0200)) (not= "java/lang/Object" (:super p)))
-          (let [msg (str "Interfaces must have java.lang.Object as superclass in class file " cname)]
-            (throw (ex-info (str "class format error in " cname ": " msg) {:class cname :class-format msg}))))
-        ;; and a final class isn't sealed
-        (when (final-sealed? p)
-          (let [msg (str "PermittedSubclasses attribute in final class file " cname)]
-            (throw (ex-info (str "class format error in " cname ": " msg) {:class cname :class-format msg}))))
-        (class-map cname p (if user :user :jdk))))))
+      (let [p (parse-class-bytes cname bytes)]
+        (check-class-file! cname p user?)
+        (class-map cname p (if user? :user :jdk))))))
 
 (defn class-map
   "The linker's class map for cname from its parsed classfile c, of origin
