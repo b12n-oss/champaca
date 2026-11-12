@@ -115,6 +115,71 @@
            (.set compile-depth d)
            (when t0 (s/call "note-compile-time!" (- (System/nanoTime) t0)))))))
 
+(defn- method-cache-origin
+  "Where a compiled method's code is cached: the library cache (:user) when
+  every class its translation read can be checked, recording those reads as
+  the class's dependencies (a fingerprint already recorded stays: were a
+  dependency to differ from it, the next run's check must fail); nil, not
+  cached, when one can't; for a class with no source fingerprint, its
+  class's cache-origin."
+  [cname mname desc info reads]
+  (if reads
+    (if-let [deps (user-deps (conj @reads cname) (= :defined (:origin info)))]
+      (do (swap! state update-in [:classes cname :deps] #(merge-with (fn [old _] old) % (dissoc deps cname)))
+          :user)
+      (do (when (trace?)
+            (binding [*out* *err*]
+              (println "jit" (str cname "." mname desc) "not cached: it reads" (uncheckable-dep (conj @reads cname) (= :defined (:origin info))))))
+          nil))
+    (cache-origin info)))
+
+(defn- report-throws
+  "Whether the method's code throws for what an instruction names (codegen):
+  a class that isn't there (NoClassDefFoundError), a method its class doesn't
+  have (NoSuchMethodError), a file that isn't a class file
+  (ClassFormatError), a call of the wrong kind (IncompatibleClassChangeError),
+  a class the JVM refuses to define (check-definition!). Such a method is
+  never cached, so a cache can't carry a throw a later run doesn't; under
+  CHAMPACA_BT each is named on stderr."
+  [cname mname desc text]
+  (let [member (fn [[_ c n d]] (str c "." n d))
+        found [[(seq (map second (thrown-in :missing text))) "not found" "NoClassDefFoundError"]
+               [(seq (map member (thrown-in :no-method text))) "not found" "NoSuchMethodError"]
+               [(seq (map second (thrown-in :class-format text))) "not a class file" "ClassFormatError"]
+               [(seq (map member (thrown-in :icce text))) "of the other kind" "IncompatibleClassChangeError"]
+               [(seq (map second (thrown-in :linkage text))) "refused by its definition's checks" "the JVM's linkage error"]]]
+    (when (System/getenv "CHAMPACA_BT")
+      (doseq [[names why what] found :when names]
+        (binding [*out* *err*]
+          (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
+                        ", " why "; that code throws " what)))))
+    (boolean (some first found))))
+
+(defn- compile-text!
+  "Compile a method's text. One that throws for something it names is
+  compiled and never recorded. The boot that archives the module graph
+  (archive.ss) runs the image's generated SystemModules classes once,
+  interpreted: a warm boot takes the graph from the archive and never calls
+  them, and compiling moduleDescriptors alone was about a second of a cold
+  one. Code for the cache is compiled once, and the same object code runs now
+  and goes in the cache; otherwise the text is kept (cheaply) so save-cache!
+  can compile it into a generation, without which a jolt program re-jits
+  these every run."
+  [cname info text origin unit throws?]
+  (cond
+    throws? (timed :chez-compile #(scheme! text :compile (lines? cname info)))
+    (and (str/starts-with? cname "jdk/internal/module/SystemModules$")
+         (true? (s/eval-string "module-graph-dumping")))
+    (timed :chez-compile #(scheme! text :interpret))
+    (compile-to-cache? origin)
+    (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
+                                       ;; a classpath class's frames keep their line numbers
+                                       (s/call "compile-unit" text (lines? cname info))))]
+      (record! origin unit {:fasl bv}))
+    :else
+    (do (timed :chez-compile #(scheme! text :compile (lines? cname info)))
+        (record! origin unit {:text text :inspect (lines? cname info)}))))
+
 (defn- compile-method!* [cname mname desc]
   (let [p (parsed cname)
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
@@ -124,65 +189,9 @@
     (when (trace?) (binding [*out* *err*] (println "jit" (str cname "." mname desc))))
     (let [reads (when (:src-fp info) (volatile! #{}))
           text (binding [*reads* reads] (timed :codegen #(cg/compile-method (:parsed info) m resolver)))
-          ;; a library cache entry's dependencies grow with each method
-          ;; compiled; a method reading one that can't be checked isn't kept
-          origin (if reads
-                   (if-let [deps (user-deps (conj @reads cname) (= :defined (:origin info)))]
-                     ;; a fingerprint already recorded stays: were a dependency
-                     ;; to differ from it, the next run's check must fail
-                     (do (swap! state update-in [:classes cname :deps] #(merge-with (fn [old _] old) % (dissoc deps cname)))
-                         :user)
-                     (do (when (trace?)
-                           (binding [*out* *err*]
-                             (println "jit" (str cname "." mname desc) "not cached: it reads" (uncheckable-dep (conj @reads cname) (= :defined (:origin info))))))
-                         nil))
-                   (cache-origin info))
-          unit [cname (str mname desc)]
-          ;; an instruction naming a class that isn't there throws when it
-          ;; runs (codegen): such a method is never cached, so a cache can't
-          ;; carry a throw for a class a later run has, and CHAMPACA_BT says so
-          missing (seq (map second (thrown-in :missing text)))
-          ;; and for a class whose file isn't a class file (ClassFormatError)
-          bad-format (seq (map second (thrown-in :class-format text)))
-          ;; the same for a method its class doesn't have (NoSuchMethodError)
-          no-method (seq (map (fn [[_ c n d]] (str c "." n d))
-                              (thrown-in :no-method text)))
-          report (fn [names why what]
-                   (when (and names (System/getenv "CHAMPACA_BT"))
-                     (binding [*out* *err*]
-                       (println (str "champaca: " cname "." mname desc " names " (str/join ", " (distinct names))
-                                     ", " why "; that code throws " what)))))
-          ;; and for a class the JVM refuses to define (check-definition!)
-          refused (seq (map second (thrown-in :linkage text)))
-          ;; and for a call of the wrong kind (IncompatibleClassChangeError)
-          icce (seq (map (fn [[_ c n d]] (str c "." n d))
-                         (thrown-in :icce text)))
-          _ (report missing "not found" "NoClassDefFoundError")
-          _ (report no-method "not found" "NoSuchMethodError")
-          _ (report bad-format "not a class file" "ClassFormatError")
-          _ (report icce "of the other kind" "IncompatibleClassChangeError")
-          _ (report refused "refused by its definition's checks" "the JVM's linkage error")
-          missing (or missing no-method bad-format icce refused)]
-      (cond
-        missing (timed :chez-compile #(scheme! text :compile (lines? cname info)))
-        ;; the boot that archives the module graph (archive.ss) runs the
-        ;; image's generated SystemModules classes once, interpreted: a warm
-        ;; boot takes the graph from the archive and never calls them, and
-        ;; compiling moduleDescriptors alone was about a second of a cold one
-        (and (str/starts-with? cname "jdk/internal/module/SystemModules$")
-             (true? (s/eval-string "module-graph-dumping")))
-        (timed :chez-compile #(scheme! text :interpret))
-        ;; compiled once: the same object code runs now and goes in the cache
-        (compile-to-cache? origin)
-        (let [bv (timed :chez-compile #(do (when (trace?) (scheme-trace! text))
-                                           ;; a classpath class's frames keep their line numbers
-                                           (s/call "compile-unit" text (lines? cname info))))]
-          (record! origin unit {:fasl bv}))
-        ;; the text is kept (cheaply) so save-cache! can compile it into a
-        ;; generation; without that a jolt program re-jits these every run
-        :else
-        (do (timed :chez-compile #(scheme! text :compile (lines? cname info)))
-            (record! origin unit {:text text :inspect (lines? cname info)}))))))
+          origin (method-cache-origin cname mname desc info reads)
+          throws? (report-throws cname mname desc text)]
+      (compile-text! cname info text origin [cname (str mname desc)] throws?))))
 
 (defn jit! [cname mname desc]
   (let [info (thaw! cname)
