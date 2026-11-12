@@ -60,6 +60,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `ManagementFactory.getCompilationMXBean()` answers, where it was null as on a
+  JVM without a JIT: `sun.management.compiler` names champaca's JIT, and the
+  total compilation time is the time spent translating and compiling methods
+  (`test/java/CompilationBeanCheck.java`).
 - Multicast works: `DatagramChannel.join`, `MembershipKey.drop`, `block`
   and `unblock`, and `MulticastSocket.joinGroup`/`leaveGroup`, for IPv4 and
   IPv6 groups, source-specific joins included, with the JDK's refusals of

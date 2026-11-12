@@ -100,7 +100,22 @@
   (let [[marker pat] (throw-patterns k)]
     (when (str/includes? text marker) (re-seq pat text))))
 
+;; how deep compile-method! is on this thread: only the outermost call's
+;; time counts toward the CompilationMXBean's total, which a compile nested
+;; in another (a class its code resolves) would otherwise count twice
+(def ^:private compile-depth (ThreadLocal/withInitial (fn [] 0)))
+
+(declare compile-method!*)
 (defn- compile-method! [cname mname desc]
+  (let [d (.get compile-depth)
+        t0 (when (zero? d) (System/nanoTime))]
+    (.set compile-depth (inc d))
+    (try (compile-method!* cname mname desc)
+         (finally
+           (.set compile-depth d)
+           (when t0 (s/call "note-compile-time!" (- (System/nanoTime) t0)))))))
+
+(defn- compile-method!* [cname mname desc]
   (let [p (parsed cname)
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
         info (assoc (class-info cname) :parsed p)]

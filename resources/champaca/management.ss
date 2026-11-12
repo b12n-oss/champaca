@@ -20,23 +20,30 @@
 (define (uptime-ms)
   (let ([d (time-difference (current-time 'time-monotonic) vm-start-mono)])
     (+ (* 1000 (time-second d)) (quotient (time-nanosecond d) 1000000))))
+;; nanoseconds the JIT has spent translating and compiling methods
+;; (jit.clj compile-method!, its outermost calls), the CompilationMXBean's
+;; total compilation time; loading a method from the cache doesn't count
+(define compile-time-ns 0)
+(define (note-compile-time! ns) (set! compile-time-ns (+ compile-time-ns ns)))
 (let ()
   (define cls "sun/management/VMManagementImpl")
   (define (def name proc) (define-native! (string-append cls "." name) proc))
   (def "getVersion0()Ljava/lang/String;" (lambda () (jstring "4.0")))
-  ;; the CPU times of the current thread and of others are measured, and
-  ;; contention, monitor and synchronizer usage reported (Thread section);
+  ;; the CPU times of the current thread and of others are measured,
+  ;; contention, monitor and synchronizer usage reported (Thread section),
+  ;; and the JIT's compilation time;
   ;; the other optional supports stay off
   (def "initOptionalSupportFields()V"
        (lambda ()
          (for-each (lambda (f) (set-top-level-value! (string->symbol (string-append "sun/management/VMManagementImpl:" f)) 1))
                    '("currentThreadCpuTimeSupport" "otherThreadCpuTimeSupport" "threadContentionMonitoringSupport"
-                     "objectMonitorUsageSupport" "synchronizerUsageSupport"))))
+                     "objectMonitorUsageSupport" "synchronizerUsageSupport" "compTimeMonitoringSupport"))))
+  (def "getTotalCompileTime()J" (lambda (this) (quotient compile-time-ns 1000000)))
   (def "isThreadCpuTimeEnabled()Z" (lambda (this) thread-cpu-enabled))
   (def "isThreadContentionMonitoringEnabled()Z" (lambda (this) contention-enabled))
   (for-each (lambda (n) (def n (lambda (this) 0)))
             '("isThreadAllocatedMemoryEnabled()Z" "getVerboseClass()Z" "getVerboseGC()Z"
-              "getUnloadedClassCount()J" "getTotalCompileTime()J" "getSafepointCount()J"
+              "getUnloadedClassCount()J" "getSafepointCount()J"
               "getTotalSafepointTime()J" "getSafepointSyncTime()J" "getTotalApplicationNonStoppedTime()J"
               "getLoadedClassSize()J" "getUnloadedClassSize()J" "getClassLoadingTime()J"
               "getMethodDataSize()J" "getClassInitializationTime()J" "getClassVerificationTime()J"))

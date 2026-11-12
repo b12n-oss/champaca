@@ -705,6 +705,9 @@
      ;; HotSpot's mode words (VersionProps prints them in -version's last
      ;; line): champaca compiles every method before it runs
      ("java.vm.info" . "compiled mode")
+     ;; the JIT's name: ManagementFactory makes a CompilationMXBean only when
+     ;; it's set, as HotSpot sets it unless -Xint leaves no compiler
+     ("sun.management.compiler" . "champaca (Chez Scheme)")
      ("java.vm.specification.name" . "Java Virtual Machine Specification")
      ("java.vm.specification.vendor" . "Oracle Corporation")
      ("java.vm.specification.version" . "25")
