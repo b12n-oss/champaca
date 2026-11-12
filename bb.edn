@@ -222,6 +222,8 @@
                     _ (shell "java test/gen/SiteMemberGen.java target/classes")
                     ;; OddNameCheck's class, whose names hold a bar and a backslash, as Scala and Kotlin emit
                     _ (shell "java test/gen/OddNameGen.java target/classes")
+                    ;; ShadowCheck's classes in JDK packages (javax.xml), which javac won't compile
+                    _ (shell "java test/gen/ShadowGen.java target/classes")
                     ;; LongOpsCheck's LongCmp: lcmp returned, kept in a local, branched on in another block
                     _ (shell "java test/gen/LongCmpGen.java target/classes")
                     ;; ArrayLoopCheck's ArrayLoopShapes: arrays moved by dup_x1 and swap in a loop

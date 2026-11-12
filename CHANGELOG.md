@@ -251,6 +251,11 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A class on the class path in a package one of the JDK's modules owns no
+  longer replaces the JDK's class or adds one to the package: an old jar
+  carrying `javax.xml` classes gets `java.xml`'s, and a class the JDK doesn't
+  have there isn't found, as on the JVM. A package outside the boot layer is
+  still the class path's (`test/java/ShadowCheck.java`).
 - `Thread.getState()` says what a thread waits for, as on the JVM:
   `TIMED_WAITING` while it sleeps, `WAITING` or `TIMED_WAITING` in
   `Object.wait` and `LockSupport.park`, `BLOCKED` while it waits to enter a

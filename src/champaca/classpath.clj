@@ -180,12 +180,18 @@
   "Where a class is looked for, as the JVM's application loader does: a
   class in a package of one of its named modules (java -p) only in that
   module's jar or directory, so the class path can't add to the module's
-  packages; any other class on the class path. A module the boot layer
-  didn't resolve is never looked in."
+  packages; a class in a package of a JDK module in the boot layer nowhere,
+  since the JDK's loaders own that package and the class path can't shadow
+  or add to it (an old jar carrying javax.xml classes loads the JDK's, and a
+  class the JDK doesn't have there isn't found); any other class on the
+  class path. A module the boot layer didn't resolve is never looked in, so
+  its packages are the class path's, as on the JVM."
   [cname]
   (let [m (layer-module cname)
         root (when (string? m) (get (app-roots) m))]
-    (if root [root] (:classpath @state))))
+    (cond root [root]
+          (string? m) []
+          :else (:classpath @state))))
 
 (declare root-directory?)
 

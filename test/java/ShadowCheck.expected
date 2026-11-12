@@ -1,0 +1,8 @@
+a JDK class the class path also has: no marker, true, boot
+its field: true
+a class added to a JDK package: java.lang.ClassNotFoundException: javax.xml.ChampacaOnly
+through the app loader: java.lang.ClassNotFoundException: javax.xml.ChampacaOnly
+a package outside the boot layer: class path, outside the layer, false, app
+javax.xml's module: java.xml
+linked: xml 16
+resource: jrt file

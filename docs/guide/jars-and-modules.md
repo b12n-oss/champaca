@@ -2,7 +2,7 @@
 
 ## The classpath
 
-`init!` takes a `:classpath` of jars and directories, searched in order like `java -cp`. With no `:classpath` it uses `CHAMPACA_CLASSPATH`'s entries, which an [app bundle](app-bundles.md)'s launcher sets, so a bundled program needn't know where its jars went. One difference from Java: the classpath is searched before the JDK's modules, so a jar that ships its own copy of a JDK class would win. Java looks in the JDK first.
+`init!` takes a `:classpath` of jars and directories, searched in order like `java -cp`. A class in a package one of the JDK's modules owns is never taken from it, as on the JVM: an old jar carrying its own copy of `javax.xml` classes gets the JDK's (`test/java/ShadowCheck.java`). With no `:classpath` it uses `CHAMPACA_CLASSPATH`'s entries, which an [app bundle](app-bundles.md)'s launcher sets, so a bundled program needn't know where its jars went. One difference from Java: the classpath is searched before the JDK's modules, so a jar that ships its own copy of a JDK class would win. Java looks in the JDK first.
 
 ```clojure
 (ldk/init! {:classpath ["target/lib.jar"]})

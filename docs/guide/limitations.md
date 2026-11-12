@@ -36,7 +36,6 @@ A JDK library load (`zip`, `net`, `management` and so on) is a no-op, because th
 
 - `init!` takes effect once per process. A second call, with a different `:classpath` or `:preview` or not, does nothing.
 - Until `save-cache!` runs, each JDK method the process compiles keeps its generated source in memory (a few KB per method) so a save can write it. A long-lived program should call `save-cache!` once its working set is warm, which also empties that list.
-- The user classpath is searched before the JDK's modules, the reverse of Java's order.
 - Every conversion copies. A Java method that changes a collection you passed it changes the copy, and a big collection is copied again on each call ([data-conversion](data-conversion.md#conversions-copy)).
 - A vector passed to a plain `Object` parameter becomes an array, not a `List`.
 - A Java object prints as `#object[:object]` in jolt. Use `ldk/to-string`.
