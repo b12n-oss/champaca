@@ -150,16 +150,23 @@
       [(eq? v jolt-nil) (and (ref-class d) 0)]
       [(seq-arg? v) (fit-seq v d c0)]
       [(coll-arg? v) (fit-coll v d)]
-      [(boolean? v) (if (char=? c0 #\Z) 0 (box-cost "java/lang/Boolean" d 1))]
-      [(char? v) (case c0 [(#\C) 0] [(#\I) 2] [(#\J) 3] [else (box-cost "java/lang/Character" d 5)])]
+      [(boolean? v) (fit-boolean d c0)]
+      [(char? v) (fit-char d c0)]
       [(exact-int? v) (fit-integer v d c0)]
-      [(flonum? v)
-       (case c0 [(#\D) 0] [(#\F) 1] [(#\I #\J #\S #\B #\C #\Z) #f]
-         [else (box-cost "java/lang/Double" d 5)])]
+      [(flonum? v) (fit-flonum d c0)]
       [(string? v) (fit-string d)]
       [(java-value? v) (fit-java v d c0)]
-      [(procedure? v) (let ([t (ref-class d)]) (and t (sam-of t) 1))]
+      [(procedure? v) (fit-procedure d)]
       [else #f])))
+
+(define (fit-boolean d c0) (if (char=? c0 #\Z) 0 (box-cost "java/lang/Boolean" d 1)))
+(define (fit-char d c0)
+  (case c0 [(#\C) 0] [(#\I) 2] [(#\J) 3] [else (box-cost "java/lang/Character" d 5)]))
+(define (fit-flonum d c0)
+  (case c0 [(#\D) 0] [(#\F) 1] [(#\I #\J #\S #\B #\C #\Z) #f]
+    [else (box-cost "java/lang/Double" d 5)]))
+;; a jolt fn fits an interface with a single abstract method
+(define (fit-procedure d) (let ([t (ref-class d)]) (and t (sam-of t) 1)))
 
 ;; vector -> array: every element must fit the component type. Where the
 ;; parameter is Object-like, the array type comes from the contents.
