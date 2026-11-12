@@ -105,6 +105,12 @@
   "The runtime's hooks into this namespace, after the launcher's state."
   []
   (s/call "set-define-class-hook!" (fn [& args] (timed :define #(apply define-class! args))))
+  ;; whether jolt's Chez places stack arguments right (foreign.ss asks once,
+  ;; when a foreign signature would otherwise be refused): true only when
+  ;; jolt.ffi/stack-args-correct? says so; an older jolt lacks it
+  (s/call "set-ffi-stack-args-hook!"
+          (fn [] (true? (when-let [probe (do (require 'jolt.ffi) (resolve 'jolt.ffi/stack-args-correct?))]
+                          (probe)))))
   (s/call "set-resource-hook!" (fn [path] (or (resource-bytes path) false))
           ;; URLs as one string, one per line
           (fn [path] (str/join "\n" (resource-urls path))))
