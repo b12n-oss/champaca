@@ -103,13 +103,20 @@
   interface that changes between runs gets a class of its own instead of an
   earlier run's cached one. One whose interfaces can't be checked isn't
   cached."
-  [ifaces sam-keys]
+  ([ifaces sam-keys] (lambda-class ifaces sam-keys nil nil))
+  ([ifaces sam-keys caller site]
   (run! ensure-loaded! ifaces)
   (let [deps (user-deps ifaces true)
+        h (Math/abs (hash (cond-> [ifaces sam-keys] (seq deps) (conj deps) caller (conj site))))
         ;; "$$Lambda" in the name, as the JVM's lambda classes have it:
-        ;; frameworks tell a lambda by it (Spring's ClassUtils.isLambdaClass)
-        n (str "champaca/$$Lambda$" (str/replace (first ifaces) "/" "$") "$"
-               (Math/abs (hash (if (empty? deps) [ifaces sam-keys] [ifaces sam-keys deps]))))]
+        ;; frameworks tell a lambda by it (Spring's ClassUtils.isLambdaClass).
+        ;; A call site's is caller$$Lambda/0x<n>, a hidden class in the
+        ;; caller's package (runtime.ss lambda-site-caller), one per site as
+        ;; on the JVM, n from the site and the interfaces so a later run's
+        ;; cache finds it; jolt's own (no caller) share one per interface
+        n (if caller
+            (str caller "$$Lambda/0x" (format "%016x" h))
+            (str "champaca/$$Lambda$" (str/replace (first ifaces) "/" "$") "$" h))]
     (if (get-in @state [:classes n])
       (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet
       (let [info (cond-> {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011 :origin :jdk
@@ -129,7 +136,7 @@
           (scheme! text :interpret))))
     ;; the code being compiled names n (user-deps)
     (when-let [r *reads*] (vswap! r conj n))
-    n))
+    n)))
 
 (defn- rename-class
   "The parsed class c under a new name: its own, every constant-pool class

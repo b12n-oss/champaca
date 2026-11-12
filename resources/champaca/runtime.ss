@@ -1508,7 +1508,18 @@
 ;; HotSpot names them, which no lookup by name finds
 (define class-loaders (make-hashtable string-hash string=?))
 (define hidden-classes (make-hashtable string-hash string=?))
-(define (hidden-class? n) (hashtable-contains? hidden-classes n))
+;; A lambda's class is one per call site, named for the class holding the
+;; site, <caller>$$Lambda/0x<n> (loader.clj lambda-class), a hidden class as
+;; HotSpot's are: it sits in its caller's package, module and loader.
+(define (lambda-site-caller n)
+  (let ([k (string-length n)])
+    (let loop ([i 0])
+      (cond [(fx> (fx+ i 11) k) #f]
+            [(and (char=? (string-ref n i) #\$) (string=? (substring n i (fx+ i 11)) "$$Lambda/0x"))
+             (substring n 0 i)]
+            [else (loop (fx+ i 1))]))))
+(define (defining-name n) (or (lambda-site-caller n) n))
+(define (hidden-class? n) (or (hashtable-contains? hidden-classes n) (and (lambda-site-caller n) #t)))
 (define (package-dir cname)
   (let loop ([i (fx- (string-length cname) 1)])
     (cond [(fx< i 0) ""]
@@ -1545,7 +1556,7 @@
   (let ([m (hashtable-ref package-modules (class-package c) #f)])
     (and m (app-loader) (eq? (module-loader m) (app-loader)) m)))
 (define (class-module c)
-  (let ([e (element-name c)])
+  (let ([e (defining-name (element-name c))])
     (cond [(user-class? e) (or (named-app-module c) (app-unnamed-module) unnamed-module)]
           [(hashtable-ref package-modules (class-package c) #f)]
           [(hashtable-ref class-loaders e #f)
@@ -1572,7 +1583,7 @@
 ;; loader for java.sql and the like), an array's its element's
 (define (module-loader m) (and m (jslot m (jfield-index "java/lang/Module" "loader"))))
 (define (class-loader-of c)
-  (let ([e (element-name c)])
+  (let ([e (defining-name (element-name c))])
     (or (hashtable-ref class-loaders e #f)
         (if (user-class? e)
             (app-loader)

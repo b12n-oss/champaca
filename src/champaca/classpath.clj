@@ -45,10 +45,12 @@
   out or the default layer doesn't resolve it (jdk.incubator.vector without
   --add-modules). Bytecode naming it fails as a class that isn't there, as
   HotSpot's NoClassDefFoundError. champaca's own classes are always there,
-  and anything is before the layer exists."
+  and so is a call site's lambda class (caller$$Lambda/0x<n>), which runs
+  only where its caller does, and anything is before the layer exists."
   [cname]
   (and (not (str/starts-with? cname "["))
        (not (str/starts-with? cname "champaca/"))
+       (not (str/includes? cname "$$Lambda/0x"))
        (nil? (layer-module cname))))
 
 (defn refuse-outside-layer!

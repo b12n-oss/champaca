@@ -380,7 +380,7 @@
       :else v)))
 
 (defn- lambda-expr
-  [{:keys [cls resolve ic!]} sam-name iface-desc captured-types captured bsm]
+  [{:keys [cls resolve ic! method-key]} pc sam-name iface-desc captured-types captured bsm]
   (let [cp (:cp cls)
         [sam-mt impl-mh _inst-mt] (map cp (:args bsm))
         iface (subs iface-desc 1 (dec (count iface-desc)))
@@ -438,7 +438,9 @@
         [markers more] (if (pos? (bit-and flags 2)) [(take (first more) (rest more)) (drop (inc (first more)) more)] [[] more])
         bridges (if (pos? (bit-and flags 4)) (take (first more) (rest more)) [])
         ifaces (cond-> (into [iface] markers) (pos? (bit-and flags 1)) (conj "java/io/Serializable"))
-        lambda-class ((:lambda-class resolve) ifaces (cons (str sam-name sam-desc) (map #(str sam-name %) bridges)))]
+        ;; a class of its own per call site, as the JVM's
+        lambda-class ((:lambda-class resolve) ifaces (cons (str sam-name sam-desc) (map #(str sam-name %) bridges))
+                      (:name cls) (str method-key "@" pc))]
     (sx "let" (apply sx (map sx cvars captured))
         (sx "jlambda" (str-lit lambda-class) (sx "lambda" (apply sx params) body)))))
 
@@ -1334,7 +1336,7 @@
       "makeConcatWithConstants" (do (compiled!) (push! e (concat-call e bsm params argv) "A"))
       "bootstrap" (do (compiled!) (push! e (record-op-call e bsm name argv) (desc->t ret)))
       ("metafactory" "altMetafactory")
-      (do (compiled!) (push! e (lambda-expr e name ret params argv bsm) "A"))
+      (do (compiled!) (push! e (lambda-expr e pc name ret params argv bsm) "A"))
       ;; java.lang.runtime.SwitchBootstraps: pattern switches on a reference
       ;; (an object or an array) whose labels handles.ss matches; a primitive
       ;; selector or label runs for real
@@ -1793,6 +1795,7 @@
         cover (into {} (map (fn [pc] [pc (covering handlers pc)]) (keys blks)))
         boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})]
     {:cls cls :resolve resolve :ic! ic! :inline! inline!
+     :method-key (str (:name method) (:desc method))
      ;; a giant method's array accesses are calls (runtime.ss big-array-ref),
      ;; but not inside a loop: every backward jump's [target jump] range
      ;; keeps the inline form, so a lexer's scanning loop in a giant method

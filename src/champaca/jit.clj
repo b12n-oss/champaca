@@ -59,7 +59,7 @@
    :resolve-method resolve-method
    :check-virtual check-virtual
    :check-kind check-kind
-   :lambda-class #(lambda-class %1 %2)})
+   :lambda-class (fn [ifaces keys & [caller site]] (lambda-class ifaces keys caller site))})
 
 ;; --- the JIT -----------------------------------------------------------------------
 

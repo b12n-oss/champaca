@@ -235,6 +235,11 @@
 (define (nest-host c)
   (or (hashtable-ref dynamic-nest-hosts (jclass-cname c) #f)
       (eq-hashtable-ref nest-hosts c #f)
+      ;; a call site's lambda class is its caller's nestmate, as the JDK's
+      ;; metafactory defines it (a NESTMATE hidden class)
+      (let ([caller (lambda-site-caller (jclass-cname c))])
+        (and caller
+             (let ([h (nest-host (find-class caller))]) (eq-hashtable-set! nest-hosts c h) h)))
       (let* ([hn (class-nest-host-name c)]
              [h (and hn (guard (e [#t #f]) (find-class hn)))]
              [host (if (and h (same-runtime-package? c h) (member (jclass-cname c) (class-nest-members h))) h c)])

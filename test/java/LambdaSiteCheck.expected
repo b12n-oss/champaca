@@ -1,0 +1,13 @@
+a: LambdaSiteCheck$$Lambda/0x... hidden=true synthetic=true final=true package= simple=true
+supplier: LambdaSiteCheck$$Lambda/0x... hidden=true synthetic=true final=true package= simple=true
+two sites, two classes: true
+one site, one class: true
+loader: true
+module: true
+nest host: LambdaSiteCheck
+interfaces: [interface java.util.function.Supplier]
+forName: ClassNotFoundException
+method ref: LambdaSiteCheck$$Lambda/0x... hidden=true synthetic=true final=true package= simple=true
+in an inner class: true
+JDK's: true java.util java.base true true
+serializable: true LambdaSiteCheck$$Lambda/0x... hidden=true synthetic=true final=true package= simple=true

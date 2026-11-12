@@ -60,6 +60,12 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- A lambda's class is one per call site, as on the JVM: a hidden class
+  named `Caller$$Lambda/0x...` in its caller's package, module and loader,
+  its caller's nestmate, where every call site with the same interface
+  shared one `champaca.$$Lambda$...` class in the boot loader's unnamed
+  module (`test/java/LambdaSiteCheck.java`). Warm starts and memory are
+  unchanged on a Quarkus fast-jar.
 - `-jar` applies the main jar's `Add-Opens`, `Add-Exports` and
   `Enable-Native-Access` manifest attributes, as the `java` launcher does,
   where they were ignored: a Quarkus fast-jar logged an
