@@ -29,66 +29,81 @@
       (prim? to) (sx "junbox" (str-lit to) v)
       :else v)))
 
+(defn- impl-call
+  "The call a lambda's body makes to its implementation method, by the method
+  handle's kind (5 virtual, 6 static, 7 special, 8 new, 9 interface).
+  Invoking a static or constructor reference initializes its class first, as
+  the JVM's method handle does (JVMS 5.5), through a site cell like
+  invokestatic's and new's. That also loads the class, which translating
+  this method did in this process but may not have in the one running it
+  from the startup cache. Unlike invokestatic, a reference to this class's
+  own method checks too: the lambda can run on another thread while this
+  class's <clinit> is still going, and that thread has to wait for it."
+  [{:keys [resolve ic!]} kind {:keys [class name desc]} actuals]
+  (case (int kind)
+    6 (do ((:ensure-loaded resolve) class)
+          (let [decl ((:resolve-method resolve) class name desc)]
+            (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl)))
+                (apply sx (method-global decl name desc) actuals))))
+    7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
+    (5 9) (cond
+            ;; a private or final method, or a final class's: the one method,
+            ;; after the null check dispatch would do, as invokevirtual; javac
+            ;; 25 references a private method (this::foo) as kind 5, and the
+            ;; vtable keeps an inherited entry under its name
+            (when (= kind 5) ((:direct-target resolve) class name desc))
+            (let [decl ((:direct-target resolve) class name desc)]
+              (apply sx (method-global decl name desc) (sx "nn" (first actuals)) (rest actuals)))
+            ;; as invokevirtual of a package-private method (JVMS 5.4.5)
+            (when (= kind 5) ((:package-private-decl resolve) class name desc))
+            (let [pp ((:package-private-decl resolve) class name desc)]
+              (apply sx (sx "package-private-target" (sx "nn" (first actuals)) (sx "symbol-class" (str "'" (sym pp))) (str-lit (str name desc))) actuals))
+            :else
+            (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals))
+    8 (do ((:ensure-loaded resolve) class)
+          (sx "let" (sx (sx "o" (sx "jnew-ic" (ic!) (str "'" (sym class)))))
+              (apply sx (method-global class name desc) "o" actuals) "o"))))
+
+(defn- lambda-body
+  "The call's result as the interface method returns it."
+  [sam-ret ret-type call]
+  (cond (= sam-ret "V") (sx "begin" call "(void)")
+        (= ret-type "V") (sx "begin" call "#f")
+        :else (convert ret-type sam-ret call)))
+
+(defn- metafactory-extras
+  "[interfaces bridges] of a lambda: the functional interface, then
+  altMetafactory's marker interfaces and Serializable (flags 2 and 1), and
+  its bridge descriptors (flag 4)."
+  [cp bsm iface]
+  (let [[flags & more] (map #(let [e (cp %)] (or (:value e) (:name e) (:desc e))) (drop 3 (:args bsm)))
+        flags (or flags 0)
+        [markers more] (if (pos? (bit-and flags 2)) [(take (first more) (rest more)) (drop (inc (first more)) more)] [[] more])
+        bridges (if (pos? (bit-and flags 4)) (take (first more) (rest more)) [])]
+    [(cond-> (into [iface] markers) (pos? (bit-and flags 1)) (conj "java/io/Serializable")) bridges]))
+
 (defn lambda-expr
-  [{:keys [cls resolve ic! method-key]} pc sam-name iface-desc captured-types captured bsm]
+  "A LambdaMetafactory call site as a jlambda of a class of its own per call
+  site, as the JVM's: site holds the interface method's name, the interface
+  descriptor, the captured values' expressions and the bootstrap entry."
+  [{:keys [cls resolve method-key] :as e} pc {:keys [sam-name iface-desc captured bsm]}]
   (let [cp (:cp cls)
         [sam-mt impl-mh _inst-mt] (map cp (:args bsm))
         iface (subs iface-desc 1 (dec (count iface-desc)))
         sam-desc (:desc sam-mt)
         {sam-args :args sam-ret :ret} (parse-desc sam-desc)
         kind (:kind impl-mh)
-        {:keys [class name desc]} (cp (:ref-idx impl-mh))
+        {:keys [class desc] :as target} (cp (:ref-idx impl-mh))
         {impl-args :args impl-ret :ret} (parse-desc desc)
-        ;; kinds: 5 virtual, 6 static, 7 special, 8 new, 9 interface
         impl-params (if (#{5 7 9} kind) (cons (str "L" class ";") impl-args) impl-args)
         params (map #(str "p" %) (range (count sam-args)))
         cvars (map #(str "c" %) (range (count captured)))
         actuals (concat cvars
                         (map (fn [t p want] (convert t want p))
                              sam-args params (drop (count captured) impl-params)))
-        ;; invoking a static or constructor reference initializes its class
-        ;; first, as the JVM's method handle does (JVMS 5.5), through a site
-        ;; cell like invokestatic's and new's. That also loads the class, which
-        ;; translating this method did in this process but may not have in the
-        ;; one running it from the startup cache. Unlike invokestatic, a
-        ;; reference to this class's own method checks too: the lambda can run
-        ;; on another thread while this class's <clinit> is still going, and
-        ;; that thread has to wait for it.
-        call (case (int kind)
-               6 (do ((:ensure-loaded resolve) class)
-                     (let [decl ((:resolve-method resolve) class name desc)]
-                       (sx "begin" (sx "jinit-ic" (ic!) (str "'" (sym decl)))
-                           (apply sx (method-global decl name desc) actuals))))
-               7 (apply sx (method-global ((:resolve-method resolve) class name desc) name desc) actuals)
-               (5 9) (cond
-                       ;; a private or final method, or a final class's: the
-                       ;; one method, after the null check dispatch would do,
-                       ;; as invokevirtual; javac 25 references a private
-                       ;; method (this::foo) as kind 5, and the vtable keeps
-                       ;; an inherited entry under its name
-                       (when (= kind 5) ((:direct-target resolve) class name desc))
-                       (let [decl ((:direct-target resolve) class name desc)]
-                         (apply sx (method-global decl name desc) (sx "nn" (first actuals)) (rest actuals)))
-                       ;; as invokevirtual of a package-private method (JVMS 5.4.5)
-                       (when (= kind 5) ((:package-private-decl resolve) class name desc))
-                       (let [pp ((:package-private-decl resolve) class name desc)]
-                         (apply sx (sx "package-private-target" (sx "nn" (first actuals)) (sx "symbol-class" (str "'" (sym pp))) (str-lit (str name desc))) actuals))
-                       :else
-                       (apply sx (sx "jvirt" (first actuals) (str "'" (sym (str name desc)))) actuals))
-               8 (do ((:ensure-loaded resolve) class)
-                     (sx "let" (sx (sx "o" (sx "jnew-ic" (ic!) (str "'" (sym class)))))
-                         (apply sx (method-global class name desc) "o" actuals) "o")))
-        ret-type (if (= kind 8) (str "L" class ";") impl-ret)
-        body (cond (= sam-ret "V") (sx "begin" call "(void)")
-                   (= ret-type "V") (sx "begin" call "#f")
-                   :else (convert ret-type sam-ret call))
-        ;; altMetafactory extras: flags, then optional markers and bridges
-        [flags & more] (map #(let [e (cp %)] (or (:value e) (:name e) (:desc e))) (drop 3 (:args bsm)))
-        flags (or flags 0)
-        [markers more] (if (pos? (bit-and flags 2)) [(take (first more) (rest more)) (drop (inc (first more)) more)] [[] more])
-        bridges (if (pos? (bit-and flags 4)) (take (first more) (rest more)) [])
-        ifaces (cond-> (into [iface] markers) (pos? (bit-and flags 1)) (conj "java/io/Serializable"))
-        ;; a class of its own per call site, as the JVM's
+        call (impl-call e kind target actuals)
+        body (lambda-body sam-ret (if (= kind 8) (str "L" class ";") impl-ret) call)
+        [ifaces bridges] (metafactory-extras cp bsm iface)
         lambda-class ((:lambda-class resolve) ifaces (cons (str sam-name sam-desc) (map #(str sam-name %) bridges))
                       (:name cls) (str method-key "@" pc))]
     (sx "let" (apply sx (map sx cvars captured))
