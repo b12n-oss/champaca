@@ -53,35 +53,43 @@
 ;; ConstantBootstraps.primitiveClass for a primitive pattern, and an EnumDesc
 ;; for a qualified enum constant (`case Color.RED`) in a switch on another type.
 
+(defn- condy-label
+  "A switch label given as a dynamic constant: an enum constant qualified by
+  its class (EnumDesc.of(ClassDesc.of(binary name), constant name)), or nil
+  for a primitive pattern's (a primitive class, Boolean.TRUE or FALSE)."
+  [cls e]
+  (let [cp (:cp cls)
+        [bsm-name [mh & args]] (condy cls e)
+        target (fn [] (cp (:ref-idx (cp mh))))]
+    (cond
+      (= bsm-name "primitiveClass") nil
+      (and (= bsm-name "invoke") (= "of" (:name (target))) (= "java/lang/Enum$EnumDesc" (:class (target))))
+      (let [[_ [_ cname]] (condy cls (cp (first args)))]
+        (sx "enum" (str-lit (str/replace (:value (cp cname)) "." "/"))
+            (str-lit (:value (cp (second args))))))
+      (= bsm-name "getStaticFinal") nil
+      :else (throw (ex-info (str "switch label not in spike: condy " bsm-name) {:class (:name cls)})))))
+
+(defn- switch-label
+  "One case label, from its constant pool entry i, or nil for a primitive
+  pattern's."
+  [cls enum? i]
+  (let [e ((:cp cls) i)]
+    (case (:tag e)
+      :class (sx "class" (str-lit (:name e)))
+      :string (sx (if enum? "name" "string") (str-lit (:value e)))
+      :int (sx "int" (str (:value e)))
+      (:long :float :double) nil
+      :dynamic (condy-label cls e)
+      (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))
+
 (defn- switch-labels
   "The case labels of a typeSwitch or enumSwitch as handles.ss's quoted list,
   or nil when one is a primitive pattern's (JEP 507, a preview in JDK 25: a
   primitive class, a long, float, double or boolean constant), whose match
   depends on the selector's type; the JDK's bootstrap runs for those."
   [cls enum? arg-idxs]
-  (let [cp (:cp cls)
-        label (fn [i]
-                (let [e (cp i)]
-                  (case (:tag e)
-                    :class (sx "class" (str-lit (:name e)))
-                    :string (sx (if enum? "name" "string") (str-lit (:value e)))
-                    :int (sx "int" (str (:value e)))
-                    (:long :float :double) nil
-                    :dynamic (let [[bsm-name [mh & args]] (condy cls e)]
-                               (cond
-                                 (= bsm-name "primitiveClass") nil
-                                 ;; a qualified enum constant: EnumDesc.of(ClassDesc.of(binary name), constant name)
-                                 (and (= bsm-name "invoke") (= "of" (:name (cp (:ref-idx (cp mh)))))
-                                      (= "java/lang/Enum$EnumDesc" (:class (cp (:ref-idx (cp mh))))))
-                                 (let [[_ [_ cname]] (condy cls (cp (first args)))]
-                                   (sx "enum" (str-lit (str/replace (:value (cp cname)) "." "/"))
-                                       (str-lit (:value (cp (second args))))))
-                                 ;; Boolean.TRUE or FALSE, a boolean constant's label
-                                 (= bsm-name "getStaticFinal") nil
-                                 :else (throw (ex-info (str "switch label not in spike: condy " bsm-name)
-                                                       {:class (:name cls)}))))
-                    (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))
-        labels (map label arg-idxs)]
+  (let [labels (map #(switch-label cls enum? %) arg-idxs)]
     (when (every? some? labels)
       (str "'" (apply sx labels)))))
 
@@ -793,7 +801,7 @@
       "makeConcatWithConstants" (do (compiled!) (push! e (concat-call e bsm params argv) "A"))
       "bootstrap" (do (compiled!) (push! e (record-op-call e bsm name argv) (desc->t ret)))
       ("metafactory" "altMetafactory")
-      (do (compiled!) (push! e (lambda-expr e pc name ret params argv bsm) "A"))
+      (do (compiled!) (push! e (lambda-expr e pc {:sam-name name :iface-desc ret :captured argv :bsm bsm}) "A"))
       ;; java.lang.runtime.SwitchBootstraps: pattern switches on a reference
       ;; (an object or an array) whose labels handles.ss matches; a primitive
       ;; selector or label runs for real
