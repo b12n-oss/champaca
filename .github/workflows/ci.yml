@@ -72,6 +72,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BEFORE: ${{ github.event.before }}
+          REF: ${{ github.ref }}
           SHA: ${{ github.sha }}
           DEFAULT: ${{ github.event.repository.default_branch }}
           EVENT: ${{ github.event_name }}
@@ -80,11 +81,16 @@ jobs:
           IN_REPEAT: ${{ inputs.repeat }}
           IN_FULL: ${{ inputs.full }}
         run: |
-          # a push whose changes are all docs/ or Markdown runs no battery: the
-          # files from the commit before it (a new branch: from the default
-          # branch), all 300 the compare API lists, else it counts as code
+          # a push whose changes are all docs/ or Markdown runs no battery. On a
+          # branch, the changes are everything since it left the default
+          # branch: a docs commit pushed on top of a code commit cancels that
+          # commit's run, so judging the docs commit alone left the code
+          # untested while ci ok passed. On the default branch they're the
+          # files since the commit before the push. All 300 the compare API
+          # lists, else it counts as code.
           if [ "$EVENT" = push ]; then
             base=$BEFORE
+            [ "$REF" = "refs/heads/$DEFAULT" ] || base=$DEFAULT
             case "$base" in ''|0000000000000000000000000000000000000000) base=$DEFAULT ;; esac
             files=$(gh api "repos/$REPO/compare/$base...$SHA" --jq '.files[].filename') || files=CODE
             n=$(printf '%s\n' "$files" | grep -c . || true)
