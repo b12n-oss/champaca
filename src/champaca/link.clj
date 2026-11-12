@@ -691,23 +691,40 @@
                               (str "class " (dotted n) " can not implement " (dotted i) ", because it is not an interface ("
                                    (s/call "class-place-text" i) ")")))))))
 
+(defn- inherited-instance-method?
+  "Whether m can override: an instance method, not a constructor, not private."
+  [m]
+  (and (not (cf/static? m)) (not= "<init>" (:name m)) (zero? (bit-and (:flags m) 0x0002))))
+
+(defn- final-method-seen
+  "c's final instance method with m's name and descriptor that class n can
+  see (public or protected, or package-private from n's package), or nil."
+  [c m n]
+  (let [pkg package-dir   ; a hidden class's /0x<n> suffix isn't its package
+        sm (some #(when (and (= (:name m) (:name %)) (= (:desc m) (:desc %))) %) (class-methods c))]
+    (when (and sm (pos? (bit-and (:flags sm) 0x0010)) (not (cf/static? sm))
+               (zero? (bit-and (:flags sm) 0x0002))
+               (or (pos? (bit-and (:flags sm) 0x0005)) (= (pkg c) (pkg n))))
+      sm)))
+
+(defn- final-override-of
+  "The error for class n's method m overriding a final method of the first
+  superclass in supers that has one n can see, or nil."
+  [m n supers]
+  (some (fn [c]
+          (when (final-method-seen c m n)
+            (linkage-error n "java/lang/IncompatibleClassChangeError"
+                           (str "class " (dotted n) " overrides final method " (dotted c) "." (:name m) (:desc m)))))
+        supers))
+
 (defn- final-override-error
   "The error for the first instance method of info overriding a final one of
   a superclass it can see (a package-private one only from the same
   package), or nil."
   [info sup]
   (let [n (:name info)
-        pkg package-dir]   ; a hidden class's /0x<n> suffix isn't its package
-    (some (fn [m]
-            (when (and (not (cf/static? m)) (not= "<init>" (:name m)) (zero? (bit-and (:flags m) 0x0002)))
-              (some (fn [c]
-                      (let [sm (some #(when (and (= (:name m) (:name %)) (= (:desc m) (:desc %))) %) (class-methods c))]
-                        (when (and sm (pos? (bit-and (:flags sm) 0x0010)) (not (cf/static? sm))
-                                   (zero? (bit-and (:flags sm) 0x0002))
-                                   (or (pos? (bit-and (:flags sm) 0x0005)) (= (pkg c) (pkg n))))
-                          (linkage-error n "java/lang/IncompatibleClassChangeError"
-                                         (str "class " (dotted n) " overrides final method " (dotted c) "." (:name m) (:desc m))))))
-                    (take-while some? (iterate #(:super (class-info %)) sup)))))
+        supers (take-while some? (iterate #(:super (class-info %)) sup))]
+    (some #(when (inherited-instance-method? %) (final-override-of % n supers))
           (:methods info))))
 
 (defn check-definition!

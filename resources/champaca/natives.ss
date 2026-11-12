@@ -405,22 +405,33 @@
 ;; The message has as many units as its text has bytes that aren't UTF-8
 ;; continuation bytes, so a cut sequence's stray bytes push the message's
 ;; last units off the end.
+;; the modified UTF-8 length of UTF-16 units
+(define (cn-mutf8-size units)
+  (fold-left (lambda (a u) (fx+ a (cond [(and (fx> u 0) (fx< u #x80)) 1] [(fx< u #x800) 2] [else 3]))) 0 units))
+
+;; how many characters start in bv's bytes lo..hi (bytes that aren't UTF-8
+;; continuation bytes)
+(define (cn-lead-count bv lo hi)
+  (let loop ([i lo] [k 0])
+    (if (fx= i hi) k
+        (loop (fx+ i 1)
+              (if (fx= (fxlogand (bytevector-u8-ref bv i) #xc0) #x80) k (fx+ k 1))))))
+
+;; HotSpot's message for a class name of size bytes bv: its first and last
+;; 128 bytes around the count omitted, cut to the characters those bytes start
+(define (cn-overlong-message bv size)
+  (let* ([pre (code-units "Class name exceeds maximum length of 65535: ")]
+         [mid (code-units (string-append " ... (" (number->string (fx- size 256)) " characters omitted) ... "))]
+         [all (append pre (cn-bytes->units bv 0 128) mid (cn-bytes->units bv (fx- size 128) size))]
+         [keep (fx+ (length pre) (length mid) (cn-lead-count bv 0 128) (cn-lead-count bv (fx- size 128) size))])
+    (list->vector (list-head all (fxmin keep (length all))))))
+
 (define (overlong-class-name name)
   (let* ([units (map (lambda (u) (if (fx= u 46) 47 u)) (jstring-units name))]
-         [size (fold-left (lambda (a u) (fx+ a (cond [(and (fx> u 0) (fx< u #x80)) 1] [(fx< u #x800) 2] [else 3]))) 0 units)])
+         [size (cn-mutf8-size units)])
     (when (fx> size 65535)
-      (let ([bv (cn-mutf8-bytes units)])
-        (let* ([pre (code-units "Class name exceeds maximum length of 65535: ")]
-               [mid (code-units (string-append " ... (" (number->string (fx- size 256)) " characters omitted) ... "))]
-               [all (append pre (cn-bytes->units bv 0 128) mid (cn-bytes->units bv (fx- size 128) size))]
-               [lead-count (lambda (lo hi)
-                             (let loop ([i lo] [k 0])
-                               (if (fx= i hi) k
-                                   (loop (fx+ i 1)
-                                         (if (fx= (fxlogand (bytevector-u8-ref bv i) #xc0) #x80) k (fx+ k 1))))))]
-               [keep (fx+ (length pre) (length mid) (lead-count 0 128) (lead-count (fx- size 128) size))])
-          (jthrow "java/lang/ClassNotFoundException"
-                  (list->vector (list-head all (fxmin keep (length all))))))))))
+      (jthrow "java/lang/ClassNotFoundException"
+              (cn-overlong-message (cn-mutf8-bytes units) size)))))
 
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
