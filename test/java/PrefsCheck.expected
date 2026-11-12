@@ -1,7 +1,7 @@
 keys: [bytes, d, i, s, z]
 values: é and 日 -7 true 2.5 [1, 2, -6] default
 children: [a, other] [c]
-paths: /champaca-prefscheck/a/b/c c true
+paths: /champaca/prefscheck/node/a/b/c c true
 after remove: [bytes, d, i, s] false
 export: true true
 import: y
