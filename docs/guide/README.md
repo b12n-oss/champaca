@@ -18,6 +18,7 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 
 ## Background
 
+- [compared-to-babashka](compared-to-babashka.md): how champaca differs from babashka and GraalVM native-image, and when each fits.
 - [compatibility](compatibility.md): what behaves as on the JVM, area by area, with the test that checks each.
 - [how-it-works](how-it-works.md): from a `.class` file to native code and how the JDK boots, with a table of the source files.
 - [limitations](limitations.md): the shortcuts a real program will run into.

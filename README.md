@@ -9,6 +9,8 @@ Champaca is a Java runtime inside [jolt](https://github.com/jolt-lang/jolt). It 
 
 The classes are the JDK's own, read from `$JAVA_HOME/lib/modules`, and the JDK boots as it does on a JVM, module system included. So `System.out.println` goes through the real `PrintStream` and UTF-8 encoder before it reaches a `FileOutputStream.writeBytes` that champaca implements over libc.
 
+If you know babashka, champaca goes the other way. Babashka is a Clojure interpreter compiled ahead of time with a fixed set of Java classes, while champaca compiles jolt's Clojure natively and loads any Java class file at run time, at the price of a slower first start. [compared-to-babashka](docs/guide/compared-to-babashka.md) sets the two side by side.
+
 ## Calling Java from jolt
 
 ```clojure
@@ -59,6 +61,7 @@ jolt -M -m champaca.main target/classes Hello   # run a class jolt test compiled
 - [app-bundles](docs/guide/app-bundles.md): shipping a program without a JDK.
 - [performance](docs/guide/performance.md) and [debugging](docs/guide/debugging.md): the caches, what generated code costs, the `CHAMPACA_*` switches.
 - [compatibility](docs/guide/compatibility.md), [limitations](docs/guide/limitations.md) and [how-it-works](docs/guide/how-it-works.md): what matches the JVM, what doesn't, and why.
+- [compared-to-babashka](docs/guide/compared-to-babashka.md): champaca next to babashka and GraalVM native-image.
 - [contributing](docs/guide/contributing.md) and [development](docs/guide/development.md): how a change gets in, the tasks, the checks before a merge. Changes written with an LLM's help are welcome on the same terms ([AI_POLICY.md](AI_POLICY.md)).
 
 ## The name
