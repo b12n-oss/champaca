@@ -971,30 +971,45 @@
   (vec (keep-indexed (fn [i {:keys [start end]}] (when (and (<= start pc) (< pc end)) i)) handlers)))
 
 
+(defn- block-use-def
+  "[used defined] for one block: the locals it reads before assigning them
+  (a ret's too), and the locals it assigns."
+  [blk]
+  (reduce (fn [[u d] {:keys [op args]}]
+            (let [i (first args)]
+              [(if (and (or (load-ops op) (= op :ret)) (not (d i))) (conj u i) u)
+               (if (store-ops op) (conj d i) d)]))
+          [#{} #{}] blk))
+
+(defn- live-in-locals
+  "Each block's live-in locals: what it uses, plus its normal successors'
+  live-in less what it defines, plus every covering handler's live-in,
+  which a throw before the def reaches; iterated to a fixed point."
+  [blks handlers cover use-def]
+  (loop [li (zipmap (keys blks) (repeat #{}))]
+    (let [li' (into {} (for [[pc [u d]] use-def]
+                         [pc (-> u
+                                 (into (remove d) (mapcat li (successors (peek (blks pc)))))
+                                 (into (mapcat #(li (:handler (nth handlers %))) (cover pc))))]))]
+      (if (= li li') li (recur li')))))
+
+(defn- assigned-under
+  "The locals the blocks handler i covers assign."
+  [i cover use-def]
+  (into #{} (comp (filter (fn [[pc _]] (some #{i} (cover pc))))
+                  (mapcat (fn [[_ [_ d]]] d)))
+        use-def))
+
 (defn- boxed-locals
   "The locals some handler reads on entry that the code it covers assigns.
   A handler sees a local's value at the throw, which only a method-wide
   variable holds: every other local keeps the value it had when the guarded
   region was entered, so the guard passes that on."
   [blks handlers cover]
-  (let [use-def (into {} (for [[pc blk] blks]
-                           [pc (reduce (fn [[u d] {:keys [op args]}]
-                                         (let [i (first args)]
-                                           [(if (and (or (load-ops op) (= op :ret)) (not (d i))) (conj u i) u)
-                                            (if (store-ops op) (conj d i) d)]))
-                                       [#{} #{}] blk)]))
-        ;; live-in = use + (normal successors' live-in - def) + every covering
-        ;; handler's live-in, which a throw before the def reaches
-        live-in (loop [li (zipmap (keys blks) (repeat #{}))]
-                  (let [li' (into {} (for [[pc [u d]] use-def]
-                                       [pc (-> u
-                                               (into (remove d) (mapcat li (successors (peek (blks pc)))))
-                                               (into (mapcat #(li (:handler (nth handlers %))) (cover pc))))]))]
-                    (if (= li li') li (recur li'))))]
+  (let [use-def (into {} (for [[pc blk] blks] [pc (block-use-def blk)]))
+        live-in (live-in-locals blks handlers cover use-def)]
     (set (for [[i {:keys [handler]}] (map-indexed vector handlers)
-               :let [assigned (into #{} (comp (filter (fn [[pc _]] (some #{i} (cover pc))))
-                                              (mapcat (fn [[_ [_ d]]] d)))
-                                    use-def)]
+               :let [assigned (assigned-under i cover use-def)]
                l (live-in handler)
                :when (assigned l)]
            l))))
