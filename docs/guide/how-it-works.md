@@ -131,7 +131,10 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/api.clj` | the jolt-facing API |
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |
-| `resources/champaca/runtime.ss` | objects, arrays, exceptions, `java.lang.String` conversion, `Class` mirrors, lambdas, records |
+| `resources/champaca/runtime.ss` | numbers, objects, arrays, exceptions, `Class` mirrors, lambdas, records |
+| `resources/champaca/strings.ss` | `java.lang.String` to and from Scheme strings, concatenation |
+| `resources/champaca/modules.ss` | which module and loader a class belongs to, and the texts that name them |
+| `resources/champaca/units.ss` | evaluating and compiling generated code, globals as their own labels, the cache's unit files |
 | `resources/champaca/natives.ss` | JDK native methods not covered by the files below, resources, a few overrides |
 | `resources/champaca/management.ss` | `java.management`: the runtime, memory, OS, class-loading and thread beans, the heap pool and collector, GC notifications |
 | `resources/champaca/memory.ss` | `Unsafe` (named natives plus pattern rules), scoped memory access, the `Unaligned` accessors |
@@ -140,7 +143,9 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `resources/champaca/varhandles.ss` | VarHandles and their coordinate combinators |
 | `resources/champaca/reflect.ss` | reflection natives, `invoke0`/`newInstance0`, `Field` overrides, `getCallerClass` and the frame walk behind stack traces |
 | `resources/champaca/handles.ss` | method handles, call sites for bootstraps run for real, pattern-switch matching |
-| `resources/champaca/files.ss` | file, channel and zlib natives through libc, `UnsafeConstants` |
+| `resources/champaca/files.ss` | file and channel natives through libc, `UnsafeConstants` |
+| `resources/champaca/zip.ss` | `Inflater` and `Deflater` over zlib |
+| `resources/champaca/prefs.ss` | `java.util.prefs`: lock files on Linux, CFPreferences on macOS |
 | `resources/champaca/spawn.ss` | child processes: `forkAndExec` through `posix_spawn`, the reaper's `waitpid`, `destroy0` |
 | `resources/champaca/net.ss` | socket, datagram and selector natives through libc: `sun.nio.ch.Net`, the socket and datagram dispatchers, `DatagramChannelImpl`, `Inet4AddressImpl`, `KQueue`, `EPoll`, the selector's wakeup pipe |
 | `resources/champaca/netif.ss` | `NetworkInterface` through `getifaddrs` and `ioctl`, and `InetAddress.isReachable` |
