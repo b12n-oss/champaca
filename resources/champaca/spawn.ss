@@ -438,54 +438,80 @@
   (when command-line (info-set! info "commandLine" (jstring command-line))))
 (define (foreign->bytevector p n)
   (let ([bv (make-bytevector n)]) (do ([i 0 (fx+ i 1)]) ((fx= i n) bv) (bytevector-u8-set! bv i (foreign-ref 'unsigned-8 p i)))))
+;; Info's user, from a uid when there is one with a name
+(define (set-info-user! info uid)
+  (let ([name (and uid (>= uid 0) (user-name uid))])
+    (when name (info-set! info "user" (jstring name)))))
+
+;; macOS: sysctl KERN_ARGMAX, the size KERN_PROCARGS2 needs
+(define (kern-argmax)
+  (with-mib (list 1 8)
+    (lambda (mib n)
+      (let ([v (foreign-alloc 4)] [len (foreign-alloc 8)])
+        (foreign-set! 'unsigned-64 len 0 4)
+        (let* ([r (libc-sysctl mib n v len 0 0)] [e (errno)] [m (foreign-ref 'int v 0)])
+          (foreign-free v) (foreign-free len)
+          (when (< r 0) (sysctl-failed e))
+          m)))))
+;; KERN_PROCARGS2 for pid as a bytevector, or #f when the kernel gives none
+;; (EINVAL or EIO: another user's process, or one that is gone)
+(define (kern-procargs pid maxargs)
+  (with-mib (list 1 49 pid)
+    (lambda (mib n)
+      (let ([args (foreign-alloc maxargs)] [len (foreign-alloc 8)])
+        (foreign-set! 'unsigned-64 len 0 maxargs)
+        (let* ([r (libc-sysctl mib n args len 0 0)] [e (errno)] [size (foreign-ref 'unsigned-64 len 0)])
+          (let ([bv (and (>= r 0) (foreign->bytevector args size))])
+            (foreign-free args) (foreign-free len)
+            (when (and (< r 0) (not (memv e '(22 5)))) (sysctl-failed e))
+            bv))))))
+;; KERN_PROCARGS2's layout: argc, the executable's path, NULs up to argv[0]
+(define (fill-from-procargs! info bv)
+  (let ([size (bytevector-length bv)])
+    (when (fx>= size 4)
+      (let* ([exe-end (bytes-nul bv 4 size)]
+             [cp (let skip ([j exe-end]) (if (and (fx< j size) (fx= 0 (bytevector-u8-ref bv j))) (skip (fx+ j 1)) j))])
+        (fill-args! info (bytevector-s32-native-ref bv 0) bv cp size (bytes-text bv 4 exe-end) #f)))))
 (define (macos-command-info! info pid)
-  (let ([u (let ([p (macos-proc pid)]) (if p (caddr p) -1))])
-    (when (>= u 0) (let ([name (user-name u)]) (when name (info-set! info "user" (jstring name))))))
-  (let ([maxargs (with-mib (list 1 8)   ; KERN_ARGMAX
-                   (lambda (mib n)
-                     (let ([v (foreign-alloc 4)] [len (foreign-alloc 8)])
-                       (foreign-set! 'unsigned-64 len 0 4)
-                       (let* ([r (libc-sysctl mib n v len 0 0)] [e (errno)] [m (foreign-ref 'int v 0)])
-                         (foreign-free v) (foreign-free len)
-                         (when (< r 0) (sysctl-failed e))
-                         m))))])
-    (with-mib (list 1 49 pid)   ; KERN_PROCARGS2
-      (lambda (mib n)
-        (let ([args (foreign-alloc maxargs)] [len (foreign-alloc 8)])
-          (foreign-set! 'unsigned-64 len 0 maxargs)
-          (let* ([r (libc-sysctl mib n args len 0 0)] [e (errno)] [size (foreign-ref 'unsigned-64 len 0)])
-            (let ([bv (and (>= r 0) (foreign->bytevector args size))])
-              (foreign-free args) (foreign-free len)
-              (cond [(< r 0) (unless (memv e '(22 5)) (sysctl-failed e))]   ; EINVAL, EIO: no info
-                    [(fx>= size 4)
-                     (let* ([nargs (bytevector-s32-native-ref bv 0)]
-                            [exe-end (bytes-nul bv 4 size)]
-                            [command (bytes-text bv 4 exe-end)]
-                            [cp (let skip ([j exe-end]) (if (and (fx< j size) (fx= 0 (bytevector-u8-ref bv j))) (skip (fx+ j 1)) j))])
-                       (fill-args! info nargs bv cp size command #f))]))))))))
+  (set-info-user! info (let ([p (macos-proc pid)]) (and p (caddr p))))
+  (let ([bv (kern-procargs pid (kern-argmax))])
+    (when bv (fill-from-procargs! info bv))))
+
+;; Linux: /proc/<pid>/cmdline, at most a page as the kernel shows it
+(define (read-cmdline dir page)
+  (let ([cmdline (guard (e [#t #f]) (call-with-port (open-file-input-port (string-append dir "/cmdline")) get-bytevector-all))])
+    (cond [(not cmdline) #f]
+          [(eof-object? cmdline) (make-bytevector 0)]
+          [(fx> (bytevector-length cmdline) page)
+           (let ([b (make-bytevector page)]) (bytevector-copy! cmdline 0 b 0 page) b)]
+          [else cmdline])))
+;; /proc/<pid>/exe's target, readable for a process of ours only
+(define (read-exe dir)
+  (let* ([path (c-string (string-append dir "/exe"))] [buf (foreign-alloc 4097)] [n (libc-readlink path buf 4096)])
+    (let ([s (and (> n 0) (bytes-text (foreign->bytevector buf n) 0 n))])
+      (foreign-free buf) (foreign-free path)
+      s)))
+;; the arguments with their NULs as spaces, as the JDK's commandLine
+(define (cmdline-as-line bv len)
+  (let ([b (bytevector-copy bv)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i len)) (when (fx= 0 (bytevector-u8-ref b i)) (bytevector-u8-set! b i 32)))
+    (bytes-text b 0 (bytes-nul b 0 len))))
+;; the NUL-separated arguments up to the first empty one
+(define (cmdline-count bv len)
+  (let count ([s 0] [i 0])
+    (if (or (fx>= s len) (fx= 0 (bytevector-u8-ref bv s))) i (count (fx+ (bytes-nul bv s len) 1) (fx+ i 1)))))
 (define (linux-command-info! info pid)
   (let ([dir (string-append "/proc/" (number->string pid))])
     (when (and fs-stat-layout? (fx= 0 (libc-stat-string dir fs-stat-buf)))
-      (let ([name (user-name (fs-ref fs-stat-buf 'st_uid))]) (when name (info-set! info "user" (jstring name)))))
-    (let ([cmdline (guard (e [#t #f]) (call-with-port (open-file-input-port (string-append dir "/cmdline")) get-bytevector-all))])
-      (when cmdline
-        (let* ([page (libc-sysconf 30)]   ; _SC_PAGESIZE
-               [bv (if (eof-object? cmdline) (make-bytevector 0)
-                       (if (fx> (bytevector-length cmdline) page)
-                           (let ([b (make-bytevector page)]) (bytevector-copy! cmdline 0 b 0 page) b)
-                           cmdline))]
-               [len (bytevector-length bv)]
-               [exe (let* ([path (c-string (string-append dir "/exe"))] [buf (foreign-alloc 4097)] [n (libc-readlink path buf 4096)])
-                      (let ([s (and (> n 0) (bytes-text (foreign->bytevector buf n) 0 n))]) (foreign-free buf) (foreign-free path) s))]
+      (set-info-user! info (fs-ref fs-stat-buf 'st_uid)))
+    (let* ([page (libc-sysconf 30)]   ; _SC_PAGESIZE
+           [bv (read-cmdline dir page)])
+      (when bv
+        (let* ([len (bytevector-length bv)]
+               [exe (read-exe dir)]
                [truncated (and (fx= len page) (not (fx= 0 (bytevector-u8-ref bv (fx- page 1)))))]
-               [line (and (fx> len 0) (or (not exe) truncated)
-                          (let ([b (bytevector-copy bv)])
-                            (do ([i 0 (fx+ i 1)]) ((fx= i len)) (when (fx= 0 (bytevector-u8-ref b i)) (bytevector-u8-set! b i 32)))
-                            (bytes-text b 0 (bytes-nul b 0 len))))]
-               [nargs (if truncated 0
-                          (let count ([s 0] [i 0])
-                            (if (or (fx>= s len) (fx= 0 (bytevector-u8-ref bv s))) i (count (fx+ (bytes-nul bv s len) 1) (fx+ i 1)))))])
-          (fill-args! info nargs bv 0 len exe line))))))
+               [line (and (fx> len 0) (or (not exe) truncated) (cmdline-as-line bv len))])
+          (fill-args! info (if truncated 0 (cmdline-count bv len)) bv 0 len exe line))))))
 (defnative "java/lang/ProcessHandleImpl$Info.initIDs()V" () (void))
 (defnative "java/lang/ProcessHandleImpl$Info.info0(J)V" (this pid)
   (let-values ([(ppid start total) (process-timings pid)])
