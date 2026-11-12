@@ -60,6 +60,10 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `java.util.prefs` works: on macOS through CFPreferences, in the layout
+  HotSpot leaves in `~/Library/Preferences`, so each reads the other's
+  nodes, and on Linux through `~/.java` with its lock files, where both
+  threw `UnsatisfiedLinkError` (`test/java/PrefsCheck.java`).
 - A lambda's class is one per call site, as on the JVM: a hidden class
   named `Caller$$Lambda/0x...` in its caller's package, module and loader,
   its caller's nestmate, where every call site with the same interface
