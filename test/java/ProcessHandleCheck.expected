@@ -1,0 +1,18 @@
+self info: true true true true
+self started before now: true
+self cpu positive: true
+child command: true
+child arguments: [30]
+child command line: true
+child user: true
+child start: true
+child cpu as this system: true
+child of self: true true true
+all processes: true true
+of: true
+same start time: true
+compare: 0 true
+grandchild: 1 true true
+exit: 143 143
+gone: false false false false false
+no such process: false
