@@ -540,6 +540,29 @@
                                           (finally (fs/delete-tree cache)))]
                                  (println (if ok "PASS" "FAIL") "a failed save leaves no class map without its code (test/cachesave)")
                                  (if ok [] ["cache save"]))
+                    ;; a program that only ends on a signal (test/signal): its shutdown
+                    ;; hook runs and the status is 128 + the signal, as on HotSpot
+                    signal-fails (let [_ (shell "javac -d target/signal-classes test/signal/SignalCheck.java")
+                                       want (slurp "test/signal/SignalCheck.expected")
+                                       run (fn [sig]
+                                             (let [outf (str (fs/create-temp-file {:prefix "champaca-signal-"}))
+                                                   proc (process/process {:out (fs/file outf) :err :inherit}
+                                                                         (jolt-bin) "-M" "-m" "champaca.main" "target/signal-classes" "SignalCheck")
+                                                   ready (loop [n 0]
+                                                           (cond (str/includes? (slurp outf) "ready") true
+                                                                 (> n 600) false
+                                                                 :else (do (Thread/sleep 500) (recur (inc n)))))
+                                                   _ (when ready (shell "kill" (str "-" sig) (str (.pid (:proc proc)))))
+                                                   r (deref proc 120000 :timed-out)]
+                                               (when (= r :timed-out) (process/destroy-tree proc))
+                                               (let [out (slurp outf)] (fs/delete outf) {:exit (when (map? r) (:exit r)) :out out})))
+                                       bad (remove nil? (for [[sig status] [["TERM" 143] ["HUP" 129]]
+                                                              :let [{:keys [exit out]} (run sig)]]
+                                                          (when-not (and (= status exit) (= want out))
+                                                            (str "SIG" sig ": exit " exit ", " (pr-str out)))))]
+                                   (println (if (seq bad) "FAIL" "PASS") "a program ended by SIGTERM or SIGHUP runs its shutdown hooks and exits 128 + the signal (test/signal)"
+                                            (if (seq bad) (str/join "; " bad) ""))
+                                   (if (seq bad) ["signal"] []))
                     ;; programs a user runs alone, each on a fresh cache of its own,
                     ;; cold then warm: the run above shares one cache across every
                     ;; program, which hid a bug only a program's own second run shows
@@ -970,7 +993,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails signal-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

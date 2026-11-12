@@ -266,6 +266,12 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A program ended by SIGTERM, SIGINT or SIGHUP runs its shutdown hooks and
+  exits with 128 plus the signal, as on HotSpot, and the startup cache is
+  saved: a server such as a Spring Boot app stopped with `kill` died on the
+  spot, ran no hook and never came back warm (`test/signal`). Spring
+  PetClinic, which serves the same pages as on HotSpot, now starts warm
+  after it has been stopped once.
 - A static field that champaca's own runtime reads (`ValueLayout.JAVA_INT`
   for a downcall's captured `errno`) keeps its value on a warm run. The
   module-graph archive's walk over static fields gave one whose class hadn't

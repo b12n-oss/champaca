@@ -819,6 +819,20 @@
   (jinit "java/lang/Shutdown")
   ((method-proc "java/lang/Shutdown" "shutdown()V")))
 
+;; SIGINT, SIGTERM or SIGHUP: jolt's signal watcher runs its shutdown hooks,
+;; one of which (champaca.main) calls this, then ends the process with
+;; 128 + the signal, the status HotSpot's exit gives. Java's shutdown hooks
+;; run here, as HotSpot runs them on those signals, unless Java's own exit
+;; has begun or the VM has already shut down (a normal end, where they ran
+;; already). #t when they ran, so the caller saves the startup cache too.
+(define (java-signal-shutdown!)
+  (jinit "jdk/internal/misc/VM")
+  (if (or java-exit-begun (eqv? 1 ((method-proc "jdk/internal/misc/VM" "isShutdown()Z"))))
+      #f
+      (begin (jinit "java/lang/Shutdown")
+             ((method-proc "java/lang/Shutdown" "shutdown()V"))
+             #t)))
+
 ;; main's ThreadGroup, which jolt's threads and DestroyJavaVM join: the main
 ;; thread's getThreadGroup() is null once it has ended
 (define main-group #f)
