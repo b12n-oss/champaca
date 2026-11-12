@@ -23,7 +23,7 @@ calls is compiled on demand.
 | Threads | Run in parallel (`pmap`, `future`) | Real threads, but one lock lets one run Java at a time ([limitations](limitations.md#threads-take-turns)) |
 | Clojure it lacks | SCI is a subset: no `deftype`, `definterface` or unboxed math, `defprotocol` and `defrecord` emulated with multimethods and maps, `reify` of one class at a time | Whatever jolt lacks; champaca adds no limits of its own |
 | Adding capability | A new babashka build with more classes, or a [pod](https://github.com/babashka/pods) | A jar on the class path |
-| Status | `clojure.core` and `java.lang` support is stable, by its README | Experimental, checked along its tests and the twenty libraries `jolt libs` runs |
+| Status | `clojure.core` and `java.lang` support is stable, by its README | Experimental, checked along its tests and the twenty-three libraries `jolt libs` runs |
 
 The babashka column comes from its README's "Differences with Clojure" and
 "Setting expectations" sections (at `b429a12e`).

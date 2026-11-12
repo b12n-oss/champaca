@@ -69,4 +69,16 @@
                        ["org.codehaus.woodstox:stax2-api:4.2.2" "b0d746cadea928e5264f2ea294ea9a1bf815bbde"]
                        ["com.fasterxml.jackson.core:jackson-databind:2.18.1" "66547d0c6c2f9e022019499308f09bebbf30ab2e"]
                        ["com.fasterxml.jackson.core:jackson-core:2.18.1" "9e2284c539e2dedd2aa1487c781e20a0f575d695"]
-                       ["com.fasterxml.jackson.core:jackson-annotations:2.18.1" "8f9aa97e7fb44d4bea829061625472b0f6199923"]]}]}
+                       ["com.fasterxml.jackson.core:jackson-annotations:2.18.1" "8f9aa97e7fb44d4bea829061625472b0f6199923"]]}
+  ;; a signed jar as a JCE provider: SHA-3, BLAKE2, AES-GCM, ECDSA keys and
+  ;; signatures the JDK's own SunEC verifies, HMAC, PBKDF2
+  {:main "Bcp" :jars [["org.bouncycastle:bcprov-jdk18on:1.79" "4d8e2732bcee15f1db93df266c3f5b70ce5cac21"]]}
+  ;; numerics: LU, eigen and singular value decompositions, statistics,
+  ;; regression, distributions, a root solver, an FFT, Mersenne Twister
+  {:main "Cmath" :jars [["org.apache.commons:commons-math3:3.6.1" "e4ba98f1d4b3c80ec46392f25e094a6a2e58fcbf"]]}
+  ;; an index written and searched on disk through MMapDirectory (memory
+  ;; segments), phrase, wildcard, fuzzy and range queries, sorting by doc
+  ;; values; its Vector API warning goes to stderr, which isn't compared
+  {:main "Luc" :jars [["org.apache.lucene:lucene-core:10.0.0" "5a9b3f728041df5b054aaaed3c3fd7ff0fed8ee7"]
+                      ["org.apache.lucene:lucene-analysis-common:10.0.0" "13eb016bab14973158554a2e6cdf2abbc5c3eda1"]
+                      ["org.apache.lucene:lucene-queryparser:10.0.0" "e11886c913058ef20378715dee715d942d04babc"]]}]}
