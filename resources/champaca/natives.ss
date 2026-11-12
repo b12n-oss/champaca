@@ -170,38 +170,6 @@
 (defnative "java/lang/ProcessImpl.init()V" () (void))
 (defnative "java/lang/ProcessHandleImpl.initNative()V" () (void))
 (defnative "java/lang/ProcessHandleImpl.getCurrentPid0()J" () (libc-getpid))
-;; The JVM answers a live process's start time, or -1 for one that is gone;
-;; 0 is a start time ProcessHandleImpl treats as unknown. kill(pid, 0) tells
-;; the two apart, and EPERM still means the process exists.
-;; A pid is a positive int; kill would read 0 and -1 as process groups, and
-;; a long outside int range can't even be passed.
-(define (pid-ok? pid) (and (>= pid 1) (<= pid 2147483647)))
-(defnative "java/lang/ProcessHandleImpl.isAlive0(J)J" (pid)
-  (if (and (pid-ok? pid) (or (eqv? 0 (libc-kill pid 0)) (eqv? (errno) 1))) 0 -1))
-;; The parent of any process: proc_pidinfo's proc_bsdinfo on macOS (ppid is
-;; the 32-bit field at byte 16, size 136, measured on arm64 and x86_64), or
-;; /proc/<pid>/stat on Linux, whose ppid follows the parenthesized command
-;; name (which may itself hold spaces and parens) and the state letter.
-(define libc-proc-pidinfo
-  (and natives-macos? (foreign-procedure "proc_pidinfo" (int int unsigned-64 uptr int) int)))
-(define (parent-pid pid)
-  (if natives-macos?
-      (let* ([buf (foreign-alloc 136)]
-             [n (libc-proc-pidinfo pid 3 0 buf 136)]   ; 3 = PROC_PIDTBSDINFO
-             [ppid (if (fx= n 136) (foreign-ref 'unsigned-32 buf 16) -1)])
-        (foreign-free buf)
-        ppid)
-      (guard (e [#t -1])
-        (let* ([text (call-with-port (open-input-file (string-append "/proc/" (number->string pid) "/stat")) get-string-all)]
-               [start (let loop ([i (fx- (string-length text) 1)])
-                        (if (char=? (string-ref text i) #\)) (fx+ i 4) (loop (fx- i 1))))]
-               [end (let loop ([j start]) (if (char-numeric? (string-ref text j)) (loop (fx+ j 1)) j))])
-          (string->number (substring text start end))))))
-(defnative "java/lang/ProcessHandleImpl.parent0(JJ)J" (pid start)
-  (cond [(not (pid-ok? pid)) -1]
-        [(eqv? pid (libc-getpid)) (libc-getppid)]
-        [else (parent-pid pid)]))
-
 (defnative "java/lang/System.mapLibraryName(Ljava/lang/String;)Ljava/lang/String;" (name)
   (jstring (string-append "lib" (jstring->scheme (nn name)) (if natives-macos? ".dylib" ".so"))))
 ;; The JDK's own libraries are champaca's natives, so loading one is a no-op.

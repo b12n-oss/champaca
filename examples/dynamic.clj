@@ -12,6 +12,7 @@
 ;;   jolt example dynamic
 (ns examples.dynamic
   (:require [clojure.test :refer [deftest is]]
+            [clojure.string :as str]
             [champaca.api :as ldk]))
 
 (ldk/init!)
@@ -111,9 +112,13 @@
          (try (ldk/invoke-static "java.lang.Integer" "parseInt" "x")
               (catch Exception e (ex-message e)))))
   ;; a native champaca lacks is an UnsatisfiedLinkError, caught like any Java
-  ;; exception, and again on a second call: listing every process stops at
-  ;; ProcessHandleImpl.getProcessPids0
-  (dotimes [_ 2]
-    (is (= ["java.lang.UnsatisfiedLinkError" true]
-           (try (ldk/invoke-static "java.lang.ProcessHandle" "allProcesses")
-                (catch Exception e [(subs (ex-message e) 0 30) (contains? (ex-data e) :java/exception)]))))))
+  ;; exception: HotSpot's diagnostic bean reads VM flags through
+  ;; com.sun.management.internal.Flag, whose static initializer calls a
+  ;; native champaca doesn't have. As on a JVM, the class then stays
+  ;; uninitialized, so the next use is a NoClassDefFoundError.
+  (let [bean (ldk/invoke-static "java.lang.management.ManagementFactory" "getPlatformMXBean"
+                                (ldk/invoke-static "java.lang.Class" "forName" "com.sun.management.HotSpotDiagnosticMXBean"))
+        flags (fn [] (try (ldk/invoke bean "getVMOption" "MaxHeapSize")
+                          (catch Exception e [(first (str/split (ex-message e) #":")) (contains? (ex-data e) :java/exception)])))]
+    (is (= ["java.lang.UnsatisfiedLinkError" true] (flags)))
+    (is (= ["java.lang.NoClassDefFoundError" true] (flags)))))

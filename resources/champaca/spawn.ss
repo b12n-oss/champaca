@@ -272,14 +272,225 @@
                   [else (foreign-free st) (if (fx= e 10) -2 -1)]))))   ; ECHILD 10
       -2))
 
-;; SIGKILL or SIGTERM, only when the start time still matches (isAlive0
-;; answers 0, unknown, for a live process, so a 0 on either side matches)
-(defnative "java/lang/ProcessHandleImpl.destroy0(JJZ)Z" (pid start force)
-  (let ([now (if (pid-ok? pid) (if (or (eqv? 0 (libc-kill pid 0)) (eqv? (errno) 1)) 0 -1) -1)])
-    (if (and (>= now 0) (or (eqv? start 0) (eqv? now 0) (eqv? start now)))
+
+;; --- ProcessHandle: start times, parents, children and Info ----------------------
+;; As the JDK's ProcessHandleImpl natives read them. A process is known by
+;; its parent, its start time in milliseconds since the epoch and its CPU
+;; time in nanoseconds (-1 unknown). macOS: sysctl KERN_PROC_PID's struct
+;; kinfo_proc (648 bytes: p_starttime's seconds at 0 and 32-bit microseconds
+;; at 8, p_pid at 40, cr_uid at 420, e_ppid at 560, the same on arm64 and
+;; x86_64), which still answers for a zombie, and CPU time only for this
+;; process (getrusage). Linux: /proc/<pid>/stat's ppid, utime, stime and
+;; starttime after the parenthesized command, in clock ticks since the boot
+;; time /proc/stat gives. A pid is a positive int; anything else is no
+;; process.
+(define (pid-ok? pid) (and (>= pid 1) (<= pid 2147483647)))
+(deflibc libc-sysctl "sysctl" #f (uptr unsigned-32 uptr uptr uptr size_t) int)
+(deflibc libc-sysconf "sysconf" #f (int) long)
+(define kinfo-size 648)
+(define (sysctl-failed e) (jthrow "java/lang/RuntimeException" (strerror-text e)))
+(define (kinfo-start kp) (+ (* 1000 (foreign-ref 'integer-64 kp 0)) (quotient (foreign-ref 'integer-32 kp 8) 1000)))
+(define (with-mib ints proc)
+  (let ([mib (foreign-alloc (fx* 4 (length ints)))])
+    (let loop ([i 0] [xs ints]) (unless (null? xs) (foreign-set! 'int mib (fx* 4 i) (car xs)) (loop (fx+ i 1) (cdr xs))))
+    (let ([r (proc mib (length ints))]) (foreign-free mib) r)))
+;; (ppid start uid) of pid, or #f when there is no such process
+(define (macos-proc pid)
+  (with-mib (list 1 14 1 pid)   ; CTL_KERN KERN_PROC KERN_PROC_PID
+    (lambda (mib n)
+      (let ([kp (foreign-alloc kinfo-size)] [len (foreign-alloc 8)])
+        (foreign-set! 'unsigned-64 len 0 kinfo-size)
+        (let* ([r (libc-sysctl mib n kp len 0 0)] [e (errno)]
+               [got (foreign-ref 'unsigned-64 len 0)]
+               [ans (and (>= r 0) (> got 0) (fx= (foreign-ref 'int kp 40) pid)
+                         (list (foreign-ref 'int kp 560) (kinfo-start kp) (foreign-ref 'unsigned-32 kp 420)))])
+          (foreign-free kp) (foreign-free len)
+          (when (< r 0) (sysctl-failed e))
+          ans)))))
+(define clock-ticks (and (not fs-macos?) (libc-sysconf 2)))   ; _SC_CLK_TCK
+(define boot-ms #f)
+(define (linux-boot-ms)
+  (or boot-ms
+      (let ([ms (guard (e [#t 0])
+                  (let loop ([lines (call-with-port (open-input-file "/proc/stat")
+                                      (lambda (p) (let get ([acc '()]) (let ([l (get-line p)]) (if (eof-object? l) (reverse acc) (get (cons l acc)))))))])
+                    (cond [(null? lines) 0]
+                          [(and (fx> (string-length (car lines)) 6) (string=? (substring (car lines) 0 6) "btime "))
+                           (* 1000 (string->number (substring (car lines) 6 (string-length (car lines)))))]
+                          [else (loop (cdr lines))])))])
+        (set! boot-ms ms)
+        ms)))
+;; (ppid start total) of pid from /proc/<pid>/stat, or #f
+(define (linux-proc pid)
+  (guard (e [#t #f])
+    (let* ([text (call-with-port (open-input-file (string-append "/proc/" (number->string pid) "/stat")) get-string-all)]
+           [close (let loop ([i (fx- (string-length text) 1)]) (if (char=? (string-ref text i) #\)) i (loop (fx- i 1))))]
+           [fields (let split ([i (fx+ close 1)] [start #f] [acc '()])
+                     (cond [(fx= i (string-length text)) (reverse (if start (cons (substring text start i) acc) acc))]
+                           [(char-whitespace? (string-ref text i))
+                            (split (fx+ i 1) #f (if start (cons (substring text start i) acc) acc))]
+                           [else (split (fx+ i 1) (or start i) acc)]))]
+           [num (lambda (k) (string->number (list-ref fields k)))])
+      ;; state 0, ppid 1, utime 11, stime 12, starttime 19
+      (list (num 1)
+            (+ (linux-boot-ms) (quotient (* (num 19) 1000) clock-ticks))
+            (* (+ (num 11) (num 12)) (quotient 1000000000 clock-ticks))))))
+(define (self-cpu-ns)   ; getrusage(RUSAGE_SELF): user + system time
+  (let ([ru (foreign-alloc 144)])
+    (let ([ns (and (fx= 0 ((foreign-procedure "getrusage" (int uptr) int) 0 ru))
+                   (* 1000 (+ (* 1000000 (+ (foreign-ref 'integer-64 ru 0) (foreign-ref 'integer-64 ru 16)))
+                              (foreign-ref 'integer-32 ru 8) (foreign-ref 'integer-32 ru 24))))])
+      (foreign-free ru)
+      (or ns -1))))
+;; (values ppid start total) as os_getParentPidAndTimings: ppid -1 when gone
+(define (process-timings pid)
+  (cond [(not (pid-ok? pid)) (values -1 0 -1)]
+        [fs-macos? (let ([p (macos-proc pid)])
+                     (if p
+                         (values (car p) (cadr p) (if (= pid (libc-getpid)) (self-cpu-ns) -1))
+                         (values -1 0 -1)))]
+        [else (let ([p (linux-proc pid)])
+                (if p (values (car p) (cadr p) (caddr p)) (values -1 0 -1)))]))
+
+(defnative "java/lang/ProcessHandleImpl.isAlive0(J)J" (pid)
+  (let-values ([(ppid start total) (process-timings pid)]) (if (< ppid 0) -1 start)))
+(defnative "java/lang/ProcessHandleImpl.parent0(JJ)J" (pid start-time)
+  (if (= pid (libc-getpid))
+      (libc-getppid)
+      (let-values ([(ppid start total) (process-timings pid)])
+        (if (and (not (= start start-time)) (not (eqv? start 0)) (not (eqv? start-time 0))) -1 ppid))))
+;; SIGKILL or SIGTERM, only when the start time still matches (0 is unknown)
+(defnative "java/lang/ProcessHandleImpl.destroy0(JJZ)Z" (pid start-time force)
+  (let ([start (let-values ([(ppid start total) (process-timings pid)]) (if (< ppid 0) -1 start))])
+    (if (and (pid-ok? pid) (or (= start start-time) (eqv? start 0) (eqv? start-time 0)))
         (if (eqv? 0 (libc-kill pid (if (eqv? force 1) 9 15))) 1 0)
         0)))
 
-;; ProcessHandle.Info is left empty: every field stays unknown
+;; every process (pid 0) or pid's children, as (pid ppid start) lists
+(define (macos-all-procs)
+  (with-mib (list 1 14 0 0)   ; KERN_PROC_ALL
+    (lambda (mib n)
+      (let ([len (foreign-alloc 8)])
+        (let retry ([tries 100])
+          (foreign-set! 'unsigned-64 len 0 0)
+          (when (< (libc-sysctl mib n 0 len 0 0) 0) (let ([e (errno)]) (foreign-free len) (sysctl-failed e)))
+          (let* ([size (+ (foreign-ref 'unsigned-64 len 0) (fx* 4 kinfo-size))] [buf (foreign-alloc size)])
+            (foreign-set! 'unsigned-64 len 0 size)
+            (let* ([r (libc-sysctl mib n buf len 0 0)] [e (errno)])
+              (cond [(and (< r 0) (fx= e 12) (fx> tries 0)) (foreign-free buf) (retry (fx- tries 1))]   ; ENOMEM
+                    [(< r 0) (foreign-free buf) (foreign-free len) (sysctl-failed e)]
+                    [else
+                     (let* ([count (quotient (foreign-ref 'unsigned-64 len 0) kinfo-size)]
+                            [procs (let loop ([i 0] [acc '()])
+                                     (if (fx= i count)
+                                         (reverse acc)
+                                         (let ([kp (+ buf (* i kinfo-size))])
+                                           (loop (fx+ i 1) (cons (list (foreign-ref 'int kp 40) (foreign-ref 'int kp 560) (kinfo-start kp)) acc)))))])
+                       (foreign-free buf) (foreign-free len)
+                       procs)]))))))))
+(define (linux-all-procs)
+  (filter (lambda (x) x)
+          (map (lambda (name)
+                 (let ([pid (string->number name)])
+                   (and pid (exact? pid) (fx> pid 0)
+                        (let ([p (linux-proc pid)]) (and p (>= (car p) 0) (list pid (car p) (cadr p)))))))
+               (guard (e [#t (jthrow "java/lang/RuntimeException" "Unable to open /proc")]) (directory-list "/proc")))))
+(defnative "java/lang/ProcessHandleImpl.getProcessPids0(J[J[J[J)I" (pid pids ppids stimes)
+  (let ([n (jarraylength pids)])
+    (if (or (and ppids (not (fx= n (jarraylength ppids)))) (and stimes (not (fx= n (jarraylength stimes)))))
+        (jthrow "java/lang/IllegalArgumentException" "array sizes not equal")
+        (let loop ([ps (if fs-macos? (macos-all-procs) (linux-all-procs))] [count 0])
+          (cond [(null? ps) count]
+                [(or (eqv? pid 0) (= (cadr (car ps)) pid))
+                 (when (fx< count n)
+                   (vector-set! (jarr-vec pids) count (car (car ps)))
+                   (when ppids (vector-set! (jarr-vec ppids) count (cadr (car ps))))
+                   (when stimes (vector-set! (jarr-vec stimes) count (caddr (car ps)))))
+                 (loop (cdr ps) (fx+ count 1))]
+                [else (loop (cdr ps) count)])))))
+
+;; Info: start and CPU times when the process is there, then its user and
+;; command line as the JDK's os_getCmdlineAndUserInfo finds them: on macOS
+;; the uid from kinfo_proc and the executable and argv from KERN_PROCARGS2
+;; (refused for another user's process, then left out); on Linux the owner
+;; of /proc/<pid>, the executable from /proc/<pid>/exe (ours only) and argv
+;; from /proc/<pid>/cmdline, with the whole line as commandLine when the
+;; executable can't be read or the line was cut at a page.
+(define info-class "java/lang/ProcessHandleImpl$Info")
+(define (info-set! info name v) (jslot-set! info (jfield-index info-class name) v))
+(define (user-name uid)
+  (let ([p (libc-getpwuid uid)])
+    (and (not (eqv? p 0))
+         (let ([name (c-string-text (foreign-ref 'uptr p 0))]) (and (fx> (string-length name) 0) name)))))
+(define (bytes-text bv start end) (utf8->string (let ([b (make-bytevector (fx- end start))]) (bytevector-copy! bv start b 0 (fx- end start)) b)))
+(define (bytes-nul bv i end) (let loop ([j i]) (if (or (fx>= j end) (fx= 0 (bytevector-u8-ref bv j))) j (loop (fx+ j 1)))))
+;; unix_fillArgArray: the command, then nargs - 1 arguments after argv[0];
+;; an empty argument or the end of the buffer leaves arguments unset
+(define (fill-args! info nargs bv cp end command command-line)
+  (info-set! info "command" (and command (jstring command)))
+  (when (fx>= nargs 1)
+    (let loop ([i 0] [cp cp] [acc '()])
+      (if (fx= i (fx- nargs 1))
+          (info-set! info "arguments" (make-jarr "Ljava/lang/String;" (list->vector (map jstring (reverse acc)))))
+          (let ([cp (fx+ (bytes-nul bv cp end) 1)])
+            (unless (or (fx>= cp end) (fx= 0 (bytevector-u8-ref bv cp)))
+              (loop (fx+ i 1) cp (cons (bytes-text bv cp (bytes-nul bv cp end)) acc)))))))
+  (when command-line (info-set! info "commandLine" (jstring command-line))))
+(define (foreign->bytevector p n)
+  (let ([bv (make-bytevector n)]) (do ([i 0 (fx+ i 1)]) ((fx= i n) bv) (bytevector-u8-set! bv i (foreign-ref 'unsigned-8 p i)))))
+(define (macos-command-info! info pid)
+  (let ([u (let ([p (macos-proc pid)]) (if p (caddr p) -1))])
+    (when (>= u 0) (let ([name (user-name u)]) (when name (info-set! info "user" (jstring name))))))
+  (let ([maxargs (with-mib (list 1 8)   ; KERN_ARGMAX
+                   (lambda (mib n)
+                     (let ([v (foreign-alloc 4)] [len (foreign-alloc 8)])
+                       (foreign-set! 'unsigned-64 len 0 4)
+                       (let* ([r (libc-sysctl mib n v len 0 0)] [e (errno)] [m (foreign-ref 'int v 0)])
+                         (foreign-free v) (foreign-free len)
+                         (when (< r 0) (sysctl-failed e))
+                         m))))])
+    (with-mib (list 1 49 pid)   ; KERN_PROCARGS2
+      (lambda (mib n)
+        (let ([args (foreign-alloc maxargs)] [len (foreign-alloc 8)])
+          (foreign-set! 'unsigned-64 len 0 maxargs)
+          (let* ([r (libc-sysctl mib n args len 0 0)] [e (errno)] [size (foreign-ref 'unsigned-64 len 0)])
+            (let ([bv (and (>= r 0) (foreign->bytevector args size))])
+              (foreign-free args) (foreign-free len)
+              (cond [(< r 0) (unless (memv e '(22 5)) (sysctl-failed e))]   ; EINVAL, EIO: no info
+                    [(fx>= size 4)
+                     (let* ([nargs (bytevector-s32-native-ref bv 0)]
+                            [exe-end (bytes-nul bv 4 size)]
+                            [command (bytes-text bv 4 exe-end)]
+                            [cp (let skip ([j exe-end]) (if (and (fx< j size) (fx= 0 (bytevector-u8-ref bv j))) (skip (fx+ j 1)) j))])
+                       (fill-args! info nargs bv cp size command #f))]))))))))
+(define (linux-command-info! info pid)
+  (let ([dir (string-append "/proc/" (number->string pid))])
+    (when (and fs-stat-layout? (fx= 0 (libc-stat-string dir fs-stat-buf)))
+      (let ([name (user-name (fs-ref fs-stat-buf 'st_uid))]) (when name (info-set! info "user" (jstring name)))))
+    (let ([cmdline (guard (e [#t #f]) (call-with-port (open-file-input-port (string-append dir "/cmdline")) get-bytevector-all))])
+      (when cmdline
+        (let* ([page (libc-sysconf 30)]   ; _SC_PAGESIZE
+               [bv (if (eof-object? cmdline) (make-bytevector 0)
+                       (if (fx> (bytevector-length cmdline) page)
+                           (let ([b (make-bytevector page)]) (bytevector-copy! cmdline 0 b 0 page) b)
+                           cmdline))]
+               [len (bytevector-length bv)]
+               [exe (let* ([path (c-string (string-append dir "/exe"))] [buf (foreign-alloc 4097)] [n (libc-readlink path buf 4096)])
+                      (let ([s (and (> n 0) (bytes-text (foreign->bytevector buf n) 0 n))]) (foreign-free buf) (foreign-free path) s))]
+               [truncated (and (fx= len page) (not (fx= 0 (bytevector-u8-ref bv (fx- page 1)))))]
+               [line (and (fx> len 0) (or (not exe) truncated)
+                          (let ([b (bytevector-copy bv)])
+                            (do ([i 0 (fx+ i 1)]) ((fx= i len)) (when (fx= 0 (bytevector-u8-ref b i)) (bytevector-u8-set! b i 32)))
+                            (bytes-text b 0 (bytes-nul b 0 len))))]
+               [nargs (if truncated 0
+                          (let count ([s 0] [i 0])
+                            (if (or (fx>= s len) (fx= 0 (bytevector-u8-ref bv s))) i (count (fx+ (bytes-nul bv s len) 1) (fx+ i 1)))))])
+          (fill-args! info nargs bv 0 len exe line))))))
 (defnative "java/lang/ProcessHandleImpl$Info.initIDs()V" () (void))
-(defnative "java/lang/ProcessHandleImpl$Info.info0(J)V" (this pid) (void))
+(defnative "java/lang/ProcessHandleImpl$Info.info0(J)V" (this pid)
+  (let-values ([(ppid start total) (process-timings pid)])
+    (when (>= ppid 0)
+      (info-set! this "totalTime" total)
+      (info-set! this "startTime" start)))
+  (when (pid-ok? pid)
+    (if fs-macos? (macos-command-info! this pid) (linux-command-info! this pid))))

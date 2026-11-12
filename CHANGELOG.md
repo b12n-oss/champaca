@@ -60,6 +60,13 @@ The first public version. Champaca is still experimental: the
 
 ### Changed
 
+- `ProcessHandle` knows processes as the JVM does: start times (so a handle
+  to a process that has gone never signals one that reused its pid),
+  `children()`, `descendants()` and `allProcesses()`, and `Info`'s command,
+  arguments, command line, user, start time and CPU time, where `Info` was
+  empty and `children()` stopped at a missing native
+  (`test/java/ProcessHandleCheck.java`, the same as HotSpot on macOS and
+  Linux).
 - VarHandle combinators screen their filters for checked exceptions as the
   JDK does: a direct handle declaring one is refused with the JDK's
   `IllegalArgumentException`, and a checked exception from any other filter
