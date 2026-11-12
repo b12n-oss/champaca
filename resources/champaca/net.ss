@@ -258,17 +258,15 @@
 (defnet "isIPv6Available0()Z" (lambda () (if (net-ipv6?) 1 0)))
 (defnet "isReusePortAvailable0()Z" (lambda () 1))
 (defnet "isExclusiveBindAvailable()I" (lambda () -1))
-;; macOS needs the write side shut before close so the peer sees the FIN
-;; before a reset, as the JDK's native answers there
-(defnet "shouldShutdownWriteBeforeClose0()Z" (lambda () (if net-macos? 1 0)))
+;; false on both, as HotSpot 25.0.2 answers (champaca said true on macOS)
+(defnet "shouldShutdownWriteBeforeClose0()Z" (lambda () 0))
 (defnet "shouldSetBothIPv4AndIPv6Options0()Z" (lambda () (if net-macos? 0 1)))
-;; as Net.c answers them per platform: an IPv6 socket can join an IPv4 group
-;; on both; IPV6_ADD_MEMBERSHIP takes an IPv4 group, and IPV6_ options work
-;; on an IPv6 socket bound to an IPv4 address, on macOS only (Linux refuses
-;; them there, so the JDK uses the IPv4 options)
+;; as HotSpot 25.0.2 answers them: an IPv6 socket can join an IPv4 group on
+;; both, IPV6_JOIN_GROUP takes an IPv4-mapped group on macOS only, and IPV6_
+;; options work on an IPv6 socket bound to an IPv4 address on both
 (defnet "canIPv6SocketJoinIPv4Group0()Z" (lambda () 1))
 (defnet "canJoin6WithIPv4Group0()Z" (lambda () (if net-macos? 1 0)))
-(defnet "canUseIPv6OptionsWithIPv4LocalAddress0()Z" (lambda () (if net-macos? 1 0)))
+(defnet "canUseIPv6OptionsWithIPv4LocalAddress0()Z" (lambda () 1))
 (defnet "pollinValue()S" (lambda () 1))
 (defnet "polloutValue()S" (lambda () 4))
 (defnet "pollerrValue()S" (lambda () 8))
