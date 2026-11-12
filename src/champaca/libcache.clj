@@ -207,6 +207,62 @@
 
 (declare dep-matches?)
 
+(defn- thaw-defined-entry
+  "The class map in a loader-defined class's packed entry, or nil, with one
+  stderr line, when the entry can't be read."
+  [n packed]
+  (try (timed :thaw #(thaw-entry packed))
+       (catch Exception e
+         (binding [*out* *err*]
+           (println (str "champaca: dropping the library cache's unreadable entry for " n ":") (ex-message e)))
+         nil)))
+
+(defn- defined-changed!
+  "Count a loader-defined class whose entry no longer holds, print why under
+  CHAMPACA_TRACE, and answer false."
+  [& why]
+  (swap! state update :defined-changed (fnil inc 0))
+  (when (trace?) (binding [*out* *err*] (apply println why)))
+  false)
+
+(defn- defined-entry-holds?
+  "Whether the entry info for class n, defined now from bytes with
+  fingerprint fp, can be restored: the same bytes, its supertypes loaded,
+  no sealed supertype refusing it (refused is set then), and every ancestry
+  dependency what it was."
+  [n fp info refused]
+  (and (or (= fp (:src-fp info))
+           (defined-changed! "define" n "changed since its entry"))
+       (do (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded!* dep)) true)
+       (not (and (sealed-refused? info) (vreset! refused true)))
+       (every? (fn [d] (or (dep-matches? d (get (:deps info) d))
+                           (defined-changed! "define" n "not restored:" d "changed")))
+               (filter (:deps info) (rest (ancestry-of-unlinked info))))))
+
+(defn- register-defined!
+  "Put the restored class n (bytes bs, map info) in the table and run its
+  registration, from its cached unit when it has one."
+  [n bs info]
+  (swap! state #(-> %
+                    (assoc-in [:classes n] info)
+                    (assoc-in [:defined-bytes n] bs)
+                    (update :dir-bytes dissoc n)
+                    (update :restored (fnil inc 0))))
+  (or (load-unit! (:cached-class info))
+      (let [text (registration-text info)]
+        (record! :user [n] {:text text})
+        (scheme! text :interpret)))
+  (str "ok " n))
+
+(defn- drop-defined-entry!
+  "Drop class n's stale entry from the library cache's file dj, so the next
+  save rewrites the file without it."
+  [n dj packed]
+  (swap! state #(-> %
+                    (update-in [:user-cache dj] dissoc n)
+                    (assoc-in [:library-dropped dj n] packed)
+                    (update :library-dirty (fnil conj #{}) dj))))
+
 (defn restore-defined-class!
   "Register the class a loader is defining, n from bytes bs with fingerprint
   fp, from the library cache's file dj: when an earlier run cached a class of
@@ -219,38 +275,11 @@
   [n bs fp dj]
   (if-let [packed (get (library-cache dj) n)]
     (let [refused (volatile! false)
-          info (try (timed :thaw #(thaw-entry packed))
-                    (catch Exception e
-                      (binding [*out* *err*]
-                        (println (str "champaca: dropping the library cache's unreadable entry for " n ":") (ex-message e)))
-                      nil))]
-      (if (and info
-               (or (= fp (:src-fp info))
-                   (do (swap! state update :defined-changed (fnil inc 0))
-                       (when (trace?) (binding [*out* *err*] (println "define" n "changed since its entry")))
-                       false))
-               (do (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))] (ensure-loaded!* dep)) true)
-               (not (and (sealed-refused? info) (vreset! refused true)))
-               (every? (fn [d] (or (dep-matches? d (get (:deps info) d))
-                                   (do (swap! state update :defined-changed (fnil inc 0))
-                                       (when (trace?) (binding [*out* *err*] (println "define" n "not restored:" d "changed")))
-                                       false)))
-                       (filter (:deps info) (rest (ancestry-of-unlinked info)))))
-        (do (swap! state #(-> %
-                              (assoc-in [:classes n] info)
-                              (assoc-in [:defined-bytes n] bs)
-                              (update :dir-bytes dissoc n)
-                              (update :restored (fnil inc 0))))
-            (or (load-unit! (:cached-class info))
-                (let [text (registration-text info)]
-                  (record! :user [n] {:text text})
-                  (scheme! text :interpret)))
-            (str "ok " n))
+          info (thaw-defined-entry n packed)]
+      (if (and info (defined-entry-holds? n fp info refused))
+        (register-defined! n bs info)
         (when-not @refused
-          (swap! state #(-> %
-                            (update-in [:user-cache dj] dissoc n)
-                            (assoc-in [:library-dropped dj n] packed)
-                            (update :library-dirty (fnil conj #{}) dj)))
+          (drop-defined-entry! n dj packed)
           nil)))
     (do (swap! state update :defined-new (fnil inc 0)) nil)))
 
@@ -409,6 +438,52 @@
             :when (< (.lastModified f) cutoff)]
       (.delete f))))
 
+(defn- writable-cache-dir
+  "The cache directory a save may write, or nil: a cache that can't be
+  written (an installed bundle's) is read only, so this run's code isn't
+  kept, and the run doesn't fail for it."
+  []
+  (let [dir (:cache-dir @state)]
+    (when (and dir (not (:cache-unusable @state)) (not (cache-read-only? dir))
+               (.isDirectory dir))
+      dir)))
+
+(defn- save-units!
+  "Write the recorded units as one more extra-N.so in dir, note where each
+  sits, and rewrite state.img (written beside, then renamed)."
+  [dir units]
+  (vreset! (:recording @state) [])
+  (let [stamp (System/currentTimeMillis)
+        file (str "extra-" stamp ".so")
+        so-tmp (io/file dir (str file ".tmp"))
+        img-tmp (io/file dir (str "state.img.tmp-" stamp))
+        offsets (write-units! (str so-tmp) units false)
+        starts (pop offsets)
+        ends (subvec offsets 1)]
+    (.renameTo so-tmp (io/file dir file))
+    (doseq [[{[cname k] :unit} start end] (map vector units starts ends)]
+      (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
+             [file start (- end start)]))
+    (dump-classes! img-tmp)
+    (.renameTo img-tmp (io/file dir "state.img"))))
+
+(defn- save-library-file!
+  "Rewrite jar's library file (written beside, then renamed). A failure
+  leaves the jar dirty, with one stderr line."
+  [jar]
+  (let [f (library-file jar)
+        tmp (io/file (.getParentFile f) (str (.getName f) ".tmp-" (System/nanoTime)))]
+    (try
+      (.mkdirs (.getParentFile f))
+      (img/dump! (str tmp) {:jar jar :entries (library-entries jar (:classes @state))})
+      (if (.renameTo tmp f)
+        (swap! state #(-> % (update :library-dirty disj jar) (update :library-dropped dissoc jar)))
+        (.delete tmp))
+      (catch Exception e
+        (.delete tmp)
+        (binding [*out* *err*]
+          (println "champaca: couldn't save the library cache for" jar (str "(" (ex-message e) ")")))))))
+
 (defn save-generation!
   "Append what this run compiled for JDK classes after boot as one more
   extra-N.so, compiled unit by unit, and rewrite state.img (written beside,
@@ -416,41 +491,14 @@
   units rather than keeping them: retrying would fail the same way at every
   later save, and the code already ran, so only cache coverage is lost."
   []
-  (let [dir (:cache-dir @state)
-        ;; a cache that can't be written (an installed bundle's) is read
-        ;; only: this run's code isn't kept, and the run doesn't fail for it
-        dir (when (and dir (not (:cache-unusable @state)) (not (cache-read-only? dir))) dir)
-        units (some-> (:recording @state) deref)]
-    (when (and dir (.isDirectory dir) (seq units))
-      (vreset! (:recording @state) [])
-      (let [stamp (System/currentTimeMillis)
-            file (str "extra-" stamp ".so")
-            so-tmp (io/file dir (str file ".tmp"))
-            img-tmp (io/file dir (str "state.img.tmp-" stamp))
-            offsets (write-units! (str so-tmp) units false)
-            starts (pop offsets)
-            ends (subvec offsets 1)]
-        (.renameTo so-tmp (io/file dir file))
-        (doseq [[{[cname k] :unit} start end] (map vector units starts ends)]
-          (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
-                 [file start (- end start)]))
-        (dump-classes! img-tmp)
-        (.renameTo img-tmp (io/file dir "state.img"))))
-    ;; after the units above have their places
-    (when (and dir (.isDirectory dir) (seq (:library-dirty @state)))
-      (doseq [jar (remove nil? (:library-dirty @state))
-              :let [f (library-file jar)
-                    tmp (io/file (.getParentFile f) (str (.getName f) ".tmp-" (System/nanoTime)))]]
-        ;; one jar's failure leaves it dirty and the others still go
-        (try
-          (.mkdirs (.getParentFile f))
-          (img/dump! (str tmp) {:jar jar :entries (library-entries jar (:classes @state))})
-          (if (.renameTo tmp f)
-            (swap! state #(-> % (update :library-dirty disj jar) (update :library-dropped dissoc jar)))
-            (.delete tmp))
-          (catch Exception e
-            (.delete tmp)
-            (binding [*out* *err*]
-              (println "champaca: couldn't save the library cache for" jar (str "(" (ex-message e) ")"))))))
+  (when-let [dir (writable-cache-dir)]
+    (let [units (some-> (:recording @state) deref)]
+      (when (seq units)
+        (save-units! dir units)))
+    ;; after the units above have their places; one jar's failure leaves it
+    ;; dirty and the others still go
+    (when (seq (:library-dirty @state))
+      (doseq [jar (remove nil? (:library-dirty @state))]
+        (save-library-file! jar))
       (swap! state update :library-dirty (fn [s] (set (remove nil? s))))
       (prune-library! dir))))
