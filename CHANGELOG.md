@@ -267,6 +267,10 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A class path entry that's a jar champaca can't open, one that isn't
+  there or a file that isn't a zip, is skipped as the JDK skips it, instead
+  of ending the run with `NoSuchFileException`; `java.class.path` still
+  lists it (the `cp-option` launcher row).
 - A class generated at run time, defined with no code source location as
   `ClassLoader.defineClass(name, b, off, len)` gives, keeps line numbers in
   its frames, so a Clojure REPL's errors read `(REPL:1)` as on HotSpot, not

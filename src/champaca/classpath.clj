@@ -570,13 +570,16 @@
   [classpath]
   ;; todo is a list of [entry named-by-a-manifest?], a jar's entries pushed
   ;; on its front; an entry seen before is skipped, the given ones included.
-  ;; A jar a manifest names that can't be read is left out, as the JDK
-  ;; skips one it can't open; a manifest that can't be read names nothing.
+  ;; A jar that can't be opened, given or named by a manifest, is left out,
+  ;; as the JDK skips one (java.class.path still lists a given one); a
+  ;; manifest that can't be read in a jar that opens names nothing.
   (loop [todo (apply list (map (fn [e] [e false]) classpath)) seen #{} out []]
     (if-let [[e manifest?] (first todo)]
       (let [k (str (.getCanonicalFile (io/file e)))
             more (when (jar-entry? e)
-                   (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable []))))]
+                   (if (try (jar e) true (catch Exception _ false))
+                     (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable [])))
+                     ::unreadable))]
         (if (or (seen k) (= more ::unreadable))
           (recur (rest todo) seen out)
           (recur (into (rest todo) (reverse (map (fn [m] [m true]) more)))
