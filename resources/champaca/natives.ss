@@ -245,19 +245,20 @@
                 [else (split (fx+ i 1) start acc)]))))
 (define (assertion-directive kind name)
   (find (lambda (d) (and (char=? (car d) kind) (string=? (caddr d) name))) assertion-directives))
+(define (parent-package p)   ; "a/b/c" -> "a/b", "a" -> #f
+  (let back ([j (fx- (string-length p) 1)])
+    (cond [(fx< j 0) #f] [(char=? (string-ref p j) #\/) (substring p 0 j)] [else (back (fx- j 1))])))
+;; the package's directive, else the nearest enclosing package's; a class in
+;; the unnamed package matches -ea:... alone, one in a package never does
+(define (package-directive pkg)
+  (let loop ([p pkg])
+    (or (assertion-directive #\p p)
+        (let ([up (parent-package p)]) (and up (loop up))))))
 (define (assertions-enabled? cname system?)
-  (let ([pkg (package-dir cname)])
-    (cond [(assertion-directive #\c cname) => cadr]
-          ;; the package, then each enclosing one; a class in the unnamed
-          ;; package matches -ea:... alone, one in a package never does
-          [(let loop ([p pkg])
-             (or (assertion-directive #\p p)
-                 (let ([i (let back ([j (fx- (string-length p) 1)])
-                            (cond [(fx< j 0) #f] [(char=? (string-ref p j) #\/) j] [else (back (fx- j 1))]))])
-                   (and i (loop (substring p 0 i))))))
-           => cadr]
-          [(find (lambda (d) (char=? (car d) (if system? #\s #\u))) assertion-directives) => cadr]
-          [else #f])))
+  (cond [(assertion-directive #\c cname) => cadr]
+        [(package-directive (package-dir cname)) => cadr]
+        [(find (lambda (d) (char=? (car d) (if system? #\s #\u))) assertion-directives) => cadr]
+        [else #f]))
 (defnative "java/lang/Class.desiredAssertionStatus0(Ljava/lang/Class;)Z" (c)
   (let ([k (mirror-class c)])
     ;; an array or a primitive never has assertions on, as on HotSpot
@@ -755,6 +756,14 @@
 (define (macos-locale)
   (let ([buf (foreign-alloc 128)])
     (let ([r (macos-locale* buf)]) (foreign-free buf) r)))
+;; the region of a CFLocale identifier, "en_AU" or "en_TH@rg=thzzzz": what
+;; follows the last _ before any @, or #f
+(define (locale-id-region id)
+  (let* ([at (let loop ([i 0]) (if (or (fx= i (string-length id)) (char=? (string-ref id i) #\@)) i (loop (fx+ i 1))))]
+         [id (substring id 0 at)]
+         [us (let loop ([i (fx- (string-length id) 1)])
+               (cond [(fx< i 0) #f] [(char=? (string-ref id i) #\_) i] [else (loop (fx- i 1))]))])
+    (and us (substring id (fx+ us 1) (string-length id)))))
 (define (macos-locale* buf)
   (guard (e [#t #f])
     (load-shared-object "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
@@ -770,12 +779,7 @@
            [first (and (not (eqv? languages 0)) (fx> (array-count languages) 0) (text (array-at languages 0)))]
            [region (let* ([cur (copy-current)] [id (text (identifier cur))])
                      (release cur)
-                     ;; "en_AU" or "en_TH@rg=thzzzz": what follows the last _
-                     (and id (let* ([at (let loop ([i 0]) (if (or (fx= i (string-length id)) (char=? (string-ref id i) #\@)) i (loop (fx+ i 1))))]
-                                    [id (substring id 0 at)]
-                                    [us (let loop ([i (fx- (string-length id) 1)])
-                                          (cond [(fx< i 0) #f] [(char=? (string-ref id i) #\_) i] [else (loop (fx- i 1))]))])
-                               (and us (substring id (fx+ us 1) (string-length id))))))])
+                     (and id (locale-id-region id)))])
       (unless (eqv? languages 0) (release languages))
       (and first
            (let ([p (locale-parts first)])

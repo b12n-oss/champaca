@@ -818,6 +818,13 @@
   (attrlist-call (lambda (l b n o) (libc-setattrlist path l b n o)) commonattr (list create mod acc) options))
 (defnative "sun/nio/fs/BsdNativeDispatcher.fsetattrlist0(IIJJJJ)V" (fd commonattr mod acc create options)
   (attrlist-call (lambda (l b n o) (libc-fsetattrlist fd l b n o)) commonattr (list create mod acc) options))
+;; n bytes at buf through wr, however many writes that takes
+(define (write-all wr buf n)
+  (let wloop ([done 0])
+    (when (< done n)
+      (let ([w (wr (+ buf done) (- n done))])
+        (when (< w 0) (unix-error))
+        (wloop (+ done w))))))
 ;; a plain read/write loop; with a pipe or FIFO on either side it runs
 ;; without the GIL, in a buffer of its own
 (define (copy-fd-to-fd dst src)
@@ -833,13 +840,7 @@
       (let loop ()
         (let ([n (rd)])
           (cond [(< n 0) (unix-error)]
-                [(> n 0)
-                 (let wloop ([done 0])
-                   (when (< done n)
-                     (let ([w (wr (+ buf done) (- n done))])
-                       (when (< w 0) (unix-error))
-                       (wloop (+ done w)))))
-                 (loop)])))
+                [(> n 0) (write-all wr buf n) (loop)])))
       (when wait? (foreign-free buf)))))
 (defnative "sun/nio/fs/BsdFileSystem.directCopy0(IIJ)I" (dst src cancel) (copy-fd-to-fd dst src) 0)
 (defnative "sun/nio/fs/UnixFileSystem.bufferedCopy0(IIJIJ)V" (dst src buf size cancel) (copy-fd-to-fd dst src))
