@@ -17,7 +17,7 @@
   instruction. What a backward jump carries arrives in the next sweep, so
   a store later in a loop body isn't seen by the loop's test, its body or
   the code after it, as in HotSpot's messages."
-  (:require [champaca.codegen :as cg]
+  (:require [champaca.bytecode :as bc] [champaca.cgtext :as cgt]
             [clojure.string :as str]))
 
 (def ^:private max-depth
@@ -66,7 +66,7 @@
   "Class.name(parameter types) of a method reference."
   [{:keys [class name desc]}]
   (str (class-text class) "." name
-       "(" (str/join ", " (map type-text (:args (cg/parse-desc desc)))) ")"))
+       "(" (str/join ", " (map type-text (:args (cgt/parse-desc desc)))) ")"))
 
 ;; --- stack effects -----------------------------------------------------------
 
@@ -134,7 +134,7 @@
 (defn- invoke-words
   "[words popped, words pushed] of a call through a method reference."
   [op {:keys [desc]}]
-  (let [{:keys [args ret]} (cg/parse-desc desc)
+  (let [{:keys [args ret]} (cgt/parse-desc desc)
         arg-words (reduce + 0 (map words args))]
     [(if (= op :invokestatic) arg-words (inc arg-words))
      (if (= ret "V") 0 (words ret))]))
@@ -146,7 +146,7 @@
       :putstatic [(words (:desc entry)) 0]
       :getfield [1 (words (:desc entry))]
       :putfield [(inc (words (:desc entry))) 0]
-      :invokedynamic (let [{:keys [args ret]} (cg/parse-desc (:desc entry))]
+      :invokedynamic (let [{:keys [args ret]} (cgt/parse-desc (:desc entry))]
                        [(reduce + 0 (map words args)) (if (= ret "V") 0 (words ret))])
       :multianewarray [(second args) 1]
       (:jsr :jsr_w) [0 1]
@@ -343,13 +343,13 @@
     (#{:invokevirtual :invokespecial :invokeinterface} op)
     (let [entry (cp (first args))]
       [(str "Cannot invoke \"" (method-text entry) "\"")
-       (reduce + 0 (map words (:args (cg/parse-desc (:desc entry)))))])
+       (reduce + 0 (map words (:args (cgt/parse-desc (:desc entry)))))])
     :else nil))
 
 (defn- param-slots
   "slot -> parameter number, counting from 1."
   [static? desc]
-  (loop [slot (if static? 0 1) k 1 args (:args (cg/parse-desc desc)) m {}]
+  (loop [slot (if static? 0 1) k 1 args (:args (cgt/parse-desc desc)) m {}]
     (if (empty? args)
       m
       (recur (+ slot (words (first args))) (inc k) (rest args) (assoc m slot k)))))
@@ -369,7 +369,7 @@
   gives none."
   [cp method bci]
   (let [{:keys [code handlers locals]} (:code method)
-        insns (cg/decode code)
+        insns (bc/decode code)
         pos-of (into {} (map-indexed (fn [i insn] [(:pc insn) i]) insns))
         target (pos-of bci)
         [first-part depth] (when target (action cp (nth insns target)))]
