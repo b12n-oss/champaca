@@ -7,8 +7,10 @@
 
 ;; Startup benchmarks, ported from upstream OpenLDK's bench/ (Anthony Green):
 ;; the same Spring Boot and Quarkus applications, each started on HotSpot and
-;; through champaca, timed, and their output checked against HotSpot's. See
-;; bench/README.md. bb.edn's bench task loads this file and calls main.
+;; through champaca, timed, and their output checked against HotSpot's; and
+;; Spring PetClinic, a server: started, its pages fetched and compared with
+;; HotSpot's byte for byte, then stopped with SIGTERM. See bench/README.md.
+;; bb.edn's bench task loads this file and calls main.
 ;;
 ;; Environment:
 ;;   JAVA_HOME   a JDK 25 (required)
@@ -16,6 +18,7 @@
 ;;   COLD_RUNS   timed runs of a cold variant, each with an empty cache (default 3)
 ;;   SKIP_AOT    set to leave out the JDK AOT cache variants
 ;;   SKIP_CHAMPACA  set to leave out the champaca variants
+;;   SERVER_RUNS timed runs of a server variant (default 3)
 ;; Needs mvn on PATH (Maven Central reached with the proxy unset).
 
 (ns bench
@@ -47,6 +50,8 @@
 ;; reference, and its variants. A variant's :cmd runs in the app's target
 ;; directory; :champaca marks one run through champaca, :cold one whose every
 ;; run starts from an empty startup cache.
+
+(def petclinic-commit "500158f732419217507c7656904b8e6aa1bcc0d6")
 
 (def apps
   {"spring-boot"
@@ -99,7 +104,29 @@
                 :cmd [java "-XX:AOTMode=on" "-XX:AOTCache=quarkus-app/app.aot" "-jar" "quarkus-app/quarkus-run.jar"]}
                {:name "champaca, uber-jar, cold" :champaca ["-jar" "quarkus-uber.jar"] :cold true}
                {:name "champaca, uber-jar" :champaca ["-jar" "quarkus-uber.jar"]}
-               {:name "champaca, fast-jar" :champaca ["-jar" "quarkus-app/quarkus-run.jar"]}]}})
+               {:name "champaca, fast-jar" :champaca ["-jar" "quarkus-app/quarkus-run.jar"]}]}
+
+   ;; a server: each run starts it on port 0, waits for Tomcat's port in its
+   ;; log, fetches :pages, and stops it with SIGTERM, which runs its shutdown
+   ;; hooks (and, through champaca, saves the startup cache)
+   "petclinic"
+   {:title "Spring PetClinic"
+    :server true
+    :build (fn [_dir t]
+             (let [src (str t "/src")]
+               (when-not (fs/exists? src)
+                 (log "Cloning spring-petclinic")
+                 (p/shell {:env no-proxy} "git" "clone" "-q" "https://github.com/spring-projects/spring-petclinic.git" src))
+               (p/shell {:dir src :env no-proxy} "git" "checkout" "-q" petclinic-commit)
+               (log "Building the jar")
+               (maven src "package" "-DskipTests" "-Dcheckstyle.skip" "-Dspring-javaformat.skip=true" "-Djacoco.skip=true")
+               (fs/copy (first (fs/glob (str src "/target") "spring-petclinic-*.jar")) (str t "/petclinic.jar") {:replace-existing true})))
+    :pages ["/" "/owners/find" "/owners?lastName=" "/owners?lastName=Davis" "/owners/1" "/owners/1/pets/new"
+            "/vets.html" "/vets" "/oups" "/owners/new" "/nosuchpage"]
+    :reference [java "-jar" "petclinic.jar"]
+    :variants [{:name "HotSpot" :cmd [java "-jar" "petclinic.jar"]}
+               {:name "champaca, cold" :champaca ["-jar" "petclinic.jar"] :cold true}
+               {:name "champaca, warm" :champaca ["-jar" "petclinic.jar"]}]}})
 
 ;; --- running and timing ----------------------------------------------------------
 
@@ -195,6 +222,74 @@
       (println after)
       (spit (str t "/results.md") (str (str/join "\n" (concat lines rows ["" after])) "\n")))))
 
+;; --- servers ---------------------------------------------------------------------
+
+;; [status body] of one GET, asking for HTML as a browser does
+(defn- http-get [port path]
+  (let [f (str (fs/create-temp-file {:prefix "page-"}))
+        code (:out (p/shell {:out :string :env no-proxy} "curl" "-s" "-o" f "-w" "%{http_code}"
+                            "-H" "Accept: text/html" (str "http://127.0.0.1:" port path)))
+        body (slurp f)]
+    (fs/delete f)
+    [(parse-long (str/trim code)) body]))
+
+;; one run of a server: started, timed to Tomcat's port and to each page,
+;; stopped with SIGTERM (its shutdown hooks run); nil when it never started
+(defn- server-run! [t {:keys [cmd env]} pages]
+  (let [log-file (str (fs/create-temp-file {:prefix "server-" :suffix ".log"}))
+        t0 (System/nanoTime)
+        proc (p/process (into (vec cmd) ["--server.port=0"]) {:dir t :env env :out (fs/file log-file) :err :out})
+        ms #(/ (- (System/nanoTime) t0) 1e6)
+        port (loop []
+               (Thread/sleep 250)
+               (or (some->> (re-find #"Tomcat started on port (\d+)" (slurp log-file)) second parse-long)
+                   (when (and (p/alive? proc) (< (ms) 1800000)) (recur))))]
+    (try
+      (when port
+        (let [started (ms)
+              fetched (mapv (fn [path] (let [[code body] (http-get port path)] [path code body (ms)])) pages)]
+          {:start started :first (nth (first fetched) 3) :all (nth (peek fetched) 3)
+           :pages (mapv (fn [[path code body]] [path code body]) fetched)}))
+      (finally
+        (p/destroy proc)
+        (deref proc 120000 nil)
+        (fs/delete log-file)))))
+
+(defn- bench-server [jolt app-name {:keys [title reference variants pages]}]
+  (let [t (str repo "/bench/" app-name "/target")
+        server-runs (env-long "SERVER_RUNS" 3)
+        ref (server-run! t {:cmd reference :env no-proxy} pages)
+        vs (cond->> variants (System/getenv "SKIP_CHAMPACA") (remove :champaca))
+        lines (concat
+               [(str "# " title ", " server-runs " runs each: started, " (count pages) " pages fetched, stopped with SIGTERM") ""]
+               (host-lines)
+               [(str "- JDK: " (first (str/split-lines (:err (p/shell {:err :string} java "-version")))))
+                (str "- champaca: " (str/trim (:out (p/shell {:out :string :dir repo} "git" "describe" "--always" "--dirty"))))
+                (str "- spring-petclinic: " (subs petclinic-commit 0 8))
+                (str "- jolt: " jolt) ""
+                "| Variant | Started (median) | First page | All pages | Pages |" "|---|---|---|---|---|"])]
+    (when-not ref (throw (ex-info (str title ": the reference run never started") {})))
+    (doseq [l lines] (println l))
+    (let [rows
+          (doall
+           (for [v vs]
+             (let [_ (log "Timing" (:name v))
+                   ;; a warm variant's first run fills its cache (saved on SIGTERM)
+                   _ (when-not (:cold v) (with-run jolt t v #(server-run! t % pages)))
+                   timed (vec (for [_ (range server-runs)] (with-run jolt t v #(server-run! t % pages))))
+                   ok (filter some? timed)
+                   med (fn [k] (let [xs (sort (map k ok))] (when (seq xs) (fmt-ms (nth xs (quot (count xs) 2))))))
+                   same (and (= (count ok) (count timed)) (every? #(= (:pages ref) (:pages %)) ok))
+                   row (format "| %s | %s | %s | %s | %s |" (:name v) (or (med :start) "n/a") (or (med :first) "n/a")
+                               (or (med :all) "n/a") (if same "same" "DIFFERENT"))]
+               (println row)
+               (flush)
+               row)))
+          after (str "Load average after: " (load-after))]
+      (println)
+      (println after)
+      (spit (str t "/results.md") (str (str/join "\n" (concat lines rows ["" after])) "\n")))))
+
 (defn main [jolt args]
   (let [[app-name what] args
         what (or what "all")
@@ -204,4 +299,4 @@
       (System/exit 2))
     (let [dir (str repo "/bench/" app-name) t (str dir "/target")]
       (when (#{"build" "all"} what) (fs/create-dirs t) ((:build app) dir t))
-      (when (#{"bench" "all"} what) (bench-app jolt app-name app)))))
+      (when (#{"bench" "all"} what) (if (:server app) (bench-server jolt app-name app) (bench-app jolt app-name app))))))

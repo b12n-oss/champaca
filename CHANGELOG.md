@@ -48,7 +48,8 @@ The first public version. Champaca is still experimental: the
 - **Libraries and frameworks**: commons-lang3, commons-lang 2.4, gson,
   jsoup, Jackson, Caffeine, Guava, SLF4J and SnakeYAML match HotSpot's output (`jolt libs`),
   and Spring Boot 4.1.2 and Quarkus 3.40.1 applications start in every
-  packaging (`jolt bench`).
+  packaging (`jolt bench`). Spring PetClinic serves eleven pages the same
+  as HotSpot's, timed as a server by `jolt bench petclinic`.
 - **Caches**: a startup cache for the JDK's boot and compiled methods, and a
   library cache for classes from jars, directories and class loaders, each
   keyed by the bytes it was built from. The startup cache is also keyed by
