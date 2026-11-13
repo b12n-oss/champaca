@@ -348,6 +348,15 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- A type test at a site that sees many classes no longer walks the class
+  hierarchy each time. An `instanceof` or cast site keeps the last class it
+  saw, and when another class arrived the answer came from comparing class
+  names up the superclasses and every interface. Each class now remembers
+  its answers, so a repeat is two table probes. A loop of `instanceof` tests
+  over eight classes went from 5.3 s to 0.19 s (12 million tests; HotSpot
+  16 ms), and Clojure loading five libraries from source, warm, from 25 s to
+  10 s. Peak memory on that Clojure run rose from 945 to 1037 MB.
+  `InstanceMemoCheck` checks the answers stay the same pass after pass.
 - The startup cache archives the module graph, as HotSpot's class data
   sharing does. A cold boot lets the JDK's own `ModuleBootstrap` build its
   `ArchivedModuleGraph` and writes that object graph to the cache; a warm
