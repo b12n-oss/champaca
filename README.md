@@ -35,7 +35,7 @@ Methods are found by name, and the overload is picked from the arguments the way
 ## What it runs
 
 - **Twenty-three common libraries** (commons-lang3, commons-lang 2.4, commons-io, commons-compress, Commons Math, gson, jsoup, Jackson and its XML module, Caffeine, Guava, Guice, Joda-Time, Kryo, Netty, SLF4J, Log4j 2, SnakeYAML, picocli, the H2 database, Lucene, Bouncy Castle and Byte Buddy) give the same output as on HotSpot, which `jolt libs` checks ([jars-and-modules](docs/guide/jars-and-modules.md)).
-- **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time, and Spring PetClinic serves its pages byte for byte as HotSpot does ([running-java-programs](docs/guide/running-java-programs.md), [bench](bench/README.md)).
+- **Spring Boot 4.1.2 and Quarkus 3.40.1 applications** start in every packaging upstream OpenLDK's benchmarks time, and Spring PetClinic serves its pages byte for byte as HotSpot does ([running-java-programs](docs/guide/running-java-programs.md), [bench](https://github.com/b12n-oss/champaca/blob/main/bench/README.md)).
 - **Other JVM languages**: Clojure, Groovy, Scala, Kawa Scheme, ABCL Common Lisp and Kotlin run, compilers included (scalac and kotlinc write the same class files as on HotSpot), checked by `jolt libs` in CI ([jvm-languages](docs/guide/jvm-languages.md)).
 - **Compiled Java programs** run from the command line as with `java`: `-cp`, `-jar`, `-D` options, `-p` and `-m` for modules, source files, and the JDK's own rules for finding `main` ([running-java-programs](docs/guide/running-java-programs.md)).
 - **Many JDK areas**, from reflection, method handles and threads to files, sockets, child processes, serialization and native calls through `java.lang.foreign`, each checked against HotSpot ([compatibility](docs/guide/compatibility.md)).
@@ -63,7 +63,7 @@ jolt -M -m champaca.main target/classes Hello   # run a class jolt test compiled
 - [performance](docs/guide/performance.md) and [debugging](docs/guide/debugging.md): the caches, what generated code costs, the `CHAMPACA_*` switches.
 - [compatibility](docs/guide/compatibility.md), [limitations](docs/guide/limitations.md) and [how-it-works](docs/guide/how-it-works.md): what matches the JVM, what doesn't, and why.
 - [compared-to-babashka](docs/guide/compared-to-babashka.md): champaca next to babashka and GraalVM native-image.
-- [contributing](docs/guide/contributing.md) and [development](docs/guide/development.md): how a change gets in, the tasks, the checks before a merge. Changes written with an LLM's help are welcome on the same terms ([AI_POLICY.md](AI_POLICY.md)).
+- [contributing](docs/guide/contributing.md) and [development](docs/guide/development.md): how a change gets in, the tasks, the checks before a merge. Changes written with an LLM's help are welcome on the same terms ([AI_POLICY.md](https://github.com/b12n-oss/champaca/blob/main/AI_POLICY.md)).
 
 ## The name
 

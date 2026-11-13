@@ -34,6 +34,23 @@ done
 grep -q 'markdown-alert-warning' "$out/index.html" \
   || { echo "the README's warning didn't render as a callout"; exit 1; }
 
+# Every link on the homepage that stays on the site names a file the build
+# wrote. The README links to docs/guide/x.md, which the engine has to turn
+# into $base/guide/x.html; left as written, each one was a 404.
+bad=0
+while read -r href; do
+  path=${href%%#*}
+  case "$path" in
+    ''|http://*|https://*|mailto:*) continue ;;
+    "$base"/*) file="$out/${path#"$base"/}" ;;
+    "$base") file="$out/index.html" ;;
+    *) file="$out/$path" ;;
+  esac
+  [ -d "$file" ] && file="$file/index.html"
+  [ -f "$file" ] || { echo "homepage link to nothing: $href"; bad=1; }
+done < <(grep -oE "href=(\"[^\"]*\"|'[^']*')" "$out/index.html" | sed -E "s/^href=.(.*).$/\1/" | sort -u)
+[ "$bad" = 0 ] || exit 1
+
 ! grep -rq '{{site-base}}' "$out" || { echo "unrendered template variable"; exit 1; }
 
 # Served at <owner>.github.io/champaca/, a root-absolute URL outside the base
