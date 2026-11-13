@@ -70,8 +70,8 @@ The first public version. Champaca is still experimental: the
   operations, and each JDK call goes through a rule, which may carry a
   condition. A method with anything no rule covers is left with the
   reason, and each port is checked against its method by
-  `champaca.portcheck`. On commons-lang 2.4's `StringUtils` it ports 89 of
-  160 static methods, 83 of them checked and agreeing. `examples/port.clj`.
+  `champaca.portcheck`. On commons-lang 2.4's `StringUtils` it ports 100 of
+  160 static methods, every one checked and agreeing. `examples/port.clj`.
 - **`champaca.portcheck`**, a check for a jolt function written to replace a
   Java static method. It runs both on the same generated inputs (the Java
   side by champaca, from the class file) and compares the result, the

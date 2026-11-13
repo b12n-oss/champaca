@@ -111,6 +111,12 @@
                  c)]
     (is (empty? differ))))
 
+(deftest a-char-array-in-the-signature-is-left
+  ;; an element of a char[] is a char in jolt and its code in the ported
+  ;; code; until arrays are typed such a method isn't ported
+  (let [r (port/port-method "java.lang.String" "valueOf" "([C)Ljava/lang/String;")]
+    (is (str/includes? (:left r) "char[]"))))
+
 (deftest what-has-no-rule-is-left-with-the-reason
   (let [r (port/port-method "java.lang.Integer" "toHexString" "(I)Ljava/lang/String;")]
     (is (string? (:left r)))

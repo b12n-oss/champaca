@@ -81,7 +81,7 @@ A port tests its condition when it runs. A function that holds for strings withi
 
 A method returning `boolean` gives `true` or `false`, a `char` parameter takes a char, and inside the function a boolean is 1 or 0 and a char its code, as in the bytecode.
 
-There are rules for the `String`, `StringBuilder`, `StringBuffer`, `Character` and `Math` members in `direct-rules`, for the `List`, `Iterator` and `Object` methods in `virtual-rules`, and for constructing the common exceptions. Adding one is a line in `src/champaca/port.clj`, and the check on a method that uses it is what shows it's right.
+There are rules for the `String`, `StringBuilder`, `StringBuffer`, `Character` and `Math` members in `direct-rules`, for the `List`, `Iterator` and `Object` methods in `virtual-rules`, and for constructing `StringBuilder`, `StringBuffer`, `ArrayList` and the common exceptions. The case rules (`toUpperCase`, `Character.toLowerCase` and the like) hold under `letters-jolt-knows`: jolt and JDK 25 agree on every char but three each way, from a newer Unicode. Adding one is a line in `src/champaca/port.clj`, and the check on a method that uses it is what shows it's right.
 
 ## What a port calls
 
@@ -95,26 +95,25 @@ Each port is run beside its method by `champaca.portcheck` ([checking-a-port](ch
 
 An `int` or `long` parameter gets the full range, the limits and their neighbours included, unless the method loops or allocates by a size, or calls one that does. There the parameter may be the loop's count or a buffer's size, and the largest `int` would run the loop two thousand million times, so it stays within -64 to 64. The check's line says when that was so, and the count at the end says how many checks it applied to. A port checked that way has not been tried on large numbers: if it does arithmetic on such a parameter, check it by hand with a wider `:range` before relying on it. Array elements always get the full range.
 
-A port whose parameters have no input generator (a `char[]`, say) is printed and counted as not checked.
+A port whose parameters have no input generator is printed and counted as not checked. Treat it as unknown: the two ports that turned out wrong on `StringUtils` sat in that count first.
 
 ## On commons-lang
 
-`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 89 of them: 83 checked and agree, none disagree, and 6 weren't checked for lack of a generator. Four of the 83 checks kept int parameters within -64 to 64, and the rest used the full range. The other 71 were left. 34 of those call a method that was left, so they follow from the rest, and the rest lack these:
+`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 100 of them, and all 100 are checked and agree on 300 inputs each. Six of those checks kept int parameters within -64 to 64, and the rest used the full range. The other 60 were left. 27 of those call a method that was left, so they follow from the rest, and the rest lack these:
 
 | What has no rule | Methods |
 |---|---|
-| `String.toCharArray` | 8 |
+| a `String[]` or another reference array made or stored into | 9 |
 | a static method of another class (`ArrayUtils`, `CharUtils`, `WordUtils`) | 8 |
-| `new` of a `String`, an `ArrayList` or a `StringBuffer` from another | 6 |
-| a `StringBuffer` method (`append(Object)`, `insert` and others) | 4 |
-| a `Character` method (`toLowerCase`, `toTitleCase`, `isUpperCase`) | 3 |
-| `String.toUpperCase` and `toLowerCase` | 3 |
-| a `String[]` or another reference array | 2 |
-| a `switch`, a reference comparison, a narrowing to `byte` | 1 each |
+| `String.toCharArray` | 6 |
+| a `char[]` in the signature | 5 |
+| a `switch`, a reference comparison, a narrowing to `byte`, `StringBuffer.reverse`, `Character.isTitleCase` | 1 each |
 
-A first run with a dozen rules ported 9. Calls between the class's own methods took it to 53, rules for `indexOf(int)` and its relatives, `valueOf(char)`, `regionMatches` and the `List` and `Iterator` methods to 71, and leaving out the initialization check before a static call into a JDK class to 89.
+A first run with a dozen rules ported 9. Calls between the class's own methods took it to 53, rules for `indexOf(int)` and its relatives, `valueOf(char)`, `regionMatches` and the `List` and `Iterator` methods to 71, leaving out the initialization check before a static call into a JDK class to 89, and rules for case conversion, `StringBuffer.append(Object)` and a few constructors to 102.
 
-That last step also turned up nine ports that disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule now settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char.
+Two of those 102 were wrong. They take a `char[]`, and an element read from one is a char in jolt where the code expects its number, so a comparison never matched. They had counted as "not checked", since no generator made a `char[]`. Once one did, the check reported both, and methods with a `char[]` or `boolean[]` in their signature are now left until arrays are typed. That is the 100.
+
+Earlier nine ports had disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char.
 
 Each count is of the first thing found in a method, so a method may lack more than one.
 
@@ -136,4 +135,4 @@ Each count is of the first thing found in a method, so a method may lack more th
 
 ## What it doesn't do yet
 
-Instance methods, fields and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. Calls into other classes. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.
+Instance methods, fields and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. `char[]`, `boolean[]` and reference arrays. Calls into other classes. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.

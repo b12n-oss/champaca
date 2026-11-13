@@ -147,6 +147,27 @@
    {:form (fn [[c]] (list 'if (list 'Character/isLetter (list 'char c)) 1 0)) :holds :letters-jolt-knows}
    "java/lang/Character.isLetterOrDigit(C)Z"
    {:form (fn [[c]] (list 'if (list 'Character/isLetterOrDigit (list 'char c)) 1 0)) :holds :letters-jolt-knows}
+   ;; case: jolt and JDK 25 agree on every char but three each way
+   ;; (U+A7CE to U+A7D5, from a newer Unicode), so these hold for the
+   ;; letters both know
+   "java/lang/Character.toLowerCase(C)C"
+   {:form (fn [[c]] (list 'int (list 'Character/toLowerCase (list 'char c)))) :holds :letters-jolt-knows}
+   "java/lang/Character.toUpperCase(C)C"
+   {:form (fn [[c]] (list 'int (list 'Character/toUpperCase (list 'char c)))) :holds :letters-jolt-knows}
+   "java/lang/Character.toTitleCase(C)C"
+   {:form (fn [[c]] (list 'int (list 'Character/toTitleCase (list 'char c)))) :holds :letters-jolt-knows}
+   "java/lang/Character.isUpperCase(C)Z"
+   {:form (fn [[c]] (list 'if (list 'Character/isUpperCase (list 'char c)) 1 0)) :holds :letters-jolt-knows}
+   "java/lang/Character.isLowerCase(C)Z"
+   {:form (fn [[c]] (list 'if (list 'Character/isLowerCase (list 'char c)) 1 0)) :holds :letters-jolt-knows}
+   "java/lang/String.toUpperCase()Ljava/lang/String;"
+   {:form (fn [[r]] (list '.toUpperCase r)) :holds :letters-jolt-knows}
+   "java/lang/String.toLowerCase()Ljava/lang/String;"
+   {:form (fn [[r]] (list '.toLowerCase r)) :holds :letters-jolt-knows}
+   "java/lang/StringBuffer.append(Ljava/lang/Object;)Ljava/lang/StringBuffer;"
+   {:form (fn [[r x]] (list '.append r x))}
+   "java/lang/StringBuilder.append(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
+   {:form (fn [[r x]] (list '.append r x))}
    "java/lang/Math.min(II)I" {:form (fn [[a b]] (list 'min a b))}
    "java/lang/Math.max(II)I" {:form (fn [[a b]] (list 'max a b))}
    "java/lang/StringBuffer.append(Ljava/lang/String;)Ljava/lang/StringBuffer;"
@@ -166,6 +187,7 @@
   {"size()I" {:form (fn [[r]] (list '.size r))}
    "get(I)Ljava/lang/Object;" {:form (fn [[r i]] (list '.get r i))}
    "isEmpty()Z" {:form (fn [[r]] (list 'if (list '.isEmpty r) 1 0))}
+   "add(Ljava/lang/Object;)Z" {:form (fn [[r x]] (list 'if (list '.add r x) 1 0))}
    "iterator()Ljava/util/Iterator;" {:form (fn [[r]] (list '.iterator r))}
    "hasNext()Z" {:form (fn [[r]] (list 'if (list '.hasNext r) 1 0))}
    "next()Ljava/lang/Object;" {:form (fn [[r]] (list '.next r))}
@@ -174,18 +196,23 @@
 (def ^:private constructor-rules
   "By class, then constructor descriptor."
   (into {"java/lang/StringBuilder" {"()V" (fn [_] (list 'StringBuilder.))
-                                    "(I)V" (fn [[n]] (list 'StringBuilder. n))}
+                                    "(I)V" (fn [[n]] (list 'StringBuilder. n))
+                                    "(Ljava/lang/String;)V" (fn [[x]] (list 'StringBuilder. x))}
          "java/lang/StringBuffer" {"()V" (fn [_] (list 'StringBuffer.))
-                                   "(I)V" (fn [[n]] (list 'StringBuffer. n))}}
+                                   "(I)V" (fn [[n]] (list 'StringBuffer. n))
+                                   "(Ljava/lang/String;)V" (fn [[x]] (list 'StringBuffer. x))}
+         "java/util/ArrayList" {"()V" (fn [_] (list 'java.util.ArrayList.))}}
         (for [c ["IllegalArgumentException" "NumberFormatException" "IllegalStateException"
                  "ArithmeticException" "IndexOutOfBoundsException" "UnsupportedOperationException"
                  "RuntimeException" "NullPointerException"]]
           [(str "java/lang/" c) {"()V" (fn [_] (list (symbol (str c "."))))
                                  "(Ljava/lang/String;)V" (fn [[msg]] (list (symbol (str c ".")) msg))}])))
 
+;; No char[] and no boolean[]: an element read from one is a char or true
+;; and false in jolt, where the code here works on a char's code and on 1
+;; and 0, and nothing yet tracks which array is which.
 (def ^:private array-makers
-  {"I" 'int-array "J" 'long-array "B" 'byte-array "C" 'char-array "S" 'short-array
-   "Z" 'boolean-array "D" 'double-array "F" 'float-array})
+  {"I" 'int-array "J" 'long-array "B" 'byte-array "S" 'short-array "D" 'double-array "F" 'float-array})
 
 (def ^:private int-ops {"ix+" '+ "ix-" '- "ix*" '* "ix-and" 'bit-and "ix-or" 'bit-or "ix-xor" 'bit-xor})
 (def ^:private wrapped-ops {"ix+" 'unchecked-add-int "ix-" 'unchecked-subtract-int "ix*" 'unchecked-multiply-int})
@@ -730,7 +757,12 @@
 
 (def ^:private spec-by-type
   {"I" :int "S" :int "B" :int "J" :long "Z" :boolean "C" :char "[I" :ints
-   "Ljava/util/List;" {:type :strings :of {:nil? true}}})
+   "Ljava/util/List;" {:type :strings :of {:nil? true}}
+   "Ljava/util/Collection;" {:type :strings :of {:nil? true}}
+   "[Ljava/lang/Object;" :objects
+   "[Ljava/lang/String;" :string-array
+   "[C" :chars
+   "Ljava/util/Iterator;" :iterator})
 
 (defn- arg-specs
   "champaca.portcheck's argument specs for a descriptor's parameters under
@@ -755,6 +787,8 @@
   [cname statics method]
   (let [{:keys [mname desc name]} (statics method)]
     (try
+      (when (re-find #"\[[CZ]" desc)
+        (left "a char[] or boolean[] in its signature: array elements aren't typed yet"))
       (let [[status shape] (structured (jit/method-text cname mname desc))]
         (when (= :left status) (left (str "the structuring pass left it (" shape ")")))
         (let [{:keys [form holds calls sized]} (defn-form name desc statics shape)]

@@ -59,6 +59,10 @@ Exception messages aren't compared. Jolt's wording for a null receiver differs f
 | `:string` | up to eight characters | `:chars` `:ascii`, `:latin1`, `:bmp` (the default) or `:any`; `:nil? true` to pass `null` now and then |
 | `:ints` | an `int[]` of up to six values | |
 | `:strings` | a `java.util.List` of up to four strings | `:of`, a `:string` spec for the elements |
+| `:objects` | an `Object[]` of up to four strings and nulls | `:of` |
+| `:iterator` | an `Iterator` over such a list | `:of` |
+| `:string-array` | a `String[]` of up to four strings and nulls | `:of` |
+| `:chars` | a `char[]` of up to eight chars | `:chars` |
 
 `:runs` sets the number of inputs (300 if left out) and `:seed` the generator's seed (84). `:desc`, the method's descriptor such as `"([I)I"`, picks one overload exactly and reaches a private method; without it the method is found by name and arguments, which fails when two overloads both accept a null. The same seed gives the same inputs on every machine. `float` and `double` parameters aren't supported yet.
 

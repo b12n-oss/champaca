@@ -67,7 +67,9 @@
 (defn- gen
   "A value for one argument. spec is a type keyword or a map with :type and
   that type's options: :range [lo hi] for an :int, :chars (:ascii, :latin1,
-  :bmp, :any) and :nil? for a :string, the same under :of for :strings."
+  :bmp, :any) and :nil? for a :string, the same under :of for :strings,
+  :objects (an Object[] of strings and nulls), :string-array (a String[] of
+  them), :iterator (an Iterator over such a list) and :chars (a char[])."
   [r spec]
   (let [{:keys [type] :as spec} (if (keyword? spec) {:type spec} spec)]
     (case type
@@ -77,7 +79,9 @@
       :char (first (str (pick r (char-pools (:chars spec :bmp)))))
       :string (gen-string r spec)
       :ints (vec (repeatedly (below r 7) #(gen-int r spec)))
-      :strings (vec (repeatedly (below r 5) #(gen-string r (:of spec {})))))))
+      :strings (vec (repeatedly (below r 5) #(gen-string r (:of spec {}))))
+      (:objects :iterator :string-array) (vec (repeatedly (below r 5) #(gen-string r (:of spec {:nil? true}))))
+      :chars (vec (gen-string r {:chars (:chars spec :bmp)})))))
 
 (defn- spec-type [spec] (if (keyword? spec) spec (:type spec)))
 
@@ -92,12 +96,23 @@
     ;; cut to length 0 is an int[]
     :ints (ldk/invoke-static "java.util.Arrays" "copyOf" (if (seq v) v [0]) (count v))
     :strings (ldk/->java v)
+    :objects (ldk/invoke (ldk/->java v) "toArray")
+    :string-array (let [string (ldk/invoke-static "java.lang.Class" "forName" "java.lang.String")
+                        a (ldk/invoke-static "java.lang.reflect.Array" "newInstance" string (count v))]
+                    (dotimes [i (count v)] (ldk/invoke-static "java.lang.reflect.Array" "set" a i (nth v i)))
+                    a)
+    :chars (ldk/invoke (apply str v) "toCharArray")
+    :iterator (ldk/invoke (ldk/->java v) "iterator")
     v))
 
 (defn- jolt-arg [spec v]
   (case (spec-type spec)
     :ints (int-array v)
     :strings (java.util.ArrayList. v)
+    :objects (object-array v)
+    :string-array (into-array String v)
+    :chars (char-array v)
+    :iterator (.iterator (java.util.ArrayList. v))
     v))
 
 (defn- plain
@@ -108,7 +123,7 @@
     (or (nil? x) (string? x) (number? x) (boolean? x) (char? x)) x
     :else (vec x)))
 
-(defn- mutable? [spec] (contains? #{:ints :strings} (spec-type spec)))
+(defn- mutable? [spec] (contains? #{:ints :strings :objects :string-array :chars} (spec-type spec)))
 
 (defn- observe
   "What a caller sees of (apply f args): {:result} or {:throws class-name},
