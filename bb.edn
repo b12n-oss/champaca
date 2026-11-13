@@ -566,6 +566,20 @@
                                    (println (if (seq bad) "FAIL" "PASS") "a program ended by SIGTERM or SIGHUP runs its shutdown hooks and exits 128 + the signal (test/signal)"
                                             (if (seq bad) (str/join "; " bad) ""))
                                    (if (seq bad) ["signal"] []))
+                    ;; System.exit from a thread other than main ends the process
+                    ;; there (test/exitsave): the startup cache is still saved, so a
+                    ;; fresh cache gains a generation (ABCL exits from its interpreter
+                    ;; thread, and never came back warm)
+                    exit-save-fails (let [_ (shell "javac -d target/exitsave-classes test/exitsave/ExitSave.java")
+                                          cache (str (fs/create-temp-dir {:prefix "champaca-exitsave-"}))
+                                          {:keys [out exit]} (run-limited 300 {:label "exit-save" :extra-env {"CHAMPACA_CACHE_DIR" cache}}
+                                                                          (jolt-bin) "-M" "-m" "champaca.main" "target/exitsave-classes" "ExitSave")
+                                          saved (seq (fs/glob cache "*/extra-*.so"))
+                                          ok (and (= 3 exit) (= out (slurp "test/exitsave/ExitSave.expected")) saved)]
+                                      (fs/delete-tree cache)
+                                      (println (if ok "PASS" "FAIL") "System.exit from another thread saves the startup cache (test/exitsave)"
+                                               (if ok "" (str "exit " exit ", " (pr-str out) ", generation " (boolean saved))))
+                                      (if ok [] ["exit-save"]))
                     ;; programs a user runs alone, each on a fresh cache of its own,
                     ;; cold then warm: the run above shares one cache across every
                     ;; program, which hid a bug only a program's own second run shows
@@ -996,7 +1010,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails signal-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails signal-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

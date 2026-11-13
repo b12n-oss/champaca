@@ -58,6 +58,9 @@
     (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
       (let [_ (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable on-signal-shutdown!))
+            ;; System.exit from another thread ends the process there, past
+            ;; the save below
+            _ (s/call "set-off-main-exit-hook!" (fn [] (save-generation!)))
             v (:version @state)
             vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)
             status (cond (not (and cname (zero? vs))) vs

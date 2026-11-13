@@ -268,6 +268,11 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- `System.exit` called from a thread other than main saves the startup
+  cache before the process ends, as main's return does. It ended the process
+  from that thread with nothing saved, so a program exiting that way, ABCL
+  among them (its Lisp runs in an interpreter thread), was cold on every run
+  (`test/exitsave`).
 - An `invokedynamic` whose bootstrap is a program's own method named like a
   JDK bootstrap champaca compiles (`bootstrap`, `metafactory`,
   `altMetafactory`, `makeConcatWithConstants`) runs it, where champaca took
