@@ -59,7 +59,7 @@ The first public version. Champaca is still experimental: the
   no JDK installed.
 - **Tasks**: `jolt test` (every test program against HotSpot's recorded
   output, plus the examples), `jolt battery`, `jolt linux`, `jolt libs`,
-  `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, and the docs
+  `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, `jolt ffi:release`, and the docs
   site tasks, and `jolt warm`.
 - Guides under `docs/guide/`, `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
@@ -341,6 +341,11 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- CI's macOS lane runs `jolt ffi:release` on jolt's 0.8.27 release binary:
+  it must answer `jolt.ffi/stack-args-correct?` true, and ForeignCheck with
+  `-Dchampaca.ffi.strict=true` must make each call an unpatched Chez
+  misplaces and return HotSpot's values, where the battery's source-built
+  jolt refuses them.
 - `jolt test` runs thirteen feature-heavy programs again alone, each on a
   fresh cache of its own, cold then warm, since the suite's shared cache
   hid a bug only a program's own second run showed (#156).

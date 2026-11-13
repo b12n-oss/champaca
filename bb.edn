@@ -1084,6 +1084,23 @@
                 (shell "javac" "-d" "target/warm" "tools/warm/Warmup.java")
                 (println "warm: training the cache for" jolt)
                 (shell {:env env} jolt "-M" "-m" "champaca.main" "target/warm" "Warmup"))}
+  ffi:release {:doc "The foreign calls Chez 10.4.1 misplaces, on a jolt release binary that carries jolt's Chez patches ($JOLT, else jolt on PATH): its jolt.ffi/stack-args-correct? must answer true, and ForeignCheck must match HotSpot with -Dchampaca.ffi.strict=true, so each such call is made, not refused. A source build answers false (jolt ffi:release; CI's macOS lane runs it on the release setup-jolt installs)"
+               :task (let [jolt (or (System/getenv "JOLT") "jolt")
+                           {:keys [out]} (shell {:out :string :dir (str (fs/temp-dir))} jolt "-e" "(require (quote [jolt.ffi :as ffi])) (println (ffi/stack-args-correct?))")
+                           answer (str/trim out)]
+                       (println "ffi:release:" jolt "answers stack-args-correct?" answer)
+                       (when-not (= answer "true")
+                         (println "FAIL this jolt doesn't place stack arguments right; a release binary of 0.8.27 or later does")
+                         (System/exit 1))
+                       (fs/create-dirs "target/ffi-release")
+                       (shell "javac -nowarn -d target/ffi-release test/java/ForeignCheck.java")
+                       (shell (str "cc -shared -fPIC -O1 -pthread -o target/" (System/mapLibraryName "ffitest") " test/native/ffitest.c"))
+                       (let [{:keys [out exit]} (run-limited 600 {:label "ffi-release"} jolt "-M" "-m" "champaca.main"
+                                                             "--enable-native-access=ALL-UNNAMED" "-Djava.library.path=target"
+                                                             "-Dchampaca.ffi.strict=true" "-cp" "target/ffi-release" "ForeignCheck")
+                             ok (and (zero? exit) (= out (slurp "test/java/ForeignCheck.expected")))]
+                         (println (if ok "PASS" "FAIL") "ForeignCheck, strict, on" jolt)
+                         (when-not ok (spit "target/ffi-release/ForeignCheck.out" (str out)) (System/exit 1))))}
   heap {:doc "Where a process's memory goes: boot, run <Main>, measure the live heap (jolt heap <classpath> <Main> [types|roots|java] [args...]; tools/heap.clj)"
         :task (let [args *command-line-args*]
                 (when (< (count args) 2) (println "usage: jolt heap <classpath> <Main> [types|roots|java] [args...]") (System/exit 2))
