@@ -310,6 +310,16 @@
   [a]
   (and (string? a) (str/ends-with? a ".java") (.isFile (io/file a))))
 
+(defn- expand-wildcard
+  "A dir/* (or bare *) entry as its directory's .jar and .JAR files, sorted,
+  or [e] itself when there are none."
+  [e]
+  (let [dir (case e "*" "." "/*" "/" (subs e 0 (- (count e) 2)))
+        jars (for [n (some-> (io/file dir) .list seq sort)
+                   :when (or (str/ends-with? n ".jar") (str/ends-with? n ".JAR"))]
+               (case e "*" n "/*" (str "/" n) (str dir "/" n)))]
+    (or (seq jars) [e])))
+
 (defn expand-class-path
   "A class path string as a list of entries, a dir/* (or a bare *) standing
   for the names ending .jar or .JAR in that directory, as the java launcher
@@ -318,14 +328,7 @@
   name: the launcher takes the directory's own order, which its
   documentation leaves unspecified."
   [cp]
-  (mapcat (fn [e]
-            (if (or (= e "*") (str/ends-with? e "/*"))
-              (let [dir (case e "*" "." "/*" "/" (subs e 0 (- (count e) 2)))
-                    jars (for [n (some-> (io/file dir) .list seq sort)
-                               :when (or (str/ends-with? n ".jar") (str/ends-with? n ".JAR"))]
-                           (case e "*" n "/*" (str "/" n) (str dir "/" n)))]
-                (or (seq jars) [e]))
-              [e]))
+  (mapcat (fn [e] (if (or (= e "*") (str/ends-with? e "/*")) (expand-wildcard e) [e]))
           (str/split cp #":")))
 
 ;; jolt bounds a thread's stack at 80% of the heap ceiling by default (gigabytes)

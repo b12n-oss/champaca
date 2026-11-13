@@ -58,20 +58,20 @@
   [& msg]
   (throw (ex-info (str/join " " msg) {::die true})))
 
+(def ^:private value-options
+  "The options that take a value, and the key each sets."
+  {"-o" :out "-cp" :cp "--class-path" :cp "-m" :main "--jolt" :jolt "--project" :project
+   "--name" :name "--add-modules" :add-modules "--locales" :locales})
+
 (defn- parse [args]
   (loop [[a & more :as args] args, opts {}]
     (cond
       (empty? args) opts
       (= a "--train") (assoc opts :train (vec more))
       (= a "--signable") (recur more (assoc opts :signable true))
-      (#{"-o" "-cp" "--class-path" "-m" "--jolt" "--project" "--name" "--add-modules" "--locales"} a)
-      (if (seq more)
-        (recur (rest more) (assoc opts (case a "-o" :out ("-cp" "--class-path") :cp "-m" :main "--jolt" :jolt
-                                             "--project" :project "--name" :name "--add-modules" :add-modules
-                                             "--locales" :locales)
-                                  (first more)))
-        (die a "needs a value"))
-      :else (die "unknown argument" a))))
+      (not (value-options a)) (die "unknown argument" a)
+      (empty? more) (die a "needs a value")
+      :else (recur (rest more) (assoc opts (value-options a) (first more))))))
 
 (defn- java-home []
   (let [h (System/getenv "JAVA_HOME")]

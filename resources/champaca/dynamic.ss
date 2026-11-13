@@ -56,27 +56,30 @@
 (define (java-value? v) (or (jobj? v) (jarr? v)))
 
 ;; the single abstract method of interface iface, as "name(desc)", or #f
+;; iface and every interface it extends, breadth first, each once
+(define (interface-closure iface)
+  (let loop ([todo (list iface)] [seen '()])
+    (cond [(null? todo) (reverse seen)]
+          [(member (car todo) seen) (loop (cdr todo) seen)]
+          [else (loop (append (cdr todo) (jclass-interfaces (find-class (car todo)))) (cons (car todo) seen))])))
+;; found with the abstract methods of class n added (name+desc), but not
+;; Object's three and not a name found already (an override keeps one)
+(define (abstract-method-keys n found)
+  (fold-left
+   (lambda (acc m)
+     (let ([key (string-append (car m) (cadr m))])
+       (if (and (fxpositive? (fxlogand (caddr m) #x400))
+                (not (member key '("equals(Ljava/lang/Object;)Z" "hashCode()I" "toString()Ljava/lang/String;")))
+                (not (exists (lambda (f) (string=? (car (string-split-paren f)) (car m))) acc)))
+           (cons key acc)
+           acc)))
+   found (meta-methods (find-class n))))
+;; the single abstract method of interface iface (name+desc), or #f
 (define (sam-of iface)
   (guard (e [#t #f])
-    (let ([c (find-class iface)])
-      (and (eq? (jclass-kind c) 'interface)
-           (let loop ([todo (list iface)] [seen '()] [found '()])
-             (if (null? todo)
-                 (and (= (length found) 1) (car found))
-                 (let* ([n (car todo)] [k (find-class n)])
-                   (if (member n seen)
-                       (loop (cdr todo) seen found)
-                       (loop (append (cdr todo) (jclass-interfaces k)) (cons n seen)
-                             (fold-left
-                              (lambda (acc m)
-                                (let ([key (string-append (car m) (cadr m))])
-                                  (if (and (fxpositive? (fxlogand (caddr m) #x400))
-                                           (not (member key '("equals(Ljava/lang/Object;)Z" "hashCode()I"
-                                                              "toString()Ljava/lang/String;")))
-                                           (not (exists (lambda (f) (string=? (car (string-split-paren f)) (car m))) acc)))
-                                      (cons key acc)
-                                      acc)))
-                              found (meta-methods k)))))))))))
+    (and (eq? (jclass-kind (find-class iface)) 'interface)
+         (let ([found (fold-left (lambda (acc n) (abstract-method-keys n acc)) '() (interface-closure iface))])
+           (and (= (length found) 1) (car found))))))
 
 (define (string-split-paren key)
   (let loop ([i 0]) (if (char=? (string-ref key i) #\() (list (substring key 0 i)) (loop (fx+ i 1)))))
@@ -994,16 +997,19 @@
   (when (hashtable-ref classes name #f) (jolt-class-fail (dotted name) " is already a class")))
 ;; each field's name once, a valid one, its type a class that exists (or the
 ;; class itself)
+;; field n of type d in class name, seen the fields before it: a field name,
+;; named once, of a type that's a class (or the class being defined)
+(define (jolt-class-check-field! name n d seen)
+  (when (jolt-class-bad-name? n) (jolt-class-fail (format "~s isn't a field name" n)))
+  (when (member n seen) (jolt-class-fail "field " n " is named twice"))
+  (let ([t (let strip ([d d]) (if (char=? (string-ref d 0) #\[) (strip (array-elem d)) d))])
+    (when (and (char=? (string-ref t 0) #\L) (not (string=? (ref-class t) name)) (not (class-exists? (ref-class t))))
+      (jolt-class-fail "field " n "'s type " (dotted (ref-class t)) " isn't a class (a nested class is Outer$Inner)"))))
 (define (jolt-class-check-fields! name fs)
   (let loop ([fs fs] [seen '()])
     (unless (null? fs)
-      (let ([n (caar fs)] [d (cdar fs)])
-        (when (jolt-class-bad-name? n) (jolt-class-fail (format "~s isn't a field name" n)))
-        (when (member n seen) (jolt-class-fail "field " n " is named twice"))
-        (let ([t (let strip ([d d]) (if (char=? (string-ref d 0) #\[) (strip (array-elem d)) d))])
-          (when (and (char=? (string-ref t 0) #\L) (not (string=? (ref-class t) name)) (not (class-exists? (ref-class t))))
-            (jolt-class-fail "field " n "'s type " (dotted (ref-class t)) " isn't a class (a nested class is Outer$Inner)")))
-        (loop (cdr fs) (cons n seen))))))
+      (jolt-class-check-field! name (caar fs) (cdar fs) seen)
+      (loop (cdr fs) (cons (caar fs) seen)))))
 (define (jolt-class-check-implements! ifaces)
   (let loop ([is ifaces])
     (when (pair? is)
