@@ -57,6 +57,16 @@
   (testing "one that reads no string by index holds for any"
     (is (empty? (:holds (port/port-method sample "gcd" "(II)I"))))))
 
+(deftest ints-are-small-only-where-a-loop-or-a-size-could-take-them
+  (testing "a loop's count may be the parameter"
+    (is (:small-ints (port/port-method sample "fib" "(I)I")))
+    (is (= [{:type :int :range [-64 64]}] (:args (port/port-method sample "fib" "(I)I")))))
+  (testing "a method that calls a looping one"
+    (is (:small-ints (port/port-method sample "gcdOfSpans" "(III)I"))))
+  (testing "straight-line arithmetic is checked on the full range"
+    (is (not (:small-ints (port/port-method sample "span" "(II)I"))))
+    (is (= [:int :int] (:args (port/port-method sample "span" "(II)I"))))))
+
 (deftest calls-within-the-class
   (let [r (port/port-method sample "gcdOfSpans" "(III)I")]
     (is (= #{"champaca/lib/PortSample.gcd(II)I" "champaca/lib/PortSample.span(II)I"} (set (:calls r))))

@@ -208,6 +208,7 @@
   (let [elem (text-of (second (get (:ics ctx) ic)))
         maker (array-makers elem)]
     (when-not maker (left (str "no rule for an array of " elem)))
+    (vreset! (:sized ctx) true)            ; a size from an argument, perhaps
     (list maker (value ctx len))))
 
 (defn- sibling-call
@@ -353,6 +354,7 @@
   (let [call (constructor-call v (first rest-forms))
         make (get-in constructor-rules [cname (:desc call)])]
     (when-not (and call make) (left (str "no rule for new " cname)))
+    (when (= "(I)V" (:desc call)) (vreset! (:sized ctx) true))   ; a capacity
     (list 'let
           (vec (concat (mapcat (fn [[n init]] [(symbol n) (value ctx init)]) (:lets call))
                        [(symbol v) (make (mapv #(value ctx %) (:args call)))]))
@@ -400,7 +402,7 @@
         {:keys [params code]} (get (:blocks ctx) label)]
     (cond
       (not= label (:loop ctx)) (apply list (block-name label) args)
-      (:in-loop ctx) (apply list 'recur args)
+      (:in-loop ctx) (do (vreset! (:sized ctx) true) (apply list 'recur args))   ; a loop
       :else (let [pairs (map vector (map symbol params) args)
                   clash? (not= (vec (mapcat identity pairs)) (sequential-bindings pairs))]
               ;; a loop's first values are bound in order too: when one uses a
@@ -466,10 +468,12 @@
     (case (count blocks)
       0 (do-form (body ctx forms tail?))
       1 (do-form (body (assoc ctx :loop (key (first blocks)) :in-loop false) forms tail?))
-      (list 'letfn
+      (do
+        (vreset! (:sized ctx) true)        ; blocks that call each other: loops
+        (list 'letfn
             (vec (for [[label {:keys [params code]}] blocks]
                    (list (block-name label) (mapv symbol params) (do-form (body ctx code true)))))
-            (do-form (body ctx forms tail?))))))
+            (do-form (body ctx forms tail?)))))))
 
 (defn- expr
   "The Clojure form for a structured expression; tail? when its value is the
@@ -626,12 +630,13 @@
         {:keys [args ret]} (parse-desc desc)
         holds (volatile! (sorted-set))
         calls (volatile! (sorted-set))
-        ctx {:ics ics :blocks {} :ret ret :holds holds :calls calls :statics statics}
+        sized (volatile! false)
+        ctx {:ics ics :blocks {} :ret ret :holds holds :calls calls :statics statics :sized sized}
         code (do-form (body ctx code true))
         entry (entry-bindings params args)]
     {:form (list 'defn fname (mapv param-form params args)
                  (tidy (if (seq entry) (list 'let entry code) code)))
-     :holds @holds :calls @calls}))
+     :holds @holds :calls @calls :sized @sized}))
 
 (def ^:private type-words
   {"I" "int" "J" "long" "Z" "boolean" "C" "char" "S" "short" "B" "byte" "D" "double" "F" "float"})
@@ -701,16 +706,17 @@
 
 (defn- arg-specs
   "champaca.portcheck's argument specs for a descriptor's parameters under
-  the conditions a port holds for, or nil when a parameter has none. An int
-  or long parameter may be a loop's count or a buffer's size, and the
-  largest int would run the loop two thousand million times or ask for that
-  many bytes, so those stay within [-64, 64]. Array elements keep the full
-  range."
-  [desc holds]
+  the conditions a port holds for, or nil when a parameter has none. small?
+  keeps an int or long within [-64, 64]: in a method that loops or
+  allocates by size it may be the loop's count or the buffer's size, and
+  the largest int would run the loop two thousand million times or ask for
+  that many bytes. Any other method gets the full range, the limits and
+  their neighbours included. Array elements always do."
+  [desc holds small?]
   (let [string {:type :string :chars (if (holds :strings-within-the-bmp) :bmp :any) :nil? true}
         spec (fn [t]
                (cond (= "Ljava/lang/String;" t) string
-                     (#{"I" "S" "B" "J"} t) {:type (spec-by-type t) :range [-64 64]}
+                     (and small? (#{"I" "S" "B" "J"} t)) {:type (spec-by-type t) :range [-64 64]}
                      :else (spec-by-type t)))
         specs (map spec (:args (parse-desc desc)))]
     (when (every? some? specs) (vec specs))))
@@ -723,18 +729,30 @@
     (try
       (let [[status shape] (structured (jit/method-text cname mname desc))]
         (when (= :left status) (left (str "the structuring pass left it (" shape ")")))
-        (let [{:keys [form holds calls]} (defn-form name desc statics shape)]
+        (let [{:keys [form holds calls sized]} (defn-form name desc statics shape)]
           {:method method :name name :source (layout form 0) :holds holds :calls calls
-           :args (arg-specs desc holds)}))
+           :desc desc :sized sized}))
       (catch clojure.lang.ExceptionInfo e
         (if-let [why (::left (ex-data e))]
           {:method method :left why}
           (throw e))))))
 
+(defn- reached-from
+  "Every method the port of method calls, directly or through another."
+  [by-method method]
+  (loop [todo (seq (:calls (by-method method))) seen #{}]
+    (if-let [m (first todo)]
+      (if (seen m)
+        (recur (rest todo) seen)
+        (recur (concat (rest todo) (:calls (by-method m))) (conj seen m)))
+      seen)))
+
 (defn- settle
   "results with every port that calls a method that was left marked left
-  too, until none is: a port stands only if everything it calls does. The
-  conditions of what it calls become its own."
+  too, until none is: a port stands only if everything it calls does. Then
+  each port gets what follows from all it reaches: their conditions become
+  its own, and its check keeps ints small if it or any of them loops or
+  allocates by size (:small-ints)."
   [results]
   (let [by-method (into {} (map (juxt :method identity) results))
         broken (fn [r] (first (filter #(:left (by-method %)) (:calls r))))
@@ -747,16 +765,23 @@
       (mapv (fn [r]
               (if (:left r)
                 r
-                (update r :holds into (mapcat #(:holds (by-method %)) (:calls r)))))
+                (let [reached (reached-from by-method (:method r))
+                      holds (into (:holds r) (mapcat #(:holds (by-method %)) reached))
+                      small? (boolean (some #(:sized (by-method %)) (cons (:method r) reached)))]
+                  (-> (dissoc r :desc :sized)
+                      (assoc :holds holds
+                             :small-ints small?
+                             :args (arg-specs (:desc r) holds small?))))))
             results)
       (recur next-results))))
 
 (defn port-class
   "Each static method of cname that has code, in the class file's order, as
-  a jolt function: {:method :name :source :holds :calls :args}, :args being
-  champaca.portcheck's specs for it and :calls the other methods of the
-  class it calls, or {:method :left reason} when something in it has no
-  rule or it calls a method that was left."
+  a jolt function: {:method :name :source :holds :calls :args :small-ints},
+  :args being champaca.portcheck's specs for it, :small-ints whether those
+  keep int and long parameters within [-64, 64], and :calls the other
+  methods of the class it calls; or {:method :left reason} when something
+  in it has no rule or it calls a method that was left."
   [cname]
   (let [cname (str/replace cname "." "/")
         _ (loader/ensure-loaded! cname)

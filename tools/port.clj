@@ -34,7 +34,8 @@
       (println (str ";; " (:method p)))
       (when (seq (:holds p)) (println (str ";; holds for: " (str/join ", " (map name (:holds p))))))
       (println (str ";; " (cond (nil? r) "not checked: a parameter type has no input generator"
-                                :else (pc/report-line r))))
+                                :else (str (pc/report-line r)
+                                           (when (some :range (:args p)) ", int and long parameters within -64 to 64")))))
       (println (:source p))
       (println))
     (doseq [l (filter :left results)]
@@ -42,5 +43,8 @@
     (println (str ";; " (count results) " static methods: " (count ported) " ported ("
                   (- (count ported) failed unchecked) " checked and agree, " failed " disagree, "
                   unchecked " not checked), " (count (filter :left results)) " left"))
+    (println (str ";; " (count (filter #(and (:report %) (some :range (:args %))) ported))
+                  " of the checks kept int and long parameters within -64 to 64 (the method loops or"
+                  " allocates by size); the others used the full range"))
     (ldk/save-cache!)
     (System/exit (if (zero? failed) 0 1))))

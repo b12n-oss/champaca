@@ -52,6 +52,7 @@ After the functions come the methods it left, each with the first thing in it th
 
 ```
 ;; 15 static methods: 15 ported (15 checked and agree, 0 disagree, 0 not checked), 0 left
+;; 4 of the checks kept int and long parameters within -64 to 64 (the method loops or allocates by size); the others used the full range
 ```
 
 The exit status is 1 when any check disagrees. A function whose check disagrees must not be used.
@@ -87,13 +88,15 @@ A method name used once gives the function its name in kebab case. An overloaded
 
 ## The check
 
-Each port is run beside its method by `champaca.portcheck` ([checking-a-port](checking-a-port.md)) on 300 generated inputs, or `PORT_RUNS`. The argument specs come from the parameter types and the port's conditions. An `int` or `long` parameter stays within -64 to 64: it may be a loop's count or a buffer's size, and the largest `int` would run a loop two thousand million times. Array elements keep the full range.
+Each port is run beside its method by `champaca.portcheck` ([checking-a-port](checking-a-port.md)) on 300 generated inputs, or `PORT_RUNS`. The argument specs come from the parameter types and the port's conditions.
+
+An `int` or `long` parameter gets the full range, the limits and their neighbours included, unless the method loops or allocates by a size, or calls one that does. There the parameter may be the loop's count or a buffer's size, and the largest `int` would run the loop two thousand million times, so it stays within -64 to 64. The check's line says when that was so, and the count at the end says how many checks it applied to. A port checked that way has not been tried on large numbers: if it does arithmetic on such a parameter, check it by hand with a wider `:range` before relying on it. Array elements always get the full range.
 
 A port whose parameters have no input generator (a `char[]`, say) is printed and counted as not checked.
 
 ## On commons-lang
 
-`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 89 of them: 83 checked and agree, none disagree, and 6 weren't checked for lack of a generator. The other 71 were left. 34 of those call a method that was left, so they follow from the rest, and the rest lack these:
+`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 89 of them: 83 checked and agree, none disagree, and 6 weren't checked for lack of a generator. Four of the 83 checks kept int parameters within -64 to 64, and the rest used the full range. The other 71 were left. 34 of those call a method that was left, so they follow from the rest, and the rest lack these:
 
 | What has no rule | Methods |
 |---|---|
@@ -122,6 +125,7 @@ Each count is of the first thing found in a method, so a method may lack more th
 (:source (first results))     ; the defn's text
 (:holds (first results))      ; the conditions it holds for
 (:report (first results))     ; champaca.portcheck's report
+(:small-ints (first results)) ; whether the check kept ints within -64 to 64
 (:left (first results))       ; or why it was left
 ```
 
