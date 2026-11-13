@@ -104,4 +104,8 @@
   {:main "Scl" :run ["scala.tools.nsc.MainGenericRunner" "-usejavacp" "-nc" "test/libs/Scl.scala"]
    :jars [["org.scala-lang:scala-library:2.13.18" "eb2086988c25b08705472cc750654570900362e5"]
           ["org.scala-lang:scala-compiler:2.13.18" "8819d2783d182a78ac47918f8d0194599f4c432f"]
-          ["org.scala-lang:scala-reflect:2.13.18" "674f3bd39f5c528d575da69c42a5dff772b9b75c"]]}]}
+          ["org.scala-lang:scala-reflect:2.13.18" "674f3bd39f5c528d575da69c42a5dff772b9b75c"]]}
+  ;; Kawa: Scheme compiled to bytecode as each form is read (records,
+  ;; syntax-rules, tail calls, call/cc, dynamic-wind, guard, Java interop)
+  {:main "Kwa" :run ["kawa.repl" "test/libs/Kwa.scm"]
+   :jars [["com.github.arvyy:kawa:3.1.1" "d4db8e9a7b4714fd5a4b77a0a23085d317bfaa27"]]}]}

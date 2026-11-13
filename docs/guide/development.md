@@ -9,7 +9,7 @@ jolt jolt                                               # build the pinned jolt 
 jolt test                                               # every test/java and test/aaa program vs the JVM, plus the examples/*.clj tests
                                                       # (a failing program's output goes to target/fails/, and the start of its diff is printed)
 JOLT=jolt jolt test                                     # the same suite on the jolt from your PATH
-jolt libs:fetch && jolt libs                              # the twenty-three real libraries and three JVM languages vs the JVM (jars into ~/.m2)
+jolt libs:fetch && jolt libs                              # the twenty-three real libraries and four JVM languages vs the JVM (jars into ~/.m2)
 jolt battery [ref]                                      # before a merge: jolt test cold, warm, cache off and CHAMPACA_BT=1, then jolt libs (after jolt libs:fetch), on a worktree of HEAD
                                                       # with its own cache (kept until the next run of another ref), logs under target/battery/; about 30 min, more under load; BATTERY_MODES=cold,libs for a subset
 jolt linux                                              # jolt test and jolt libs on Linux, in Docker (jolt linux amd64 for x86_64)
