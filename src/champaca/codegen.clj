@@ -777,16 +777,26 @@
                         (apply sx (map #(const-datum cls %) (:args bsm)))))
            (str-lit name) (str-lit desc) argv)))
 
+(def ^:private compiled-bootstraps
+  "The JDK bootstraps codegen compiles instead of running, by method name and
+  the class that declares it."
+  {"makeConcatWithConstants" "java/lang/invoke/StringConcatFactory"
+   "bootstrap" "java/lang/runtime/ObjectMethods"
+   "metafactory" "java/lang/invoke/LambdaMetafactory"
+   "altMetafactory" "java/lang/invoke/LambdaMetafactory"
+   "typeSwitch" "java/lang/runtime/SwitchBootstraps"
+   "enumSwitch" "java/lang/runtime/SwitchBootstraps"})
+
 (defn- bootstrap-name
-  "The bootstrap's method name; a typeSwitch or enumSwitch in a class other
-  than SwitchBootstraps is named with its class, so it runs for real."
+  "The bootstrap's method name when it's one of the JDK's that codegen
+  compiles (compiled-bootstraps), else its class and name, so it runs for
+  real: Groovy's IndyInterface.bootstrap is no record's ObjectMethods."
   [cp bsm]
   (let [bsm-ref (cp (:ref-idx (cp (:ref-idx bsm))))
         n (:name bsm-ref)]
-    (if (and (#{"typeSwitch" "enumSwitch"} n)
-             (not= (:class bsm-ref) "java/lang/runtime/SwitchBootstraps"))
-      (str (:class bsm-ref) "." n)
-      n)))
+    (if (= (:class bsm-ref) (compiled-bootstraps n))
+      n
+      (str (:class bsm-ref) "." n))))
 
 (defn- emit-indy [e {:keys [args pc]} _]
   (let [cls (:cls e) resolve (:resolve e)

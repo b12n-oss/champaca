@@ -12,6 +12,17 @@ public class IndyBootstraps {
         return new ConstantCallSite(lookup.findStatic(IndyBootstraps.class, name, type));
     }
 
+    // bootstraps named like the JDK's that champaca compiles instead of running
+    // (ObjectMethods.bootstrap, the metafactories, string concatenation); these
+    // are this class's, so each runs, as Groovy's IndyInterface.bootstrap does
+    static CallSite own(String which, MethodType type) {
+        return new ConstantCallSite(MethodHandles.constant(String.class, "own " + which));
+    }
+    public static CallSite bootstrap(MethodHandles.Lookup lookup, String name, MethodType type) { return own("bootstrap", type); }
+    public static CallSite metafactory(MethodHandles.Lookup lookup, String name, MethodType type) { return own("metafactory", type); }
+    public static CallSite altMetafactory(MethodHandles.Lookup lookup, String name, MethodType type) { return own("altMetafactory", type); }
+    public static CallSite makeConcatWithConstants(MethodHandles.Lookup lookup, String name, MethodType type) { return own("makeConcatWithConstants", type); }
+
     // every kind of static argument, folded into a constant answer
     public static CallSite describe(MethodHandles.Lookup lookup, String name, MethodType type,
                                     String s, int i, long l, float f, double d,
