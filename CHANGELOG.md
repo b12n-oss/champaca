@@ -61,7 +61,7 @@ The first public version. Champaca is still experimental: the
   output, plus the examples), `jolt battery`, `jolt linux`, `jolt libs`,
   `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, `jolt ffi:release`, and the docs
   site tasks, and `jolt warm`.
-- Guides under `docs/guide/`, `CONTRIBUTING.md`, and SPDX license headers
+- Guides under `docs/guide/` (`jvm-languages` for Clojure, Groovy, Scala, Kawa, ABCL and Kotlin), `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
 - **`jolt warm`**, a training run for the startup cache. It compiles the JDK
   paths programs reach early, so a first `String.format`, `SecureRandom` or
