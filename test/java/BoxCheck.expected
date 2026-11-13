@@ -1,0 +1,47 @@
+Integer -129 fresh -129 -129 -128
+Integer -128 same -128 -128 -127
+Integer -1 same -1 -1 0
+Integer 0 same 0 0 1
+Integer 1 same 1 1 2
+Integer 127 same 127 127 128
+Integer 128 fresh 128 128 129
+Integer 1000 fresh 1000 1000 1001
+Integer 2147483647 fresh 2147483647 2147483647 -2147483648
+Integer -2147483648 fresh -2147483648 -2147483648 -2147483647
+Long -129 fresh -129 128 -130
+Long -128 same -128 127 -129
+Long 0 same 0 0 -1
+Long 127 same 127 127 126
+Long 128 fresh 128 128 127
+Long 1099511627776 fresh 1099511627776 256 1099511627775
+Long 1152921504606846975 fresh 1152921504606846975 -268435456 1152921504606846974
+Long 1152921504606846976 fresh 1152921504606846976 268435456 1152921504606846975
+Long 9223372036854775807 fresh 9223372036854775807 -2147483648 9223372036854775806
+Long -9223372036854775808 fresh -9223372036854775808 -2147483648 9223372036854775807
+Short -129 fresh -129 -129
+Short -128 same -128 -128
+Short 0 same 0 0
+Short 127 same 127 127
+Short 128 fresh 128 128
+Short 32767 fresh 32767 32767
+Short -32768 fresh -32768 -32768
+Character 0 same 0 0
+Character 97 same 97 97
+Character 127 same 127 127
+Character 128 fresh 128 128
+Character 233 fresh 233 233
+Character 65535 fresh 65535 65535
+Double 0.0 fresh 0.0 0 false
+Double -0.0 fresh -0.0 -2147483648 false
+Double 1.5 fresh 1.5 1073217536 false
+Double NaN fresh NaN 2146959360 true
+Double Infinity fresh Infinity 2146435072 false
+Double 4.9E-324 fresh 4.9E-324 1 false
+Float 0.0 fresh 0.0 0
+Float -0.0 fresh -0.0 -2147483648
+Float 1.5 fresh 1.5 1069547520
+Float NaN fresh NaN 2143289344
+Float 3.4028235E38 fresh 3.4028235E38 2139095039
+Byte -128 same Boolean true same
+map 315 284587 true v1900 longs 44 -3784425932234851461 true 4
+Integer Long Short Character Double Float Byte Boolean -1 false true

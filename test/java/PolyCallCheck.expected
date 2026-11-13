@@ -1,0 +1,8 @@
+pass 0: shape3:3 quad:4 square:4 quad:4 regular5:5 star5:10 shape0:0 line:2 shape7:7 shape9:9 shape1:1 regular6:6
+pass 1: shape3:3 quad:4 square:4 quad:4 regular5:5 star5:10 shape0:0 line:2 shape7:7 shape9:9 shape1:1 regular6:6
+pass 2: shape3:3 quad:4 square:4 quad:4 regular5:5 star5:10 shape0:0 line:2 shape7:7 shape9:9 shape1:1 regular6:6
+reversed: regular6:6 shape1:1 shape9:9 shape7:7 line:2 shape0:0 star5:10 regular5:5 quad:4 square:4 quad:4 shape3:3
+sum 620000
+objects: n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true n/true
+suppliers: a b  shape3:3 anon a b  shape3:3 anon a b  shape3:3 anon
+collections 23000

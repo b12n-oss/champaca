@@ -491,9 +491,13 @@
 ;; lock is the object's monitor once something synchronizes on it (natives.ss
 ;; monitor-of). It costs no memory: Chez rounds a record up to 16 bytes, and
 ;; three fields fit the 32 two did.
-(define-record-type jobj (fields cls slots (mutable lock))
-  (protocol (lambda (new) (lambda (cls slots) (new cls slots #f))))
+;; make-jobj is a macro over the record's own constructor, so an allocation
+;; is in line where it's written: a protocol's constructor is a closure,
+;; called for every new.
+(define-record-type (jobj make-jobj* jobj?) (fields cls slots (mutable lock))
   (sealed #t) (nongenerative champaca-jobj))
+(define-syntax make-jobj
+  (syntax-rules () [(_ cls slots) (make-jobj* cls slots #f)]))
 ;; An array's element descriptor is interned, so every String[] shares one
 ;; string and an aastore cell can compare descriptors with eq?. The lookup is
 ;; by the descriptor object first (one eq? hash for the literal an allocation
@@ -762,7 +766,7 @@
 
 (define (jnew name)
   (let ([c (find-class name)])
-    (make-jobj c (vector-copy (jclass-template c)))))
+    (make-jobj c (#3%vector-copy (jclass-template c)))))
 
 (define (jfield-index cname fname)
   (let loop ([c (find-class cname)])
@@ -859,9 +863,9 @@
 ;; a unit's literals alive.
 (define instance-answers (make-weak-eq-hashtable))
 (define (class-instance-of? cls target)
-  (let* ([t (or (eq-hashtable-ref instance-answers cls #f)
+  (let* ([t (or (#3%eq-hashtable-ref instance-answers cls #f)
                 (let ([t (make-weak-eq-hashtable)]) (eq-hashtable-set! instance-answers cls t) t))]
-         [a (eq-hashtable-ref t target 'unknown)])
+         [a (#3%eq-hashtable-ref t target 'unknown)])
     (if (eq? a 'unknown)
         (let ([r (and (class-assignable? (jclass-cname cls) target) #t)])
           (eq-hashtable-set! t target r)
@@ -922,12 +926,28 @@
        (if (and (jobj? o) (eq? (jobj-cls o) (car ic)))
            (cdr ic)
            (jvirt-miss ic o key tag pc)))]))
+;; A site that sees many receiver classes misses its cell on most calls, and
+;; the lookup behind a miss is a vtable probe, top-level-value (14 ns) and a
+;; probe of the stubs. So each class keeps the procedures found for it, by
+;; method key: a miss for a class and method seen before is two probes. Only
+;; compiled procedures are kept, as in the cell, never a stub. Weak on the
+;; class.
+(define virt-procs (make-weak-eq-hashtable))
 (define (jvirt-miss ic o key tag pc)
-  (let ([proc (jvirt (or o (npe-at tag pc)) key)])
-    (when (and (jobj? o) (not (eq-hashtable-contains? stub-procs proc)))
-      (set-car! ic (jobj-cls o))
-      (set-cdr! ic proc))
-    proc))
+  (if (jobj? o)
+      (let* ([cls (jobj-cls o)]
+             [found (or (#3%eq-hashtable-ref virt-procs cls #f)
+                        (let ([t (make-eq-hashtable)]) (eq-hashtable-set! virt-procs cls t) t))]
+             [kept (#3%eq-hashtable-ref found key #f)])
+        (if kept
+            (begin (set-car! ic cls) (set-cdr! ic kept) kept)
+            (let ([proc (jvirt o key)])
+              (unless (eq-hashtable-contains? stub-procs proc)
+                (eq-hashtable-set! found key proc)
+                (set-car! ic cls)
+                (set-cdr! ic proc))
+              proc)))
+      (jvirt (or o (npe-at tag pc)) key)))
 
 ;; Selection for a call whose resolved method is package-private (JVMS
 ;; 5.4.5). The vtable is keyed by name and descriptor, which is right when
@@ -1028,7 +1048,7 @@
   (let ([c (symbol-class s)])
     (unless (eq? (jclass-state c) 'initialized) (jinit-slow c (jclass-cname c)))))
 (define (jnew-sym s)
-  (let ([c (symbol-class s)]) (make-jobj c (vector-copy (jclass-template c)))))
+  (let ([c (symbol-class s)]) (make-jobj c (#3%vector-copy (jclass-template c)))))
 ;; The same from generated code, through a per-site cell that holds the class
 ;; once it is initialized, which it then stays: the check becomes one car.
 ;; The trailing tag and pc (codegen's site) ride into the slow path's call,
@@ -1046,7 +1066,7 @@
     [(_ cell s) (jnew-ic cell s #f -1)]
     [(_ cell s tag pc) (let ([c (car cell)])
                          (if c
-                             (make-jobj c (vector-copy (jclass-template c)))
+                             (make-jobj c (#3%vector-copy (jclass-template c)))
                              (begin (jinit-cell! cell s tag pc) (jnew-sym s))))]))
 
 ;; --- arrays -------------------------------------------------------------------
@@ -1054,12 +1074,12 @@
 (define (jnewarray elem n default)
   (if (fx< n 0)
       (jthrow "java/lang/NegativeArraySizeException" (number->string n))
-      (make-jarr elem (make-vector n default))))
+      (make-jarr elem (#3%make-vector n default))))
 ;; generated code's newarray and anewarray, with elem already interned
 (define (jnewarray-interned elem n default)
   (if (fx< n 0)
       (jthrow "java/lang/NegativeArraySizeException" (number->string n))
-      (make-jarr* elem (make-vector n default))))
+      (make-jarr* elem (#3%make-vector n default))))
 
 (define (elem-default d)
   (case (string-ref d 0) [(#\L #\[) #f] [(#\F #\D) 0.0] [else 0]))

@@ -91,7 +91,7 @@
 ;; StringLatin1.charAt, checkIndex and Preconditions before the byte is read:
 ;; five calls for one array read, and a loop over a string pays them per
 ;; character. The code generator writes these forms where a call names one
-;; of the three methods on java.lang.String (codegen.clj string-intrinsics).
+;; of the three methods on java.lang.String (intrinsics.clj direct-forms).
 ;; The receiver is already null-checked. An index in range reads the byte, or
 ;; the two of a UTF-16 unit (low byte first, as the JDK stores them on the
 ;; little-endian machines champaca runs on). Anything else calls the method

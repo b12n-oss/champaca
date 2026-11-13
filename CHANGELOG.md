@@ -364,6 +364,16 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- Allocation, boxing and range checks. `new` no longer calls a constructor
+  closure and a by-name `vector-copy` (12.5 to 7.6 ns with a constructor),
+  which reaches everything that allocates: `HashMap.put` 92.6 to 65.9 ns,
+  `substring` 173.7 to 82.8 ns. `Integer.valueOf` and the other boxes'
+  `valueOf`, `Objects.checkIndex` and its relatives and `requireNonNull` are
+  done at the call site, the method itself called for a cached box or a
+  failed check. A call site that sees many receiver classes finds a class's
+  method in two probes (interface calls over eight classes: 204 to 106 ms).
+  `RangeCheckCheck`, `BoxCheck` and `PolyCallCheck` check the results
+  against HotSpot's.
 - String and array basics. `String.charAt`, `length` and `isEmpty` are done at
   the call site (an index out of range still goes to the JDK's method, for
   its exception): a `charAt` loop went from 17.2 to 6.4 ns an iteration.

@@ -120,6 +120,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/codegen.clj` | turns one method's bytecode into a Scheme `define`, with basic blocks as `letrec` thunks and a typed compile-time stack |
 | `src/champaca/bytecode.clj` | decodes instructions, splits basic blocks, finds control flow and the loops array versioning works on |
 | `src/champaca/cgtext.clj` | the text codegen writes: forms, literals, descriptors, block labels and pc markers |
+| `src/champaca/intrinsics.clj` | the methods a call site does in line (`String.charAt`, range checks, boxing) and the runtime form for each |
 | `src/champaca/linkage.clj` | what an instruction names but can't be resolved, as code that throws where the JVM would |
 | `src/champaca/lambdas.clj` | lambda sites and bootstrap constants |
 | `src/champaca/main.clj` | the `java`-like launcher: reads the command line and runs the main class |
@@ -136,6 +137,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |
 | `resources/champaca/runtime.ss` | numbers, objects, arrays, exceptions, `Class` mirrors, lambdas, records |
+| `resources/champaca/inline.ss` | call-site forms for the JDK methods HotSpot intrinsifies: range checks, `requireNonNull`, boxing ([performance](performance.md#allocation-boxing-and-calls-that-see-many-classes)) |
 | `resources/champaca/strings.ss` | `java.lang.String` to and from Scheme strings, concatenation |
 | `resources/champaca/modules.ss` | which module and loader a class belongs to, and the texts that name them |
 | `resources/champaca/units.ss` | evaluating and compiling generated code, globals as their own labels, the cache's unit files |

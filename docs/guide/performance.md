@@ -355,3 +355,30 @@ A benchmark of plain string and array operations (2026-11-14, M1 Pro, jolt 0.8.2
 The loop itself costs about 2 ns an iteration here, which is most of what's left in the first three rows. A `byte[]` is a Scheme vector with one word per byte, so copying 1024 bytes moves 8 KB, and that sets the floor for the copy rows. `StringBuilder.append(String)` (73 ns), `append(int)` (99 ns), `substring` (171 ns) and `trim` (90 ns) didn't move: they are chains of small Java methods, and the cost is the calls.
 
 `StringOpsCheck` covers every index of Latin-1 and UTF-16 strings and the out-of-range messages, `ConcatCheck` numbers of every digit count next to every kind of text, and `ArrayMoveCheck` overlapping copies in both directions for each element kind.
+
+### Allocation, boxing and calls that see many classes
+
+The same kind of benchmark for the basics (calls, field access, `new`, boxing, the collections) on 2026-11-14 showed where the rest of a collection call goes.
+
+- **`new` called two library procedures.** An object is a record holding its class and a vector of slots copied from the class's template. The record's constructor had a protocol, which makes it a closure called for every allocation, and the template was copied with `vector-copy` by name. At jolt's optimize level a Chez library procedure called by name checks its arguments and isn't open-coded, where `car` or `vector-ref` is. `make-jobj` is now a macro over the record's own constructor and the copy is `#3%vector-copy`; array allocation uses `#3%make-vector` after its length check. That one change reaches everything that allocates: `substring`, `trim`, `StringBuilder`, every collection.
+- **Boxing.** `Integer.valueOf` and the other boxes' `valueOf` are done at the call site (`inline.ss`). A value in the box's cache still goes to the method, so two boxes of a small value are the same object. Any other is allocated in line with its value stored, which is all the constructors do. `Integer`'s cache can be widened by a property, so its upper bound is read from `IntegerCache.high` once that class has initialized.
+- **Range checks.** `Objects.checkIndex`, `checkFromToIndex`, `checkFromIndexSize`, the `Preconditions` methods under them and `Objects.requireNonNull` are tested in line. HotSpot intrinsifies the checks too. A failing test calls the method itself, so the exception and its message are the JDK's.
+- **A call site that sees many classes.** A site keeps the last receiver class with the procedure found for it. When another class arrived the lookup was a vtable probe, `top-level-value` (14 ns) and a probe of the not-yet-compiled stubs. Each class now keeps the procedures found for it by method key, compiled ones only, so a repeat is two probes. Interface calls over eight classes in turn went from 204 to 106 ms for four million calls.
+
+| Operation | Before | Now | HotSpot |
+|---|---|---|---|
+| `new` and a constructor | 12.5 ns | 7.6 ns | 0.2 ns |
+| box and unbox an `int` above 127 | 13.6 ns | 7.6 ns | 0.2 ns |
+| `ArrayList.get` | 13.7 ns | 11.9 ns | 0.7 ns |
+| `ArrayList.add` | 39.6 ns | 29.5 ns | 4.2 ns |
+| `HashMap.get` | 31.8 ns | 25.8 ns | 1.9 ns |
+| `HashMap.put` | 92.6 ns | 65.9 ns | 9.2 ns |
+| `substring` | 173.7 ns | 82.8 ns | 8.8 ns |
+| `trim` | 91.4 ns | 56.3 ns | 9.5 ns |
+| `StringBuilder.append(String)` | 74.0 ns | 46.1 ns | 5.3 ns |
+
+Each figure includes the benchmark's loop, about 2 ns an iteration. The string rows start from the numbers before the section above.
+
+What the benchmark showed and nothing here changes: entering a `try` block costs about 23 ns (a one-shot continuation, a handler pushed on Chez's handler stack and a `dynamic-wind`), and a `synchronized` block pays that plus the monitor, 43 ns against HotSpot's 10. A plain call costs 1.5 to 3 ns and a lambda call 7.
+
+`RangeCheckCheck` has every check in and out of range, directly and through the collections and strings built on them; `BoxCheck` the identity of cached and fresh boxes for each type; `PolyCallCheck` one site calling twelve classes, in order, reversed and interleaved.

@@ -21,6 +21,7 @@
   (:require [clojure.string :as str]
             [champaca.bytecode :refer [array-loops backward-ranges blocks decode load-ops store-ops successors]]
             [champaca.cgtext :refer [*inline-site* *method-tag* at jstring-lit-form label method-global num-lit parse-desc site static-global str-lit sx sym wide?]]
+            [champaca.intrinsics :refer [direct-form static-form]]
             [champaca.lambdas :refer [condy const-datum lambda-expr]]
             [champaca.linkage :refer [bad-class local-names missing-class missing-method refused-class resolve-bsm-args! resolve-site! resolve-type! wrong-kind]]))
 
@@ -327,14 +328,6 @@
 (defn- init-class! [e c pc]
   (when (not= c (:this-class e))
     (stmt! e (sx "jinit-ic" ((:ic! e)) (str "'" (sym c)) (site pc)))))
-
-(def ^:private string-intrinsics
-  "The java.lang.String methods a call site does in line (strings.ss): the
-  form takes the null-checked receiver, the arguments, and the method
-  itself, which it calls when the fast path doesn't apply."
-  {"java/lang/String.charAt(I)C" "jstring-char-at"
-   "java/lang/String.length()I" "jstring-length"
-   "java/lang/String.isEmpty()Z" "jstring-empty?"})
 
 (defn- callee
   "What a direct call names: the callee inlined into this method when it is a
@@ -698,9 +691,8 @@
     ((:check-virtual resolve) class name desc)
     ((:check-kind resolve) (if (= op :invokeinterface) :interface :virtual) class name desc)
     (if-let [decl ((:direct-target resolve) class name desc)]
-      (if-let [form (string-intrinsics (str decl "." name desc))]
-        (apply sx form (sx "nn-at" recv (site pc)) (concat argv [(at pc (method-global decl name desc))]))
-        (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv))
+      (or (direct-form (str decl "." name desc) (sx "nn-at" recv (site pc)) argv (at pc (method-global decl name desc)))
+          (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv))
       (if-let [pp (and (= op :invokevirtual) ((:package-private-decl resolve) class name desc))]
         (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! e)) recv (key) (str "'" (sym pp)) (site pc))) recv argv)
         (apply sx (at pc (sx "jvirt-ic" ((:ic! e)) recv (key) (site pc))) recv argv)))))
@@ -739,7 +731,8 @@
                (let [decl ((:resolve-method resolve) class name desc)]
                  ((:check-kind resolve) :static class name desc)
                  (init-class! e decl pc)
-                 (apply sx (at pc (callee e pc decl name desc)) argv)))]
+                 (or (static-form (str decl "." name desc) argv (at pc (method-global decl name desc)) (:ic! e) (site pc))
+                     (apply sx (at pc (callee e pc decl name desc)) argv))))]
     (cond (nil? call) nil
           (= ret "V") (stmt! e call)
           :else (push! e call (desc->t ret)))))
