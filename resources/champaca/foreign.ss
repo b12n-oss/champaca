@@ -166,29 +166,32 @@
     [(layout-is? l "java/lang/foreign/SequenceLayout")
      `(array ,((jvirt l "elementCount()J") l)
              ,(layout-ftype ((jvirt l "elementLayout()Ljava/lang/foreign/MemoryLayout;") l)))]
-    [(layout-is? l "java/lang/foreign/UnionLayout")
-     `(union ,@(let loop ([ms (layout-members l)] [i 0])
-                 (cond [(null? ms) '()]
-                       [(layout-is? (car ms) "java/lang/foreign/PaddingLayout")
-                        (cons `(,(string->symbol (format "f~a" i)) (array ,(layout-size (car ms)) unsigned-8))
-                              (loop (cdr ms) (fx+ i 1)))]
-                       [else (cons `(,(string->symbol (format "f~a" i)) ,(layout-ftype (car ms)))
-                                   (loop (cdr ms) (fx+ i 1)))])))]
-    [(layout-group? l)
-     `(struct
-        ,@(let loop ([ms (layout-members l)] [i 0])
-            (cond
-              [(null? ms) '()]
-              [(layout-is? (car ms) "java/lang/foreign/PaddingLayout") (loop (cdr ms) i)]
-              [else
-               (cons `(,(string->symbol (format "f~a" i)) ,(layout-ftype (car ms)))
-                     (loop (cdr ms) (fx+ i 1)))])))]
-    [else
-     (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
-       (case (string-ref d 0)
-         [(#\I) 'integer-32] [(#\J) 'integer-64] [(#\S) 'integer-16] [(#\B) 'integer-8]
-         [(#\C) 'unsigned-16] [(#\Z) 'unsigned-8] [(#\F) 'float] [(#\D) 'double]
-         [else 'uptr]))]))
+    [(layout-is? l "java/lang/foreign/UnionLayout") `(union ,@(union-ftype-fields l))]
+    [(layout-group? l) `(struct ,@(struct-ftype-fields l))]
+    [else (scalar-ftype l)]))
+(define (ftype-field-name i) (string->symbol (format "f~a" i)))
+;; a union's members as fields f0, f1, ...; padding as that many bytes
+(define (union-ftype-fields l)
+  (let loop ([ms (layout-members l)] [i 0])
+    (cond [(null? ms) '()]
+          [(layout-is? (car ms) "java/lang/foreign/PaddingLayout")
+           (cons `(,(ftype-field-name i) (array ,(layout-size (car ms)) unsigned-8))
+                 (loop (cdr ms) (fx+ i 1)))]
+          [else (cons `(,(ftype-field-name i) ,(layout-ftype (car ms)))
+                      (loop (cdr ms) (fx+ i 1)))])))
+;; a struct's members as fields f0, f1, ..., padding left out (Chez pads)
+(define (struct-ftype-fields l)
+  (let loop ([ms (layout-members l)] [i 0])
+    (cond [(null? ms) '()]
+          [(layout-is? (car ms) "java/lang/foreign/PaddingLayout") (loop (cdr ms) i)]
+          [else (cons `(,(ftype-field-name i) ,(layout-ftype (car ms)))
+                      (loop (cdr ms) (fx+ i 1)))])))
+(define (scalar-ftype l)
+  (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
+    (case (string-ref d 0)
+      [(#\I) 'integer-32] [(#\J) 'integer-64] [(#\S) 'integer-16] [(#\B) 'integer-8]
+      [(#\C) 'unsigned-16] [(#\Z) 'unsigned-8] [(#\F) 'float] [(#\D) 'double]
+      [else 'uptr])))
 
 (define ffi-ftypes (make-hashtable equal-hash equal?))
 ;; the name of an ftype for group layout l, defined on first use
@@ -244,25 +247,33 @@
 ;; a layout's scalar leaves as (kind size . offset), kind float, double or
 ;; other, with a union's members at one offset and duplicates dropped, as
 ;; Chez's filter-union drops them
-(define (layout-leaves l)
-  (let walk ([l l] [base 0])
-    (cond [(layout-is? l "java/lang/foreign/PaddingLayout") '()]
-          [(layout-is? l "java/lang/foreign/SequenceLayout")
-           (let ([e ((jvirt l "elementLayout()Ljava/lang/foreign/MemoryLayout;") l)])
-             (let loop ([k 0])
-               (if (= k ((jvirt l "elementCount()J") l))
-                   '()
-                   (append (walk e (+ base (* k (layout-size e)))) (loop (+ k 1))))))]
-          [(layout-is? l "java/lang/foreign/UnionLayout")
-           (fold-left (lambda (acc m) (append acc (remove-dups acc (walk m base)))) '() (layout-members l))]
-          [(layout-group? l)
-           (let loop ([ms (layout-members l)] [off base])
-             (if (null? ms)
-                 '()
-                 (append (walk (car ms) off) (loop (cdr ms) (+ off (layout-size (car ms)))))))]
-          [else (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
-                  (list (cons* (case (string-ref d 0) [(#\F) 'float] [(#\D) 'double] [else 'other])
-                               (layout-size l) base)))])))
+(define (layout-leaves l) (layout-leaves-at l 0))
+(define (layout-leaves-at l base)
+  (cond [(layout-is? l "java/lang/foreign/PaddingLayout") '()]
+        [(layout-is? l "java/lang/foreign/SequenceLayout") (sequence-leaves l base)]
+        [(layout-is? l "java/lang/foreign/UnionLayout") (union-leaves l base)]
+        [(layout-group? l) (struct-leaves l base)]
+        [else (scalar-leaf l base)]))
+;; each element's leaves, element k at base + k * its size
+(define (sequence-leaves l base)
+  (let ([e ((jvirt l "elementLayout()Ljava/lang/foreign/MemoryLayout;") l)])
+    (let loop ([k 0])
+      (if (= k ((jvirt l "elementCount()J") l))
+          '()
+          (append (layout-leaves-at e (+ base (* k (layout-size e)))) (loop (+ k 1)))))))
+;; every member's leaves at base, each leaf once
+(define (union-leaves l base)
+  (fold-left (lambda (acc m) (append acc (remove-dups acc (layout-leaves-at m base)))) '() (layout-members l)))
+;; each member's leaves after the members before it
+(define (struct-leaves l base)
+  (let loop ([ms (layout-members l)] [off base])
+    (if (null? ms)
+        '()
+        (append (layout-leaves-at (car ms) off) (loop (cdr ms) (+ off (layout-size (car ms))))))))
+(define (scalar-leaf l base)
+  (let ([d (mirror->desc ((jvirt l "carrier()Ljava/lang/Class;") l))])
+    (list (cons* (case (string-ref d 0) [(#\F) 'float] [(#\D) 'double] [else 'other])
+                 (layout-size l) base))))
 (define (remove-dups seen xs) (filter (lambda (x) (not (member x seen))) xs))
 
 (define (hfa-of l)   ; an HFA's member kind, float or double, or #f
