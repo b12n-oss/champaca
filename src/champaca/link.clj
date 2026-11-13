@@ -583,15 +583,16 @@
          (if declared-classes (apply cgt/sx (map cgt/str-lit declared-classes)) "#f")))
 
 (defn- register-form
-  "register-class! for the class: name, super, interfaces, template, vtable
-  delta, layout, flags, then the declared members in classfile order for
-  reflection (methods, fields, then the class's own meta)."
+  "register-class! for the class: name, super, interfaces, template, the
+  vtable delta and the field layout as one pair, flags, then the declared
+  members in classfile order for reflection (methods, fields, then the
+  class's own meta)."
   [{:keys [name super interfaces template layout fields flags reflection]} vtable methods]
   (cgt/sx "register-class!" (cgt/str-lit name) (if super (cgt/str-lit super) "#f")
          (str "'" (apply cgt/sx (map cgt/str-lit interfaces)))
          (apply cgt/sx "vector" template)
-         (vtable-delta-text super vtable)
-         (str "'" (apply cgt/sx (for [[k i] (sort layout)] (str "(" (cgt/str-lit k) " . " i ")"))))
+         (cgt/sx "cons" (vtable-delta-text super vtable)
+                 (str "'" (apply cgt/sx (for [[k i] (sort layout)] (str "(" (cgt/str-lit k) " . " i ")")))))
          (str flags)
          (str "'" (cgt/sx (apply cgt/sx (map method-meta-text methods))
                          (apply cgt/sx (map field-meta-text fields))

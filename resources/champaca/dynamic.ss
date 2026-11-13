@@ -1129,7 +1129,7 @@
   (let ([m (guard (e [#t (for-each (lambda (m) (hashtable-delete! natives (string-append name "." (car m) (cadr m))))
                                    natives-defined)
                          (raise e)])
-             (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) #f #f #f))])
+             (define-class! (app-loader) (jstring name) bytes 0 (vector-length bytes) plain-definition #f))])
     (hashtable-set! defined-supers name (cons super ifaces))
     m))
 

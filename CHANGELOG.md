@@ -362,6 +362,12 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- The Scheme runtime's last critical jolt-metrics findings are gone, so
+  `jolt metrics:gate` holds `resources/` to none too. The four hot paths
+  among them dispatch over `syntax-rules` steps, which expand in place, so
+  they lost no speed (concatenation, unaligned buffer access, checked
+  arraycopy and segment copies timed against main); three functions over
+  the parameter limit take one argument fewer.
 - CI runs `jolt metrics:gate` on every push, and `ci ok` needs it: a
   critical jolt-metrics finding outside `resources/`, or unused code that
   `ci/metrics-allow.edn` doesn't list with its reason, fails the run, as
