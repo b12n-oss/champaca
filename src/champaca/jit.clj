@@ -213,6 +213,44 @@
   [d mapping]
   (str/replace d #"L([^;]+);" (fn [[m n]] (if-let [r (get mapping n)] (str "L" r ";") m))))
 
+(defn- referenced-class-names
+  "Every class name p refers to besides cname itself: its class entries,
+  member references' classes, handler types, and the classes in the
+  descriptors type-desc-entry? names."
+  [cname p]
+  (->> (vals (:cp p)) (keep #(or (when (= :class (:tag %)) (:name %)) (:class %)))
+       (concat (mapcat #(map :type (:handlers (:code %))) (:methods p)))
+       (concat (mapcat #(desc-class-names (:desc %)) (filter type-desc-entry? (vals (:cp p)))))
+       (remove #(or (nil? %) (= % cname))) distinct))
+
+(defn- loader-mapping
+  "The names cname's defining loader resolves to other classes, as {name
+  internal-name}: asked once (loaders.ss loader-resolve-names) and kept until
+  a loader's map changes (loader-map-stamp)."
+  [cname p]
+  (let [stamp (s/call "loader-map-stamp-now")
+        [st mapping] (get-in @state [:loader-maps cname])]
+    (if (= st stamp)
+      mapping
+      (let [names (referenced-class-names cname p)
+            [_ & pairs] (str/split-lines (s/call "loader-resolve-names" cname (str/join "\n" names)))
+            m (into {} (map #(str/split % #"\t")) pairs)]
+        (swap! state assoc-in [:loader-maps cname] [stamp m])
+        m))))
+
+(defn- remap-type-descs
+  "Constant pool cp with each type descriptor (type-desc-entry?) mapped."
+  [cp mapping]
+  (into {} (map (fn [[i e]] [i (cond-> e (type-desc-entry? e) (update :desc remap-desc mapping))])) cp))
+
+(defn- apply-loader-mapping
+  "p with the class names and type descriptors mapping changes."
+  [p mapping]
+  (if (empty? mapping)
+    p
+    (-> (remap-class-names p #(get mapping % %))
+        (update :cp remap-type-descs mapping))))
+
 (defn- through-defining-loader
   "The parsed class p of cname with the class names it refers to as its
   defining loader resolves them (loaders.ss loader-resolve-name), when a loader
@@ -223,22 +261,7 @@
   [cname info p]
   (if (not= :defined (:origin info))
     p
-    (let [stamp (s/call "loader-map-stamp-now")
-          [st mapping] (get-in @state [:loader-maps cname])
-          mapping (if (= st stamp)
-                    mapping
-                    (let [names (->> (vals (:cp p)) (keep #(or (when (= :class (:tag %)) (:name %)) (:class %)))
-                                     (concat (mapcat #(map :type (:handlers (:code %))) (:methods p)))
-                                     (concat (mapcat #(desc-class-names (:desc %)) (filter type-desc-entry? (vals (:cp p)))))
-                                     (remove #(or (nil? %) (= % cname))) distinct)
-                          [_ & pairs] (str/split-lines (s/call "loader-resolve-names" cname (str/join "\n" names)))
-                          m (into {} (map #(str/split % #"\t")) pairs)]
-                      (swap! state assoc-in [:loader-maps cname] [stamp m])
-                      m))]
-      (if (empty? mapping)
-        p
-        (-> (remap-class-names p #(get mapping % %))
-            (update :cp (fn [cp] (into {} (map (fn [[i e]] [i (if (type-desc-entry? e) (update e :desc remap-desc mapping) e)])) cp))))))))
+    (apply-loader-mapping p (loader-mapping cname p))))
 
 (defn- compile-method!* [cname mname desc]
   (let [p (through-defining-loader cname (class-info cname) (parsed cname))
@@ -383,6 +406,16 @@
     [(or source "") line (or module "")
      (if (or (contains? hidden (str mname desc)) (str/includes? cname "/0x")) 1 0)]))
 
+(defn- parsed-answer
+  "classpath-class-answer's answer for the bytes bs of cname's class file."
+  [cname bs]
+  (try (str "ok " (:name (cf/parse bs)))
+       (catch Exception e
+         (let [{:keys [class-format named class-version]} (ex-data e)]
+           (cond class-format (str "format " (if named (str class-format " " cname) class-format))
+                 class-version (str "version " (class-version cname))
+                 :else (str "error " (ex-message e)))))))
+
 (defn classpath-class-answer
   "The class file <cname>.class on the class path, found as the JDK's
   URLClassPath finds it (a directory through the file system, so a//b is
@@ -395,14 +428,7 @@
   so no Clojure exception crosses the native."
   [cname parse?]
   (if-let [bs (user-resource-bytes (str cname ".class"))]
-    (if-not parse?
-      "found"
-      (try (str "ok " (:name (cf/parse bs)))
-           (catch Exception e
-             (let [{:keys [class-format named class-version]} (ex-data e)]
-               (cond class-format (str "format " (if named (str class-format " " cname) class-format))
-                     class-version (str "version " (class-version cname))
-                     :else (str "error " (ex-message e)))))))
+    (if parse? (parsed-answer cname bs) "found")
     false))
 
 (defn constant-value

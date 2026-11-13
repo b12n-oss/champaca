@@ -393,6 +393,40 @@
   [s]
   (apply str (map #(let [c (int %)] (if (<= 65 c 90) (char (+ c 32)) %)) s)))
 
+(defn- manifest-utf8 [s] (String. (.getBytes ^String s "ISO-8859-1") "UTF-8"))
+
+(defn- manifest-lines
+  "A manifest's lines with continuations joined: a line starting with a space
+  continues the one before, joined as bytes (ISO-8859-1) so a character split
+  across the wrap survives. The piece after the last line break is empty, or
+  an unterminated line, and is dropped."
+  [bs]
+  (reduce (fn [acc l]
+            (if (and (str/starts-with? l " ") (seq acc))
+              (conj (pop acc) (str (peek acc) (subs l 1)))
+              (conj acc l)))
+          [] (butlast (str/split (String. bs "ISO-8859-1") #"\r\n|\r|\n" -1))))
+
+(defn- manifest-header
+  "[lower-case key, value, key as written] of a header line; one without
+  \": \" is the JDK's invalid header."
+  [l]
+  (let [i (or (str/index-of l ": ")
+              (throw (ex-info (str "invalid header: " (manifest-utf8 l)) {})))]
+    [(ascii-lower (subs l 0 i)) (manifest-utf8 (subs l (+ i 2))) (manifest-utf8 (subs l 0 i))]))
+
+(defn- manifest-step
+  "manifest-sections' state after line l: a blank line opens a section, the
+  first header after it must be its Name, any other header goes in the
+  current section."
+  [{:keys [sec opening?] :as st} l]
+  (if (str/blank? l)
+    (assoc st :opening? true)
+    (let [[k v raw-k] (manifest-header l)]
+      (cond (not opening?) (assoc-in st [:out sec k] v)
+            (= k "name") (assoc st :sec v :opening? false)
+            :else (throw (ex-info (str "a section starts with " raw-k ", not Name") {}))))))
+
 (defn manifest-sections
   "A manifest's attributes by section, as java.util.jar.Manifest reads
   them: the main one under nil, a named one under its Name, keys in lower
@@ -402,26 +436,18 @@
   \": \" or a section not opened by Name is the format error the JDK refuses,
   thrown here."
   [bs]
-  (let [text (String. bs "ISO-8859-1")
-        ;; the piece after the last line break is empty, or unterminated
-        lines (butlast (str/split text #"\r\n|\r|\n" -1))
-        lines (reduce (fn [acc l]
-                        (if (and (str/starts-with? l " ") (seq acc))
-                          (conj (pop acc) (str (peek acc) (subs l 1)))
-                          (conj acc l)))
-                      [] lines)
-        utf8 (fn [s] (String. (.getBytes s "ISO-8859-1") "UTF-8"))]
-    (loop [ls lines sec nil opening? false out {}]
-      (if-let [l (first ls)]
-        (if (str/blank? l)
-          (recur (rest ls) sec true out)
-          (let [i (or (str/index-of l ": ")
-                      (throw (ex-info (str "invalid header: " (utf8 l)) {})))
-                k (ascii-lower (subs l 0 i)) v (utf8 (subs l (+ i 2)))]
-            (cond (not opening?) (recur (rest ls) sec false (assoc-in out [sec k] v))
-                  (= k "name") (recur (rest ls) v false out)
-                  :else (throw (ex-info (str "a section starts with " (utf8 (subs l 0 i)) ", not Name") {})))))
-        out))))
+  (:out (reduce manifest-step {:sec nil :opening? false :out {}} (manifest-lines bs))))
+
+(defn- read-jar-manifest
+  "Jar entry's manifest parsed, nil without one, or nil with a line on stderr
+  when the JDK would refuse it."
+  [entry]
+  (when-let [bs (read-entry (jar entry) "META-INF/MANIFEST.MF")]
+    (try (manifest-sections bs)
+         (catch Exception e
+           (binding [*out* *err*]
+             (println (str "champaca: ignoring the invalid manifest of " entry ": " (ex-message e))))
+           nil))))
 
 (defn jar-manifest
   "entry's parsed manifest, read once per jar; nil for a directory, a jar
@@ -430,13 +456,7 @@
   (let [cached (get-in @state [:manifests entry] ::unread)]
     (if (not= cached ::unread)
       cached
-      (let [m (when (jar-entry? entry)
-                (when-let [bs (read-entry (jar entry) "META-INF/MANIFEST.MF")]
-                  (try (manifest-sections bs)
-                       (catch Exception e
-                         (binding [*out* *err*]
-                           (println (str "champaca: ignoring the invalid manifest of " entry ": " (ex-message e))))
-                         nil))))]
+      (let [m (when (jar-entry? entry) (read-jar-manifest entry))]
         (swap! state assoc-in [:manifests entry] m)
         m))))
 
@@ -564,6 +584,14 @@
                        (if (str/ends-with? p "/") (.isDirectory f) (.isFile f)))]
         (str f)))))
 
+(defn- jar-opens? [e] (try (jar e) true (catch Exception _ false)))
+
+(defn- listed-class-path
+  "The Class-Path entries jar e's manifest lists; a manifest that can't be
+  read lists none, or makes e ::unreadable when a manifest named e."
+  [e manifest?]
+  (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable []))))
+
 (defn- manifest-entries
   "The Class-Path entries class path entry e's manifest names, nil for a
   directory, or ::unreadable for a jar that can't be opened, which is left
@@ -571,10 +599,9 @@
   jar a manifest named (manifest?) whose own manifest can't be read is left
   out too, as the JDK skips it."
   [e manifest?]
-  (when (jar-entry? e)
-    (if (try (jar e) true (catch Exception _ false))
-      (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable [])))
-      ::unreadable)))
+  (cond (not (jar-entry? e)) nil
+        (not (jar-opens? e)) ::unreadable
+        :else (listed-class-path e manifest?)))
 
 (defn with-manifest-class-paths
   "classpath with each jar's manifest Class-Path entries right after it,
