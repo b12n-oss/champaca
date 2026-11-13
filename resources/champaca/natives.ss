@@ -50,13 +50,20 @@
 ;; run before a thread other than main ends the process (System.exit or
 ;; Runtime.halt there, as ABCL's interpreter thread does): champaca.main saves
 ;; the startup cache as main's return does, so such a program comes back warm.
-;; A save that fails doesn't stop the exit.
+;; A save that fails doesn't stop the exit; it says so on stderr.
 (define off-main-exit-hook #f)
 (define (set-off-main-exit-hook! f) (set! off-main-exit-hook f))
 (defnative "java/lang/Shutdown.halt0(I)V" (status)
   (if (eq? (self) main-state)
       (raise (make-java-halt status))
-      (begin (when off-main-exit-hook (guard (e [#t #f]) (off-main-exit-hook)))
+      (begin (when off-main-exit-hook
+               ;; champaca's work, so past the Java stack bound (call-unbounded):
+               ;; a save under the 1 MB launcher bound overflowed on ABCL
+               (guard (e [#t (let ([p (console-error-port)])
+                               (display "champaca: couldn't save the startup cache at exit: " p)
+                               (display (if (jobj? e) "a Java exception" (condition-text e)) p)
+                               (newline p))])
+                 (call-unbounded off-main-exit-hook)))
              (exit-process status))))
 (defnative "java/lang/System.currentTimeMillis()J" () (quotient (now-nanos) 1000000))
 (defnative "java/lang/System.nanoTime()J" ()
