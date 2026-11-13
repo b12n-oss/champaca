@@ -11,6 +11,7 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 - [running-java-programs](running-java-programs.md): running a compiled Java `main` straight from the command line, and Spring Boot and Quarkus applications in their packagings.
 - [jvm-languages](jvm-languages.md): Clojure, Groovy, Scala, Kawa, ABCL and Kotlin on champaca, their compilers included: the command for each, what's been checked against HotSpot, and how fast they start.
 - [checking-a-port](checking-a-port.md): `champaca.portcheck`, which runs a jolt function and the Java method it was written to replace on the same generated inputs and reports where they differ.
+- [porting-a-class](porting-a-class.md): `jolt port`, which writes a class's static methods out as jolt functions that need no JDK, checks each against its method, and says why it left the rest.
 - [app-bundles](app-bundles.md): shipping a Java or jolt program as a directory that runs with no JDK installed, its cache warmed at build time and moving with it.
 
 ## When it's slow or broken

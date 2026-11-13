@@ -329,6 +329,13 @@
   (when (not= c (:this-class e))
     (stmt! e (sx "jinit-ic" ((:ic! e)) (str "'" (sym c)) (site pc)))))
 
+(def ^:dynamic *plain*
+  "True to translate a method as written: no callee compiled into it, no
+  second copy of its array loops, and every call a call (none done in line
+  at the call site). The port tool reads this form (jit.clj method-text);
+  what runs is never translated this way."
+  false)
+
 (defn- callee
   "What a direct call names: the callee inlined into this method when it is a
   small leaf (compile-method), else its top-level definition."
@@ -691,7 +698,8 @@
     ((:check-virtual resolve) class name desc)
     ((:check-kind resolve) (if (= op :invokeinterface) :interface :virtual) class name desc)
     (if-let [decl ((:direct-target resolve) class name desc)]
-      (or (direct-form (str decl "." name desc) (sx "nn-at" recv (site pc)) argv (at pc (method-global decl name desc)))
+      (or (and (not *plain*)
+               (direct-form (str decl "." name desc) (sx "nn-at" recv (site pc)) argv (at pc (method-global decl name desc))))
           (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv))
       (if-let [pp (and (= op :invokevirtual) ((:package-private-decl resolve) class name desc))]
         (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! e)) recv (key) (str "'" (sym pp)) (site pc))) recv argv)
@@ -731,7 +739,8 @@
                (let [decl ((:resolve-method resolve) class name desc)]
                  ((:check-kind resolve) :static class name desc)
                  (init-class! e decl pc)
-                 (or (static-form (str decl "." name desc) argv (at pc (method-global decl name desc)) (:ic! e) (site pc))
+                 (or (and (not *plain*)
+                          (static-form (str decl "." name desc) argv (at pc (method-global decl name desc)) (:ic! e) (site pc)))
                      (apply sx (at pc (callee e pc decl name desc)) argv))))]
     (cond (nil? call) nil
           (= ret "V") (stmt! e call)
@@ -763,7 +772,9 @@
         conv (map (fn [t v]
                     (case t
                       ;; an int or a long as the number: jconcat writes its digits
-                      ("I" "S" "B" "J") v
+                      ;; (plain keeps number->string, which tells the port tool the
+                      ;; argument is a number and not a reference)
+                      ("I" "S" "B" "J") (if *plain* (sx "number->string" v) v)
                       "F" (sx "java-float->string" v)
                       "D" (sx "jdouble->string" v)
                       "C" (sx "list" v)
@@ -1109,7 +1120,7 @@
         bt? (System/getenv "CHAMPACA_BT")
         caller {:cls cls :resolve resolve :ic! ic! :tag tag :defs defs}]
     (fn [decl name desc]
-      (when-not bt?
+      (when-not (or bt? *plain*)
         (let [ctag (str decl "." name desc)
               key [ctag (first *inline-site*)]]
           (if (contains? @inlined key)
@@ -1236,7 +1247,7 @@
      :live (live-locals insns param-set boxed)
      ;; array loops to version (handler-free methods of a size whose
      ;; blocks' dominators are cheap to find)
-     :loops (or (when (and (empty? handlers) (<= (count code) ic-vector-limit))
+     :loops (or (when (and (not *plain*) (empty? handlers) (<= (count code) ic-vector-limit))
                   (array-loops blks))
                 {})
      :entered (volatile! (sorted-set))}))

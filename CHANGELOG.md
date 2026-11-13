@@ -63,6 +63,15 @@ The first public version. Champaca is still experimental: the
   site tasks, and `jolt warm`.
 - Guides under `docs/guide/` (`jvm-languages` for Clojure, Groovy, Scala, Kawa, ABCL and Kotlin), `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
+- **`jolt port`** and `champaca.port`: a class's static methods written
+  out as jolt functions that use jolt's own `String`, `StringBuilder`,
+  arrays and `clojure.core`, so they need neither champaca nor a JDK. A
+  loop becomes `loop` and `recur`, int arithmetic the unchecked int
+  operations, and each JDK call goes through a rule, which may carry a
+  condition. A method with anything no rule covers is left with the
+  reason, and each port is checked against its method by
+  `champaca.portcheck`. On commons-lang 2.4's `StringUtils` it ports 89 of
+  160 static methods, 83 of them checked and agreeing. `examples/port.clj`.
 - **`champaca.portcheck`**, a check for a jolt function written to replace a
   Java static method. It runs both on the same generated inputs (the Java
   side by champaca, from the class file) and compares the result, the

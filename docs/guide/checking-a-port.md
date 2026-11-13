@@ -53,14 +53,14 @@ Exception messages aren't compared. Jolt's wording for a null receiver differs f
 | Spec | Values | Options |
 |---|---|---|
 | `:int` | a third random 32-bit values, a third edge values (powers of two, the limits and their neighbours), a third from `0 1 -1 Integer.MAX_VALUE Integer.MIN_VALUE` | `:range [lo hi]` for values in a range only |
-| `:long` | the same, with the 64-bit limits added | |
+| `:long` | the same, with the 64-bit limits added | `:range [lo hi]` |
 | `:boolean` | `true` or `false` | |
 | `:char` | one character | `:chars`, as for `:string` |
 | `:string` | up to eight characters | `:chars` `:ascii`, `:latin1`, `:bmp` (the default) or `:any`; `:nil? true` to pass `null` now and then |
 | `:ints` | an `int[]` of up to six values | |
 | `:strings` | a `java.util.List` of up to four strings | `:of`, a `:string` spec for the elements |
 
-`:runs` sets the number of inputs (300 if left out) and `:seed` the generator's seed (84). The same seed gives the same inputs on every machine. `float` and `double` parameters aren't supported yet.
+`:runs` sets the number of inputs (300 if left out) and `:seed` the generator's seed (84). `:desc`, the method's descriptor such as `"([I)I"`, picks one overload exactly and reaches a private method; without it the method is found by name and arguments, which fails when two overloads both accept a null. The same seed gives the same inputs on every machine. `float` and `double` parameters aren't supported yet.
 
 The sharp values are drawn that often for a reason. The first generator missed a seeded bug that shows only for `Integer.MIN_VALUE / -1`, because 300 inputs rarely paired those two numbers.
 

@@ -17,6 +17,7 @@ jolt linux                                              # jolt test and jolt lib
                                                       # (CHAMPACA_LINUX_RUN='BATTERY_MODES=bt jolt battery' runs that instead of jolt test and jolt libs; CI runs the battery's modes this way)
 jolt examples                                           # list the examples/*.clj test files
 jolt example interop                                    # run one file's tests (builds target/lib.jar first if it needs to)
+jolt port target/lib.jar champaca.lib.PortSample       # a class's static methods as jolt functions, each checked against the method (PORT_RUNS=300)
 jolt bench:port                                         # each test/jar PortSample method timed on HotSpot, champaca and as its jolt port (examples/portcheck.clj), ns a call
 jolt heap target/classes Hello                          # where the memory goes: the live heap by type after Hello (roots or java for the other views)
 jolt prof target/classes Streams                        # where the time goes: the hottest Java frames of a run, sampled (PROF_US=500 for a finer interval)

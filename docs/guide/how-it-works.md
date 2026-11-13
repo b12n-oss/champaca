@@ -121,6 +121,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/bytecode.clj` | decodes instructions, splits basic blocks, finds control flow and the loops array versioning works on |
 | `src/champaca/cgtext.clj` | the text codegen writes: forms, literals, descriptors, block labels and pc markers |
 | `src/champaca/intrinsics.clj` | the methods a call site does in line (`String.charAt`, range checks, boxing) and the runtime form for each |
+| `src/champaca/port.clj` | static methods written out as jolt functions from their structured form ([porting-a-class](porting-a-class.md)); `resources/champaca/port.ss` hands it that form as data |
 | `src/champaca/linkage.clj` | what an instruction names but can't be resolved, as code that throws where the JVM would |
 | `src/champaca/lambdas.clj` | lambda sites and bootstrap constants |
 | `src/champaca/main.clj` | the `java`-like launcher: reads the command line and runs the main class |

@@ -53,6 +53,18 @@ public class PortSample {
         for (int i = 0; i < s.length(); i++) h = 31 * h + s.charAt(i);
         return h;
     }
+    /** A swap: both locals change at once. */
+    public static int span(int start, int end) {
+        if (start > end) { int t = start; start = end; end = t; }
+        return end - start;
+    }
+    /** Calls two other methods of the class. */
+    public static int gcdOfSpans(int a, int b, int c) {
+        return gcd(span(a, b), span(b, c));
+    }
+    /** Overloads: the functions are named by their parameter types. */
+    public static boolean within(int x, int hi) { return within(x, 0, hi); }
+    public static boolean within(int x, int lo, int hi) { return x >= lo && x < hi; }
     public static String joinTrim(List<String> parts, String sep) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < parts.size(); i++) {

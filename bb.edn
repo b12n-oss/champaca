@@ -100,7 +100,8 @@
                          ["preview" "class files compiled with --enable-preview, from jolt"]
                          ["vector" "the Vector API, with :add-modules, from jolt"]
                          ["upcalls" "C calling jolt fns through upcall stubs"]
-                         ["portcheck" "jolt functions checked against the Java methods they stand for"]])
+                         ["portcheck" "jolt functions checked against the Java methods they stand for"]
+                         ["port" "static methods written out as jolt functions, and checked"]])
           ;; test/jar packed into target/lib.jar, which jars, fields,
           ;; serialization and classes put on their classpath
           (defn lib-jar! []
@@ -182,7 +183,7 @@
                             listed (subs text start (str/index-of text "]" start))
                             unlisted (->> (fs/glob "src/champaca" "*.clj")
                                           (map (fn [f] (str (fs/file-name f))))
-                                          (remove (fn [n] (contains? (set ["api.clj" "npe.clj" "portcheck.clj"]) n)))
+                                          (remove (fn [n] (contains? (set ["api.clj" "npe.clj" "portcheck.clj" "port.clj"]) n)))
                                           (remove (fn [n] (str/includes? listed (str "\"champaca/" n "\""))))
                                           sort)]
                         (when (seq unlisted)
@@ -1264,6 +1265,10 @@
   bench {:doc "Upstream OpenLDK's startup benchmarks: build and time Spring Boot or Quarkus on HotSpot and through champaca (jolt bench spring-boot [build|bench|all]); see bench/README.md"
          :task (do (load-file "bench/bench.clj")
                    ((resolve (symbol "bench" "main")) (jolt-bin) *command-line-args*))}
+  port {:doc "A class's static methods as jolt functions, each checked against the method (jolt port <classpath> <Class>; champaca.port, tools/port.clj; PORT_RUNS=300 inputs a check)"
+        :task (let [args *command-line-args*]
+                (when (< (count args) 2) (println "usage: jolt port <classpath> <Class>") (System/exit 2))
+                (System/exit (:exit (apply shell {:continue true} (jolt-bin) "-M" "tools/port.clj" args))))}
   bench:port {:doc "Time each test/jar PortSample method four ways, ns a call: HotSpot, champaca, champaca with CHAMPACA_STRUCTURED=1, and the hand translation in examples/portcheck.clj on jolt (bench/port.clj). Prints a table; champaca's columns are from a second, warm run"
               :task (let [_ (when (lib-jar-stale?) (lib-jar!))
                           rows (fn [out] (into {} (keep (fn [l] (let [[n v] (str/split l (re-pattern " "))]

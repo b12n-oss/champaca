@@ -13,7 +13,8 @@
 
   Agreement is on the inputs tried. It shows nothing about the ones that
   weren't, so a report names how many ran and from which seed."
-  (:require [champaca.api :as ldk]))
+  (:require [champaca.api :as ldk]
+            [clojure.string :as str]))
 
 ;; --- a generator that gives the same inputs everywhere --------------------------
 ;; java.util.Random's recurrence on 48 bits, kept in a long.
@@ -71,7 +72,7 @@
   (let [{:keys [type] :as spec} (if (keyword? spec) {:type spec} spec)]
     (case type
       :int (gen-int r spec)
-      :long (if (zero? (below r 3)) (gen-int r spec) (pick r long-edges))
+      :long (if (or (:range spec) (zero? (below r 3))) (gen-int r spec) (pick r long-edges))
       :boolean (zero? (below r 2))
       :char (first (str (pick r (char-pools (:chars spec :bmp)))))
       :string (gen-string r spec)
@@ -137,14 +138,23 @@
   kept, and the check stops there.
 
     (check {:name \"sumEven\" :class \"champaca.lib.PortSample\" :method \"sumEven\"
-            :args [:ints] :f sum-even})"
-  [{:keys [name class method args f runs seed] :or {runs 300 seed 84}}]
-  (let [r (rng seed)]
+            :args [:ints] :f sum-even})
+
+  :desc, the method's descriptor (\"([I)I\"), picks one overload exactly and
+  reaches a private method; without it the method is found by name and
+  arguments, which fails when two overloads both take a null."
+  [{:keys [name class method desc args f runs seed] :or {runs 300 seed 84}}]
+  (let [r (rng seed)
+        ;; by descriptor when one is given: the one overload, private or not,
+        ;; where a call by name can't choose between two that take null
+        call (if desc
+               (let [cname (str/replace class "." "/")] #(apply ldk/call-static cname method desc %&))
+               #(apply ldk/invoke-static class method %&))]
     (loop [i 0 bad []]
       (if (or (= i runs) (= 3 (count bad)))
         {:name name :runs i :seed seed :mismatches bad}
         (let [input (mapv #(gen r %) args)
-              java (observe #(apply ldk/invoke-static class method %&) args
+              java (observe call args
                             (map java-arg args input) #(plain (ldk/->clj %)) java-throw-class)
               jolt (observe f args (map jolt-arg args input) plain jolt-throw-class)]
           (recur (inc i) (if (same? java jolt) bad (conj bad {:at (inc i) :input input :java java :jolt jolt}))))))))

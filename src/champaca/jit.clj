@@ -276,6 +276,18 @@
           throws? (report-throws cname mname desc text)]
       (compile-text! cname info text origin [cname (str mname desc)] throws?))))
 
+(defn method-text
+  "The Scheme text the translator writes for a method, in its plain form
+  (cg/*plain*), without compiling it or touching the cache: what the port
+  tool starts from. nil when the class has no such method with code."
+  [cname mname desc]
+  (thaw! cname)
+  (let [p (through-defining-loader cname (class-info cname) (parsed cname))
+        m (first (filter #(and (= mname (:name %)) (= desc (:desc %)) (:code %)) (:methods p)))]
+    (when m
+      (binding [cg/*plain* true *reads* nil]
+        (cg/compile-method p m resolver)))))
+
 (defn jit! [cname mname desc]
   (let [info (thaw! cname)
         unit (get (:cached-methods info) (str mname desc))
