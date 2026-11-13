@@ -258,6 +258,12 @@ jobs:
         run: |
           case ",$BATTERY_MODES," in *,libs,*) jolt libs:fetch ;; esac
           jolt battery
+      # the foreign calls Chez 10.4.1 misplaces, made for real: the battery's
+      # pinned jolt is a source build without jolt's Chez patches, so it
+      # refuses them, while the release binary setup-jolt put on PATH has them
+      - name: foreign calls on jolt's release binary
+        if: matrix.platform == 'macos'
+        run: JOLT="$(command -v jolt)" jolt ffi:release
 
       # jolt battery keeps each mode's output in target/battery/<tip>-<mode>.log,
       # and a program that times out leaves target/hangs/<program>-<ms>/ with
