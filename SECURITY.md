@@ -4,13 +4,16 @@ Please don't report a security problem in a public issue. Use GitHub's private v
 
 ## What champaca is, and isn't
 
-Champaca runs a Java program inside a jolt process. It isn't a sandbox. A program run through it can do what it could do on HotSpot: read and write files, open sockets, start processes, and call native code through `java.lang.foreign` ([compatibility](docs/guide/compatibility.md)). Run only programs and libraries you would run on a JVM.
+Champaca runs a Java program inside a jolt process. It isn't a sandbox. A program run through it can do what it could do on HotSpot: read and write files, open sockets, start processes, and call native code through `java.lang.foreign` ([compatibility](docs/guide/compatibility.md)).
 
-So a program doing something harmful because it was written to isn't a champaca vulnerability. These are:
+It also trusts the class files it runs more than HotSpot does. Champaca doesn't verify bytecode ([limitations](docs/guide/limitations.md)), and its generated code uses unchecked arithmetic on values the bytecode says are ints ([performance](docs/guide/performance.md)). That holds for what a compiler writes. Nothing checks it for a hand-made class file, which can do things HotSpot would refuse with a `VerifyError`, with results that aren't defined. Treat every class and jar you run as code you trust completely, as you would a native library.
 
-- champaca letting a program do something HotSpot would refuse it, such as a module boundary, an access check or a bounds check that doesn't hold;
-- a class file, jar or bundle that champaca only reads (to load, cache or inspect it) making champaca itself misbehave in a way that crosses one of the boundaries below;
-- anything below exposing more than it should.
+So neither of these is a champaca vulnerability: a program doing something harmful because it was written to, and a crafted class file misbehaving when it's run. These are:
+
+- champaca running code from a file it was only meant to read, such as a jar on the class path whose classes the program never loads, or a cache entry that belongs to another program;
+- anything in the next section exposing more than it says.
+
+A correctness gap, where champaca lets an ordinary compiled program do what HotSpot would refuse (an access check or a module boundary that doesn't hold), is a bug worth a normal issue.
 
 ## What to keep in mind
 
