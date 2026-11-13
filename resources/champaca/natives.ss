@@ -322,10 +322,14 @@
                          (slashes->dots (plain-class-name n))))])
     (jslot-set! this (jfield-index "java/lang/Class" "name") s)
     s))
+;; both go through the answers each class keeps (runtime.ss
+;; class-instance-of?): a class's name is one string object for its life, so
+;; it serves as the key a site's literal is there
 (defnative "java/lang/Class.isInstance(Ljava/lang/Object;)Z" (this x)
-  (if (jinstance? x (jclass-cname (mirror-class this))) 1 0))
+  (let ([target (jclass-cname (mirror-class this))])
+    (if (if (jobj? x) (class-instance-of? (jobj-cls x) target) (jinstance? x target)) 1 0)))
 (defnative "java/lang/Class.isAssignableFrom(Ljava/lang/Class;)Z" (this other)
-  (if (class-assignable? (jclass-cname (mirror-class other)) (jclass-cname (mirror-class this))) 1 0))
+  (if (class-instance-of? (mirror-class other) (jclass-cname (mirror-class this))) 1 0))
 ;; the element of an array descriptor given as a binary name: "[[Lp.Foo;" ->
 ;; "p.Foo", a primitive element -> 'prim, a malformed name ("[", "[[", "[X",
 ;; "[LFoo") -> #f, not found as on the JVM

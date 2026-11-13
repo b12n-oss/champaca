@@ -32,4 +32,61 @@ cast 1 int[]: CCE class [I cannot be cast to class InstanceMemoCheck$Counted
 cast 1 null: null passes
 cast 1 ArrayList: CCE class java.util.ArrayList cannot be cast to class InstanceMemoCheck$Counted
 reversed: ArrayList=--------L null=--------- int[]=--------L A[]=------OQL Seqable[]=------OQL Object[]=------O-L Integer=-----P--- String=-----P--- G=-----P--- F=CMSB----- E=CM-BA---- D=---B----- C=C--B----- B=-MSB----- A=CM-BA----
+isInstance 0 Counted: A C E F
+isInstance 0 Marker: A B E F
+isInstance 0 Base: A B C D E F
+isInstance 0 A: A E
+isInstance 0 Object: A B C D E F G String Integer Object[] Seqable[] A[] int[] ArrayList
+isInstance 0 Comparable: G String Integer
+isInstance 0 Cloneable: Object[] Seqable[] A[] int[] ArrayList
+isInstance 0 Serializable: String Integer Object[] Seqable[] A[] int[] ArrayList
+isInstance 0 Object[]: Object[] Seqable[] A[]
+isInstance 0 Seqable[]: Seqable[] A[]
+isInstance 0 int[]: int[]
+isInstance 0 int:
+isInstance 0 Number: Integer
+isInstance 0 List: ArrayList
+assignable 0 Counted from: Counted A A C E F
+assignable 0 Marker from: Marker A A B E F
+assignable 0 Base from: Base A A B C D E F
+assignable 0 A from: A A E
+assignable 0 Object from: Counted Marker Base A Object Comparable Cloneable Serializable Object[] Seqable[] int[] Number List A B C D E F G String Integer Object[] Seqable[] A[] int[] ArrayList
+assignable 0 Comparable from: Comparable G String Integer
+assignable 0 Cloneable from: Cloneable Object[] Seqable[] int[] Object[] Seqable[] A[] int[] ArrayList
+assignable 0 Serializable from: Serializable Object[] Seqable[] int[] Number String Integer Object[] Seqable[] A[] int[] ArrayList
+assignable 0 Object[] from: Object[] Seqable[] Object[] Seqable[] A[]
+assignable 0 Seqable[] from: Seqable[] Seqable[] A[]
+assignable 0 int[] from: int[] int[]
+assignable 0 int from: int
+assignable 0 Number from: Number Integer
+assignable 0 List from: List ArrayList
+isInstance 1 Counted: A C E F
+isInstance 1 Marker: A B E F
+isInstance 1 Base: A B C D E F
+isInstance 1 A: A E
+isInstance 1 Object: A B C D E F G String Integer Object[] Seqable[] A[] int[] ArrayList
+isInstance 1 Comparable: G String Integer
+isInstance 1 Cloneable: Object[] Seqable[] A[] int[] ArrayList
+isInstance 1 Serializable: String Integer Object[] Seqable[] A[] int[] ArrayList
+isInstance 1 Object[]: Object[] Seqable[] A[]
+isInstance 1 Seqable[]: Seqable[] A[]
+isInstance 1 int[]: int[]
+isInstance 1 int:
+isInstance 1 Number: Integer
+isInstance 1 List: ArrayList
+assignable 1 Counted from: Counted A A C E F
+assignable 1 Marker from: Marker A A B E F
+assignable 1 Base from: Base A A B C D E F
+assignable 1 A from: A A E
+assignable 1 Object from: Counted Marker Base A Object Comparable Cloneable Serializable Object[] Seqable[] int[] Number List A B C D E F G String Integer Object[] Seqable[] A[] int[] ArrayList
+assignable 1 Comparable from: Comparable G String Integer
+assignable 1 Cloneable from: Cloneable Object[] Seqable[] int[] Object[] Seqable[] A[] int[] ArrayList
+assignable 1 Serializable from: Serializable Object[] Seqable[] int[] Number String Integer Object[] Seqable[] A[] int[] ArrayList
+assignable 1 Object[] from: Object[] Seqable[] Object[] Seqable[] A[]
+assignable 1 Seqable[] from: Seqable[] Seqable[] A[]
+assignable 1 int[] from: int[] int[]
+assignable 1 int from: int
+assignable 1 Number from: Number Integer
+assignable 1 List from: List ArrayList
+isAssignableFrom(null): NPE
 sum 8220000

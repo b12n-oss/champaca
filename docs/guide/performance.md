@@ -475,3 +475,17 @@ On the same benchmark (2026-11-14, median of three runs, interleaved with main, 
 HotSpot's `try` costs nothing until something is thrown, because it finds the handler from a table of pc ranges. Doing that here would mean marking every point where Scheme code calls into Java, so it's left for now. `TryCheck` covers leaving a region every way it can be left, including a throw after an inner region caught and catches inside a lambda the JDK calls.
 
 `RangeCheckCheck` has every check in and out of range, directly and through the collections and strings built on them; `BoxCheck` the identity of cached and fresh boxes for each type; `PolyCallCheck` one site calling twelve classes, in order, reversed and interleaved.
+
+### `Class.isInstance` and `isAssignableFrom`
+
+A subtype question that didn't come from a type test in the code, such as `Class.isInstance`, `Class.isAssignableFrom` or a method handle's type check, walked the class's superclasses and interfaces comparing names. Clojure's compiler asks `isAssignableFrom` while it emits constants (`Compiler$ObjExpr.constantType`). Each class now keeps the set of every name it answers to: its own, its superclasses' and all their interfaces'. The set is built from the supertypes' own sets the first time something asks, so a question is one lookup. `isInstance` and `isAssignableFrom` also go through the per-class answers the type tests keep.
+
+Eight million calls of each over eight interfaces and eight JDK classes (`AssignBench`, 2026-11-14):
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| `isAssignableFrom`, 8M calls | 10,043 ms | 228 ms | 32 ms |
+| `isInstance`, 8M calls | 9,739 ms | 158 ms | 24 ms |
+
+On Clojure loading five libraries from source (above), peak memory didn't change (1003 against 1005 MB, the median of three warm runs), and the time didn't move outside the noise of a loaded machine, since `isAssignableFrom` was about 6% of that run's profile. `InstanceMemoCheck` asks both of them, and `instanceof` and `checkcast`, about fifteen kinds of object and class, twice over, against HotSpot's answers.
+

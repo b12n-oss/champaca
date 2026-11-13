@@ -57,6 +57,29 @@ public class InstanceMemoCheck {
         StringBuilder line = new StringBuilder("reversed:");
         for (int i = xs.length - 1; i >= 0; i--) line.append(' ').append(name(xs[i])).append('=').append(tests(xs[i]));
         System.out.println(line);
+        // Class.isInstance and Class.isAssignableFrom share the classes' answers
+        Class<?>[] types = { Counted.class, Marker.class, Base.class, A.class, Object.class, Comparable.class,
+                             Cloneable.class, java.io.Serializable.class, Object[].class, Seqable[].class,
+                             int[].class, int.class, Number.class, List.class };
+        for (int pass = 0; pass < 2; pass++) {
+            for (Class<?> t : types) {
+                StringBuilder row = new StringBuilder("isInstance " + pass + " " + t.getSimpleName() + ":");
+                for (Object x : xs) row.append(t.isInstance(x) ? " " + name(x) : "");
+                System.out.println(row);
+            }
+            for (Class<?> t : types) {
+                StringBuilder row = new StringBuilder("assignable " + pass + " " + t.getSimpleName() + " from:");
+                for (Class<?> c : types) row.append(t.isAssignableFrom(c) ? " " + c.getSimpleName() : "");
+                for (Object x : xs) if (x != null && t.isAssignableFrom(x.getClass())) row.append(" " + name(x));
+                System.out.println(row);
+            }
+        }
+        try {
+            Object.class.isAssignableFrom(null);
+            System.out.println("no NPE");
+        } catch (NullPointerException e) {
+            System.out.println("isAssignableFrom(null): NPE");
+        }
         long n = 0;
         for (int r = 0; r < 20000; r++)
             for (Object x : xs) { if (x instanceof Counted c) n += c.count(); if (x instanceof Marker) n += 100; }

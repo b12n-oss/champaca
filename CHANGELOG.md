@@ -386,6 +386,13 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- Subtype questions outside type-test sites (`Class.isInstance`,
+  `Class.isAssignableFrom`, method handle checks) are one lookup in a set of
+  every name a class answers to, built once per class from its supertypes'
+  sets, where they walked the hierarchy comparing names. Eight million
+  `isAssignableFrom` calls went from 10.0 s to 0.23 s and as many
+  `isInstance` calls from 9.7 s to 0.16 s. `InstanceMemoCheck` compares
+  both, and `instanceof` and `checkcast`, with HotSpot's answers.
 - Entering a `try` block no longer sets up a `dynamic-wind`: `jtry` pops
   its handler itself when its continuation returns, with the body's value
   or with a caught exception's thunk. A `try` block with a call went from
