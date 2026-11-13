@@ -693,7 +693,12 @@
     (when classdata (jslot-set! m (jfield-index "java/lang/Class" "classData") classdata))
     (when pd (jslot-set! m (jfield-index "java/lang/Class" "protectionDomain") pd))
     m))
-(define (define-class! loader given v off len hidden? classdata pd)
+;; how a class is defined: (hidden? . class data), one argument so
+;; define-class! stays under jolt-metrics' parameter limit
+(define plain-definition '(#f . #f))
+(define (define-class! loader given v off len how pd)
+  (define hidden? (car how))
+  (define classdata (cdr how))
   (unless (and (fx>= off 0) (fx>= len 0) (fx<= (fx+ off len) (vector-length v)))
     (jthrow "java/lang/ArrayIndexOutOfBoundsException"
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
@@ -708,7 +713,7 @@
         (defined-mirror arg loader hidden? classdata pd))))
 (defnative "java/lang/ClassLoader.defineClass1(Ljava/lang/ClassLoader;Ljava/lang/String;[BIILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
-  (define-class! loader name (jarr-vec (nn b)) off len #f #f pd))
+  (define-class! loader name (jarr-vec (nn b)) off len plain-definition pd))
 (defnative "java/lang/ClassLoader.defineClass2(Ljava/lang/ClassLoader;Ljava/lang/String;Ljava/nio/ByteBuffer;IILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
   ;; only a direct buffer gets here (ClassLoader.defineClass copies a heap
@@ -716,23 +721,23 @@
   ;; from the position given, which is what Unsafe gave it
   (let ([hb (jslot (nn b) (jfield-index "java/nio/ByteBuffer" "hb"))])
     (if hb
-        (define-class! loader name (jarr-vec hb) (fx+ off (jslot b (jfield-index "java/nio/ByteBuffer" "offset"))) len #f #f pd)
+        (define-class! loader name (jarr-vec hb) (fx+ off (jslot b (jfield-index "java/nio/ByteBuffer" "offset"))) len plain-definition pd)
         (let* ([addr (jslot b (jfield-index "java/nio/Buffer" "address"))]
                [v (make-vector len)])
           (do ([i 0 (fx+ i 1)]) ((fx= i len))
             (vector-set! v i (foreign-ref 'unsigned-8 addr (fx+ off i))))
-          (define-class! loader name v 0 len #f #f pd)))))
+          (define-class! loader name v 0 len plain-definition pd)))))
 (defnative "java/lang/ClassLoader.defineClass0(Ljava/lang/ClassLoader;Ljava/lang/Class;Ljava/lang/String;[BIILjava/security/ProtectionDomain;ZILjava/lang/Object;)Ljava/lang/Class;"
   (loader lookup name b off len pd initialize flags classdata)
   ;; flags: 1 nestmate (the lookup class's nest host becomes its own), 2 hidden, 4 strong, 8 vm annotations
-  (let ([m (define-class! loader name (jarr-vec (nn b)) off len (fxpositive? (fxlogand flags 2)) classdata pd)])
+  (let ([m (define-class! loader name (jarr-vec (nn b)) off len (cons (fxpositive? (fxlogand flags 2)) classdata) pd)])
     (when (and lookup (fxpositive? (fxlogand flags 1)))
       (hashtable-set! dynamic-nest-hosts (jclass-cname (mirror-class m)) (nest-host (mirror-class lookup))))
     (when (eqv? initialize 1) (jinit (jclass-cname (mirror-class m))))
     m))
 (defnative "jdk/internal/misc/Unsafe.defineClass0(Ljava/lang/String;[BIILjava/lang/ClassLoader;Ljava/security/ProtectionDomain;)Ljava/lang/Class;"
   (this name b off len loader pd)
-  (define-class! loader name (jarr-vec (nn b)) off len #f #f pd))
+  (define-class! loader name (jarr-vec (nn b)) off len plain-definition pd))
 
 (define-override! "jdk/internal/loader/BuiltinClassLoader.loadClassOrNull(Ljava/lang/String;Z)Ljava/lang/Class;"
   (lambda (this name resolve) (class-or-null this name)))

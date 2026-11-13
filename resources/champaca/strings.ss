@@ -234,25 +234,38 @@
     (cond [(null? ps) n]
           [(concat-latin1-length (car ps)) => (lambda (k) (loop (cdr ps) (fx+ n k)))]
           [else #f])))
+;; Each kind of piece's bytes into v from at, answering the index after them.
+;; Macros, not procedures: they expand inside concat-latin1-fill!, so the
+;; steps cost no call (a top-level procedure here is a mutable binding Chez
+;; can't inline; splitting into procedures cost concatenation 3%).
+(define-syntax latin1-fill-string!   ; a Scheme string of Latin-1 characters
+  (syntax-rules ()
+    [(_ v p at)
+     (let ([n (string-length p)])
+       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (i2b (char->integer (string-ref p i)))))
+       (fx+ at n))]))
+(define-syntax latin1-fill-jstring!   ; a Java String whose coder is Latin-1
+  (syntax-rules ()
+    [(_ v p at)
+     (let* ([sv (jarr-vec (vector-ref (jobj-slots p) string-value-slot))] [n (vector-length sv)])
+       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (vector-ref sv i)))
+       (fx+ at n))]))
+(define-syntax latin1-fill-units!   ; a list of code units, each under 256
+  (syntax-rules ()
+    [(_ v p at0)
+     (let inner ([l p] [at at0])
+       (if (null? l)
+           at
+           (begin (vector-set! v at (i2b (car l))) (inner (cdr l) (fx+ at 1)))))]))
 ;; the Latin-1 pieces' bytes, one after another, into v
 (define (concat-latin1-fill! v pieces)
   (let loop ([ps pieces] [at 0])
     (unless (null? ps)
       (let ([p (car ps)])
-        (cond
-          [(string? p)
-           (let ([n (string-length p)])
-             (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (i2b (char->integer (string-ref p i)))))
-             (loop (cdr ps) (fx+ at n)))]
-          [(jobj? p)
-           (let* ([sv (jarr-vec (vector-ref (jobj-slots p) string-value-slot))] [n (vector-length sv)])
-             (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (vector-ref sv i)))
-             (loop (cdr ps) (fx+ at n)))]
-          [else
-           (let inner ([l p] [at at])
-             (if (null? l)
-                 (loop (cdr ps) at)
-                 (begin (vector-set! v at (i2b (car l))) (inner (cdr l) (fx+ at 1)))))])))))
+        (loop (cdr ps)
+              (cond [(string? p) (latin1-fill-string! v p at)]
+                    [(jobj? p) (latin1-fill-jstring! v p at)]
+                    [else (latin1-fill-units! v p at)]))))))
 ;; a String with coder 0 (Latin-1) over the bytes in v
 (define (latin1-jstring v)
   (let ([o (jnew "java/lang/String")])

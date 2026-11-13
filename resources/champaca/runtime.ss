@@ -529,7 +529,11 @@
 ;; method up with eq? rather than hashing a string each time.
 ;; vtable-alist holds the changes to the superclass's vtable: a new or
 ;; overriding entry, or (key . #f) for one this class drops.
-(define (register-class! name super interfaces template vtable-alist field-alist flags meta)
+(define (register-class! name super interfaces template tables flags meta)
+  ;; tables: (vtable delta . field layout), one argument so the call stays
+  ;; under jolt-metrics' parameter limit
+  (define vtable-alist (car tables))
+  (define field-alist (cdr tables))
   (hashtable-set! classes name
                   (make-jclass name super interfaces template
                                (let ([t (if super (hashtable-copy (jclass-vtable (find-class super)) #t) (make-eq-hashtable))])

@@ -187,46 +187,72 @@
               (fx= (type-size e) n)
               (let ([b (fx- off array-base)])
                 (and (fx= 0 (fxremainder b n)) (fxquotient b n)))))))
-;; the unsigned n-byte value at off in o: a byte[], native memory, or any
-;; other array (mem-byte); n is 1, 2, 4 or 8
-(define (unaligned-u o off n be?)
-  (cond
-    [(byte-array? o)
+;; unaligned-u and unaligned-put!'s four kinds of memory, one macro each so
+;; the steps expand in place (a top-level procedure costs a call Chez can't
+;; inline away; these run under every Unsafe unaligned access)
+(define-syntax ua-get-bytes   ; a byte[]: its elements in either order
+  (syntax-rules ()
+    [(_ o off n be?)
      (let ([v (jarr-vec o)] [i (fx- off array-base)])
        (if (fx= n 8)
            (logior (vec-bytes->fx v (if be? (fx+ i 4) i) 4 be?) (ash (vec-bytes->fx v (if be? i (fx+ i 4)) 4 be?) 32))
-           (vec-bytes->fx v i n be?)))]
-    [(not o)
+           (vec-bytes->fx v i n be?)))]))
+(define-syntax ua-get-native   ; native memory at address off
+  (syntax-rules ()
+    [(_ off n be?)
      (let ([u (case n [(1) (#3%foreign-ref 'unsigned-8 off 0)] [(2) (#3%foreign-ref 'unsigned-16 off 0)] [(4) (#3%foreign-ref 'unsigned-32 off 0)] [else (#3%foreign-ref 'unsigned-64 off 0)])])
-       (if be? (bswap u n) u))]
-    [(whole-element o off n)
-     => (lambda (i)
-          (let ([u (logand (elem-bits (elem-type o) (vector-ref (jarr-vec o) i)) (- (ash 1 (fx* 8 n)) 1))])
-            (if be? (bswap u n) u)))]
-    [else
+       (if be? (bswap u n) u))]))
+(define-syntax ua-get-element   ; element i of a primitive array, which off and n cover exactly
+  (syntax-rules ()
+    [(_ o i n be?)
+     (let ([u (logand (elem-bits (elem-type o) (vector-ref (jarr-vec o) i)) (- (ash 1 (fx* 8 n)) 1))])
+       (if be? (bswap u n) u))]))
+(define-syntax ua-get-memory   ; any other array, a byte at a time (mem-byte)
+  (syntax-rules ()
+    [(_ o off n be?)
      (let loop ([k 0] [acc 0])
        (if (fx= k n)
            acc
            (loop (fx+ k 1) (logior acc (ash (mem-byte o (+ off k)) (fx* 8 (if be? (fx- (fx- n 1) k) k)))))))]))
+;; the unsigned n-byte value at off in o: a byte[], native memory, or any
+;; other array (mem-byte); n is 1, 2, 4 or 8
+(define (unaligned-u o off n be?)
+  (cond
+    [(byte-array? o) (ua-get-bytes o off n be?)]
+    [(not o) (ua-get-native off n be?)]
+    [(whole-element o off n) => (lambda (i) (ua-get-element o i n be?))]
+    [else (ua-get-memory o off n be?)]))
+(define-syntax ua-put-bytes
+  (syntax-rules ()
+    [(_ o off n x be?)
+     (let ([v (jarr-vec o)] [i (fx- off array-base)])
+       (do ([k 0 (fx+ k 1)]) ((fx= k n))
+         (vector-set! v (fx+ i (if be? (fx- (fx- n 1) k) k)) (i2b (logand (ash x (fx* -8 k)) #xff)))))]))
+(define-syntax ua-low-bits   ; the n low bytes of x, unsigned, in the order asked
+  (syntax-rules ()
+    [(_ x n be?) (let ([u (logand x (- (ash 1 (fx* 8 n)) 1))]) (if be? (bswap u n) u))]))
+(define-syntax ua-put-native
+  (syntax-rules ()
+    [(_ off n x be?)
+     (let ([u (ua-low-bits x n be?)])
+       (case n
+         [(1) (#3%foreign-set! 'unsigned-8 off 0 u)] [(2) (#3%foreign-set! 'unsigned-16 off 0 u)]
+         [(4) (#3%foreign-set! 'unsigned-32 off 0 u)] [else (#3%foreign-set! 'unsigned-64 off 0 u)]))]))
+(define-syntax ua-put-element
+  (syntax-rules ()
+    [(_ o i n x be?) (vector-set! (jarr-vec o) i (signed-as (elem-type o) (ua-low-bits x n be?)))]))
+(define-syntax ua-put-memory
+  (syntax-rules ()
+    [(_ o off n x be?)
+     (do ([k 0 (fx+ k 1)]) ((fx= k n))
+       (mem-byte-set! o (+ off (if be? (fx- (fx- n 1) k) k)) (logand (ash x (fx* -8 k)) #xff)))]))
 ;; the n low bytes of x (any sign) written at off in o, in either order
 (define (unaligned-put! o off n x be?)
   (cond
-    [(byte-array? o)
-     (let ([v (jarr-vec o)] [i (fx- off array-base)])
-       (do ([k 0 (fx+ k 1)]) ((fx= k n))
-         (vector-set! v (fx+ i (if be? (fx- (fx- n 1) k) k)) (i2b (logand (ash x (fx* -8 k)) #xff)))))]
-    [(not o)
-     (let ([u (let ([u (logand x (- (ash 1 (fx* 8 n)) 1))]) (if be? (bswap u n) u))])
-       (case n
-         [(1) (#3%foreign-set! 'unsigned-8 off 0 u)] [(2) (#3%foreign-set! 'unsigned-16 off 0 u)]
-         [(4) (#3%foreign-set! 'unsigned-32 off 0 u)] [else (#3%foreign-set! 'unsigned-64 off 0 u)]))]
-    [(whole-element o off n)
-     => (lambda (i)
-          (let ([u (let ([u (logand x (- (ash 1 (fx* 8 n)) 1))]) (if be? (bswap u n) u))])
-            (vector-set! (jarr-vec o) i (signed-as (elem-type o) u))))]
-    [else
-     (do ([k 0 (fx+ k 1)]) ((fx= k n))
-       (mem-byte-set! o (+ off (if be? (fx- (fx- n 1) k) k)) (logand (ash x (fx* -8 k)) #xff)))]))
+    [(byte-array? o) (ua-put-bytes o off n x be?)]
+    [(not o) (ua-put-native off n x be?)]
+    [(whole-element o off n) => (lambda (i) (ua-put-element o i n x be?))]
+    [else (ua-put-memory o off n x be?)]))
 (define (bswap u n)
   (let loop ([k 0] [acc 0])
     (if (fx= k n) acc (loop (fx+ k 1) (logior (ash acc 8) (logand (ash u (fx* -8 k)) #xff))))))
@@ -333,19 +359,27 @@
 (defnative "jdk/internal/misc/Unsafe.freeMemory0(J)V" (this a) (unless (eqv? a 0) (foreign-free a)))
 (defnative "jdk/internal/misc/Unsafe.setMemory0(Ljava/lang/Object;JJB)V" (this o off n b)
   (do ([i 0 (+ i 1)]) ((= i n)) (mem-byte-set! o (+ off i) (fxlogand b #xff))))
+(define-syntax copy-whole-elements   ; same element type, every offset on an element: one pass
+  (syntax-rules ()
+    [(_ src dst sb db n se)
+     ;; backwards when the same vector's ranges overlap with the destination
+     ;; past the source (memmove)
+     (let ([k (quotient n se)] [si (quotient sb se)] [di (quotient db se)] [sv (jarr-vec src)] [dv (jarr-vec dst)])
+       (if (or (not (eq? sv dv)) (fx<= di si))
+           (do ([i 0 (fx+ i 1)]) ((fx= i k)) (vector-set! dv (fx+ di i) (vector-ref sv (fx+ si i))))
+           (do ([i (fx- k 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ di i) (vector-ref sv (fx+ si i))))))]))
+(define-syntax copy-array-bytes   ; anything else, through each element's bytes, read before any is written
+  (syntax-rules ()
+    [(_ src dst sb db n)
+     (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (byte-of src (+ sb i)) acc))))])
+       (let loop ([i 0] [bs bytes])
+         (unless (null? bs) (set-byte! dst (+ db i) (car bs)) (loop (+ i 1) (cdr bs)))))]))
 (define (copy-array-memory src soff dst doff n)
   (let* ([sb (- soff array-base)] [db (- doff array-base)]
          [et (elem-type src)] [se (type-size et)])
     (if (and (same-type? et (elem-type dst)) (zero? (remainder sb se)) (zero? (remainder db se)) (zero? (remainder n se)))
-        ;; one pass, backwards when the same vector's ranges overlap with
-        ;; the destination past the source (memmove)
-        (let ([k (quotient n se)] [si (quotient sb se)] [di (quotient db se)] [sv (jarr-vec src)] [dv (jarr-vec dst)])
-          (if (or (not (eq? sv dv)) (fx<= di si))
-              (do ([i 0 (fx+ i 1)]) ((fx= i k)) (vector-set! dv (fx+ di i) (vector-ref sv (fx+ si i))))
-              (do ([i (fx- k 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ di i) (vector-ref sv (fx+ si i))))))
-        (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (byte-of src (+ sb i)) acc))))])
-          (let loop ([i 0] [bs bytes])
-            (unless (null? bs) (set-byte! dst (+ db i) (car bs)) (loop (+ i 1) (cdr bs))))))))
+        (copy-whole-elements src dst sb db n se)
+        (copy-array-bytes src dst sb db n))))
 (defnative "jdk/internal/misc/Unsafe.allocateInstance(Ljava/lang/Class;)Ljava/lang/Object;" (this c)
   (jnew (jclass-cname (mirror-class c))))
 

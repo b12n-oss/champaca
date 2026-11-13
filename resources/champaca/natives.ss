@@ -102,7 +102,7 @@
       (arraycopy-bounds! se sv sp de dv dp n)
       (if (arraycopy-whole? se de)
           (arraycopy-move! sv sp dv dp n)
-          (arraycopy-elements! dst se sv sp de dv dp n)))))
+          (arraycopy-elements! dst se sv sp de dp n)))))
 
 ;; src and dst must both be arrays
 (define (arraycopy-arrays! src dst)
@@ -135,8 +135,8 @@
 
 ;; each element, up to the first that doesn't fit; the message says whether
 ;; the copy narrows or the element types are unrelated
-(define (arraycopy-elements! dst se sv sp de dv dp n)
-  (do ([i 0 (fx+ i 1)]) ((fx= i n))
+(define (arraycopy-elements! dst se sv sp de dp n)
+  (do ([dv (jarr-vec dst)] [i 0 (fx+ i 1)]) ((fx= i n))
     (let ([x (vector-ref sv (fx+ sp i))])
       (unless (or (not x) (array-store-ok? dst x))
         (let ([sn (slashes->dots (desc->class-name se))] [dn (slashes->dots (desc->class-name de))])
