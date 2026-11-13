@@ -306,9 +306,32 @@ jobs:
 
   # the one check to require (see the top): every battery job passed, or there
   # was nothing to run
+  # jolt-metrics over the repo, gated by ci/metrics-gate.clj: a critical
+  # finding under ci/metrics-allow.edn's :critical-free paths, or unused code
+  # it doesn't list, fails the run. Every push, docs-only ones included.
+  metrics:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # churn and hotspots come from the git history
+          fetch-depth: 0
+      - uses: jlt-commons/setup-jolt@v1
+        with:
+          version: "0.8.27"
+      - name: jolt metrics:gate
+        run: jolt metrics:gate
+      - name: the report
+        if: always()
+        run: |
+          jolt metrics target/metrics-report.md --top 30 >/dev/null
+          awk '/^## Cleanup candidates/{exit} {print}' target/metrics-report.md >> "$GITHUB_STEP_SUMMARY"
+
   ok:
     name: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) && 'ci ok (pull request)' || 'ci ok' }}
-    needs: [plan, battery]
+    needs: [plan, battery, metrics]
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -317,9 +340,10 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           RUN: ${{ needs.plan.outputs.run }}
           BATTERY: ${{ needs.battery.result }}
+          METRICS: ${{ needs.metrics.result }}
         run: |
-          echo "plan $PLAN, run $RUN, battery $BATTERY"
-          if [ "$PLAN" = success ] && { [ "$BATTERY" = success ] || { [ "$RUN" = false ] && [ "$BATTERY" = skipped ]; }; }; then
+          echo "plan $PLAN, run $RUN, battery $BATTERY, metrics $METRICS"
+          if [ "$PLAN" = success ] && [ "$METRICS" = success ] && { [ "$BATTERY" = success ] || { [ "$RUN" = false ] && [ "$BATTERY" = skipped ]; }; }; then
             exit 0
           fi
           exit 1

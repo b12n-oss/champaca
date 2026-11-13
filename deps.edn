@@ -15,8 +15,9 @@
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
                  :git/sha "0f08ec2732a0078d7523f274a1507049c06bffe6"}
  :aliases
- {;; Code metrics report (jolt metrics): jolt-metrics' CLI. Report only.
+ {;; Code metrics (jolt metrics, metrics:gate): jolt-metrics' CLI at the
+  ;; commit jolt's own gate runs (jolt-lang/jolt#1640), which needs jolt 0.8.25
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
                          {:git/url "https://github.com/jlt-commons/jolt-metrics"
-                          :git/tag "v0.4.0" :git/sha "e51804d"}}
+                          :git/sha "3e13e1f1b86e7ba2db3f28125279864ef7ff0818"}}
             :main-opts ["-m" "metrics.cli"]}}}

@@ -450,6 +450,3 @@
                                  (parse-bootstrap-methods (:info %)))
                               attrs)}))
 
-(defn parse-file [path]
-  (parse (java.nio.file.Files/readAllBytes
-          (java.nio.file.Paths/get path (into-array String [])))))

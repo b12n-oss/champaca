@@ -24,6 +24,7 @@ jolt warm                                               # a training run for the
 jolt nrepl                                              # an nREPL server for your editor, on a free port written to .nrepl-port
 jolt metrics                                            # jolt-metrics: refactoring queue, hotspots, cleanup candidates (report only; jolt metrics:edn or metrics:json for data)
 jolt metrics:html                                       # the same as one page to share, target/metrics.html
+jolt metrics:gate                                       # what CI fails on: criticals outside resources/, unused code not in ci/metrics-allow.edn
 jolt site:serve                                         # build the docs site and serve it on the first free port from 3000 (jolt site:serve 4000 refuses a busy port); needs a docs-engine checkout
 jolt site:build                                         # build the docs site into _site/ (jolt site:clean deletes it)
 jolt bundle -o out/app -cp CP -m Main --train          # a directory that runs Main with no JDK installed (--jolt NS --project DIR for a jolt program)
@@ -55,4 +56,6 @@ jolt linux arm64          # or amd64
 
 ## Code health
 
-`jolt metrics` runs jolt-metrics over the source and prints the functions most worth splitting, the files that are both complex and often changed, and cleanup candidates. It's a report only, and nothing fails on it. `jolt metrics:json` and `jolt metrics:edn` give the same data for tools, and `jolt metrics:html` makes one page to share.
+`jolt metrics` runs jolt-metrics over the source and prints the functions most worth splitting, the files that are both complex and often changed, and cleanup candidates. The report itself fails nothing. `jolt metrics:json` and `jolt metrics:edn` give the same data for tools, and `jolt metrics:html` makes one page to share.
+
+`jolt metrics:gate` is the check CI runs on every push, and `ci ok` waits for it. It fails on a critical finding (a function past a complexity, length, nesting or parameter limit, or a file past the length limit) under the paths `ci/metrics-allow.edn` lists as `:critical-free`, which is everything but `resources/` for now. There's no list of accepted criticals, so a function that crosses a limit gets split. It also fails on an unused require, private function or public function, unless the allowlist names it with the reason it stays, and on an allowlist entry that's no longer reported. `resources/` joins the critical-free paths once its seven remaining criticals are gone. They're hot paths and fixed native signatures, kept on purpose so far. The gate follows the one jolt's CI added in [jolt#1640](https://github.com/jolt-lang/jolt/pull/1640), at the same jolt-metrics commit.

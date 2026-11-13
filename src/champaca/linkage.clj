@@ -9,7 +9,7 @@
   "Resolving what an instruction names while its method is translated:
   missing classes and members become code that throws where the JVM would."
   (:require [clojure.string :as str]
-            [champaca.cgtext :refer [parse-desc site]]))
+            [champaca.cgtext :refer [parse-desc]]))
 
 (defn missing-class
   "The class a resolution failure says isn't there, or nil for any other

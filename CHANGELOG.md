@@ -362,6 +362,12 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- CI runs `jolt metrics:gate` on every push, and `ci ok` needs it: a
+  critical jolt-metrics finding outside `resources/`, or unused code that
+  `ci/metrics-allow.edn` doesn't list with its reason, fails the run, as
+  jolt's own CI does since jolt-lang/jolt#1640. jolt-metrics moves to that
+  PR's commit, which found two criticals and four unused names left by
+  recent changes; they're split or removed.
 - `jolt libs` runs four JVM languages beside the twenty-three libraries:
   Clojure 1.12.4, Groovy 5.0.8, Scala 2.13.18 and Kawa 3.1.1, each through its own
   launcher on a probe in `test/libs`, the jars pinned by Maven Central's

@@ -563,6 +563,18 @@
                        (if (str/ends-with? p "/") (.isDirectory f) (.isFile f)))]
         (str f)))))
 
+(defn- manifest-entries
+  "The Class-Path entries class path entry e's manifest names, nil for a
+  directory, or ::unreadable for a jar that can't be opened, which is left
+  out. A manifest that can't be read in a jar that opens names nothing, but a
+  jar a manifest named (manifest?) whose own manifest can't be read is left
+  out too, as the JDK skips it."
+  [e manifest?]
+  (when (jar-entry? e)
+    (if (try (jar e) true (catch Exception _ false))
+      (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable [])))
+      ::unreadable)))
+
 (defn with-manifest-class-paths
   "classpath with each jar's manifest Class-Path entries right after it,
   where the JDK's URLClassPath searches them, theirs after them in turn; an
@@ -576,10 +588,7 @@
   (loop [todo (apply list (map (fn [e] [e false]) classpath)) seen #{} out []]
     (if-let [[e manifest?] (first todo)]
       (let [k (str (.getCanonicalFile (io/file e)))
-            more (when (jar-entry? e)
-                   (if (try (jar e) true (catch Exception _ false))
-                     (try (vec (manifest-class-path e)) (catch Exception _ (if manifest? ::unreadable [])))
-                     ::unreadable))]
+            more (manifest-entries e manifest?)]
         (if (or (seen k) (= more ::unreadable))
           (recur (rest todo) seen out)
           (recur (into (rest todo) (reverse (map (fn [m] [m true]) more)))

@@ -1240,8 +1240,13 @@
   bench {:doc "Upstream OpenLDK's startup benchmarks: build and time Spring Boot or Quarkus on HotSpot and through champaca (jolt bench spring-boot [build|bench|all]); see bench/README.md"
          :task (do (load-file "bench/bench.clj")
                    ((resolve (symbol "bench" "main")) (jolt-bin) *command-line-args*))}
-  ;; Report only: findings never fail these. metrics.cli exits non-zero
-  ;; only on bad usage or a missing directory, and that exit passes through.
+  ;; Reports: findings never fail these. metrics.cli exits non-zero only on
+  ;; bad usage or a missing directory, and that exit passes through.
+  ;; metrics:gate is the one that fails, as CI's metrics job does.
+  metrics:gate {:doc "Fail on a critical jolt-metrics finding under ci/metrics-allow.edn's :critical-free paths, or on unused code not listed there with its reason (ci/metrics-gate.clj; CI runs it on every push)"
+                :task (do (fs/create-dirs "target")
+                          (shell (jolt-bin) "-M:metrics" "." "target/metrics-report.edn" "--format" "edn")
+                          (shell (jolt-bin) "ci/metrics-gate.clj" "target/metrics-report.edn" "ci/metrics-allow.edn"))}
   metrics {:doc "jolt-metrics report over the repo (Markdown; findings never fail it). Extra args go to metrics.cli: an output file (its extension picks the format), --top N, --no-git, --exclude GLOB"
            :task (apply shell (jolt-bin) "-M:metrics" "." *command-line-args*)}
   metrics:edn {:doc "jolt-metrics findings as EDN (findings never fail it). Extra args as for metrics"
