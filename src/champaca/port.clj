@@ -622,6 +622,33 @@
                    nil))
                params types)))
 
+(def preamble
+  "What the functions of a port need defined before them: the test a
+  function makes of its string parameters when it holds only for strings
+  within the BMP. It throws, so a string the port wasn't checked on can't
+  give an answer Java wouldn't."
+  (str "(defn within-bmp!\n"
+       "  \"Throws when s has a character above U+FFFF. Java indexes a string by\n"
+       "  UTF-16 code unit and jolt by character, and a function ported from\n"
+       "  code that reads a string by index agrees with it only without those.\"\n"
+       "  [^String s]\n"
+       "  (when s\n"
+       "    (let [n (.length s)]\n"
+       "      (loop [i 0]\n"
+       "        (when (< i n)\n"
+       "          (when (> (int (.charAt s i)) 0xFFFF)\n"
+       "            (throw (ex-info \"ported from Java code that reads strings by index: holds for characters up to U+FFFF\"\n"
+       "                            {:champaca.port/outside :strings-within-the-bmp :index i})))\n"
+       "          (recur (inc i)))))))"))
+
+(defn- guards
+  "The tests a function makes on entry for the conditions it holds under:
+  each String parameter within the BMP, when it reads strings by index."
+  [holds params types]
+  (when (holds :strings-within-the-bmp)
+    (for [[p t] (map vector params types) :when (= "Ljava/lang/String;" t)]
+      (list 'within-bmp! (symbol p)))))
+
 (defn- kebab [s]
   (str/lower-case (str/replace s #"([a-z0-9])([A-Z])" "$1-$2")))
 
@@ -634,8 +661,9 @@
         ctx {:ics ics :blocks {} :ret ret :holds holds :calls calls :statics statics :sized sized}
         code (do-form (body ctx code true))
         entry (entry-bindings params args)]
-    {:form (list 'defn fname (mapv param-form params args)
-                 (tidy (if (seq entry) (list 'let entry code) code)))
+    {:form (apply list 'defn fname (mapv param-form params args)
+                  (concat (guards @holds params args)
+                          [(tidy (if (seq entry) (list 'let entry code) code))]))
      :holds @holds :calls @calls :sized @sized}))
 
 (def ^:private type-words
@@ -806,6 +834,7 @@
   [ported]
   (binding [*ns* (create-ns 'champaca.ported)]
     (clojure.core/refer-clojure)
+    (load-string preamble)
     (load-string (str "(declare " (str/join " " (map :name ported)) ")"))
     (into {} (map (fn [p] [(:method p) (load-string (:source p))]) ported))))
 

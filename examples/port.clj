@@ -57,6 +57,28 @@
   (testing "one that reads no string by index holds for any"
     (is (empty? (:holds (port/port-method sample "gcd" "(II)I"))))))
 
+(deftest a-port-tests-its-condition-when-it-runs
+  ;; hash31 reads its string by index, so its port holds for characters up to
+  ;; U+FFFF and throws on any other string, where it would otherwise answer
+  ;; differently from Java without saying so
+  (let [r (port/port-method sample "hash31" "(Ljava/lang/String;)I")]
+    (is (str/includes? (:source r) "(within-bmp! l0)"))
+    (port/check-ports [r] 1)
+    (let [hash31 @(ns-resolve 'champaca.ported 'hash31)]
+      (is (= (ldk/invoke-static sample "hash31" "héllo wörld") (hash31 "héllo wörld")))
+      (is (= :strings-within-the-bmp
+             (try (hash31 "a😀") (catch clojure.lang.ExceptionInfo e (:champaca.port/outside (ex-data e))))))
+      (is (thrown? NullPointerException (hash31 nil)) "null goes on to the method's own behavior")))
+  (testing "a port that reads no string by index has no test"
+    (is (not (str/includes? (:source (port/port-method sample "joinTrim" "(Ljava/util/List;Ljava/lang/String;)Ljava/lang/String;"))
+                            "within-bmp!"))))
+  (testing "the check, run with the condition broken, reports it"
+    (let [r (port/port-method sample "hash31" "(Ljava/lang/String;)I")
+          f @(ns-resolve 'champaca.ported 'hash31)
+          report (pc/check {:name "hash31, any string" :class sample :method "hash31"
+                            :args [{:type :string :chars :any}] :f f})]
+      (is (not (pc/agrees? report))))))
+
 (deftest ints-are-small-only-where-a-loop-or-a-size-could-take-them
   (testing "a loop's count may be the parameter"
     (is (:small-ints (port/port-method sample "fib" "(I)I")))

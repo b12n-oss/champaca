@@ -37,6 +37,7 @@ The names are the bytecode's local slots, since the class was compiled without d
 ;; hash31: agrees on 300 inputs (seed 84)
 (defn hash31
   [^String l0]
+  (within-bmp! l0)
   (loop [l1 7 l2 0]
     (let [s1 (.length l0)]
       (if (>= l2 s1)
@@ -75,6 +76,8 @@ Scheme's `let` and a block's parameters bind all at once, and Clojure's `let` an
 ## Rules
 
 A rule maps one JDK member to a jolt form and may carry a condition. `String.length` and `charAt` map to `.length` and `.charAt` under the condition `strings-within-the-bmp`: Java indexes a string by UTF-16 code unit and jolt by character, so the two agree while no character is above U+FFFF. The check then generates only such strings.
+
+A port tests its condition when it runs. A function that holds for strings within the BMP starts with `(within-bmp! s)` for each `String` parameter, which throws an `ex-info` carrying `{:champaca.port/outside :strings-within-the-bmp}` when the string has a character above U+FFFF. So a string the port wasn't checked on gets an exception, never an answer Java wouldn't give. `within-bmp!` is printed once before the functions and costs a pass over the string. The test covers the function's own string parameters. A string reached another way, an element of a list say, isn't tested.
 
 A method returning `boolean` gives `true` or `false`, a `char` parameter takes a char, and inside the function a boolean is 1 or 0 and a char its code, as in the bytecode.
 
