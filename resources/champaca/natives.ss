@@ -75,11 +75,12 @@
 ;; stops at the first that doesn't fit, leaving the ones before it copied.
 (define (arraycopy-type-name e) (if (prim-desc? e) (desc->class-name e) "object array"))
 (define (arraycopy-fail cls msg) (jthrow cls (string-append "arraycopy: " msg)))
-;; vector-copy!-style copy that handles overlap within one vector
+;; The copy itself, for indexes its callers have checked: Chez's vector-copy!,
+;; which copies as if through a temporary, so an overlap within one vector
+;; comes out right either way. Unchecked (#3%): at jolt's optimize level the
+;; element-by-element loop this replaced cost 2.7 ns an element.
 (define (arraycopy-move! sv sp dv dp n)
-  (if (and (eq? sv dv) (fx< sp dp))
-      (do ([i (fx- n 1) (fx- i 1)]) ((fx< i 0)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))
-      (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! dv (fx+ dp i) (vector-ref sv (fx+ sp i))))))
+  (#3%vector-copy! sv sp dv dp n))
 
 ;; the common case first: two arrays of one (interned) element type and
 ;; indexes in range need none of the checks below
@@ -1101,8 +1102,8 @@
 ;; its exception.
 (define-syntax hash-step   ; 31 * h + e, as a Java int
   (syntax-rules ()
-    [(_ h e) (let ([y (fxlogand (fx+ (fx* 31 h) e) #xffffffff)])
-               (if (fx>= y #x80000000) (fx- y #x100000000) y))]))
+    [(_ h e) (let ([y (#3%fxlogand (#3%fx+ (#3%fx* 31 h) e) #xffffffff)])
+               (if (#3%fx>= y #x80000000) (#3%fx- y #x100000000) y))]))
 ;; A range past the vector: the exception the JVM's interpreter throws from
 ;; the loop, naming the first index it would have read (the intrinsic's
 ;; behaviour is undefined there; no JDK caller passes one, but a Scheme
@@ -1114,10 +1115,13 @@
 (define (vector-hash v from len init mask)   ; mask #f for the element itself
   (let ([end (fx+ from len)])
     (check-hash-range! from end (vector-length v))
+    ;; the range is checked above, so the reads below aren't checked again:
+    ;; at jolt's optimize level a checked vector-ref costs most of a step
     (let loop ([i from] [h init])
-      (if (fx>= i end)
+      (if (#3%fx>= i end)
           h
-          (loop (fx+ i 1) (hash-step h (if mask (fxlogand (vector-ref v i) mask) (vector-ref v i))))))))
+          (loop (#3%fx+ i 1)
+                (hash-step h (if mask (#3%fxlogand (#3%vector-ref v i) mask) (#3%vector-ref v i))))))))
 (define-override! "jdk/internal/util/ArraysSupport.vectorizedHashCode(Ljava/lang/Object;IIII)I"
   (lambda (a from len init basic)
     (let ([v (jarr-vec (nn a))] [et (string-ref (jarr-elem a) 0)])
@@ -1128,11 +1132,11 @@
                    ;; in chars; the index named is the byte the JDK's getChar reads first
                    (check-hash-range! (fx* 2 from) (fx* 2 end) (vector-length v))
                    (let loop ([i from] [h init])
-                     (if (fx>= i end)
+                     (if (#3%fx>= i end)
                          h
-                         (loop (fx+ i 1)
-                               (hash-step h (fxlogor (fxlogand (vector-ref v (fx* 2 i)) #xff)
-                                                     (fxsll (fxlogand (vector-ref v (fx+ (fx* 2 i) 1)) #xff) 8)))))))
+                         (loop (#3%fx+ i 1)
+                               (hash-step h (#3%fxlogor (#3%fxlogand (#3%vector-ref v (#3%fx* 2 i)) #xff)
+                                                        (#3%fxsll (#3%fxlogand (#3%vector-ref v (#3%fx+ (#3%fx* 2 i) 1)) #xff) 8)))))))
                  (vector-hash v from len init #f))]
         [(8 9 10) (vector-hash v from len init #f)]         ; T_BYTE, T_SHORT, T_INT: signed, as stored
         [else (jthrow "java/lang/IllegalArgumentException" (string-append "unrecognized basic type: " (number->string basic)))]))))
@@ -1140,19 +1144,19 @@
   (lambda (value other)
     (let* ([v (jarr-vec (nn value))] [o (jarr-vec (nn other))] [n (vector-length v)])
       (if (fx= n (vector-length o))
-          (let loop ([i 0])
-            (cond [(fx= i n) 1]
-                  [(fx= (vector-ref v i) (vector-ref o i)) (loop (fx+ i 1))]
+          (let loop ([i 0])   ; both lengths are n
+            (cond [(#3%fx= i n) 1]
+                  [(#3%eq? (#3%vector-ref v i) (#3%vector-ref o i)) (loop (#3%fx+ i 1))]
                   [else 0]))
           0))))
 (define-override! "java/lang/StringLatin1.indexOfChar([BIII)I"
   (lambda (value ch from max)
     (let ([v (jarr-vec (nn value))] [c (i2b ch)])   ; (byte) ch, as the JDK compares
       (when (fx< from max) (check-hash-range! from max (vector-length v)))
-      (let loop ([i from])
-        (cond [(fx>= i max) -1]
-              [(fx= (vector-ref v i) c) i]
-              [else (loop (fx+ i 1))])))))
+      (let loop ([i from])   ; inside the range just checked
+        (cond [(#3%fx>= i max) -1]
+              [(#3%eq? (#3%vector-ref v i) c) i]
+              [else (loop (#3%fx+ i 1))])))))
 
 ;; --- java.io.UnixFileSystem: the read-only queries --------------------------------
 ;; Answered with Chez's own file procedures. Changes, access checks and

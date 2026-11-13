@@ -329,3 +329,29 @@ What remained, measured on the same run: thawing the 2,584 class entries the lau
 Spike 75 profiled what was left of the loader's own Java at a 1 ms interval: `String.hashCode`, `equals` and `indexOf`, the three HotSpot intrinsifies, were 0.2 s of a 4.5 s start as the JDK's Java loops. They are overridden with the same loops in Scheme over the arrays' vectors (`ArraysSupport.vectorizedHashCode` for every basic type the JDK hashes there, `StringLatin1.equals` and `indexOfChar`): a micro-benchmark on a 70-character string has `equals` 740 to 350 ns and `indexOf` 500 to 230 ns, the JVM at 9 and 12. The rest of that profile is the launcher's own logic spread thin (its `JarUrlConnection.connect` under a lock, zip header reads, URL parsing) and two fixed costs: `BigDecimal`'s class initialization, 0.1 s of `BigInteger` squaring whose 64-bit products are bignums here (145 ms, then 46 ms after spike 84's [long arithmetic](#long-arithmetic), and 24 ms after spike 85, against 57 ms for spike 84's code in the same runs), and inflating, where every byte crosses between a vector and native memory. `StringOpsCheck` pins the three against the JVM.
 
 `jolt test` checks the accessors with `UnalignedCheck`: every alignment and both byte orders on heap and direct buffers, writes through the same paths, the views, and a closed arena's buffer throwing as on the JVM.
+
+### Strings and array copies
+
+A benchmark of plain string and array operations (2026-11-14, M1 Pro, jolt 0.8.27) showed each one 10 to 200 times slower than HotSpot, and most of the time in three places.
+
+- **`String.charAt`, `length` and `isEmpty` were calls.** `charAt` is five Java calls before the byte is read: `isLatin1()`, `StringLatin1.charAt`, `checkIndex` and two in `Preconditions`. HotSpot intrinsifies it. A call site that names one of the three methods on `String` now does the work in line (`strings.ss`): an index in range reads the byte, or the two of a UTF-16 unit, and anything else calls the method itself, so an exception, its message and its stack trace are still the JDK's. The methods aren't overridden, so a call through `CharSequence` runs the Java code as before.
+- **Loops in the runtime read vectors with checks.** The Scheme loops behind `String.equals`, `indexOf(char)` and `hashCode` check their range once and then read each element; at jolt's optimize level the checked read cost most of a step. They use unchecked reads after the range check. `System.arraycopy` and `clone` copied element by element the same way, and now use Chez's `vector-copy!` and `vector-copy`.
+- **Concatenation with a number.** `"n" + i` turned the `int` into a Scheme string with `number->string`, looked its recipe up in a weak table, and found the `String` class and the `byte[]` element type by name for the result. The recipe is parsed when the call site is translated, an `int` or `long` goes to the runtime as the number and its digits are written straight into the result's bytes, and the class and element type are looked up once.
+
+| Operation | Before | Now | HotSpot |
+|---|---|---|---|
+| `s.charAt(i)` in a loop, Latin-1, an iteration | 17.2 ns | 6.4 ns | 0.3 ns |
+| the same, UTF-16 | 21.8 ns | 6.8 ns | 0.3 ns |
+| `s.length()` in a loop, an iteration | 5.7 ns | 3.7 ns | under 0.1 ns |
+| `StringBuilder.append(char)` | 34.9 ns | 24.1 ns | 1.8 ns |
+| `"hello" + i` | 371.8 ns | 77.7 ns | 7.4 ns |
+| `equals`, two equal strings of 1000 chars | 2133 ns | 516 ns | 16 ns |
+| `indexOf(char)` over 1000 chars, not found | 1637 ns | 514 ns | 18 ns |
+| `System.arraycopy`, 16 bytes | 49.4 ns | 18.6 ns | 1.5 ns |
+| `System.arraycopy`, 1024 bytes | 2825 ns | 693 ns | 14 ns |
+| `Arrays.copyOfRange`, 1000 bytes | 3225 ns | 1153 ns | 73 ns |
+| `clone` of 1024 bytes | 2729 ns | 743 ns | 30 ns |
+
+The loop itself costs about 2 ns an iteration here, which is most of what's left in the first three rows. A `byte[]` is a Scheme vector with one word per byte, so copying 1024 bytes moves 8 KB, and that sets the floor for the copy rows. `StringBuilder.append(String)` (73 ns), `append(int)` (99 ns), `substring` (171 ns) and `trim` (90 ns) didn't move: they are chains of small Java methods, and the cost is the calls.
+
+`StringOpsCheck` covers every index of Latin-1 and UTF-16 strings and the out-of-range messages, `ConcatCheck` numbers of every digit count next to every kind of text, and `ArrayMoveCheck` overlapping copies in both directions for each element kind.
