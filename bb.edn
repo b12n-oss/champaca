@@ -99,7 +99,8 @@
                          ["classes" "real Java classes defined from jolt"]
                          ["preview" "class files compiled with --enable-preview, from jolt"]
                          ["vector" "the Vector API, with :add-modules, from jolt"]
-                         ["upcalls" "C calling jolt fns through upcall stubs"]])
+                         ["upcalls" "C calling jolt fns through upcall stubs"]
+                         ["portcheck" "jolt functions checked against the Java methods they stand for"]])
           ;; test/jar packed into target/lib.jar, which jars, fields,
           ;; serialization and classes put on their classpath
           (defn lib-jar! []
@@ -181,7 +182,7 @@
                             listed (subs text start (str/index-of text "]" start))
                             unlisted (->> (fs/glob "src/champaca" "*.clj")
                                           (map (fn [f] (str (fs/file-name f))))
-                                          (remove (fn [n] (contains? (set ["api.clj" "npe.clj"]) n)))
+                                          (remove (fn [n] (contains? (set ["api.clj" "npe.clj" "portcheck.clj"]) n)))
                                           (remove (fn [n] (str/includes? listed (str "\"champaca/" n "\""))))
                                           sort)]
                         (when (seq unlisted)
@@ -1260,6 +1261,29 @@
   bench {:doc "Upstream OpenLDK's startup benchmarks: build and time Spring Boot or Quarkus on HotSpot and through champaca (jolt bench spring-boot [build|bench|all]); see bench/README.md"
          :task (do (load-file "bench/bench.clj")
                    ((resolve (symbol "bench" "main")) (jolt-bin) *command-line-args*))}
+  bench:port {:doc "Time each test/jar PortSample method four ways, ns a call: HotSpot, champaca, champaca with CHAMPACA_STRUCTURED=1, and the hand translation in examples/portcheck.clj on jolt (bench/port.clj). Prints a table; champaca's columns are from a second, warm run"
+              :task (let [_ (when (lib-jar-stale?) (lib-jar!))
+                          rows (fn [out] (into {} (keep (fn [l] (let [[n v] (str/split l (re-pattern " "))]
+                                                                 (when (and v (re-matches (re-pattern "[0-9]+") v)) [n (parse-long v)])))
+                                                       (str/split-lines out))))
+                          order (fn [out] (keep (fn [l] (let [[n v] (str/split l (re-pattern " "))]
+                                                         (when (and v (re-matches (re-pattern "[0-9]+") v)) n)))
+                                               (str/split-lines out)))
+                          run (fn [env & cmd] (:out (apply shell {:out :string :err :inherit :extra-env env} cmd)))
+                          java (str (or (System/getenv "JAVA_HOME") (throw (ex-info "set JAVA_HOME to a JDK 25" {}))) "/bin/java")
+                          hotspot (run {} java "-cp" "target/lib.jar" "champaca.lib.PortBench")
+                          champaca (fn [env]
+                                     (let [cmd [(jolt-bin) "-M" "-m" "champaca.main" "target/lib.jar" "champaca.lib.PortBench"]]
+                                       (apply run env cmd)
+                                       (apply run env cmd)))
+                          cols [["HotSpot" (rows hotspot)]
+                                ["champaca" (rows (champaca {}))]
+                                ["champaca, structured" (rows (champaca {"CHAMPACA_STRUCTURED" "1"}))]
+                                ["jolt translation" (rows (run {} (jolt-bin) "-M" "bench/port.clj"))]]]
+                      (println (str "| Method | " (str/join " | " (map first cols)) " |"))
+                      (println (str "|---|" (str/join (repeat (count cols) "---|"))))
+                      (doseq [m (order hotspot)]
+                        (println (str "| `" m "` | " (str/join " | " (map (fn [[_ r]] (if-let [v (r m)] (str v " ns") "missing")) cols)) " |"))))}
   ;; Reports: findings never fail these. metrics.cli exits non-zero only on
   ;; bad usage or a missing directory, and that exit passes through.
   ;; metrics:gate is the one that fails, as CI's metrics job does.

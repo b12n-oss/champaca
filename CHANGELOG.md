@@ -63,6 +63,13 @@ The first public version. Champaca is still experimental: the
   site tasks, and `jolt warm`.
 - Guides under `docs/guide/` (`jvm-languages` for Clojure, Groovy, Scala, Kawa, ABCL and Kotlin), `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
+- **`champaca.portcheck`**, a check for a jolt function written to replace a
+  Java static method. It runs both on the same generated inputs (the Java
+  side by champaca, from the class file) and compares the result, the
+  exception's class and what the call did to its array and list arguments.
+  `examples/portcheck.clj` checks eleven ports and then eleven versions with
+  a bug put in, each of which the check has to report. `jolt bench:port`
+  times the same methods on HotSpot, champaca and jolt.
 - **Structured method code** (`CHAMPACA_STRUCTURED=1`): a pass over each
   method's generated form, before it's compiled, that moves a block called
   from one place to that place and drops the `let`s that only rename a local
@@ -71,6 +78,7 @@ The first public version. Champaca is still experimental: the
   Methods with exception handlers are left as generated for now.
   `CHAMPACA_STRUCTURED_TRACE=<file>` writes the result. `jolt test` runs six
   programs with it on, and the whole suite passes with it.
+||||||| parent of b130b97 (WIP: portcheck)
 - **`jolt warm`**, a training run for the startup cache. It compiles the JDK
   paths programs reach early, so a first `String.format`, `SecureRandom` or
   time zone no longer costs seconds. A program using all three went from
