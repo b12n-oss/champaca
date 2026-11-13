@@ -6,7 +6,7 @@ is a Clojure interpreter, [SCI](https://github.com/babashka/sci), that
 GraalVM's native-image compiled ahead of time into one binary along with a
 selection of Java classes. Your Clojure is interpreted there, and the Java it
 can reach was chosen when babashka was built. Champaca is a Java runtime inside
-jolt. It loads real class files at run time, turns each method's bytecode into
+jolt. It loads class files at run time, turns each method's bytecode into
 Chez Scheme the first time it's called and compiles that to native code in the
 same process, so your Clojure is jolt's, compiled natively, and the Java it
 calls is compiled on demand.
@@ -35,14 +35,13 @@ Its own Clojure goes through an interpreter, though, which is why its README
 sends a script that runs for more than a few seconds, or loops a lot, to
 Clojure on the JVM. And a Java class outside its set isn't there at all.
 
-Champaca's strength is reach. Real libraries run unchanged: Jackson, Guava,
-Guice, H2, Byte Buddy and the rest of what `jolt libs` checks, with the same
-output as HotSpot. Once a method is compiled it runs as native Chez code with
+Champaca runs libraries unchanged: Jackson, Guava, Guice, H2, Byte Buddy and
+the rest of what `jolt libs` checks, with the same output as HotSpot. Once a method is compiled it runs as native Chez code with
 inline caches, and jolt code calls it as a plain procedure call.
 
-What champaca costs is a slow first run (the startup cache softens it, much as
-class data sharing does for HotSpot), Java code that can't run on two threads
-at once, and warm runs slower than the JVM's for library-heavy code: a warm
+Champaca's costs are a slow first run, which the startup cache softens much as
+class data sharing does for HotSpot, Java code that can't run on two threads
+at once, and warm runs slower than the JVM's for library-heavy code. A warm
 Jackson run takes 1.34 s against 0.28 s on the JVM
 ([performance](performance.md)).
 
