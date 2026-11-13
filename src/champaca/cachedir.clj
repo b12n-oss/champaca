@@ -30,7 +30,8 @@
 
 (def runtime-files
   "The Scheme runtime, in load order."
-  ["champaca/runtime.ss" "champaca/strings.ss" "champaca/modules.ss" "champaca/units.ss" "champaca/launch.ss"
+  ["champaca/runtime.ss" "champaca/strings.ss" "champaca/modules.ss" "champaca/units.ss" "champaca/structure.ss"
+   "champaca/launch.ss"
    "champaca/natives.ss" "champaca/management.ss" "champaca/memory.ss"
    "champaca/threads.ss" "champaca/loaders.ss" "champaca/varhandles.ss" "champaca/reflect.ss" "champaca/handles.ss"
    "champaca/files.ss" "champaca/zip.ss" "champaca/prefs.ss"
@@ -236,7 +237,8 @@
           key (hash [(when (.exists release) (slurp release)) (.length modules)
                      (if @bundle-root (image-index-crc) (.lastModified modules))
                      (translator-fingerprint) (img/runtime-version) *jolt-version*
-                     (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)])
+                     (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)
+                     (some? (env "CHAMPACA_STRUCTURED"))])
           d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))
           ;; a bundle whose own cache can't be written runs on a copy in the
           ;; user's (user-copy)

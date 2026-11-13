@@ -38,6 +38,7 @@ CHAMPACA_PROF=1 ...     # time spent per phase (parse, register, codegen, compil
 CHAMPACA_CALLER_DEBUG=1 ...  # print the frames each Reflection.getCallerClass call sees
 CHAMPACA_NPE_STRICT=1 ...    # throw when an NPE message can't be built, instead of a null message (jolt test sets it)
 CHAMPACA_TRACE=1 ...    # log each compiled method, and write the generated Scheme to target/jit/trace.ss
+CHAMPACA_STRUCTURED=1 ...  # rewrite each method's code into a readable form before compiling it (debugging.md)
 CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke-static and construct
 ```
 

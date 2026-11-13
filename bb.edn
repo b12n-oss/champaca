@@ -528,6 +528,26 @@
                                           (finally (fs/delete-tree cache)))]
                                  (println (if ok "PASS" "FAIL") "a warm boot's new classes reach the startup cache (EncoderCheck)")
                                  (if ok [] ["boot generation"]))
+                    ;; structured method code (CHAMPACA_STRUCTURED=1, structure.ss): a few
+                    ;; programs on a cache of their own, cold and then the first one warm,
+                    ;; and the pass's own counters to show it ran. The whole suite under
+                    ;; CHAMPACA_STRUCTURED=1 is the full check, run by hand.
+                    structured-fails (let [cache (str (fs/create-temp-dir {:prefix "champaca-structured-"}))
+                                           ch (fn [m err]
+                                                (run-limited 300 {:label (str "structured-" m) :err err
+                                                                  :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_STRUCTURED" "1" "CHAMPACA_STATS" "1"
+                                                                              "CHAMPACA_NPE_STRICT" "1" "CHAMPACA_TEST_VAR" "a=b=c"}}
+                                                             (jolt-bin) "-M" "-m" "champaca.main" "target/classes:target/lib.jar:target/lib2.jar" m))
+                                           same? (fn [m r] (and (zero? (:exit r)) (= (:out r) (slurp (str "test/java/" m ".expected")))))
+                                           ok (try
+                                                (let [first-run (ch "Hello" :string)
+                                                      ran (re-find (re-pattern "structured: methods-structured [1-9]") (str (:err first-run)))]
+                                                  (and (same? "Hello" first-run) ran
+                                                       (every? (fn [m] (same? m (ch m :inherit)))
+                                                               ["ArrayLoopCheck" "StackCheck" "FieldAccessCheck" "LongOpsCheck" "LambdaInitCheck" "Hello"])))
+                                                (finally (fs/delete-tree cache)))]
+                                       (println (if ok "PASS" "FAIL") "structured method code gives the same output (CHAMPACA_STRUCTURED)")
+                                       (if ok [] ["structured"]))
                     ;; a save that fails, then one that succeeds, in one process
                     ;; (test/cachesave), on a cache of its own: the next run uses
                     ;; the class whose code the failed save dropped
@@ -1010,7 +1030,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails save-fails signal-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails structured-fails save-fails signal-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

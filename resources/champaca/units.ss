@@ -58,12 +58,12 @@
     (let ([p (open-string-input-port text)])
       (let loop ([last (void)])
         (let ([form (read p)])
-          (if (eof-object? form) last (begin (self-label-form! form) (loop (eval form)))))))))
+          (if (eof-object? form) last (begin (self-label-form! form) (loop (eval (structure-form form))))))))))
 (define (interpret-string s)
   (let ([p (open-input-string s)])
     (let loop ([r (void)])
       (let ([x (read p)])
-        (if (eof-object? x) r (begin (self-label-form! x) (loop (interpret x))))))))
+        (if (eof-object? x) r (begin (self-label-form! x) (loop (interpret (structure-form x)))))))))
 
 ;; compile-file announces itself on stdout, which belongs to the Java program.
 ;; The cache's code carries no inspector information (free-variable names,
@@ -91,7 +91,7 @@
   (let ([in (open-input-string text)])
     (let loop ([forms '()])
       (let ([x (read in)])
-        (if (eof-object? x) (reverse forms) (begin (self-label-form! x) (loop (cons x forms))))))))
+        (if (eof-object? x) (reverse forms) (begin (self-label-form! x) (loop (cons (structure-form x) forms))))))))
 
 ;; inspect: keep inspector information, as a classpath class's method bodies
 ;; do, since stack traces read their line numbers from it (JDK code goes
