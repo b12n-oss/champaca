@@ -108,4 +108,10 @@
   ;; Kawa: Scheme compiled to bytecode as each form is read (records,
   ;; syntax-rules, tail calls, call/cc, dynamic-wind, guard, Java interop)
   {:main "Kwa" :run ["kawa.repl" "test/libs/Kwa.scm"]
-   :jars [["com.github.arvyy:kawa:3.1.1" "d4db8e9a7b4714fd5a4b77a0a23085d317bfaa27"]]}]}
+   :jars [["com.github.arvyy:kawa:3.1.1" "d4db8e9a7b4714fd5a4b77a0a23085d317bfaa27"]]}
+  ;; ABCL: Common Lisp. Its boot loads each compiled file through a
+  ;; FaslClassLoader of its own, and several define classes of the same name
+  ;; (org.armedbear.lisp.defmacro_1), which one class table refused before
+  ;; loaders got names of their own (CLOS, conditions, restarts, compile)
+  {:main "Abcl" :run ["org.armedbear.lisp.Main" "--noinform" "--noinit" "--batch" "--load" "test/libs/Abcl.lisp"]
+   :jars [["org.abcl:abcl:1.9.2" "dc3ce051fb0a19822d46c4ad75d0d3b9fb8e9024"]]}]}

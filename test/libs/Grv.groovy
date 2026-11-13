@@ -46,5 +46,6 @@ row "with", (new StringBuilder().with { append("a"); append("b"); delegate.toStr
 row "inject", (1..10).inject(0) { s, x -> s + x }
 row "sort", [[3, 1, 2].sort(), ["bb", "a", "ccc"].sort { it.size() }, [3, 1, 2].sort { a, b -> b <=> a }]
 row "eval", Eval.me("2 * 21")
+row "shell", new GroovyShell().evaluate("def f(x) { x * x }; f(7)")
 row "threads", { def t = Thread.start { 6 * 7 }; t.join(); "joined" }()
 row "switch", [1, "s", [1], 2.5].collect { v -> switch (v) { case Integer: "int"; break; case String: "str"; break; case List: "list"; break; default: "other" } }

@@ -315,7 +315,7 @@
                          ;; pkg/Name/0x1 prints as pkg.Name/0x1, as HotSpot prints a hidden class
                          (let ([i (let loop ([i (fx- (string-length n) 1)]) (if (char=? (string-ref n i) #\/) i (loop (fx- i 1))))])
                            (string-append (slashes->dots (substring n 0 i)) (substring n i (string-length n))))
-                         (slashes->dots n)))])
+                         (slashes->dots (plain-class-name n))))])
     (jslot-set! this (jfield-index "java/lang/Class" "name") s)
     s))
 (defnative "java/lang/Class.isInstance(Ljava/lang/Object;)Z" (this x)
@@ -566,7 +566,7 @@
          [file (vector-ref info 0)] [line (if (eqv? pc -2) -2 (vector-ref info 1))] [module (vector-ref info 2)]
          [set (lambda (f v) (jslot-set! ste (slot-of "java/lang/StackTraceElement" f) v))])
     (set "declaringClassObject" (jmirror-of cname))
-    (set "declaringClass" (jstring (slashes->dots cname)))
+    (set "declaringClass" (jstring (slashes->dots (plain-class-name cname))))
     (set "methodName" (jstring mname))
     (set "fileName" (and (fx> (string-length file) 0) (jstring file)))
     (set "lineNumber" line)

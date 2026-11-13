@@ -647,9 +647,10 @@
 
 (defn dotted
   "A class's name as Java prints it; a hidden class keeps the slash before
-  its /0x<n> suffix, as Class.getName does."
+  its /0x<n> suffix, as Class.getName does, and a loader's /0L<k> (another
+  loader had the name) isn't printed."
   [n]
-  (let [[_ base sfx] (re-matches #"(.*?)(/0x[0-9a-f]+)?" n)]
+  (let [[_ base sfx] (re-matches #"(.*?)(/0x[0-9a-f]+)?" (str/replace n #"/0L[0-9]+$" ""))]
     (str (str/replace base "/" ".") sfx)))
 
 (defn- check-sealed!

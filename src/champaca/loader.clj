@@ -138,6 +138,19 @@
     (when-let [r *reads*] (vswap! r conj n))
     n)))
 
+(defn remap-class-names
+  "The parsed class c with f applied to every class name its constant pool's
+  class entries and member references hold and to the exception-table types
+  parse-code resolved to names. Descriptors and the class's own :name stay."
+  [c f]
+  (let [fix (fn [e] (cond (= :class (:tag e)) (update e :name f)
+                          (contains? e :class) (update e :class f)
+                          :else e))]
+    (-> c
+        (update :cp #(into {} (map (fn [[i e]] [i (fix e)])) %))
+        (update :methods (fn [ms] (mapv (fn [m] (cond-> m (:code m) (update-in [:code :handlers] (fn [hs] (mapv #(update % :type f) hs)))))
+                                        ms))))))
+
 (defn- rename-class
   "The parsed class c under a new name: its own, every constant-pool class
   entry and member reference naming it, and the exception-table types
@@ -147,16 +160,9 @@
   does an array type naming the class ([Lold;), which the JVM resolves to the
   original class too (DefineCheck's hidden self-references row)."
   [c new]
-  (let [old (:name c)
-        fix-name (fn [s] (if (= s old) new s))
-        fix (fn [e] (cond (= :class (:tag e)) (update e :name fix-name)
-                          (contains? e :class) (update e :class fix-name)
-                          :else e))]
-    (-> c
-        (assoc :name new)
-        (update :cp #(into {} (map (fn [[i e]] [i (fix e)])) %))
-        (update :methods (fn [ms] (mapv (fn [m] (cond-> m (:code m) (update-in [:code :handlers] (fn [hs] (mapv #(update % :type fix-name) hs)))))
-                                        ms))))))
+  (let [old (:name c)]
+    (-> (remap-class-names c (fn [s] (if (= s old) new s)))
+        (assoc :name new))))
 
 (def ^:private hidden-counter (atom 0x1000))
 
@@ -178,7 +184,7 @@
   "define-class!'s answer when the parsed class c can't be defined, else nil.
   HotSpot checks the name as it reads it, before the interface and sealed
   checks."
-  [c given hidden?]
+  [c given hidden? renamed?]
   (cond
     (:bad c) (str "bad " (:bad c))
     (:version c) (str "link java/lang/UnsupportedClassVersionError|" (:version c))
@@ -186,7 +192,7 @@
     (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
     (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
     (final-sealed? c) (str "bad PermittedSubclasses attribute in final class file " (or given (:name c)))
-    (and (not hidden?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))))
+    (and (not hidden?) (not renamed?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))))
 
 (defn- defined-deps!
   "A defined class n's library cache dependencies from what its link and
@@ -206,9 +212,11 @@
   "Link and register the parsed class c (renamed first when hidden), as
   ensure-loaded! does for a classpath class: \"ok <name>\", or HotSpot's
   definition checks' error as \"link <class>|<text>\"."
-  [c hidden? bs fp dj]
+  [c hidden? internal bs fp dj]
   (try
-    (let [c (if hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc)))) c)
+    (let [c (cond hidden? (rename-class c (str (:name c) "/0x" (Long/toHexString (swap! hidden-counter inc))))
+                  internal (rename-class c internal)
+                  :else c)
           n (:name c)
           info (class-map n c :defined)]
       ;; bytes class-source held for a classpath class of this name won't be parsed
@@ -254,17 +262,20 @@
   earlier run's entry for the same bytes is restored instead of parsing
   (restore-defined-class!). With generated? (a domain with no code source
   location: bytes made at run time, as a Clojure REPL's eval classes) the
-  class gets line numbers (jit.clj lines?) and its own cache file."
-  [given text hidden? cacheable? generated?]
+  class gets line numbers (jit.clj lines?) and its own cache file. With
+  internal (loaders.ss loader-internal-name: another loader has the name) the
+  class is renamed to it, as a hidden class is, and never cached, the name
+  depending on definition order."
+  [given text hidden? cacheable? generated? internal]
   (let [bs (.getBytes ^String text "ISO-8859-1")
-        fp (when (and cacheable? given) (timed :fingerprint #(bytes-fp bs)))
+        fp (when (and cacheable? given (not internal)) (timed :fingerprint #(bytes-fp bs)))
         dj (when fp (defined-jar generated?))
         answer (or (when (and fp (not (get-in @state [:classes given])))
                      (restore-defined-class! given bs fp dj))
                    (let [c (parse-defined bs given)]
-                     (or (definition-refusal c given hidden?)
-                         (do (when generated? (note-generated! (:name c)))
-                             (define-parsed-class! c hidden? bs fp dj)))))]
+                     (or (definition-refusal c given hidden? (boolean internal))
+                         (do (when (and generated? (not internal)) (note-generated! (:name c)))
+                             (define-parsed-class! c hidden? internal bs fp dj)))))]
     (when (and generated? (str/starts-with? answer "ok "))
       (note-generated! (subs answer 3)))
     answer))
