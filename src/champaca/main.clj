@@ -45,6 +45,26 @@
   (try (when (true? (s/call "java-signal-shutdown!")) (save-generation!))
        (finally (s/call "gil-leave!"))))
 
+(defn- install-exit-saves!
+  "Save the startup cache however the process ends: on a signal (jolt's
+  shutdown hook) and on System.exit from another thread, which ends the
+  process there, past run's own save."
+  []
+  (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable on-signal-shutdown!))
+  (s/call "set-off-main-exit-hook!" (fn [] (save-generation!))))
+
+(defn- launch!
+  "Print the version when asked, then run the program as the command line
+  named it (a module, a jar or a class): its exit status. Only a version
+  printed and nothing to run (-version) ends without running."
+  [cname args]
+  (let [v (:version @state)
+        vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)]
+    (cond (not (and cname (zero? vs))) vs
+          (:launch-module @state) (apply s/call "run-module-main" cname args)
+          (:launch-jar @state) (apply s/call "run-jar-main" (:launch-jar @state) args)
+          :else (apply s/call "run-main" cname args))))
+
 (defn run
   "Run cname's main method with classes found under the classpath dirs,
   after booting the JDK. Returns the exit status. With :version in the
@@ -57,16 +77,8 @@
         _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
     (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
-      (let [_ (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable on-signal-shutdown!))
-            ;; System.exit from another thread ends the process there, past
-            ;; the save below
-            _ (s/call "set-off-main-exit-hook!" (fn [] (save-generation!)))
-            v (:version @state)
-            vs (if v (s/call "java-print-version" (boolean (:err? v))) 0)
-            status (cond (not (and cname (zero? vs))) vs
-                         (:launch-module @state) (apply s/call "run-module-main" cname args)
-                         (:launch-jar @state) (apply s/call "run-jar-main" (:launch-jar @state) args)
-                         :else (apply s/call "run-main" cname args))]
+      (let [_ (install-exit-saves!)
+            status (launch! cname args)]
         (when (env "CHAMPACA_PROF") (prof-report "run" (- (System/nanoTime) t0)))
         (when (env "CHAMPACA_STATS") (stats))
         (save-generation!)
