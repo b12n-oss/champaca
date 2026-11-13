@@ -62,6 +62,22 @@
           (record! (cache-origin info) [cname] {:text text})
           (scheme! text :interpret)))))
 
+(defn- link-and-register!
+  "Link the parsed class info, put it in the table and run its registration.
+  A classpath class's link and registration record what they read, which
+  become its library cache keys."
+  [cname info]
+  (let [reads (when (= :user (:origin info)) (volatile! #{}))
+        linked (binding [*reads* reads] (timed :link #(link info)))]
+    (swap! state assoc-in [:classes cname] linked)
+    (note-parsed! cname)
+    (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
+          linked (if-let [ks (when reads (library-cache-keys cname @reads))]
+                   (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
+                   linked)]
+      (record! (cache-origin linked) [cname] {:text text})
+      (timed :register-eval #(scheme! text :interpret)))))
+
 (defn- load-new-class!
   "A class not in the table: restored from the library cache, else parsed,
   its supertypes loaded, linked and registered. A classpath class's link and
@@ -71,16 +87,7 @@
     (when-let [info (timed :parse #(normalize cname))]
       (load-supertypes! info)
       (when-not (get-in @state [:classes cname])
-        (let [reads (when (= :user (:origin info)) (volatile! #{}))
-              linked (binding [*reads* reads] (timed :link #(link info)))]
-          (swap! state assoc-in [:classes cname] linked)
-          (note-parsed! cname)
-          (let [text (binding [*reads* reads] (timed :register-text #(registration-text linked)))
-                linked (if-let [ks (when reads (library-cache-keys cname @reads))]
-                         (get-in (swap! state update-in [:classes cname] merge ks) [:classes cname])
-                         linked)]
-            (record! (cache-origin linked) [cname] {:text text})
-            (timed :register-eval #(scheme! text :interpret))))))))
+        (link-and-register! cname info)))))
 
 (defn ensure-loaded! [cname]
   (refuse-outside-layer! cname)
