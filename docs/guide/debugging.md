@@ -10,6 +10,7 @@ Each switch is an environment variable, read when the process starts. `STATS` an
 | `CHAMPACA_STATS=1` | prints how many classes were loaded (and how many of them came from the library cache), methods compiled (and how many of classpath classes) and cached units loaded, after boot and at exit; when a loader of the program's own defined classes, a second line says how many weren't restored from the cache and why (new, changed, or depending on a class the cache can't check) and how many classes had their cached methods dropped for a changed dependency |
 | `CHAMPACA_PROF=1` | prints how long each phase took, after boot and again when `main` returns |
 | `CHAMPACA_TRACE=1` | logs each method as it compiles and writes all the generated Scheme to `target/jit/trace.ss` |
+| `CHAMPACA_STRUCTURED=1` | rewrites each method's generated code into a form meant for reading before compiling it, see [structured method code](#structured-method-code); `CHAMPACA_STRUCTURED_TRACE=<file>` appends each rewritten method to that file |
 | `CHAMPACA_CALLER_DEBUG=1` | prints the frames each `Reflection.getCallerClass` call sees |
 | `CHAMPACA_NPE_STRICT=1` | throws when an NPE's message can't be built, where a normal run gives a `null` message as HotSpot does; `jolt test` and `jolt libs` set it |
 | `CHAMPACA_CACHE=off` | ignores the startup cache ([performance](performance.md)) |
@@ -97,6 +98,56 @@ A class that isn't there at all, named by an instruction (`new`, a field or meth
 (The file has it on one line; it's indented here.) `l0` is local 0, `s0` and `s1` are stack slots, `ic0` remembers that `System` is initialized, `ic1` is the `println` call's inline cache, and `#B0` is the method's only basic block. `npe-tag` names the method for a helpful `NullPointerException` message, which gets it with the bytecode index (0 and 5 here), and each `(begin '(jpc . 5) ...)` marks the bytecode pc a stack trace reads its line number from. [how-it-works](how-it-works.md) explains the shape.
 
 A method compiled from the startup cache doesn't go through the translator, so it won't appear. Add `CHAMPACA_CACHE=off` to see everything.
+
+## Structured method code
+
+The generated code has one procedure for each basic block and one `let` for each stack slot, which is easy to produce and hard to read. `CHAMPACA_STRUCTURED=1` runs a pass over each method's form before Chez compiles it (`resources/champaca/structure.ss`). A block that one place calls moves to that place, and a `let` that only gives a local or a constant another name goes away. Every runtime operation stays, in the same order, so the method does what the generated code does.
+
+Take Euclid's algorithm:
+
+```java
+static int gcd(int a, int b) {
+    while (b != 0) { int t = a % b; a = b; b = t; }
+    return a;
+}
+```
+
+The generator writes three blocks and eight stack-slot bindings for it (647 characters):
+
+```scheme
+(letrec ((|Gcd.gcd(II)I#B0| (lambda (l0 l1 l2)
+           (let ((s0 l1))
+             (if (ix= s0 0) (|Gcd.gcd(II)I#B15| l0 l1 l2) (|Gcd.gcd(II)I#B4| l0 l1 l2)))))
+         (|Gcd.gcd(II)I#B4| (lambda (l0 l1 l2)
+           (let ((s0 l0)) (let ((s1 l1))
+             (let ((s0 (int-rem s0 s1 (begin '(jpc . 6) npe-tag) 6)))
+               (let ((l2 s0)) (let ((s0 l1)) (let ((l0 s0)) (let ((s0 l2)) (let ((l1 s0))
+                 (begin (when (#3%fx> gil-ready 0) (jsafepoint))
+                        (|Gcd.gcd(II)I#B0| l0 l1 l2)))))))))))
+         (|Gcd.gcd(II)I#B15| (lambda (l0 l1 l2) (let ((s0 l0)) s0))))
+  (|Gcd.gcd(II)I#B0| l0 l1 0))
+```
+
+With the pass on, the loop head is the one procedure left, and the body reads as the Java does (418 characters, indented here):
+
+```scheme
+(letrec ([|Gcd.gcd(II)I#B0|
+          (lambda (l0 l1 l2)
+            (if (ix= l1 0)
+                l0
+                (let ([l2 (int-rem l0 l1 (begin '(jpc . 6) npe-tag) 6)])
+                  (begin (when (#3%fx> gil-ready 0) (jsafepoint))
+                         (|Gcd.gcd(II)I#B0| l1 l2 l2)))))])
+  (|Gcd.gcd(II)I#B0| l0 l1 0))
+```
+
+`CHAMPACA_STRUCTURED_TRACE=<file>` appends each rewritten method to a file, pretty-printed. Use it with `CHAMPACA_CACHE=off`, as for the trace above.
+
+The pass leaves a method as generated when it can't follow it: one with an exception handler (`jtry`), a `synchronized` method, a `switch` compiled to `case`, an assigned local, or a block label that appears twice (an inlined callee used at two sites). The trace file names each of those with its reason, and `CHAMPACA_STATS=1` prints the counts. On a cold `Hello` (jolt 0.8.27, 2026-11-14) 972 of the 1,081 methods compiled were rewritten and 3,310 of their 4,189 blocks moved to their one caller. Start times didn't change: 4.8 s cold and 0.55 s warm with the pass off and on.
+
+One rewrite that looks safe isn't. `(let ((s0 (f x))) s0)` could be `(f x)`, but with line numbers kept Chez leaves the `let` in place, so the call to `f` is not a tail call and its frame is there for a stack trace and for `Reflection.getCallerClass`. Dropping the `let` lost that frame and four test programs failed, so the pass keeps it.
+
+The startup cache keeps structured and generated code apart (`CHAMPACA_STRUCTURED` is part of its key). `jolt test` runs six programs with the pass on. `CHAMPACA_STRUCTURED=1 jolt test` runs everything with it, and passed 278 of 278 on 2026-11-14.
 
 ## Timing a run
 

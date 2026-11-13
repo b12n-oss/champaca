@@ -22,6 +22,11 @@
 (defn- stats []
   (let [{:keys [classes lazy jitted jitted-user units-loaded restored]} @state]
     (binding [*out* *err*]
+      ;; CHAMPACA_STRUCTURED: what the structuring pass did with the methods
+      ;; compiled this run (structure.ss), one counter a line
+      (when (env "CHAMPACA_STRUCTURED")
+        (doseq [line (str/split-lines (s/call "structure-stats-text"))]
+          (println (str "champaca: structured: " line))))
       (println (str "champaca: " (- (count classes) (count lazy)) " classes loaded ("
                     (or restored 0) " from the library cache), " jitted " methods compiled ("
                     (or jitted-user 0) " of classpath classes), " (or units-loaded 0) " cached units loaded"))

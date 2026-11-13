@@ -139,6 +139,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `resources/champaca/strings.ss` | `java.lang.String` to and from Scheme strings, concatenation |
 | `resources/champaca/modules.ss` | which module and loader a class belongs to, and the texts that name them |
 | `resources/champaca/units.ss` | evaluating and compiling generated code, globals as their own labels, the cache's unit files |
+| `resources/champaca/structure.ss` | structured method code (`CHAMPACA_STRUCTURED=1`): a method's generated form rewritten for reading before it's compiled ([debugging](debugging.md#structured-method-code)) |
 | `resources/champaca/launch.ss` | launching `main`, `System.exit`'s halt, uncaught-exception reports |
 | `resources/champaca/natives.ss` | JDK native methods not covered by the files below, resources, a few overrides |
 | `resources/champaca/management.ss` | `java.management`: the runtime, memory, OS, class-loading and thread beans, the heap pool and collector, GC notifications |

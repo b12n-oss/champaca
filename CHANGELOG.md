@@ -63,6 +63,14 @@ The first public version. Champaca is still experimental: the
   site tasks, and `jolt warm`.
 - Guides under `docs/guide/` (`jvm-languages` for Clojure, Groovy, Scala, Kawa, ABCL and Kotlin), `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
+- **Structured method code** (`CHAMPACA_STRUCTURED=1`): a pass over each
+  method's generated form, before it's compiled, that moves a block called
+  from one place to that place and drops the `let`s that only rename a local
+  or a constant. The operations and their order stay, so the output of a
+  program doesn't change; the code is shorter and reads closer to the Java.
+  Methods with exception handlers are left as generated for now.
+  `CHAMPACA_STRUCTURED_TRACE=<file>` writes the result. `jolt test` runs six
+  programs with it on, and the whole suite passes with it.
 - **`jolt warm`**, a training run for the startup cache. It compiles the JDK
   paths programs reach early, so a first `String.format`, `SecureRandom` or
   time zone no longer costs seconds. A program using all three went from
