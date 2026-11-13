@@ -405,6 +405,10 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- CI's nightly lane runs the whole suite with `CHAMPACA_STRUCTURED=1` on
+  Linux x86_64 and macOS (`BATTERY_MODES=structured`). A push checks the
+  structuring pass on six programs, and the four programs that caught its
+  one bug so far weren't among them.
 - Issue forms for bug reports and feature requests (with the commit, jolt
   and JDK versions, how champaca is run, the platform and the area), a
   `SECURITY.md` that routes reports to GitHub's private vulnerability

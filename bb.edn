@@ -1039,13 +1039,16 @@
                                   (map (fn [i] (str "libcache-fix-" i)) (range 1 4)) aaa-mains (map first examples))]
                 (println (str (- (count mains) (count fails)) "/" (count mains) " passed"))
                 (when (seq fails) (System/exit 1)))}
-  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, jolt test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then jolt libs (jolt battery [ref]; BATTERY_MODES=cold,libs runs a subset, cold first since the cache starts empty); logs and a hang's artifacts stay under target/battery/, and the cache until the next run of another ref"
+  battery {:doc "The gate before a merge: on a detached worktree of <ref> (HEAD) with a cache of its own, jolt test cold, warm, with CHAMPACA_CACHE=off and with CHAMPACA_BT=1, then jolt libs (jolt battery [ref]; BATTERY_MODES=cold,libs runs a subset, cold first since the cache starts empty; BATTERY_MODES=structured is jolt test with CHAMPACA_STRUCTURED=1, which CI runs nightly); logs and a hang's artifacts stay under target/battery/, and the cache until the next run of another ref"
            :task (let [ref (or (first *command-line-args*) "HEAD")
                        tip (str/trim (:out (shell {:out :string} "git" "rev-parse" "--short" ref)))
                        dir (str (fs/absolutize "target/battery"))
                        wt (str dir "/wt-" tip)
                        cache (str dir "/cache-" tip)
-                       envs {"cold" {} "warm" {} "cache-off" {"CHAMPACA_CACHE" "off"} "bt" {"CHAMPACA_BT" "1"} "libs" {}}
+                       envs {"cold" {} "warm" {} "cache-off" {"CHAMPACA_CACHE" "off"} "bt" {"CHAMPACA_BT" "1"} "libs" {}
+                             ;; the whole suite with structured method code (structure.ss):
+                             ;; not in the default list, CI's nightly lane names it
+                             "structured" {"CHAMPACA_STRUCTURED" "1"}}
                        modes (if-let [m (System/getenv "BATTERY_MODES")] (str/split m (re-pattern ",")) ["cold" "warm" "cache-off" "bt" "libs"])
                        _ (when (or (empty? modes) (some (fn [m] (not (contains? envs m))) modes))
                            (println "jolt battery: BATTERY_MODES names modes among" (str/join ", " (keys envs)) "; got" (pr-str modes))

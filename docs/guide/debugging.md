@@ -147,7 +147,7 @@ The pass leaves a method as generated when it can't follow it: one with an excep
 
 One rewrite that looks safe isn't. `(let ((s0 (f x))) s0)` could be `(f x)`, but with line numbers kept Chez leaves the `let` in place, so the call to `f` is not a tail call and its frame is there for a stack trace and for `Reflection.getCallerClass`. Dropping the `let` lost that frame and four test programs failed, so the pass keeps it.
 
-The startup cache keeps structured and generated code apart (`CHAMPACA_STRUCTURED` is part of its key). `jolt test` runs six programs with the pass on. `CHAMPACA_STRUCTURED=1 jolt test` runs everything with it, and passed 278 of 278 on 2026-11-14. It works with `CHAMPACA_BT=1` too, whose wrapper around each method body (a `fluid-let` of the shadow stack) the pass follows.
+The startup cache keeps structured and generated code apart (`CHAMPACA_STRUCTURED` is part of its key). `jolt test` runs six programs with the pass on. `CHAMPACA_STRUCTURED=1 jolt test` runs everything with it, and passed 278 of 278 on 2026-11-14; CI does the same every night on Linux x86_64 and macOS (the battery's `structured` mode), since a change to the code generator can break the pass for a program that isn't among the six. It works with `CHAMPACA_BT=1` too, whose wrapper around each method body (a `fluid-let` of the shadow stack) the pass follows.
 
 ## Timing a run
 

@@ -6,7 +6,9 @@
 # - fast, on a push to any branch: cold, warm and the libraries on each
 #   platform (arm64 skips warm), and CHAMPACA_BT=1 on x86_64
 # - full, every night on main and by hand with `full`: every mode on every
-#   platform, cache-off included (over 90 minutes on x86_64)
+#   platform, cache-off included (over 90 minutes on x86_64), and on x86_64
+#   and macOS the whole suite with CHAMPACA_STRUCTURED=1 (the `structured`
+#   mode), which a push checks on six programs only
 #
 # By hand: `gh workflow run ci -r <branch>` with any of
 #   -f modes="cold,warm bt"     mode groups, one job each (space between groups)
@@ -114,7 +116,7 @@ jobs:
               amd64:false) echo "cold,warm,libs bt" ;;
               arm64:false) echo "cold,libs" ;;
               macos:false) echo "cold,warm,libs" ;;
-              amd64:true|macos:true) echo "cold,warm,libs bt cache-off" ;;
+              amd64:true|macos:true) echo "cold,warm,libs bt cache-off structured" ;;
               arm64:true) echo "cold,warm,libs bt" ;;
             esac
           }
