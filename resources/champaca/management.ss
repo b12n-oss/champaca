@@ -217,7 +217,8 @@
 ;; jdk.management's OperatingSystemImpl is the OS bean once the module system
 ;; has booted (ManagementFactory finds its provider in the boot layer, as the
 ;; JVM does): process CPU time from the runtime, the host's CPU counts from
-;; sysconf, and -1 for what isn't measured here (memory and swap sizes, CPU
+;; sysconf, physical memory too, and -1 for what isn't measured here (free
+;; memory and swap sizes, CPU
 ;; loads, file descriptor counts), which the bean's contract allows.
 (let ()
   (define cls "com/sun/management/internal/OperatingSystemImpl")
@@ -225,6 +226,12 @@
   (define libc-sysconf (foreign-procedure "sysconf" (int) long))
   (define (cpu-count online?)   ; _SC_NPROCESSORS_CONF / _SC_NPROCESSORS_ONLN
     (max 1 (libc-sysconf (if natives-macos? (if online? 58 57) (if online? 84 83)))))
+  ;; _SC_PHYS_PAGES times _SC_PAGESIZE
+  (define physical-memory
+    (let ([pages (libc-sysconf (if natives-macos? 200 85))]
+          [page (libc-sysconf (if natives-macos? 29 30))])
+      (and (> pages 0) (> page 0) (* pages page))))
+  (def "getTotalMemorySize0()J" (lambda (this) (or physical-memory -1)))
   (def "initialize0()V" (lambda () (void)))
   (def "getProcessCpuTime0()J"
        (lambda (this) (let ([t (current-time 'time-process)]) (+ (* 1000000000 (time-second t)) (time-nanosecond t)))))
@@ -232,7 +239,7 @@
   (def "getHostOnlineCpuCount0()I" (lambda (this) (cpu-count #t)))
   (for-each (lambda (n) (def n (lambda (this) -1)))
             '("getCommittedVirtualMemorySize0()J" "getFreeMemorySize0()J" "getFreeSwapSpaceSize0()J"
-              "getMaxFileDescriptorCount0()J" "getOpenFileDescriptorCount0()J" "getTotalMemorySize0()J"
+              "getMaxFileDescriptorCount0()J" "getOpenFileDescriptorCount0()J"
               "getTotalSwapSpaceSize0()J" "getHostTotalCpuTicks0()J"))
   (for-each (lambda (n) (def n (lambda (this) -1.0))) '("getProcessCpuLoad0()D" "getCpuLoad0()D"))
   (def "getSingleCpuLoad0(I)D" (lambda (this cpu) -1.0)))

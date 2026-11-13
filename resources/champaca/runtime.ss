@@ -364,8 +364,10 @@
          (and (record? v)
               (eq? (record-type-uid (record-rtd v)) 'jolt-ex-info-record-v2)
               (equal? ((record-accessor (record-rtd v) 0) v) "java.lang.StackOverflowError")))))
+;; jolt's out-of-memory error is OutOfMemoryError to Java (arrays.ss)
 (define (java-raise-of e)
   (cond [(jobj? e) e]
+        [(jolt-out-of-memory e) => (lambda (message) (or (java-out-of-memory e message) e))]
         [(jolt-stack-overflow? e)
          (or (eq-hashtable-ref overflows-seen e #f)
              (let* ([flag (overflow-flag)]
@@ -1070,32 +1072,7 @@
                              (begin (jinit-cell! cell s tag pc) (jnew-sym s))))]))
 
 ;; --- arrays -------------------------------------------------------------------
-
-(define (jnewarray elem n default)
-  (if (fx< n 0)
-      (jthrow "java/lang/NegativeArraySizeException" (number->string n))
-      (make-jarr elem (#3%make-vector n default))))
-;; generated code's newarray and anewarray, with elem already interned
-(define (jnewarray-interned elem n default)
-  (if (fx< n 0)
-      (jthrow "java/lang/NegativeArraySizeException" (number->string n))
-      (make-jarr* elem (#3%make-vector n default))))
-
-(define (elem-default d)
-  (case (string-ref d 0) [(#\L #\[) #f] [(#\F #\D) 0.0] [else 0]))
-
-(define (jmultiarray desc dims)
-  ;; desc is the full array type, e.g. "[[I"; every dimension is checked
-  ;; first, as multianewarray does, so new int[0][-1] throws too
-  (for-each (lambda (n) (when (fx< n 0) (jthrow "java/lang/NegativeArraySizeException" (number->string n)))) dims)
-  (jmultiarray* desc dims))
-(define (jmultiarray* desc dims)
-  (let ([elem (substring desc 1 (string-length desc))])
-    (if (null? (cdr dims))
-        (jnewarray elem (car dims) (elem-default elem))
-        (let ([a (jnewarray elem (car dims) #f)])
-          (do ([i 0 (fx+ i 1)]) ((fx= i (car dims)) a)
-            (vector-set! (jarr-vec a) i (jmultiarray* elem (cdr dims))))))))
+;; making them, and the limits on their size, are in arrays.ss
 
 (define (bounds-error i v . site)   ; site: codegen's tag and pc, for the trace
   (jthrow "java/lang/ArrayIndexOutOfBoundsException"

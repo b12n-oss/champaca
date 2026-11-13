@@ -222,7 +222,10 @@
 (defnative "java/lang/Runtime.availableProcessors()I" (this) 1)
 ;; Chez's heap: committed and allocated bytes; max is a nominal 4 GB, or
 ;; the heap once it's bigger
-(defnative "java/lang/Runtime.maxMemory()J" (this) (max 4294967296 (current-memory-bytes)))
+;; jolt's heap ceiling, which a large array is checked against (runtime.ss):
+;; HotSpot's default maximum heap, or JOLT_MAX_HEAP; -Xmx is ignored
+(defnative "java/lang/Runtime.maxMemory()J" (this)
+  (max (or (jolt-heap-max-bytes) 4294967296) (current-memory-bytes)))
 (defnative "java/lang/Runtime.totalMemory()J" (this) (current-memory-bytes))
 (defnative "java/lang/Runtime.freeMemory()J" (this) (max 0 (- (current-memory-bytes) (bytes-allocated))))
 ;; a full collection through jolt's own entry (jolt-collect-full!), which

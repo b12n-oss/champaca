@@ -1,0 +1,27 @@
+byte[MAX]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+byte[MAX-1]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+long[MAX]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+char[MAX-1]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+Object[MAX]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+String[MAX-1]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+long[MAX-2]: java.lang.OutOfMemoryError: Java heap space
+double[MAX-2]: java.lang.OutOfMemoryError: Java heap space
+long[100000][100000]: java.lang.OutOfMemoryError: Java heap space
+int[60000][60000][4]: java.lang.OutOfMemoryError: Java heap space
+long[2][MAX]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+long[MAX][2]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+long[MAX][-1]: java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+long[MAX-2][-1]: java.lang.OutOfMemoryError: Java heap space
+long[3][-1]: other: java.lang.NegativeArraySizeException: -1
+long[-1][MAX]: other: java.lang.NegativeArraySizeException: -1
+long[0][-1]: other: java.lang.NegativeArraySizeException: -1
+long[0][MAX]: made 0
+Array.newInstance(int, MAX): java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+Array.newInstance(long, MAX-2): java.lang.OutOfMemoryError: Java heap space
+Array.newInstance(long, 100000, 100000): java.lang.OutOfMemoryError: Java heap space
+Arrays.copyOf(MAX): java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+StringBuilder(MAX): java.lang.OutOfMemoryError: Requested array size exceeds VM limit
+int[1 << 20]: made 1048576
+long[300][5000]: made 300
+byte[0]: made 0
+last 7
