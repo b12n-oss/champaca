@@ -53,6 +53,9 @@ public class PortSample {
         for (int i = 0; i < s.length(); i++) h = 31 * h + s.charAt(i);
         return h;
     }
+    static final int[] SQUARES = {0, 1, 4, 9};
+    /** Reads a static field of the class, which no rule covers: it is left. */
+    public static int square(int i) { return SQUARES[i & 3]; }
     /** A swap: both locals change at once. */
     public static int span(int start, int end) {
         if (start > end) { int t = start; start = end; end = t; }

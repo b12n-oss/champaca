@@ -24,9 +24,11 @@
 (def sample "champaca.lib.PortSample")
 
 (deftest every-method-ports-and-agrees
+  ;; all but square, which reads a static field
   (let [results (port/check-ports (port/port-class sample) 200)]
-    (is (= 15 (count results)))
-    (doseq [r results]
+    (is (= 16 (count results)))
+    (is (= ["champaca/lib/PortSample.square(I)I"] (map :method (filter :left results))))
+    (doseq [r (remove :left results)]
       (is (nil? (:left r)) (str (:method r) " was left: " (:left r)))
       (is (some? (:report r)) (str (:method r) " wasn't checked"))
       (when (:report r)
@@ -110,6 +112,38 @@
                                  (boolean (ldk/call-static "java/lang/Character" "isWhitespace" "(C)Z" (char c))))]
                  c)]
     (is (empty? differ))))
+
+(deftest a-static-field-read-is-left
+  ;; as a reason, for that method alone: the field's name must not reach the
+  ;; function as a free symbol, which would stop every port of the class
+  ;; from loading
+  (let [r (port/port-method sample "square" "(I)I")]
+    (is (str/includes? (:left r) "static field"))
+    (is (str/includes? (:left r) "SQUARES"))))
+
+(deftest a-null-array-throws-as-in-java
+  ;; jolt's aget answers nil for a nil array; the port keeps Java's check
+  (let [r (port/port-method sample "sumEven" "([I)I")]
+    (is (str/includes? (:source r) "(non-null "))
+    (is (= [{:type :ints :nil? true}] (:args r)) "the check passes null for the array now and then")
+    (port/check-ports [r] 1)
+    (is (thrown? NullPointerException (@(ns-resolve 'champaca.ported 'sum-even) nil)))))
+
+(deftest the-case-rules-differ-from-the-jdk-only-on-newer-letters
+  ;; String.toUpperCase and toLowerCase on each char as a one-char string,
+  ;; ß to SS and the like included: jolt and the JDK differ only on the few
+  ;; chars from a Unicode newer than the JDK's tables, which is what the
+  ;; rules' condition, letters-jolt-knows, says
+  (let [differ (fn [jolt-fn java-name]
+                 (for [c (range 65536)
+                       :when (not (<= 0xD800 c 0xDFFF))
+                       :let [s (str (char c))]
+                       :when (not= (jolt-fn s) (ldk/invoke s java-name))]
+                   c))
+        newer? (fn [c] (or (<= 0xA7CE c 0xA7D5) (contains? #{0x88F 0xC5C 0xCDC 0xA7F1 0x295} c)))]
+    (is (every? newer? (differ #(.toUpperCase ^String %) "toUpperCase")))
+    (is (every? newer? (differ #(.toLowerCase ^String %) "toLowerCase")))
+    (is (= (ldk/invoke "ΟΔΟΣ" "toLowerCase") (.toLowerCase "ΟΔΟΣ")) "a final sigma")))
 
 (deftest a-char-array-in-the-signature-is-left
   ;; an element of a char[] is a char in jolt and its code in the ported

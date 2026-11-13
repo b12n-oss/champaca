@@ -65,7 +65,7 @@ The method is translated as champaca translates any method, in a plain form with
 - a loop head called from one place is `loop`, and the jumps back to it are `recur`;
 - a join point or an exit is copied into each path that reaches it;
 - `int` arithmetic that wraps is `unchecked-add-int` and its relatives, division is `(unchecked-int (quot a b))`, and remainder is `rem`;
-- array access is `aget`, `aset` and `alength`, and `new int[n]` is `(int-array n)`;
+- array access is `aget`, `aset` and `alength`, a read or write going through `non-null` (jolt's `aget` answers nil for a nil array where Java throws), and `new int[n]` is `(int-array n)`;
 - `new` with its constructor call is one constructor form;
 - a call of a JDK method goes through a rule, which names the jolt form that stands for it.
 
@@ -77,7 +77,9 @@ Scheme's `let` and a block's parameters bind all at once, and Clojure's `let` an
 
 A rule maps one JDK member to a jolt form and may carry a condition. `String.length` and `charAt` map to `.length` and `.charAt` under the condition `strings-within-the-bmp`: Java indexes a string by UTF-16 code unit and jolt by character, so the two agree while no character is above U+FFFF. The check then generates only such strings.
 
-A port tests its condition when it runs. A function that holds for strings within the BMP starts with `(within-bmp! s)` for each `String` parameter, which throws an `ex-info` carrying `{:champaca.port/outside :strings-within-the-bmp}` when the string has a character above U+FFFF. So a string the port wasn't checked on gets an exception, never an answer Java wouldn't give. `within-bmp!` is printed once before the functions and costs a pass over the string. The test covers the function's own string parameters. A string reached another way, an element of a list say, isn't tested.
+A port tests its condition when it runs. A function that holds for strings within the BMP starts with `(within-bmp! s)` for each `String` parameter, which throws an `ex-info` carrying `{:champaca.port/outside :strings-within-the-bmp}` when the string has a character above U+FFFF. So such a string passed as a parameter gets an exception where it could have got an answer Java wouldn't give. `within-bmp!` is printed once before the functions and costs a pass over the string. The test covers the function's own `String` parameters only. A string reached another way, an element of a list or an array say, isn't tested when the function runs, and the check's generators make those elements within the BMP too, so that case is neither guarded nor checked.
+
+The other condition, `letters-jolt-knows` on the case rules, has no test at run time. It names a handful of chars from a Unicode newer than JDK 25's tables, on which jolt and the JDK convert case differently; `examples/port.clj` compares the two on every char to keep that list honest.
 
 A method returning `boolean` gives `true` or `false`, a `char` parameter takes a char, and inside the function a boolean is 1 or 0 and a char its code, as in the bytecode.
 
@@ -93,7 +95,7 @@ A method name used once gives the function its name in kebab case. An overloaded
 
 Each port is run beside its method by `champaca.portcheck` ([checking-a-port](checking-a-port.md)) on 300 generated inputs, or `PORT_RUNS`. The argument specs come from the parameter types and the port's conditions.
 
-An `int` or `long` parameter gets the full range, the limits and their neighbours included, unless the method loops or allocates by a size, or calls one that does. There the parameter may be the loop's count or a buffer's size, and the largest `int` would run the loop two thousand million times, so it stays within -64 to 64. The check's line says when that was so, and the count at the end says how many checks it applied to. A port checked that way has not been tried on large numbers: if it does arithmetic on such a parameter, check it by hand with a wider `:range` before relying on it. Array elements always get the full range.
+An `int` or `long` parameter gets the full range, the limits and their neighbours included, unless the method loops or allocates by a size, or calls one that does. There the parameter may be the loop's count or a buffer's size, and the largest `int` would run the loop two thousand million times, so it stays within -64 to 64. The check's line says when that was so, and the count at the end says how many checks it applied to. A port checked that way has not been tried on large numbers: if it does arithmetic on such a parameter, check it by hand with a wider `:range` before relying on it. Array elements always get the full range, and an array, a list or an iterator is passed as null now and then, as a `String` is.
 
 A port whose parameters have no input generator is printed and counted as not checked. Treat it as unknown: the two ports that turned out wrong on `StringUtils` sat in that count first.
 
@@ -113,7 +115,7 @@ A first run with a dozen rules ported 9. Calls between the class's own methods t
 
 Two of those 102 were wrong. They take a `char[]`, and an element read from one is a char in jolt where the code expects its number, so a comparison never matched. They had counted as "not checked", since no generator made a `char[]`. Once one did, the check reported both, and methods with a `char[]` or `boolean[]` in their signature are now left until arrays are typed. That is the 100.
 
-Earlier nine ports had disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char.
+Earlier nine ports had disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char outside the surrogates.
 
 Each count is of the first thing found in a method, so a method may lack more than one.
 
@@ -135,4 +137,6 @@ Each count is of the first thing found in a method, so a method may lack more th
 
 ## What it doesn't do yet
 
-Instance methods, fields and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. `char[]`, `boolean[]` and reference arrays. Calls into other classes. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.
+Instance methods, fields (a read of a static field leaves the method) and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. `char[]`, `boolean[]` and reference arrays. Calls into other classes. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.
+
+Two limits aren't reported as reasons yet. Copying a join point into each path that reaches it has no size limit, so a method with many independent `if`s in a row grows with each one. And the code assumes loops don't nest with a group of blocks that call each other; the plain form it reads doesn't produce that today.

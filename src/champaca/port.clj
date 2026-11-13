@@ -44,8 +44,9 @@
 (defn- structured
   "[:ok form] or [:left reason] for a method's generated text."
   [text]
-  (when (compare-and-set! helper-loaded false true)
-    (s/eval-string (slurp (io/resource "champaca/port.ss"))))
+  (when-not @helper-loaded
+    (s/eval-string (slurp (io/resource "champaca/port.ss")))
+    (reset! helper-loaded true))
   (read-string (s/call "port-structured" text)))
 
 (defn- head [x] (when (vector? x) (first x)))
@@ -132,7 +133,7 @@
    ;; jolt 0.8.27's Character/isWhitespace differs from the JDK's on five
    ;; chars: it leaves out U+001C to U+001F and takes U+0085. With those
    ;; settled here the form agrees with the JDK on every char
-   ;; (examples/port.clj checks all 65,536).
+   ;; outside the surrogates (examples/port.clj checks each).
    "java/lang/Character.isWhitespace(C)Z"
    {:form (fn [[c]] (list 'let ['ch c]
                           (list 'if (list 'and (list 'not= 'ch 0x85)
@@ -301,8 +302,10 @@
     "int-rem" (list 'rem (value ctx a) (value ctx b))
     "int-div" (list 'unchecked-int (list 'quot (value ctx a) (value ctx b)))
     "array-length" (list 'alength (value ctx a))
-    "array-ref" (list 'aget (value ctx a) (value ctx b))
-    "array-set!" (list 'aset (value ctx a) (value ctx b) (value ctx c))
+    ;; jolt's aget answers nil for a nil array and its aset throws another
+    ;; class, where Java throws NullPointerException: non-null keeps Java's
+    "array-ref" (list 'aget (list 'non-null (value ctx a)) (value ctx b))
+    "array-set!" (list 'aset (list 'non-null (value ctx a)) (value ctx b) (value ctx c))
     "jstring-lit" (or (text-of a) (left "a string constant that isn't plain text"))
     "jcheckcast-ic" (value ctx b)
     "jconcat-parts" (concat-value ctx x)
@@ -315,6 +318,10 @@
   "The Clojure form for a structured expression used for its value."
   [ctx x]
   (cond
+    ;; a local is l3, s0, l2_1; a name holding ( or : is a global, which here
+    ;; can only be a static field read (a method's global is a call's
+    ;; operator, handled before this)
+    (and (string? x) (re-find #"[(:]" x)) (left (str "a read of the static field " x))
     (string? x) (symbol x)
     (number? x) x
     (false? x) nil
@@ -447,7 +454,10 @@
   [label x]
   (cond (not (vector? x)) 0
         (= "quote" (head x)) 0
-        :else (+ (if (= label (head x)) 1 0) (reduce + (map #(calls label %) (rest x))))))
+        ;; a form's head is a name; a list of bindings has none, and its
+        ;; first element counts like the rest
+        :else (+ (if (= label (head x)) 1 0)
+                 (reduce + (map #(calls label %) (if (string? (first x)) (rest x) x))))))
 
 (defn- inline-block
   "x with each call of label replaced by the block's body under its
@@ -650,10 +660,11 @@
                params types)))
 
 (def preamble
-  "What the functions of a port need defined before them: the test a
-  function makes of its string parameters when it holds only for strings
-  within the BMP. It throws, so a string the port wasn't checked on can't
-  give an answer Java wouldn't."
+  "What the functions of a port need defined before them. within-bmp! is
+  the test a function makes of its string parameters when it holds only for
+  strings within the BMP: it throws, so a string the port wasn't checked on
+  can't give an answer Java wouldn't. non-null is Java's null check on an
+  array that is read or written."
   (str "(defn within-bmp!\n"
        "  \"Throws when s has a character above U+FFFF. Java indexes a string by\n"
        "  UTF-16 code unit and jolt by character, and a function ported from\n"
@@ -666,7 +677,13 @@
        "          (when (> (int (.charAt s i)) 0xFFFF)\n"
        "            (throw (ex-info \"ported from Java code that reads strings by index: holds for characters up to U+FFFF\"\n"
        "                            {:champaca.port/outside :strings-within-the-bmp :index i})))\n"
-       "          (recur (inc i)))))))"))
+       "          (recur (inc i)))))))\n"
+       "\n"
+       "(defn non-null\n"
+       "  \"x, or Java's exception when it is null. An array read or written goes\n"
+       "  through this: jolt's aget answers nil for a nil array.\"\n"
+       "  [x]\n"
+       "  (if (nil? x) (throw (NullPointerException.)) x))"))
 
 (defn- guards
   "The tests a function makes on entry for the conditions it holds under:
@@ -756,13 +773,17 @@
              ")")))))
 
 (def ^:private spec-by-type
-  {"I" :int "S" :int "B" :int "J" :long "Z" :boolean "C" :char "[I" :ints
-   "Ljava/util/List;" {:type :strings :of {:nil? true}}
-   "Ljava/util/Collection;" {:type :strings :of {:nil? true}}
-   "[Ljava/lang/Object;" :objects
-   "[Ljava/lang/String;" :string-array
-   "[C" :chars
-   "Ljava/util/Iterator;" :iterator})
+  "A parameter type's spec. An array, a list or an iterator is null now and
+  then, as a String is: Java throws on a null one, and the port must too."
+  {"I" :int "J" :long "Z" :boolean "C" :char
+   "S" {:type :int :range [-32768 32767]}
+   "B" {:type :int :range [-128 127]}
+   "[I" {:type :ints :nil? true}
+   "Ljava/util/List;" {:type :strings :of {:nil? true} :nil? true}
+   "Ljava/util/Collection;" {:type :strings :of {:nil? true} :nil? true}
+   "[Ljava/lang/Object;" {:type :objects :nil? true}
+   "[Ljava/lang/String;" {:type :string-array :nil? true}
+   "Ljava/util/Iterator;" {:type :iterator :nil? true}})
 
 (defn- arg-specs
   "champaca.portcheck's argument specs for a descriptor's parameters under
@@ -776,7 +797,8 @@
   (let [string {:type :string :chars (if (holds :strings-within-the-bmp) :bmp :any) :nil? true}
         spec (fn [t]
                (cond (= "Ljava/lang/String;" t) string
-                     (and small? (#{"I" "S" "B" "J"} t)) {:type (spec-by-type t) :range [-64 64]}
+                     (and small? (#{"I" "J"} t)) {:type (spec-by-type t) :range [-64 64]}
+                     (and small? (#{"S" "B"} t)) {:type :int :range [-64 64]}
                      :else (spec-by-type t)))
         specs (map spec (:args (parse-desc desc)))]
     (when (every? some? specs) (vec specs))))

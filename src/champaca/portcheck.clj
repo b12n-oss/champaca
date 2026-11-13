@@ -69,7 +69,8 @@
   that type's options: :range [lo hi] for an :int, :chars (:ascii, :latin1,
   :bmp, :any) and :nil? for a :string, the same under :of for :strings,
   :objects (an Object[] of strings and nulls), :string-array (a String[] of
-  them), :iterator (an Iterator over such a list) and :chars (a char[])."
+  them), :iterator (an Iterator over such a list) and :chars (a char[]).
+  :nil? on any of those, or on :ints, passes null itself now and then."
   [r spec]
   (let [{:keys [type] :as spec} (if (keyword? spec) {:type spec} spec)]
     (case type
@@ -78,10 +79,13 @@
       :boolean (zero? (below r 2))
       :char (first (str (pick r (char-pools (:chars spec :bmp)))))
       :string (gen-string r spec)
-      :ints (vec (repeatedly (below r 7) #(gen-int r spec)))
-      :strings (vec (repeatedly (below r 5) #(gen-string r (:of spec {}))))
-      (:objects :iterator :string-array) (vec (repeatedly (below r 5) #(gen-string r (:of spec {:nil? true}))))
-      :chars (vec (gen-string r {:chars (:chars spec :bmp)})))))
+      (if (and (:nil? spec) (zero? (below r 12)))
+        nil                               ; the array, list or iterator itself
+        (case type
+          :ints (vec (repeatedly (below r 7) #(gen-int r (dissoc spec :nil?))))
+          :strings (vec (repeatedly (below r 5) #(gen-string r (:of spec {}))))
+          (:objects :iterator :string-array) (vec (repeatedly (below r 5) #(gen-string r (:of spec {:nil? true}))))
+          :chars (vec (gen-string r {:chars (:chars spec :bmp)})))))))
 
 (defn- spec-type [spec] (if (keyword? spec) spec (:type spec)))
 
@@ -91,7 +95,7 @@
   "v as the Java method takes it. An array is made here, so the same object
   can be read back after the call."
   [spec v]
-  (case (spec-type spec)
+  (case (when (some? v) (spec-type spec))     ; null goes as null
     ;; copyOf of an empty vector could be any array type; a one-int vector
     ;; cut to length 0 is an int[]
     :ints (ldk/invoke-static "java.util.Arrays" "copyOf" (if (seq v) v [0]) (count v))
@@ -106,7 +110,7 @@
     v))
 
 (defn- jolt-arg [spec v]
-  (case (spec-type spec)
+  (case (when (some? v) (spec-type spec))
     :ints (int-array v)
     :strings (java.util.ArrayList. v)
     :objects (object-array v)

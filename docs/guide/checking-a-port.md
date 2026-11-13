@@ -57,7 +57,7 @@ Exception messages aren't compared. Jolt's wording for a null receiver differs f
 | `:boolean` | `true` or `false` | |
 | `:char` | one character | `:chars`, as for `:string` |
 | `:string` | up to eight characters | `:chars` `:ascii`, `:latin1`, `:bmp` (the default) or `:any`; `:nil? true` to pass `null` now and then |
-| `:ints` | an `int[]` of up to six values | |
+| `:ints` | an `int[]` of up to six values | `:nil? true` to pass `null` now and then, as on the array and list specs below |
 | `:strings` | a `java.util.List` of up to four strings | `:of`, a `:string` spec for the elements |
 | `:objects` | an `Object[]` of up to four strings and nulls | `:of` |
 | `:iterator` | an `Iterator` over such a list | `:of` |
