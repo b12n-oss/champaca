@@ -357,8 +357,8 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
-- `jolt libs` runs three JVM languages beside the twenty-three libraries:
-  Clojure 1.12.4, Groovy 5.0.8 and Scala 2.13.18, each through its own
+- `jolt libs` runs four JVM languages beside the twenty-three libraries:
+  Clojure 1.12.4, Groovy 5.0.8, Scala 2.13.18 and Kawa 3.1.1, each through its own
   launcher on a probe in `test/libs`, the jars pinned by Maven Central's
   SHA-1s. A `libs.edn` entry's `:run` names the main class and its
   arguments, with no javac step.
