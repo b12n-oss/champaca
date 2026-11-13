@@ -8,7 +8,7 @@ Champaca runs a Java program inside a jolt process. It isn't a sandbox. A progra
 
 It also trusts the class files it runs more than HotSpot does. Champaca doesn't verify bytecode ([limitations](docs/guide/limitations.md)), and its generated code uses unchecked arithmetic on values the bytecode says are ints ([performance](docs/guide/performance.md)). That holds for what a compiler writes. Nothing checks it for a hand-made class file, which can do things HotSpot would refuse with a `VerifyError`, with results that aren't defined. Treat every class and jar you run as code you trust completely, as you would a native library.
 
-So neither of these is a champaca vulnerability: a program doing something harmful because it was written to, and a crafted class file misbehaving when it's run. These are:
+A program doing something harmful because it was written to, or a crafted class file misbehaving when it's run, isn't a champaca vulnerability. These are:
 
 - champaca running code from a file it was only meant to read, such as a jar on the class path whose classes the program never loads, or a cache entry that belongs to another program;
 - anything in the next section exposing more than it says.

@@ -59,8 +59,8 @@ The first public version. Champaca is still experimental: the
   no JDK installed.
 - **Tasks**: `jolt test` (every test program against HotSpot's recorded
   output, plus the examples), `jolt battery`, `jolt linux`, `jolt libs`,
-  `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, `jolt ffi:release`, and the docs
-  site tasks, and `jolt warm`.
+  `jolt bench`, `jolt prof`, `jolt heap`, `jolt metrics`, `jolt nrepl`, `jolt ffi:release`, `jolt warm`
+  and the docs site tasks.
 - Guides under `docs/guide/` (`jvm-languages` for Clojure, Groovy, Scala, Kawa, ABCL and Kotlin), `CONTRIBUTING.md`, and SPDX license headers
   on the sources, task files and scripts.
 - **`jolt port`** and `champaca.port`: a class's static methods written

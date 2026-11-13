@@ -36,8 +36,9 @@ sends a script that runs for more than a few seconds, or loops a lot, to
 Clojure on the JVM. And a Java class outside its set isn't there at all.
 
 Champaca runs libraries unchanged: Jackson, Guava, Guice, H2, Byte Buddy and
-the rest of what `jolt libs` checks, with the same output as HotSpot. Once a method is compiled it runs as native Chez code with
-inline caches, and jolt code calls it as a plain procedure call.
+the rest of what `jolt libs` checks, with the same output as HotSpot.
+Once a method is compiled it runs as native Chez code with inline caches,
+and jolt code calls it as a plain procedure call.
 
 Champaca's costs are a slow first run, which the startup cache softens much as
 class data sharing does for HotSpot, Java code that can't run on two threads

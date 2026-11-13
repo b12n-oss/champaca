@@ -2,7 +2,7 @@
 
 `jolt port` writes a Java class's static methods out as jolt functions and checks each one against the method it came from. The functions use jolt's own `String`, `StringBuilder`, arrays and `clojure.core`, so a ported function needs neither champaca nor a JDK to run.
 
-It is a first version. It handles static methods over ints, longs, strings, `int[]` and the JDK members it has rules for, and it says so about everything else.
+It is a first version. It handles static methods over ints, longs, strings, `int[]` and the JDK members it has rules for, and it reports why it leaves anything else.
 
 ```sh
 jolt port target/lib.jar champaca.lib.PortSample
@@ -61,7 +61,7 @@ The exit status is 1 when any check disagrees. A function whose check disagrees 
 
 ## How a method becomes a function
 
-The method is translated as champaca translates any method, in a plain form with no callee compiled into it and no second copy of its array loops. The structuring pass ([debugging](debugging.md#structured-method-code)) turns that into a procedure for each loop head and a `let` for each value. `champaca.port` writes the result as Clojure:
+Champaca translates the method as it would any other, but in a plain form: no callee compiled into it, no second copy of its array loops. The structuring pass ([debugging](debugging.md#structured-method-code)) turns that into a procedure for each loop head and a `let` for each value, and `champaca.port` writes the result as Clojure:
 
 - a loop head called from one place is `loop`, and the jumps back to it are `recur`;
 - a join point or an exit is copied into each path that reaches it;
@@ -73,33 +73,35 @@ The method is translated as champaca translates any method, in a plain form with
 
 Then a tidy pass merges nested `let`s, drops bindings of a name to itself and locals a path never reads, and removes from each loop the locals no `recur` changes.
 
-Scheme's `let` and a block's parameters bind all at once, and Clojure's `let` and `loop` bind in order. Where a value uses a name bound earlier in the same list, as in a swap, the port takes every value first under a name ending in `_in`. Leaving that out was this tool's first bug, and the check found it on commons-lang's `overlay`.
+Scheme's `let` and a block's parameters bind all at once, while Clojure's `let` and `loop` bind in order. Where a value uses a name bound earlier in the same list, as in a swap, the port first takes every value under a name ending in `_in`. Leaving that out was this tool's first bug, which the check found on commons-lang's `overlay`.
 
 ## Rules
 
 A rule maps one JDK member to a jolt form and may carry a condition. `String.length` and `charAt` map to `.length` and `.charAt` under the condition `strings-within-the-bmp`: Java indexes a string by UTF-16 code unit and jolt by character, so the two agree while no character is above U+FFFF. The check then generates only such strings.
 
-A port tests its condition when it runs. A function that holds for strings within the BMP starts with `(within-bmp! s)` for each `String` parameter, which throws an `ex-info` carrying `{:champaca.port/outside :strings-within-the-bmp}` when the string has a character above U+FFFF. So such a string passed as a parameter gets an exception where it could have got an answer Java wouldn't give. `within-bmp!` is printed once before the functions and costs a pass over the string. The test covers the function's own `String` parameters only. A string reached another way, an element of a list or an array say, isn't tested when the function runs, and the check's generators make those elements within the BMP too, so that case is neither guarded nor checked.
+A port tests its condition when it runs. A function that holds for strings within the BMP starts with `(within-bmp! s)` for each `String` parameter. That throws an `ex-info` carrying `{:champaca.port/outside :strings-within-the-bmp}` when the string has a character above U+FFFF, so such a string gets an exception, never an answer Java wouldn't give. `within-bmp!` is printed once before the functions and costs a pass over the string.
 
-The other condition, `letters-jolt-knows` on the case rules, has no test at run time. It names a handful of chars from a Unicode newer than JDK 25's tables, on which jolt and the JDK convert case differently; `examples/port.clj` compares the two on every char to keep that list honest.
+Only the function's own `String` parameters are tested. A string reached another way, say an element of a list or an array, isn't tested when the function runs. The check's generators keep those elements within the BMP too, so that case is neither guarded nor checked.
+
+The other condition, `letters-jolt-knows` on the case rules, has no test at run time. It names a handful of chars, three each way, where jolt's newer Unicode and JDK 25's tables convert case differently. `examples/port.clj` compares the two on every char to keep that list honest.
 
 A method returning `boolean` gives `true` or `false`, a `char` parameter takes a char, and inside the function a boolean is 1 or 0 and a char its code, as in the bytecode.
 
-There are rules for the `String`, `StringBuilder`, `StringBuffer`, `Character` and `Math` members in `direct-rules`, for the `List`, `Iterator` and `Object` methods in `virtual-rules`, and for constructing `StringBuilder`, `StringBuffer`, `ArrayList` and the common exceptions. The case rules (`toUpperCase`, `Character.toLowerCase` and the like) hold under `letters-jolt-knows`: jolt and JDK 25 agree on every char but three each way, from a newer Unicode. Adding one is a line in `src/champaca/port.clj`, and the check on a method that uses it is what shows it's right.
+There are rules for the `String`, `StringBuilder`, `StringBuffer`, `Character` and `Math` members in `direct-rules`, for the `List`, `Iterator` and `Object` methods in `virtual-rules`, and for constructing `StringBuilder`, `StringBuffer`, `ArrayList` and the common exceptions. The case rules (`toUpperCase`, `Character.toLowerCase` and the like) are the ones under `letters-jolt-knows`. Adding a rule is a line in `src/champaca/port.clj`, and the check on a method that uses it shows whether it's right.
 
-Some rules name a helper printed before the functions, where jolt's own form is looser than Java's. `new String(a, from, count)` becomes `(string-of a from count)`, which throws for a nil array or a range outside it; jolt's `(String. a from count)` answers a string for both. `toCharArray` and `new String(char[])` go through `non-null` for the same reason.
+Some rules name a helper printed before the functions, for where jolt's own form is looser than Java's. `new String(a, from, count)` becomes `(string-of a from count)`, which throws for a nil array or a range outside it, where jolt's `(String. a from count)` answers a string for both. `toCharArray` and `new String(char[])` go through `non-null` for the same reason.
 
 ## What a port calls
 
-A call of another static method of the same class becomes a call of that method's function. A port stands only if everything it calls does: when a method is left, so is every method that calls it, with that as the reason. The conditions of what a port calls become its own.
+A call of another static method of the same class becomes a call of that method's function. A port stands only if everything it calls does. When a method is left, so is every method that calls it, with that as the reason, and a port takes on the conditions of whatever it calls.
 
-A call of a static method of another class of the program works the same way. That method is ported too, and so is what it calls, and those functions are printed after the class's own, each marked as called from the class being ported. Their names start with the class's simple name (`array-utils-is-empty-chars`), and they are checked like the rest. Classes of the JDK are never written out: a call into one needs a rule.
+A call of a static method of another class of the program works the same way. That method is ported too, along with what it calls, and the functions are printed after the class's own, each marked as called from the class being ported. Their names start with the class's simple name (`array-utils-is-empty-chars`), and they're checked like the rest. Classes of the JDK are never written out, so a call into one needs a rule.
 
-A function has no class to initialize, so the initialization check before a call into another class is dropped. In Java the first call of a static method runs its class's static initializer. An initializer that only fills the class's own fields with constants and arrays does nothing a caller can see. One that calls a method, makes an object or throws might, so a port of a method of such a class, or of anything that calls one, holds under the condition `initializers-without-effects`. Nothing tests that when the function runs.
+A function has no class to initialize, so the port drops the initialization check before a call into another class. In Java, though, the first call of a static method runs its class's static initializer. An initializer that only fills the class's own fields with constants and arrays does nothing a caller can see, but one that calls a method, makes an object or throws might. So a port of a method of such a class, or of anything that calls one, holds under the condition `initializers-without-effects`, which nothing tests when the function runs.
 
 ## Static fields
 
-A read of a `static final` field becomes a `def` printed before the functions, when the field's value can't change: a number, a string, null, or an empty array. The tool reads the value once the class has initialized, so the initializer runs at port time under champaca. The def is named after the class and the field, the field in capitals (`array-utils-EMPTY-STRING-ARRAY`), and an empty array stays one object, as the field is.
+A read of a `static final` field whose value can't change (a number, a string, null, or an empty array) becomes a `def` printed before the functions. The tool reads the value once the class has initialized, which means the initializer runs at port time under champaca. The def is named after the class and the field, the field in capitals (`array-utils-EMPTY-STRING-ARRAY`), and an empty array stays one object, as the field is.
 
 Any other static field read leaves the method, with the reason: the field isn't final, or it holds an array with elements or another object, which code can change.
 
@@ -109,31 +111,31 @@ A method name used once gives the function its name in kebab case. An overloaded
 
 Each port is run beside its method by `champaca.portcheck` ([checking-a-port](checking-a-port.md)) on 300 generated inputs, or `PORT_RUNS`. The argument specs come from the parameter types and the port's conditions.
 
-An `int` or `long` parameter gets the full range, the limits and their neighbours included, unless the method loops or allocates by a size, or calls one that does. There the parameter may be the loop's count or a buffer's size, and the largest `int` would run the loop two thousand million times, so it stays within -64 to 64. The check's line says when that was so, and the count at the end says how many checks it applied to. A port checked that way has not been tried on large numbers: if it does arithmetic on such a parameter, check it by hand with a wider `:range` before relying on it. Array elements always get the full range, and an array, a list or an iterator is passed as null now and then, as a `String` is.
+An `int` or `long` parameter gets the full range, the limits and their neighbours included, unless the method loops or allocates by a size, or calls one that does. There the parameter may be the loop's count or a buffer's size, and the largest `int` would run the loop two thousand million times, so it stays within -64 to 64. The check's line says when that happened, and the count at the end says how many checks it applied to.
+
+A port checked that way hasn't been tried on large numbers. If it does arithmetic on such a parameter, check it by hand with a wider `:range` before relying on it. Array elements always get the full range, and an array, a list or an iterator is passed as null now and then, as a `String` is.
 
 A port whose parameters have no input generator is printed and counted as not checked. Treat it as unknown: the two ports that turned out wrong on `StringUtils` sat in that count first.
 
 ## On commons-lang
 
-`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 149 of them, and all 149 are checked and agree on 300 inputs each. 22 of those checks kept int parameters within -64 to 64, and the rest used the full range. They call 13 static methods of six other classes, of which 8 are ported, checked and agree, and 5 are left. The other 11 of `StringUtils` were left. 7 of those call a method that was left, so they follow from the rest, and the rest lack these:
+`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 149 of them, and all 149 are checked and agree on 300 inputs each. 22 of those checks kept int parameters within -64 to 64, and the rest used the full range. The ports call 13 static methods of six other classes, of which 8 are ported, checked and agree, and 5 are left. Of the 11 `StringUtils` methods left, 7 call a method that was left, so they follow from the rest, and the rest lack these:
 
 | What has no rule | Methods |
 |---|---|
 | a `boolean[]`, a `switch`, a reference comparison, `Character.getType` | 1 each |
 
-A first run with a dozen rules ported 9. Calls between the class's own methods took it to 53, rules for `indexOf(int)` and its relatives, `valueOf(char)`, `regionMatches` and the `List` and `Iterator` methods to 71, leaving out the initialization check before a static call into a JDK class to 89, and rules for case conversion, `StringBuffer.append(Object)` and a few constructors to 102.
-
-Two of those 102 were wrong. They take a `char[]`, and an element read from one is a char in jolt where the code expects its number, so a comparison never matched. They had counted as "not checked", since no generator made a `char[]`. Once one did, the check reported both, and methods with a `char[]` or `boolean[]` in their signature were left until arrays were typed. That was the 100.
-
-A `char[]` has instructions of its own in the bytecode, so the plain form now marks its reads and writes and the port converts at each one. With that, rules for `toCharArray`, the `String` constructors from a `char[]`, `StringBuffer.reverse`, `Character.isTitleCase` and `List.toArray`, and `String[]` allocation, the count is 110. `Character.getType` stays without a rule: jolt and JDK 25 differ on 63 chars there.
-
-Following calls into the program's other classes took it to 121. Two of the five methods left in those classes have an exception handler or call `CharSet.contains`, an instance method.
-
-Reading `ArrayUtils.EMPTY_STRING_ARRAY` as a def brought in the split methods and their callers, which is the 139. `padding` throws `new IndexOutOfBoundsException(new StringBuffer()...toString())`, a constructor whose argument is built with another `new`; reading that shape brought in the pad and center methods, which is the 149.
-
-Earlier nine ports had disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char outside the surrogates.
-
 Each count is of the first thing found in a method, so a method may lack more than one.
+
+The count grew in steps. A first run with a dozen rules ported 9, and calls between the class's own methods took that to 53. Rules for `indexOf(int)` and its relatives, `valueOf(char)`, `regionMatches` and the `List` and `Iterator` methods made it 71. Leaving out the initialization check before a static call into a JDK class gave 89, then rules for case conversion, `StringBuffer.append(Object)` and a few constructors gave 102.
+
+Two of those 102 were wrong. Both take a `char[]`, and an element read from one is a char in jolt where the code expects its number, so a comparison never matched. They had counted as "not checked" because no generator made a `char[]`. Once one did, the check reported both, and methods with a `char[]` or `boolean[]` in their signature were left until arrays were typed. That was the 100.
+
+A `char[]` has instructions of its own in the bytecode, so the plain form marks its reads and writes and the port converts at each one. That, plus rules for `toCharArray`, the `String` constructors from a `char[]`, `StringBuffer.reverse`, `Character.isTitleCase` and `List.toArray`, and `String[]` allocation, brought the count to 110. `Character.getType` stays without a rule, because jolt and JDK 25 differ on 63 chars there.
+
+Following calls into the program's other classes made it 121. Of the five methods left in those classes, two have an exception handler or call `CharSet.contains`, an instance method. Reading `ArrayUtils.EMPTY_STRING_ARRAY` as a def brought in the split methods and their callers for 139. Last came `padding`, which throws `new IndexOutOfBoundsException(new StringBuffer()...toString())`, a constructor whose argument is built with another `new`. Reading that shape brought in the pad and center methods, and the count reached 149.
+
+Along the way nine ports disagreed with their methods for a while, all through `Character.isWhitespace`. jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655), so the rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char outside the surrogates.
 
 ## From jolt
 
@@ -155,4 +157,4 @@ Each count is of the first thing found in a method, so a method may lack more th
 
 Instance methods, instance fields, static fields whose value can change, and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. `boolean[]`, which the bytecode reads with the instruction that reads a `byte[]`, and reference arrays of anything but `String` and `Object`. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.
 
-Two limits aren't reported as reasons yet. Copying a join point into each path that reaches it has no size limit, so a method with many independent `if`s in a row grows with each one. And the code assumes loops don't nest with a group of blocks that call each other; the plain form it reads doesn't produce that today.
+Two limits aren't reported as reasons yet. Copying a join point into each path that reaches it has no size limit, so a method with many independent `if`s in a row grows with each one. The code also assumes loops don't nest with a group of blocks that call each other, which the plain form it reads doesn't produce today.

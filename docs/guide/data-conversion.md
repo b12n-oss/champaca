@@ -34,9 +34,11 @@ A vector given to an array parameter becomes a fresh array of that type, element
 (ldk/->clj (ldk/invoke-static "java.util.Arrays" "copyOf" [3 1 2] 5))  ;=> [3 1 2 0 0]
 ```
 
-A vector of integers becomes a `byte[]` or `short[]` too, when the method has no overload that takes it without narrowing, so `(ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 2 3])`, `(ldk/construct "java.lang.String" [104 105])` and a `MessageDigest`'s `update` work, as long as every element is in the type's range. A Java `byte` is signed, -128 to 127, so a byte written as `0xCA` or `200` fits nothing: write it as the negative number with the same bits (`0xCA` is -54, `0xFF` is -1), or let Java parse hex, `(ldk/invoke (ldk/invoke-static "java.util.HexFormat" "of") "parseHex" "cafebabe")`. Nothing wraps a value silently, as Clojure's `byte` refuses one out of range. `->clj` reads a `byte[]` back as a vector of signed integers: `[104 105]`, or `[-54 -2 -70 -66]` for that hex.
+A vector of integers also becomes a `byte[]` or `short[]` when the method has no overload that takes it without narrowing, as long as every element is in the type's range. That's how `(ldk/invoke-static "java.nio.ByteBuffer" "wrap" [1 2 3])`, `(ldk/construct "java.lang.String" [104 105])` and a `MessageDigest`'s `update` work.
 
-When the parameter is just `Object`, nothing says which array type to build, so the contents decide: all small integers make an `int[]`, any integer beyond 32 bits makes a `long[]`, all doubles a `double[]`, all strings (keywords count as strings) a `String[]`, vectors of one kind a nested array, and anything else an `Object[]`: characters, booleans, `nil`s, an empty vector, or integers mixed with doubles.
+A Java `byte` is signed, -128 to 127, so a byte written as `0xCA` or `200` fits nothing. Write it as the negative number with the same bits (`0xCA` is -54, `0xFF` is -1), or let Java parse hex with `(ldk/invoke (ldk/invoke-static "java.util.HexFormat" "of") "parseHex" "cafebabe")`. No value wraps silently, just as Clojure's `byte` refuses one out of range. `->clj` reads a `byte[]` back as a vector of signed integers: `[104 105]`, or `[-54 -2 -70 -66]` for that hex.
+
+When the parameter is just `Object`, nothing says which array type to build, so the contents decide. All small integers make an `int[]`, and one integer beyond 32 bits makes it a `long[]`. All doubles make a `double[]`, all strings a `String[]` (keywords count as strings), and vectors of one kind a nested array. Anything else is an `Object[]`: characters, booleans, `nil`s, an empty vector, or integers mixed with doubles.
 
 ### Collections
 
@@ -58,7 +60,7 @@ That makes the JSON libraries easy to feed. gson and Jackson both take a jolt ma
 ;=> "{\"name\":\"champaca\",\"tags\":[\"a\",\"b\"]}"
 ```
 
-(That one needs the Jackson jars on the classpath; see [jars-and-modules](jars-and-modules.md).)
+That one needs the Jackson jars on the classpath ([jars-and-modules](jars-and-modules.md)).
 
 ## Coming out
 
@@ -77,7 +79,7 @@ A result converts only if it's a string or a box: `String`, `Integer`, `Long`, `
 (ldk/->clj (ldk/invoke-static "java.util.Map" "of" "k" 1))       ;=> {"k" 1}
 ```
 
-Map keys stay strings unless you pass `:key-fn`, which `->clj` applies to every string key at any depth. Keys of other types are left alone, so `keyword` can't turn `1` into `nil`. Two keys that `:key-fn` maps to the same key throw instead of one being dropped:
+Map keys stay strings unless you pass `:key-fn`, which `->clj` applies to every string key at any depth. It leaves keys of other types alone, so `keyword` can't turn `1` into `nil`. If two keys map to the same key, `->clj` throws instead of dropping one:
 
 ```clojure
 (ldk/->clj (ldk/invoke-static "java.util.Map" "of" "k" 1) {:key-fn keyword})   ;=> {:k 1}
@@ -85,7 +87,7 @@ Map keys stay strings unless you pass `:key-fn`, which `->clj` applies to every 
 
 ### `->java`
 
-`ldk/->java` runs the inbound conversion by hand, for when you want the Java collection itself, perhaps to hold on to it or pass it through an `Object` parameter as a list. A top-level vector becomes an `ArrayList` here:
+`ldk/->java` runs the inbound conversion by hand. Use it when you want the Java collection itself, to hold on to or to pass through an `Object` parameter as a list. Here a top-level vector becomes an `ArrayList`:
 
 ```clojure
 (ldk/to-string (ldk/->java {:name "champaca" :tags #{"tree"} :n [1 2]}))
@@ -104,4 +106,4 @@ Every conversion copies. A Java method that changes a collection you passed in c
 ;=> [[1 2 3] [1 2 3 4]]
 ```
 
-That's usually what you want from immutable data, but it costs something: a big collection is copied on every call that takes it. If you pass the same large map to Java many times, convert it once with `->java` and pass the Java object instead.
+That's usually what you want from immutable data, but a big collection is copied on every call that takes it. If you pass the same large map to Java many times, convert it once with `->java` and pass the Java object instead.
