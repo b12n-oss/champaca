@@ -99,15 +99,21 @@
 
 ;; the raw bytes of a variable in this process's environment, as a Latin-1
 ;; string (one char per byte, so a path round-trips to the same bytes), or #f
+;; whether the environment entry at p is name=...
+(define (environ-entry-for? p name)
+  (let ([n (string-length name)])
+    (and (let match ([j 0]) (or (fx= j n) (and (fx= (foreign-ref 'unsigned-8 p j) (char->integer (string-ref name j))) (match (fx+ j 1)))))
+         (fx= (foreign-ref 'unsigned-8 p n) 61))))
+;; the bytes after name= in the entry at p, one character each
+(define (environ-entry-value p name)
+  (let* ([start (+ p (string-length name) 1)] [len (cstring-length start)])
+    (list->string (let collect ([k 0]) (if (fx= k len) '() (cons (integer->char (foreign-ref 'unsigned-8 start k)) (collect (fx+ k 1))))))))
 (define (environ-bytes name)
-  (let ([envp (environ-pointer)] [n (string-length name)] [w (foreign-sizeof 'uptr)])
+  (let ([envp (environ-pointer)] [w (foreign-sizeof 'uptr)])
     (let loop ([i 0])
       (let ([p (if (eqv? envp 0) 0 (foreign-ref 'uptr envp (fx* i w)))])
         (cond [(eqv? p 0) #f]
-              [(and (let match ([j 0]) (or (fx= j n) (and (fx= (foreign-ref 'unsigned-8 p j) (char->integer (string-ref name j))) (match (fx+ j 1)))))
-                    (fx= (foreign-ref 'unsigned-8 p n) 61))
-               (let ([len (cstring-length (+ p n 1))])
-                 (list->string (let collect ([k 0]) (if (fx= k len) '() (cons (integer->char (foreign-ref 'unsigned-8 p (+ n 1 k))) (collect (fx+ k 1)))))))]
+              [(environ-entry-for? p name) (environ-entry-value p name)]
               [else (loop (fx+ i 1))])))))
 
 ;; dir/prog, prog itself (the working directory's) for an empty dir
@@ -133,13 +139,20 @@
       (map (lambda (dir) (path-candidate dir prog))
            (path-entries (or (environ-bytes "PATH") ":/bin:/usr/bin")))))
 
-;; spawn path with argv0 and the other arguments (argv0 is the program as
-;; the caller named it, never the path found, as JDK_execvpe keeps it) and
-;; envp; the pid, or (error . errno). ENOEXEC runs it as /bin/sh path args,
-;; as the JDK's execve_with_shell_fallback.
-(define (spawn-one fa attr path argv0 arg-ptrs envp)
+;; what every candidate of one process start is spawned with: posix_spawn's
+;; file actions and attributes, argv0, the other arguments and envp
+(define-record-type spawn-call (fields fa attr argv0 arg-ptrs envp))
+;; spawn path with sc's argv0 and the other arguments (argv0 is the program
+;; as the caller named it, never the path found, as JDK_execvpe keeps it)
+;; and envp; the pid, or (error . errno). ENOEXEC runs it as /bin/sh path
+;; args, as the JDK's execve_with_shell_fallback.
+(define (spawn-one sc path)
+  (define fa (spawn-call-fa sc))
+  (define attr (spawn-call-attr sc))
+  (define arg-ptrs (spawn-call-arg-ptrs sc))
+  (define envp (spawn-call-envp sc))
   (let* ([cpath (latin1->foreign path)]
-         [argv (pointer-vector (cons argv0 arg-ptrs))]
+         [argv (pointer-vector (cons (spawn-call-argv0 sc) arg-ptrs))]
          [pidp (foreign-alloc 4)]
          [r (libc-posix-spawn pidp cpath fa attr argv envp)]
          [r (if (fx= r 8)   ; ENOEXEC, 8 on macOS and Linux
@@ -167,12 +180,12 @@
 ;; a relative candidate is checked where the child will look for it
 (define (in-dir dir path)
   (if (or (not dir) (and (fx> (string-length path) 0) (char=? (string-ref path 0) #\/))) path (string-append dir "/" path)))
-(define (spawn-search fa attr prog dir argv0 arg-ptrs envp)
+(define (spawn-search sc prog dir)
   (let loop ([cs (spawn-candidates prog)] [sticky #f])
     (if (null? cs)
         (cons 'error (or sticky 2))
         (let* ([e (access-errno (in-dir dir (car cs)))]
-               [r (if (fx= e 0) (spawn-one fa attr (car cs) argv0 arg-ptrs envp) (cons 'error e))])
+               [r (if (fx= e 0) (spawn-one sc (car cs)) (cons 'error e))])
           (cond [(fixnum? r) r]
                 [(null? (cdr cs)) (if (and sticky (memv (cdr r) '(2 20))) (cons 'error sticky) r)]
                 [(memv (cdr r) '(2 20)) (loop (cdr cs) sticky)]   ; ENOENT, ENOTDIR: next directory
@@ -236,7 +249,7 @@
                  ;; is for jolt's own buffered output
                  (when (or (memv 1 child) (memv 2 child)) (console-flush 1))
                  (let ([e (if ldir (access-errno ldir) 0)])
-                   (if (fx= e 0) (spawn-search fa attr cprog ldir argv0 arg-ptrs envp) (cons 'error e)))))])
+                   (if (fx= e 0) (spawn-search (make-spawn-call fa attr argv0 arg-ptrs envp) cprog ldir) (cons 'error e)))))])
       (release!)
       (if (pair? r)
           (begin (close-pipes!)
@@ -367,6 +380,13 @@
         0)))
 
 ;; every process (pid 0) or pid's children, as (pid ppid start) lists
+;; (pid ppid start) of each of the count kinfo_proc structs at buf
+(define (kinfo-procs buf count)
+  (let loop ([i 0] [acc '()])
+    (if (fx= i count)
+        (reverse acc)
+        (let ([kp (+ buf (* i kinfo-size))])
+          (loop (fx+ i 1) (cons (list (foreign-ref 'int kp 40) (foreign-ref 'int kp 560) (kinfo-start kp)) acc))))))
 (define (macos-all-procs)
   (with-mib (list 1 14 0 0)   ; KERN_PROC_ALL
     (lambda (mib n)
@@ -380,12 +400,7 @@
               (cond [(and (< r 0) (fx= e 12) (fx> tries 0)) (foreign-free buf) (retry (fx- tries 1))]   ; ENOMEM
                     [(< r 0) (foreign-free buf) (foreign-free len) (sysctl-failed e)]
                     [else
-                     (let* ([count (quotient (foreign-ref 'unsigned-64 len 0) kinfo-size)]
-                            [procs (let loop ([i 0] [acc '()])
-                                     (if (fx= i count)
-                                         (reverse acc)
-                                         (let ([kp (+ buf (* i kinfo-size))])
-                                           (loop (fx+ i 1) (cons (list (foreign-ref 'int kp 40) (foreign-ref 'int kp 560) (kinfo-start kp)) acc)))))])
+                     (let ([procs (kinfo-procs buf (quotient (foreign-ref 'unsigned-64 len 0) kinfo-size))])
                        (foreign-free buf) (foreign-free len)
                        procs)]))))))))
 (define (linux-all-procs)
