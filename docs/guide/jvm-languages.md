@@ -20,7 +20,7 @@ jolt -M -m champaca.main -cp "$CP" clojure.main < forms.clj    # the REPL, fed o
 
 What's been checked: protocols, records, `deftype` and `reify`, multimethods, spec, atoms, refs, agents, futures and `pmap`, transducers, `pprint`, `eval` and `read-string`, Java interop, and hashing (`test/libs/Clj.clj`). The REPL reports errors at the same line HotSpot does (`Execution error ... (REPL:1)`). AOT compilation works both ways: classes `compile` writes on champaca run on HotSpot, and the other way round. They differ from HotSpot's only by gensym counters, which depend on what was evaluated first.
 
-Loading a library from source is the slow part. Clojure compiles every form of a source-only library when it loads it, and that compiler is Java code champaca runs. Five source-only libraries (core.logic, core.match, test.check, data.json, tools.reader) took 26 s warm against HotSpot's 1.5 s, and 22.7 s of it was Java code running. An AOT-compiled library loads at the speed of any other jar.
+Loading a library from source is the slow part. Clojure compiles every form of a source-only library when it loads it, and that compiler is Java code champaca runs. Five source-only libraries (core.logic, core.match, test.check, data.json, tools.reader) take 10 s warm against HotSpot's 1.5 s, nearly all of it Java code running. It was 26 s until type tests at sites that see many classes stopped walking the class hierarchy (see [performance](performance.md)). An AOT-compiled library loads at the speed of any other jar.
 
 ## Groovy
 
@@ -97,7 +97,7 @@ Measured on an Apple M1 Pro on 2026-11-13. Cold is a fresh startup cache, warm i
 | Program | HotSpot | champaca, cold | champaca, warm |
 |---|---|---|---|
 | Clojure script (`Clj.clj`) | 0.7 s | 65 s | 4 s |
-| Clojure, five libraries from source | 1.5 s | 97 s | 26 s |
+| Clojure, five libraries from source | 1.5 s | 79 s | 10 s |
 | Groovy script (`Grv.groovy`) | 1.0 s | 49 s | 7 s |
 | Scala program, compiled by scalac | 0.3 s | 14 s | 1 s |
 | scalac compiling it | 0.9 s | 73 s | 12 s |

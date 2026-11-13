@@ -1,0 +1,35 @@
+pass 0: A=CM-BA---- B=-MSB----- C=C--B----- D=---B----- E=CM-BA---- F=CMSB----- G=-----P--- String=-----P--- Integer=-----P--- Object[]=------O-L Seqable[]=------OQL A[]=------OQL int[]=--------L null=--------- ArrayList=--------L
+pass 1: A=CM-BA---- B=-MSB----- C=C--B----- D=---B----- E=CM-BA---- F=CMSB----- G=-----P--- String=-----P--- Integer=-----P--- Object[]=------O-L Seqable[]=------OQL A[]=------OQL int[]=--------L null=--------- ArrayList=--------L
+pass 2: A=CM-BA---- B=-MSB----- C=C--B----- D=---B----- E=CM-BA---- F=CMSB----- G=-----P--- String=-----P--- Integer=-----P--- Object[]=------O-L Seqable[]=------OQL A[]=------OQL int[]=--------L null=--------- ArrayList=--------L
+cast 0 A: count 1
+cast 0 B: CCE class InstanceMemoCheck$B cannot be cast to class InstanceMemoCheck$Counted
+cast 0 C: count 3
+cast 0 D: CCE class InstanceMemoCheck$D cannot be cast to class InstanceMemoCheck$Counted
+cast 0 E: count 1
+cast 0 F: count 6
+cast 0 G: CCE class InstanceMemoCheck$G cannot be cast to class InstanceMemoCheck$Counted
+cast 0 String: CCE class java.lang.String cannot be cast to class InstanceMemoCheck$Counted
+cast 0 Integer: CCE class java.lang.Integer cannot be cast to class InstanceMemoCheck$Counted
+cast 0 Object[]: CCE class [Ljava.lang.Object; cannot be cast to class InstanceMemoCheck$Counted
+cast 0 Seqable[]: CCE class [LInstanceMemoCheck$Seqable; cannot be cast to class InstanceMemoCheck$Counted
+cast 0 A[]: CCE class [LInstanceMemoCheck$A; cannot be cast to class InstanceMemoCheck$Counted
+cast 0 int[]: CCE class [I cannot be cast to class InstanceMemoCheck$Counted
+cast 0 null: null passes
+cast 0 ArrayList: CCE class java.util.ArrayList cannot be cast to class InstanceMemoCheck$Counted
+cast 1 A: count 1
+cast 1 B: CCE class InstanceMemoCheck$B cannot be cast to class InstanceMemoCheck$Counted
+cast 1 C: count 3
+cast 1 D: CCE class InstanceMemoCheck$D cannot be cast to class InstanceMemoCheck$Counted
+cast 1 E: count 1
+cast 1 F: count 6
+cast 1 G: CCE class InstanceMemoCheck$G cannot be cast to class InstanceMemoCheck$Counted
+cast 1 String: CCE class java.lang.String cannot be cast to class InstanceMemoCheck$Counted
+cast 1 Integer: CCE class java.lang.Integer cannot be cast to class InstanceMemoCheck$Counted
+cast 1 Object[]: CCE class [Ljava.lang.Object; cannot be cast to class InstanceMemoCheck$Counted
+cast 1 Seqable[]: CCE class [LInstanceMemoCheck$Seqable; cannot be cast to class InstanceMemoCheck$Counted
+cast 1 A[]: CCE class [LInstanceMemoCheck$A; cannot be cast to class InstanceMemoCheck$Counted
+cast 1 int[]: CCE class [I cannot be cast to class InstanceMemoCheck$Counted
+cast 1 null: null passes
+cast 1 ArrayList: CCE class java.util.ArrayList cannot be cast to class InstanceMemoCheck$Counted
+reversed: ArrayList=--------L null=--------- int[]=--------L A[]=------OQL Seqable[]=------OQL Object[]=------O-L Integer=-----P--- String=-----P--- G=-----P--- F=CMSB----- E=CM-BA---- D=---B----- C=C--B----- B=-MSB----- A=CM-BA----
+sum 8220000

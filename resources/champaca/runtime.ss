@@ -850,10 +850,29 @@
        (if (and (jobj? o) (eq? (jobj-cls o) (car ic)))
            (cdr ic)
            (jinstance-miss ic o target)))]))
+;; A site that sees many classes (Clojure's RT.seq, a compiler walking mixed
+;; collections) misses its one-class cell most of the time, and jinstance?
+;; then walks the class's whole hierarchy, every interface included, a
+;; string comparison at each. So each class remembers its answers: target
+;; string (a site's literal, compared by identity) -> #t or #f. The table per
+;; class is found by identity too; both are weak, so neither keeps a class or
+;; a unit's literals alive.
+(define instance-answers (make-weak-eq-hashtable))
+(define (class-instance-of? cls target)
+  (let* ([t (or (eq-hashtable-ref instance-answers cls #f)
+                (let ([t (make-weak-eq-hashtable)]) (eq-hashtable-set! instance-answers cls t) t))]
+         [a (eq-hashtable-ref t target 'unknown)])
+    (if (eq? a 'unknown)
+        (let ([r (and (class-assignable? (jclass-cname cls) target) #t)])
+          (eq-hashtable-set! t target r)
+          r)
+        a)))
 (define (jinstance-miss ic o target)
-  (let ([r (jinstance? o target)])
-    (when (jobj? o) (set-car! ic (jobj-cls o)) (set-cdr! ic r))
-    r))
+  (if (jobj? o)
+      (let ([r (class-instance-of? (jobj-cls o) target)])
+        (set-car! ic (jobj-cls o)) (set-cdr! ic r)
+        r)
+      (jinstance? o target)))
 (define-syntax jcheckcast-ic
   (syntax-rules ()
     [(_ ic x target) (jcheckcast-ic ic x target #f -1)]
