@@ -29,8 +29,11 @@ jobs:
       # Pinned rather than trusting the shared workflow's default. v0.4.4 is
       # the first release that copies the README's docs/images and renders
       # its GitHub alerts as callouts, which docs/check-site.sh checks; v0.4.5
-      # builds on jolt v0.8.25 (its jolt-lang/time pin was too old).
-      docs-engine-ref: v0.4.5
+      # builds on jolt v0.8.25 (its jolt-lang/time pin was too old). The
+      # commit pinned here is v0.4.5 plus jlt-commons/docs-engine#7, which
+      # points the README's docs/guide/*.md links at the built pages: on the
+      # homepage each one was a 404. Move to the release that carries it.
+      docs-engine-ref: 408bb617c9855b22b0cb423c308ecd1ee38c8c56
     permissions:
       contents: read
       pages: write
