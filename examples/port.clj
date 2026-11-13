@@ -29,7 +29,7 @@
   ;; method of another class that is left; after them, the methods of that
   ;; class they call
   (let [results (port/check-ports (port/port-class sample) 200)]
-    (is (= 26 (count (remove :from results))))
+    (is (= 27 (count (remove :from results))))
     (is (= ["champaca/lib/PortSample.square(I)I" "champaca/lib/PortSample.countTrue([Z)I"
             "champaca/lib/PortSample.calls()I" "champaca/lib/PortSample.tabled(I)I"]
            (map :method (filter :left (remove :from results)))))
@@ -244,6 +244,18 @@
     (is (= 1 (@(ns-resolve 'champaca.ported 'vowels) "xyz a")))
     (is (str/includes? (:left (by-method "champaca/lib/PortOther.tableAt(I)I")) "static field"))
     (is (str/includes? (:left (by-method "champaca/lib/PortSample.tabled(I)I")) "PortOther.tableAt"))))
+
+(deftest a-constructor-argument-built-with-another-new
+  ;; new A(new B(...).m()): the inner object is bound first, then the outer
+  ;; one is made from what it gave
+  (let [r (first (port/check-ports [(port/port-method sample "positive" "(I)I")] 300))
+        f @(ns-resolve 'champaca.ported 'positive)]
+    (is (nil? (:left r)))
+    (is (str/includes? (:source r) "(StringBuilder. "))
+    (is (str/includes? (:source r) "(IllegalArgumentException. "))
+    (is (pc/agrees? (:report r)))
+    (is (= 5 (f 5)))
+    (is (= "not positive: -3" (try (f -3) (catch IllegalArgumentException e (ex-message e)))))))
 
 (deftest what-has-no-rule-is-left-with-the-reason
   (let [r (port/port-method "java.lang.Integer" "toHexString" "(I)Ljava/lang/String;")]

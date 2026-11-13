@@ -119,6 +119,13 @@ public class PortSample {
     }
     /** Reads a static field that isn't final: left. */
     public static int calls() { return calls; }
+    /** A constructor whose argument is built with another new, as javac
+     *  wrote string concatenation before Java 9. */
+    public static int positive(int n) {
+        if (n <= 0)
+            throw new IllegalArgumentException(new StringBuilder("not positive: ").append(n).toString());
+        return n;
+    }
     /** Calls into another class, whose methods are ported with this one. */
     public static int vowels(String s) {
         int n = 0;

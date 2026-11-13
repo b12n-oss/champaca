@@ -427,30 +427,63 @@
 (defn- do-form [forms]
   (if (= 1 (count forms)) (first forms) (apply list 'do forms)))
 
+(defn- constructor-rule [ctx cname desc]
+  (or (get-in constructor-rules [cname desc]) (left (str "no rule for new " cname)))
+  (when (= "(I)V" desc) (vreset! (:sized ctx) true))   ; a capacity
+  (get-in constructor-rules [cname desc]))
+
+(declare constructor-call)
+
+(defn- bound-before
+  "found with binds, symbol and form in turn, ahead of its own."
+  [binds found]
+  (update found :binds #(vec (concat binds %))))
+
+(defn- through-new
+  "constructor-call's answer through (let ([n (jnew-ic ...)]) (begin <init
+  call on n> x)): an object made on the way to v's arguments, bound to n
+  before what x binds."
+  [ctx v n init forms]
+  (let [inner (first forms)]
+    (when (and (= "begin" (head inner)) (= 3 (count inner)))
+      (when-let [made (constructor-call ctx n (nth inner 1))]
+        (when-let [found (constructor-call ctx v (nth inner 2))]
+          (let [make (constructor-rule ctx (quoted (nth init 2)) (:desc made))]
+            (bound-before (concat (:binds made) [(symbol n) (make (mapv #(value ctx %) (:args made)))])
+                          found)))))))
+
+(defn- through-let
+  "constructor-call's answer through a let around one form."
+  [ctx v [_ bindings & forms]]
+  (let [[n init] (first bindings)]
+    (cond
+      (not= 1 (count forms)) nil
+      (and (= 1 (count bindings)) (= "jnew-ic" (head init))) (through-new ctx v n init forms)
+      :else (when-let [found (constructor-call ctx v (first forms))]
+              (bound-before (mapcat (fn [[n i]] [(symbol n) (value ctx i)]) bindings) found)))))
+
 (defn- constructor-call
-  "The <init> call on v in x, with the lets around its arguments: {:lets
-  [[name init] ...] :desc :args}, or nil when x isn't one."
-  [v x]
+  "The <init> call on v in x, with what is bound on the way to its
+  arguments: {:binds [symbol form ...] :desc :args}, the bindings already
+  Clojure, or nil when x isn't one. On the way may be plain lets and other
+  objects made with their own constructor calls, as javac writes
+  new A(new B(...).m())."
+  [ctx v x]
   (cond
-    (= "let" (head x))
-    (when-let [inner (and (= 3 (count x)) (constructor-call v (nth x 2)))]
-      (update inner :lets #(into (vec (second x)) %)))
+    (= "let" (head x)) (through-let ctx v x)
     (vector? (head x))
     (let [f (unmark (first x))]
       (when (and (string? f) (str/includes? f ".<init>(") (= v (second x)))
-        {:lets [] :desc (subs f (str/index-of f "(")) :args (drop 2 x)}))))
+        {:binds [] :desc (subs f (str/index-of f "(")) :args (drop 2 x)}))))
 
 (defn- new-form
   "(let ([v (jnew-ic ...)]) (begin <init call> rest...)): the allocation and
   its constructor call as one constructor form bound to v."
   [ctx v cname rest-forms tail?]
-  (let [call (constructor-call v (first rest-forms))
-        make (get-in constructor-rules [cname (:desc call)])]
-    (when-not (and call make) (left (str "no rule for new " cname)))
-    (when (= "(I)V" (:desc call)) (vreset! (:sized ctx) true))   ; a capacity
+  (let [call (or (constructor-call ctx v (first rest-forms)) (left (str "no rule for new " cname)))
+        make (constructor-rule ctx cname (:desc call))]
     (list 'let
-          (vec (concat (mapcat (fn [[n init]] [(symbol n) (value ctx init)]) (:lets call))
-                       [(symbol v) (make (mapv #(value ctx %) (:args call)))]))
+          (vec (concat (:binds call) [(symbol v) (make (mapv #(value ctx %) (:args call)))]))
           (do-form (body ctx (rest rest-forms) tail?)))))
 
 (defn- mentions?

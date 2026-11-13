@@ -72,7 +72,7 @@ The first public version. Champaca is still experimental: the
   reason, and each port is checked against its method by
   `champaca.portcheck`. A `char[]` is read and written as chars, and a
   `String[]` can be made and stored into. On commons-lang 2.4's
-  `StringUtils` it ports 139 of 160 static methods, every one checked and
+  `StringUtils` it ports 149 of 160 static methods, every one checked and
   agreeing. A call of a static method of another class of the program
   brings that method along, as a function named with its class, and a
   `static final` field holding a number, a string, null or an empty array

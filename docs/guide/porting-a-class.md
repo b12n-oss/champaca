@@ -52,7 +52,7 @@ The names are the bytecode's local slots, since the class was compiled without d
 After the functions come the methods it left, each with the first thing in it that has no rule, and a count:
 
 ```
-;; 26 static methods: 22 ported (22 checked and agree, 0 disagree, 0 not checked), 4 left
+;; 27 static methods: 23 ported (23 checked and agree, 0 disagree, 0 not checked), 4 left
 ;; 4 static methods of 1 other class that those call: 3 ported (3 checked and agree, 0 disagree, 0 not checked), 1 left
 ;; 5 of the checks kept int and long parameters within -64 to 64 (the method loops or allocates by size); the others used the full range
 ```
@@ -68,7 +68,7 @@ The method is translated as champaca translates any method, in a plain form with
 - `int` arithmetic that wraps is `unchecked-add-int` and its relatives, division is `(unchecked-int (quot a b))`, and remainder is `rem`;
 - array access is `aget`, `aset` and `alength`, a read or write going through `non-null` (jolt's `aget` answers nil for a nil array where Java throws), and `new int[n]` is `(int-array n)`;
 - an element of a `char[]` is a char in jolt and its code in the method, so a read is `(int (aget a i))` and a write `(aset a i (char x))`, and `new String[n]` is `(make-array String n)`;
-- `new` with its constructor call is one constructor form;
+- `new` with its constructor call is one constructor form, and an object made on the way to its arguments is bound before it;
 - a call of a JDK method goes through a rule, which names the jolt form that stands for it.
 
 Then a tidy pass merges nested `let`s, drops bindings of a name to itself and locals a path never reads, and removes from each loop the locals no `recur` changes.
@@ -115,11 +115,11 @@ A port whose parameters have no input generator is printed and counted as not ch
 
 ## On commons-lang
 
-`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 139 of them, and all 139 are checked and agree on 300 inputs each. Twelve of those checks kept int parameters within -64 to 64, and the rest used the full range. They call 13 static methods of six other classes, of which 8 are ported, checked and agree, and 5 are left. The other 21 of `StringUtils` were left. 16 of those call a method that was left, so they follow from the rest, and the rest lack these:
+`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 149 of them, and all 149 are checked and agree on 300 inputs each. 22 of those checks kept int parameters within -64 to 64, and the rest used the full range. They call 13 static methods of six other classes, of which 8 are ported, checked and agree, and 5 are left. The other 11 of `StringUtils` were left. 7 of those call a method that was left, so they follow from the rest, and the rest lack these:
 
 | What has no rule | Methods |
 |---|---|
-| a `boolean[]`, a `switch`, a reference comparison, `Character.getType`, a constructor argument built with another `new` | 1 each |
+| a `boolean[]`, a `switch`, a reference comparison, `Character.getType` | 1 each |
 
 A first run with a dozen rules ported 9. Calls between the class's own methods took it to 53, rules for `indexOf(int)` and its relatives, `valueOf(char)`, `regionMatches` and the `List` and `Iterator` methods to 71, leaving out the initialization check before a static call into a JDK class to 89, and rules for case conversion, `StringBuffer.append(Object)` and a few constructors to 102.
 
@@ -129,7 +129,7 @@ A `char[]` has instructions of its own in the bytecode, so the plain form now ma
 
 Following calls into the program's other classes took it to 121. Two of the five methods left in those classes have an exception handler or call `CharSet.contains`, an instance method.
 
-Reading `ArrayUtils.EMPTY_STRING_ARRAY` as a def brought in the split methods and their callers, which is the 139.
+Reading `ArrayUtils.EMPTY_STRING_ARRAY` as a def brought in the split methods and their callers, which is the 139. `padding` throws `new IndexOutOfBoundsException(new StringBuffer()...toString())`, a constructor whose argument is built with another `new`; reading that shape brought in the pad and center methods, which is the 149.
 
 Earlier nine ports had disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char outside the surrogates.
 
