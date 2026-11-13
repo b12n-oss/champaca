@@ -60,14 +60,35 @@
             [else (loop (fx+ i 1))]))))
 (define (defining-name n) (or (lambda-site-caller n) n))
 (define (hidden-class? n) (or (hashtable-contains? hidden-classes n) (and (lambda-site-caller n) #t)))
+;; A class a loader of the program's own defines under a name another loader
+;; (or the class path, or the JDK) has is named <name>/0L<k> inside, one class
+;; table holding every loader's classes; Java sees <name> (plain-class-name).
+;; loader-names maps each such loader to its classes: name -> internal name.
+(define loader-names (make-weak-eq-hashtable))
+(define (loader-own-class loader n)
+  (let ([t (and loader (eq-hashtable-ref loader-names loader #f))]) (and t (hashtable-ref t n #f))))
+(define (note-loader-class! loader n internal)
+  (let ([t (or (eq-hashtable-ref loader-names loader #f)
+               (let ([t (make-hashtable string-hash string=?)]) (eq-hashtable-set! loader-names loader t) t))])
+    (hashtable-set! t n internal)))
+;; the index of a /0L<digits> suffix ending n, or #f
+(define (loader-suffix-index n)
+  (let loop ([i (fx- (string-length n) 1)])
+    (cond [(fx< i 2) #f]
+          [(char-numeric? (string-ref n i)) (loop (fx- i 1))]
+          [(and (char=? (string-ref n i) #\L) (char=? (string-ref n (fx- i 1)) #\0) (char=? (string-ref n (fx- i 2)) #\/)
+                (fx< (fx+ i 1) (string-length n)))
+           (fx- i 2)]
+          [else #f])))
+(define (plain-class-name n) (let ([i (loader-suffix-index n)]) (if i (substring n 0 i) n)))
 (define (package-dir cname)
   (let loop ([i (fx- (string-length cname) 1)])
     (cond [(fx< i 0) ""]
           [(char=? (string-ref cname i) #\/)
-           ;; a hidden class's /0x<n> isn't a package boundary (no package
-           ;; starts with a digit)
+           ;; a hidden class's /0x<n> and a loader's /0L<k> aren't package
+           ;; boundaries (no package starts with a digit)
            (if (and (fx< (fx+ i 2) (string-length cname))
-                    (char=? (string-ref cname (fx+ i 1)) #\0) (char=? (string-ref cname (fx+ i 2)) #\x))
+                    (char=? (string-ref cname (fx+ i 1)) #\0) (memv (string-ref cname (fx+ i 2)) '(#\x #\L)))
                (package-dir (substring cname 0 i))
                (substring cname 0 i))]
           [else (loop (fx- i 1))])))
@@ -175,6 +196,7 @@
    [(and (fx> k 0) (fx< k (string-length n)) (char=? (string-ref n k) #\L))
     (string-append (substring n 0 (fx+ k 1))
                    (external-class-name (substring n (fx+ k 1) (fx- (string-length n) 1))) ";")]
+   [(loader-suffix-index n) (slashes->dots (plain-class-name n))]
    [(hidden-class? n)
     (let loop ([i (fx- (string-length n) 1)])
       (if (char=? (string-ref n i) #\/)

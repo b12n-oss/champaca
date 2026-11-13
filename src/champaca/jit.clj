@@ -23,7 +23,7 @@
             [champaca.link :refer [check-kind check-virtual class-info direct-target field-index methods-of
                                    overridden? package-private-decl parsed resolve-method
                                    resolve-static-field thaw!]]
-            [champaca.loader :refer [ensure-loaded! lambda-class]]
+            [champaca.loader :refer [ensure-loaded! lambda-class remap-class-names]]
             [champaca.state :refer [state env trace? timed scheme! scheme-trace! *reads*]]))
 
 ;; --- resolution ----------------------------------------------------------------------
@@ -197,8 +197,51 @@
     (do (timed :chez-compile #(scheme! text :compile (lines? cname info)))
         (record! origin unit {:text text :inspect (lines? cname info)}))))
 
+(defn- type-desc-entry?
+  "A constant whose descriptor is a type to resolve, not a member's key: an
+  invokedynamic site's, a method type's, a dynamic constant's. A method or
+  field reference's descriptor names the member as its class declares it, so
+  it stays."
+  [e]
+  (contains? #{:indy :methodtype :dynamic} (:tag e)))
+
+(defn- desc-class-names [d]
+  (map second (re-seq #"L([^;]+);" (or d ""))))
+
+(defn- remap-desc
+  "Descriptor d with each class in it as mapping maps it."
+  [d mapping]
+  (str/replace d #"L([^;]+);" (fn [[m n]] (if-let [r (get mapping n)] (str "L" r ";") m))))
+
+(defn- through-defining-loader
+  "The parsed class p of cname with the class names it refers to as its
+  defining loader resolves them (loaders.ss loader-resolve-name), when a loader
+  of the program's own defined it: two loaders' classes of one name have
+  different names inside (ROADMAP 26). Asked per translation, so a class
+  defined before a sibling of its own loader names the sibling once it's
+  there."
+  [cname info p]
+  (if (not= :defined (:origin info))
+    p
+    (let [stamp (s/call "loader-map-stamp-now")
+          [st mapping] (get-in @state [:loader-maps cname])
+          mapping (if (= st stamp)
+                    mapping
+                    (let [names (->> (vals (:cp p)) (keep #(or (when (= :class (:tag %)) (:name %)) (:class %)))
+                                     (concat (mapcat #(map :type (:handlers (:code %))) (:methods p)))
+                                     (concat (mapcat #(desc-class-names (:desc %)) (filter type-desc-entry? (vals (:cp p)))))
+                                     (remove #(or (nil? %) (= % cname))) distinct)
+                          [_ & pairs] (str/split-lines (s/call "loader-resolve-names" cname (str/join "\n" names)))
+                          m (into {} (map #(str/split % #"\t")) pairs)]
+                      (swap! state assoc-in [:loader-maps cname] [stamp m])
+                      m))]
+      (if (empty? mapping)
+        p
+        (-> (remap-class-names p #(get mapping % %))
+            (update :cp (fn [cp] (into {} (map (fn [[i e]] [i (if (type-desc-entry? e) (update e :desc remap-desc mapping) e)])) cp))))))))
+
 (defn- compile-method!* [cname mname desc]
-  (let [p (parsed cname)
+  (let [p (through-defining-loader cname (class-info cname) (parsed cname))
         m (first (filter #(and (= mname (:name %)) (= desc (:desc %))) (:methods p)))
         info (assoc (class-info cname) :parsed p)]
     (swap! state update :jitted inc)

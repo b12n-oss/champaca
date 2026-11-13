@@ -268,6 +268,14 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- Classes of the same name from different class loaders: a loader of the
+  program's own defining a name another loader, the class path or the JDK
+  has gets a class of its own, named `<name>/0L<k>` inside and `<name>` to
+  Java, and its classes' references resolve through it. It was a
+  `LinkageError` (one class table), so ABCL couldn't boot, a second Groovy
+  shell couldn't run, and a child-first loader's class saw the class path's
+  copies (`test/aaa/siblingloaders.java`, `test/aaa/childfirst.java`, the
+  ABCL row of `jolt libs`).
 - `System.exit` called from a thread other than main saves the startup
   cache before the process ends, as main's return does. It ended the process
   from that thread with nothing saved, so a program exiting that way, ABCL
@@ -374,8 +382,8 @@ Refactors and licensing work with no change in behavior.
   jolt's own CI does since jolt-lang/jolt#1640. jolt-metrics moves to that
   PR's commit, which found two criticals and four unused names left by
   recent changes; they're split or removed.
-- `jolt libs` runs four JVM languages beside the twenty-three libraries:
-  Clojure 1.12.4, Groovy 5.0.8, Scala 2.13.18 and Kawa 3.1.1, each through its own
+- `jolt libs` runs five JVM languages beside the twenty-three libraries:
+  Clojure 1.12.4, Groovy 5.0.8, Scala 2.13.18, Kawa 3.1.1 and ABCL 1.9.2, each through its own
   launcher on a probe in `test/libs`, the jars pinned by Maven Central's
   SHA-1s. A `libs.edn` entry's `:run` names the main class and its
   arguments, with no javac step.

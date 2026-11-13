@@ -444,7 +444,9 @@
 ;; (below); any other loader has defined none, and finds what its parents
 ;; have by delegating, as ClassLoader.loadClass does next
 (defnative "java/lang/ClassLoader.findLoadedClass0(Ljava/lang/String;)Ljava/lang/Class;" (this name)
-  (let ([c (hashtable-ref classes (slashes (jstring->scheme name)) #f)])
+  (let* ([n (slashes (jstring->scheme name))]
+         [own (loader-own-class this n)]
+         [c (hashtable-ref classes (or own n) #f)])
     (and c
          (let ([dl (hashtable-ref class-loaders (jclass-cname c) #f)])
            (if dl
@@ -637,6 +639,80 @@
                                 #f])
              ((jvirt l "loadClass(Ljava/lang/String;)Ljava/lang/Class;") l (jstring (slashes->dots name)))
              (and (hashtable-ref classes name #f) #t))))))
+;; A class a loader of the program's own defined names others as that loader
+;; resolves them (ROADMAP 26). jit.clj maps each name the class's constant
+;; pool holds through loader-resolve-name before translating a method: the
+;; loader's own class of the name, else the loader's loadClass answer when the
+;; name is one some loader renamed or the loader overrides loadClass (a
+;; child-first one) and the name is a class path class, else the plain name.
+;; A stock loader asks its parent first, whose answer is the plain name, so
+;; programs whose loaders rename nothing never ask.
+(define renamed-plain-names (make-hashtable string-hash string=?))
+(define loadclass-key "loadClass(Ljava/lang/String;Z)Ljava/lang/Class;")
+(define overriding-loader-classes (make-weak-eq-hashtable))
+(define (loader-overrides-loadclass? l)
+  (let* ([c (jobj-cls l)] [v (eq-hashtable-ref overriding-loader-classes c 'unknown)])
+    (if (eq? v 'unknown)
+        (let* ([sym (eq-hashtable-ref (jclass-vtable c) (string->symbol loadclass-key) #f)]
+               [s (and sym (symbol->string sym))]
+               [cut (and s (fx- (string-length s) (fx+ 1 (string-length loadclass-key))))]
+               [decl (and cut (fx> cut 0) (substring s 0 cut))]
+               [r (and decl (not (member decl '("java/lang/ClassLoader" "java/security/SecureClassLoader" "java/net/URLClassLoader"))) #t)])
+          (eq-hashtable-set! overriding-loader-classes c r)
+          r)
+        v)))
+(define loader-answers (make-weak-eq-hashtable))   ; loader -> (name -> internal name)
+(define (loader-asked-name l x)
+  (and (not (member x (asking-loader)))
+       (parameterize ([asking-loader (cons x (asking-loader))] [resolving-loader #f])
+         ;; a name it can't load stays plain, and its resolution (lazy, at the
+         ;; instruction) fails then as it would have
+         (guard (e [#t #f])
+           (let ([m ((jvirt l "loadClass(Ljava/lang/String;)Ljava/lang/Class;") l (jstring (slashes->dots x)))])
+             (and m (jclass-cname (mirror-class m))))))))
+;; how often a loader's map changed (a class defined under a name some loader
+;; renamed, or renamed itself): jit.clj keeps each class's mapping until it does
+(define loader-map-stamp 0)
+(define (loader-map-stamp-now) loader-map-stamp)
+;; the names among text's (one per line) that cname's loader resolves to
+;; another class, as "old\tnew" lines after a first line with the stamp
+(define (loader-resolve-names cname text)
+  (let ([out (open-output-string)])
+    (put-string out (number->string loader-map-stamp))
+    (let ([l (hashtable-ref class-loaders cname #f)])
+      (when (and l (not (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))
+                 (or (fx> (hashtable-size renamed-plain-names) 0) (loader-overrides-loadclass? l)))
+        (for-each (lambda (x)
+                    (let ([r (loader-resolve-name cname x)])
+                      (unless (string=? r x)
+                        (put-string out "\n") (put-string out x) (put-string out "\t") (put-string out r))))
+                  (loader-split-lines text))))
+    (get-output-string out)))
+(define (loader-split-lines s)
+  (let loop ([i 0] [start 0] [acc '()])
+    (cond [(fx= i (string-length s)) (reverse (if (fx> i start) (cons (substring s start i) acc) acc))]
+          [(char=? (string-ref s i) #\newline) (loop (fx+ i 1) (fx+ i 1) (if (fx> i start) (cons (substring s start i) acc) acc))]
+          [else (loop (fx+ i 1) start acc)])))
+(define (loader-resolve-name cname x)
+  (let ([l (hashtable-ref class-loaders cname #f)])
+    (cond
+     [(or (not l) (fx= 0 (string-length x)) (jinstance? l "jdk/internal/loader/BuiltinClassLoader"))
+      x]
+     ;; an array of classes: its element as the loader resolves it
+     [(char=? (string-ref x 0) #\[)
+      (let ([k (let loop ([i 0]) (if (and (fx< i (string-length x)) (char=? (string-ref x i) #\[)) (loop (fx+ i 1)) i))])
+        (if (and (fx< k (string-length x)) (char=? (string-ref x k) #\L))
+            (let* ([e (substring x (fx+ k 1) (fx- (string-length x) 1))] [r (loader-resolve-name cname e)])
+              (if (string=? r e) x (string-append (substring x 0 (fx+ k 1)) r ";")))
+            x))]
+     [(loader-own-class l x)]
+     [(or (hashtable-contains? renamed-plain-names x)
+          (and (loader-overrides-loadclass? l) (not (jdk-package? x)) (class-exists? x)))
+      (let* ([t (or (eq-hashtable-ref loader-answers l #f)
+                    (let ([t (make-hashtable string-hash string=?)]) (eq-hashtable-set! loader-answers l t) t))]
+             [a (hashtable-ref t x #f)])
+        (or a (let ([r (or (loader-asked-name l x) x)]) (hashtable-set! t x r) r)))]
+     [else x])))
 ;; when each name's resolution error was recorded: defineClass rethrows one
 ;; for a missing supertype only if this definition's own lookup recorded it
 (define resolution-error-count 0)
@@ -655,6 +731,20 @@
 (define (generated-domain? pd)
   (let ([cs (and pd (jslot pd (jfield-index "java/security/ProtectionDomain" "codesource")))])
     (or (not cs) (not (jslot cs (jfield-index "java/security/CodeSource" "location"))))))
+;; the internal name a loader of the program's own defines name under when
+;; another loader, the class path or the JDK has the name (modules.ss
+;; loader-names), else #f. A loader defining its own name twice gets #f and
+;; the JVM's duplicate definition.
+(define loader-rename-count 0)
+(define (loader-internal-name loader name hidden?)
+  (and loader name (not hidden?)
+       (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader"))
+       (not (loader-own-class loader name))
+       (or (hashtable-ref classes name #f) (class-exists? name))
+       (begin (set! loader-rename-count (fx+ loader-rename-count 1))
+              (set! loader-map-stamp (fx+ loader-map-stamp 1))
+              (hashtable-set! renamed-plain-names name #t)
+              (string-append name "/0L" (number->string loader-rename-count)))))
 (define (definition-answer loader name text hidden? stamp pd)
   (guard (e [(and (not (jobj? e))
                   (let ([m (class-not-found-in e)])
@@ -668,7 +758,8 @@
       (define-class-hook* name text hidden?
                          (and loader (not hidden?)
                               (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
-                         (generated-domain? pd)))))
+                         (generated-domain? pd)
+                         (loader-internal-name loader name hidden?)))))
 ;; the JVM's error for an answer that isn't "ok": "bad", "link
 ;; <error class>|<text>" (link.clj check-definition!), "wrong" (the JVM's
 ;; message keeps both names slashed) or "dup"
@@ -704,13 +795,21 @@
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
   (let* ([stamp resolution-error-count]
          [name (and given (slashes (jstring->scheme given)))]
+         ;; a loader defining a name it defined before: the JVM's duplicate,
+         ;; whether or not the first was renamed
+         [_ (when (and loader name (not hidden?) (loader-own-class loader name))
+              (throw-definition-refusal "dup" name name))]
          [r (definition-answer loader name (bytes->latin1 v off len) hidden? stamp pd)]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])
     (if (member kind '("bad" "link" "wrong" "dup"))
         (throw-definition-refusal kind arg name)
-        (defined-mirror arg loader hidden? classdata pd))))
+        (begin (when (and loader (not hidden?))
+                 (note-loader-class! loader (plain-class-name arg) arg)
+                 (when (hashtable-contains? renamed-plain-names (plain-class-name arg))
+                   (set! loader-map-stamp (fx+ loader-map-stamp 1))))
+               (defined-mirror arg loader hidden? classdata pd)))))
 (defnative "java/lang/ClassLoader.defineClass1(Ljava/lang/ClassLoader;Ljava/lang/String;[BIILjava/security/ProtectionDomain;Ljava/lang/String;)Ljava/lang/Class;"
   (loader name b off len pd source)
   (define-class! loader name (jarr-vec (nn b)) off len plain-definition pd))

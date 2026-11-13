@@ -112,9 +112,10 @@
 
 (defn package-dir
   "cname's package directory (\"java/util\"). A hidden class's /0x<n> suffix
-  (define-class!) is part of its name, as in runtime.ss."
+  and a loader's /0L<k> (define-class!) are part of its name, as in
+  modules.ss."
   [cname]
-  (let [n (str/replace cname #"/0x[0-9a-f]+$" "")]
+  (let [n (str/replace cname #"/0(x[0-9a-f]+|L[0-9]+)$" "")]
     (subs n 0 (or (str/last-index-of n "/") 0))))
 
 (defn jar-entry?
