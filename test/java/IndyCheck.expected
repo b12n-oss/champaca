@@ -10,3 +10,7 @@ second
 java.lang.BootstrapMethodError
 java.lang.BootstrapMethodError
 42
+own bootstrap
+own metafactory
+own altMetafactory
+own makeConcatWithConstants

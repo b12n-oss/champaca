@@ -267,6 +267,12 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- An `invokedynamic` whose bootstrap is a program's own method named like a
+  JDK bootstrap champaca compiles (`bootstrap`, `metafactory`,
+  `altMetafactory`, `makeConcatWithConstants`) runs it, where champaca took
+  it for the JDK's by its name alone: every Groovy script died with "record
+  op with irritant invoke", Groovy's `IndyInterface.bootstrap` compiled as
+  a record's `ObjectMethods` (`test/java/IndyCheck.java`).
 - `FileSystems.newFileSystem(jrt:/, {java.home: H})` with this JDK's own
   home reads the image champaca runs on, where it failed with a duplicate
   class definition for `JrtFileSystemProvider`: the JDK loads H's

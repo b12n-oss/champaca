@@ -88,6 +88,12 @@ public class IndyCheckGen {
                 // ldc of a dynamic constant
                 cb.ldc(DynamicConstantDesc.ofNamed(answerBsm, "answer", CD_int));
                 println(cb, CD_int);
+                // bootstraps of this program's own named like the JDK's that
+                // champaca compiles: each must run, not be taken for the JDK's
+                for (String b : new String[] {"bootstrap", "metafactory", "altMetafactory", "makeConcatWithConstants"}) {
+                    cb.invokedynamic(DynamicCallSiteDesc.of(bsm(b), b, MethodTypeDesc.of(CD_String)));
+                    println(cb, CD_String);
+                }
                 cb.return_();
             });
         });
