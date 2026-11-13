@@ -588,6 +588,17 @@
                                    (println (if (seq bad) "FAIL" "PASS") "a program ended by SIGTERM or SIGHUP runs its shutdown hooks and exits 128 + the signal (test/signal)"
                                             (if (seq bad) (str/join "; " bad) ""))
                                    (if (seq bad) ["signal"] []))
+                    ;; the heap filled until nothing fits (test/heap), under a small
+                    ;; ceiling so it takes seconds: OutOfMemoryError that the program
+                    ;; catches and goes on from, as on HotSpot with -Xmx256m
+                    heap-fails (let [_ (shell "javac -d target/heap-classes test/heap/HeapFullCheck.java")
+                                     r (run-limited 300 {:label "heap-full"
+                                                         :extra-env {"JOLT_MAX_HEAP" "768m" "CHAMPACA_NPE_STRICT" "1"}}
+                                                    (jolt-bin) "-M" "-m" "champaca.main" "target/heap-classes" "HeapFullCheck")
+                                     ok (and (zero? (:exit r)) (= (slurp "test/heap/HeapFullCheck.expected") (:out r)))]
+                                 (println (if ok "PASS" "FAIL") "a full heap is OutOfMemoryError the program can catch (test/heap)")
+                                 (when-not ok (println (:out r)))
+                                 (if ok [] ["heap"]))
                     ;; System.exit from a thread other than main ends the process
                     ;; there (test/exitsave): the startup cache is still saved, so a
                     ;; fresh cache gains a generation (ABCL exits from its interpreter
@@ -1032,7 +1043,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails structured-fails save-fails signal-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails structured-fails save-fails signal-fails heap-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))

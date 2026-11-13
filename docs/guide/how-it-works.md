@@ -138,6 +138,7 @@ A pattern switch compiles to a call that walks its case labels in order (`jswitc
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |
 | `resources/champaca/runtime.ss` | numbers, objects, arrays, exceptions, `Class` mirrors, lambdas, records |
+| `resources/champaca/arrays.ss` | making arrays: the allocators, the limits on an array's size, and jolt's out-of-memory error as `OutOfMemoryError` ([limitations](limitations.md)) |
 | `resources/champaca/inline.ss` | call-site forms for the JDK methods HotSpot intrinsifies: range checks, `requireNonNull`, boxing ([performance](performance.md#allocation-boxing-and-calls-that-see-many-classes)) |
 | `resources/champaca/strings.ss` | `java.lang.String` to and from Scheme strings, concatenation |
 | `resources/champaca/modules.ss` | which module and loader a class belongs to, and the texts that name them |

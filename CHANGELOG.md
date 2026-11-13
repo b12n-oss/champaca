@@ -293,6 +293,14 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- An array too large to make is `OutOfMemoryError` with HotSpot's messages
+  (`Requested array size exceeds VM limit` above `Integer.MAX_VALUE - 2`,
+  `Java heap space` when there is no room), from `new`, multi-dimensional
+  `new`, `Array.newInstance` and the library, in HotSpot's order of checks.
+  A heap filled by many small objects is `OutOfMemoryError` too, which the
+  program can catch and go on from. Both ended the process with a Scheme
+  error. `Runtime.maxMemory` reports jolt's heap ceiling, and the
+  OperatingSystem bean reports physical memory.
 - Classes of the same name from different class loaders: a loader of the
   program's own defining a name another loader, the class path or the JDK
   has gets a class of its own, named `<name>/0L<k>` inside and `<name>` to
