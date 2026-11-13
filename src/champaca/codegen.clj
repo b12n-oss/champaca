@@ -331,9 +331,10 @@
 
 (def ^:dynamic *plain*
   "True to translate a method as written: no callee compiled into it, no
-  second copy of its array loops, and every call a call (none done in line
-  at the call site). The port tool reads this form (jit.clj method-text);
-  what runs is never translated this way."
+  second copy of its array loops, every call a call (none done in line at
+  the call site), and no CHAMPACA_BT wrapper around its body. The port tool
+  reads this form (jit.clj method-text); what runs is never translated this
+  way."
   false)
 
 (defn- callee
@@ -1437,7 +1438,7 @@
         entries (entry-defs plan emitted)
         body* (blocks-body plan block-fns entries versions start)
         sync? (pos? (bit-and (:flags method) 0x0020))
-        bt? (System/getenv "CHAMPACA_BT")
+        bt? (and (not *plain*) (System/getenv "CHAMPACA_BT"))   ; the port's form has no wrapper
         body (if sync? (synchronized-body cls method ic! body*) body*)
         ;; CHAMPACA_BT: keep a shadow stack of Java frames for backtraces
         body (if bt?
