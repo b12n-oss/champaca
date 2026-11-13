@@ -1,0 +1,73 @@
+(ns probe
+  (:require [clojure.string :as str]
+            [clojure.set :as set]
+            [clojure.walk :as walk]
+            [clojure.edn :as edn]
+            [clojure.pprint :as pp]
+            [clojure.spec.alpha :as s]
+            [clojure.core.protocols]))
+
+(defprotocol Shape (area [s]) (label [s]))
+(defrecord Circle [r] Shape (area [_] (* Math/PI r r)) (label [_] "circle"))
+(defrecord Rect [w h] Shape (area [_] (* w h)) (label [_] "rect"))
+(deftype Pt [x y] Object (toString [_] (str "Pt(" x "," y ")")))
+(extend-protocol Shape String (area [s] (count s)) (label [_] "string"))
+
+(defmulti speak :kind)
+(defmethod speak :dog [_] "woof")
+(defmethod speak :default [m] (str "? " (:kind m)))
+
+(s/def ::age (s/and int? #(<= 0 % 150)))
+(s/def ::person (s/keys :req-un [::name ::age]))
+(s/def ::name string?)
+
+(defmacro unless [c & body] `(if ~c nil (do ~@body)))
+
+(defn row [k v] (println (str k ":") (pr-str v)))
+
+(row "version" (clojure-version))
+(row "arith" [(+ 1 2) (/ 1 3) (* 1.5 2) (quot 17 5) (rem -17 5) (mod -17 5) (bit-xor 12 10)])
+(row "bigint" [(* 99999999999N 99999999999N) (reduce *' (range 1 25)) (bigdec "1.10") (+ 0.1M 0.2M)])
+(row "overflow" (try (* Long/MAX_VALUE 2) (catch ArithmeticException e (.getMessage e))))
+(row "strings" [(str/upper-case "abc") (str/split "a,b,,c" #",") (str/join "-" [1 2 3]) (str/replace "hello world" #"o(\w)" "0$1") (format "%05.2f|%-4s|%x" 3.14159 "ab" 255)])
+(row "regex" [(re-find #"(\d+)-(\d+)" "tel 12-34") (re-seq #"\w+" "a bb ccc") (re-matches #"[a-z]+" "abc")])
+(row "colls" [(conj [1 2] 3) (assoc {:a 1} :b 2) (dissoc {:a 1 :b 2} :a) (into (sorted-set) [3 1 2]) (frequencies "hello") (group-by odd? (range 6))])
+(row "seq" [(take 5 (iterate #(* 2 %) 1)) (partition 2 1 [1 2 3 4]) (interleave [1 2] [:a :b]) (take 10 (cycle [1 2 3])) (mapcat reverse [[1 2] [3 4]])])
+(row "lazy" (->> (range) (filter even?) (map #(* % %)) (take 5)))
+(row "transducers" [(transduce (comp (filter odd?) (map inc)) + (range 10)) (into [] (comp (partition-all 3) (map count)) (range 10)) (sequence (dedupe) [1 1 2 2 3 1])])
+(row "sorted" [(sort-by :n [{:n 3} {:n 1} {:n 2}]) (sort > [3 1 2]) (sorted-map :b 2 :a 1) (compare "a" "b")])
+(row "sets" [(set/union #{1 2} #{2 3}) (set/difference #{1 2 3} #{2}) (set/rename-keys {:a 1} {:a :z})])
+(row "records" [(area (->Rect 2 3)) (label (->Circle 1)) (map->Rect {:w 1 :h 2}) (= (->Rect 1 2) (->Rect 1 2)) (area "four")])
+(row "deftype" (str (Pt. 1 2)))
+(row "multimethods" [(speak {:kind :dog}) (speak {:kind :cat})])
+(row "reify" (str (reify Object (toString [_] "reified"))))
+(row "spec" [(s/valid? ::person {:name "a" :age 3}) (s/valid? ::person {:name "a" :age 300}) (s/conform (s/cat :a int? :b keyword?) [1 :x])])
+(row "spec-explain" (with-out-str (s/explain ::age 200)))
+(row "atoms" (let [a (atom 0)] (dotimes [_ 100] (swap! a inc)) (reset-vals! a 5) @a))
+(row "refs" (let [r (ref 1)] (dosync (alter r + 10)) @r))
+(row "agents" (let [ag (agent 1)] (send ag * 7) (await ag) @ag))
+(row "futures" (let [fs (doall (map #(future (* % %)) (range 5)))] (map deref fs)))
+(row "promise" (let [p (promise)] (future (deliver p :done)) (deref p 5000 :timeout)))
+(row "pmap" (vec (pmap inc (range 8))))
+(row "exceptions" (try (throw (ex-info "boom" {:code 7})) (catch clojure.lang.ExceptionInfo e [(ex-message e) (ex-data e)])))
+(row "finally" (let [log (atom [])] (try (try (/ 1 0) (finally (swap! log conj :f))) (catch ArithmeticException e (swap! log conj (.getMessage e)))) @log))
+(row "macro" [(unless false :ran) (macroexpand-1 '(unless x y)) (macroexpand '(-> a (b c) d))])
+(row "destructure" (let [{:keys [a b] :or {b 9}} {:a 1} [x & more :as all] [1 2 3]] [a b x more all]))
+(row "walk" (walk/postwalk #(if (number? %) (inc %) %) {:a [1 2 {:b 3}]}))
+(row "edn" (edn/read-string "{:a [1 2.5 \"s\" #{:k}] :b nil}"))
+(row "read-eval" (eval (read-string "(let [f (fn [x] (* x 3))] (map f [1 2 3]))")))
+(row "pprint" (with-out-str (pp/pprint {:alpha (range 12) :beta {:nested [1 2 3] :deeper {:x "long string value here"}}})))
+(row "interop" [(.toUpperCase "java") (Math/abs -5) (java.util.ArrayList. [1 2]) (.get (doto (java.util.HashMap.) (.put "k" 1)) "k") (Integer/parseInt "42") (String/valueOf 3.5)])
+(row "arrays" [(vec (int-array [3 1 2])) (alength (make-array String 4)) (vec (sort (long-array [5 2 9]))) (aget (to-array [:a :b]) 1)])
+(row "chars" [(char 65) (int \z) (Character/isDigit \5) (seq "héllo")])
+(row "keywords" [(keyword "ns" "k") (name :a/b) (namespace :a/b) (symbol "x") (:k {:k 1})])
+(row "meta" (meta (with-meta [1] {:tag :v})))
+(row "volatile" (let [v (volatile! 1)] (vswap! v + 2) @v))
+(row "letfn" (letfn [(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))] (ev? 100)))
+(row "recur" (loop [i 0 acc 0] (if (= i 100000) acc (recur (inc i) (+ acc i)))))
+(row "trampoline" (trampoline (fn f [n] (if (zero? n) :done #(f (dec n)))) 10000))
+(row "hash" [(hash "abc") (hash [1 2]) (hash {:a 1}) (hash 1.5)])
+(row "print" [(pr-str [nil true \a "s" 1.0 1/2 'sym :kw {:m 1}]) (prn-str #inst "2020-01-02T03:04:05.000-00:00") (str #uuid "00000000-0000-0000-0000-000000000001")])
+(row "ns" [(count (ns-publics 'clojure.core)) (some? (resolve 'clojure.string/join)) (str *ns*)])
+(row "stacktrace" (try (nth [] 5) (catch IndexOutOfBoundsException e (class e))))
+(shutdown-agents)

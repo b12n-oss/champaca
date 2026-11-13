@@ -84,4 +84,24 @@
   ;; values; its Vector API warning goes to stderr, which isn't compared
   {:main "Luc" :jars [["org.apache.lucene:lucene-core:10.0.0" "5a9b3f728041df5b054aaaed3c3fd7ff0fed8ee7"]
                       ["org.apache.lucene:lucene-analysis-common:10.0.0" "13eb016bab14973158554a2e6cdf2abbc5c3eda1"]
-                      ["org.apache.lucene:lucene-queryparser:10.0.0" "e11886c913058ef20378715dee715d942d04babc"]]}]}
+                      ["org.apache.lucene:lucene-queryparser:10.0.0" "e11886c913058ef20378715dee715d942d04babc"]]}
+  ;; Other JVM languages, each run as its own launcher would (:run is the main
+  ;; class and its arguments, no javac). Clojure: a script through
+  ;; clojure.main (protocols, records, multimethods, spec, refs, agents,
+  ;; futures, pprint, eval)
+  {:main "Clj" :run ["clojure.main" "test/libs/Clj.clj"]
+   :jars [["org.clojure:clojure:1.12.4" "580cd548600f63b597efea7e94c3e55be2d12537"]
+          ["org.clojure:spec.alpha:0.5.238" "4eb5dea521c4e6e1f68c2c47517f14a922003e60"]
+          ["org.clojure:core.specs.alpha:0.4.74" "d56a8d4c666ff8140e6d0a62d41263134be39254"]]}
+  ;; Groovy: a script through GroovyMain, every call an invokedynamic site of
+  ;; Groovy's own bootstrap (closures, metaclasses, traits, @CompileStatic)
+  {:main "Grv" :run ["groovy.ui.GroovyMain" "test/libs/Grv.groovy"]
+   :jars [["org.apache.groovy:groovy:5.0.8" "e2ff7e471b4693d07877409761207c6c27c88b5a"]
+          ["org.apache.groovy:groovy-json:5.0.8" "586342fe9600f7f5c9f0c0ec1661a376412f6970"]
+          ["org.apache.groovy:groovy-xml:5.0.8" "2e36bcf3603bd78cdae70c223e982bb8bcb3a805"]]}
+  ;; Scala: the compiler compiles the source in memory and runs it, as the
+  ;; scala launcher does (its deprecation warning goes to stderr)
+  {:main "Scl" :run ["scala.tools.nsc.MainGenericRunner" "-usejavacp" "-nc" "test/libs/Scl.scala"]
+   :jars [["org.scala-lang:scala-library:2.13.18" "eb2086988c25b08705472cc750654570900362e5"]
+          ["org.scala-lang:scala-compiler:2.13.18" "8819d2783d182a78ac47918f8d0194599f4c432f"]
+          ["org.scala-lang:scala-reflect:2.13.18" "674f3bd39f5c528d575da69c42a5dff772b9b75c"]]}]}

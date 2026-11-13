@@ -1119,7 +1119,7 @@
                     tail (fn [s] (str/join "\n    " (take-last 5 (str/split-lines s))))
                     results
                     (doall
-                     (for [{:keys [main jars stderr]} libs
+                     (for [{:keys [main jars stderr run]} libs
                            :when (or (empty? only) (contains? only main))
                            :let [missing (remove (fn [[c _]] (fs/exists? (m2-jar c))) jars)
                                  bad (when (empty? missing)
@@ -1136,16 +1136,21 @@
                                cp (str/join ":" (map (fn [[c _]] (m2-jar c)) jars))
                                _ (fs/delete-tree out)
                                _ (fs/create-dirs out)
-                               jc (shell {:err :string :continue true} "javac -nowarn -cp" cp "-d" out (str "test/libs/" main ".java"))]
+                               ;; a :run probe is a language's launcher on its own
+                               ;; source: nothing to compile with javac
+                               jc (if run
+                                    {:exit 0}
+                                    (shell {:err :string :continue true} "javac -nowarn -cp" cp "-d" out (str "test/libs/" main ".java")))
+                               cmd (or run [main])]
                            (if-not (zero? (:exit jc))
                              (do (println "FAIL" main "(javac)") (println (str "    " (tail (:err jc)))) :fail)
                              (let [run-cp (str out ":" cp)
-                                   jvm (shell {:out :string :err :string :continue true} "java -cp" run-cp main)
+                                   jvm (apply shell {:out :string :err :string :continue true} "java -cp" run-cp cmd)
                                    ;; a fresh cache each time, so the run is a cold one
                                    cache (fs/create-temp-dir)
-                                   ch (try (shell {:out :string :err :string :continue true
+                                   ch (try (apply shell {:out :string :err :string :continue true
                                                    :extra-env {"CHAMPACA_CACHE_DIR" (str cache) "CHAMPACA_NPE_STRICT" "1"}}
-                                                  (jolt-bin) "-M" "-m" "champaca.main" run-cp main)
+                                                  (jolt-bin) "-M" "-m" "champaca.main" run-cp cmd)
                                            (finally (fs/delete-tree cache)))
                                    exits-ok (and (zero? (:exit jvm)) (zero? (:exit ch)))
                                    same-out (= (:out jvm) (:out ch))
