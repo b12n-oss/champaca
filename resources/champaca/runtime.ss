@@ -887,7 +887,7 @@
 
 ;; Virtual and interface dispatch: one hashtable probe on the receiver's class.
 ;; Arrays dispatch through Object's vtable, except clone.
-(define (array-clone a) (make-jarr* (jarr-elem a) (vector-copy (jarr-vec a))))
+(define (array-clone a) (make-jarr* (jarr-elem a) (#3%vector-copy (jarr-vec a))))
 ;; key is a symbol in generated code; the runtime's own callers pass strings.
 (define clone-key (string->symbol "clone()Ljava/lang/Object;"))
 (define (jvirt x key)

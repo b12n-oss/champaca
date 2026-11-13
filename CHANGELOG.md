@@ -348,6 +348,16 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- String and array basics. `String.charAt`, `length` and `isEmpty` are done at
+  the call site (an index out of range still goes to the JDK's method, for
+  its exception): a `charAt` loop went from 17.2 to 6.4 ns an iteration.
+  `"hello" + i` went from 372 to 78 ns: the recipe is parsed at translation
+  and the number's digits are written straight into the result.
+  `System.arraycopy` and `clone` use Chez's bulk vector copies (1024 bytes:
+  2825 to 693 ns), and the loops behind `String.equals`, `indexOf(char)` and
+  `hashCode` read unchecked after their range check (`equals` on 1000
+  chars: 2133 to 516 ns). `StringOpsCheck`, `ConcatCheck` and
+  `ArrayMoveCheck` check the results against HotSpot's.
 - A type test at a site that sees many classes no longer walks the class
   hierarchy each time. An `instanceof` or cast site keeps the last class it
   saw, and when another class arrived the answer came from comparing class

@@ -16,4 +16,53 @@ indexOf from 40: -1 -1 -1 -1 -1
 indexOf 4 12 -1 1 10 true
 arrays 898500 1011839 2154849 -2147453881 1 0
 boolean-ish 40359 8897 4681
+chars 0:
+charAt -1: Index -1 out of bounds for length 0
+charAt 0: Index 0 out of bounds for length 0
+charAt 3: Index 3 out of bounds for length 0
+charAt -2147483648: Index -2147483648 out of bounds for length 0
+charAt 2147483647: Index 2147483647 out of bounds for length 0
+chars 1: 97
+charAt -1: Index -1 out of bounds for length 1
+charAt 1: Index 1 out of bounds for length 1
+charAt 4: Index 4 out of bounds for length 1
+charAt -2147483648: Index -2147483648 out of bounds for length 1
+charAt 2147483647: Index 2147483647 out of bounds for length 1
+chars 5: 104 101 108 108 111
+charAt -1: Index -1 out of bounds for length 5
+charAt 5: Index 5 out of bounds for length 5
+charAt 8: Index 8 out of bounds for length 5
+charAt -2147483648: Index -2147483648 out of bounds for length 5
+charAt 2147483647: Index 2147483647 out of bounds for length 5
+chars 46: 111 114 103 47 115 112 114 105 110 103 102 114 97 109 101 119 111 114 107 47 98 111 111 116 47 108 111 97 100 101 114 47 122 105 112 47 90 105 112 67 111 110 116 101 110 116
+charAt -1: Index -1 out of bounds for length 46
+charAt 46: Index 46 out of bounds for length 46
+charAt 49: Index 49 out of bounds for length 46
+charAt -2147483648: Index -2147483648 out of bounds for length 46
+charAt 2147483647: Index 2147483647 out of bounds for length 46
+chars 3: 233 116 233
+charAt -1: Index -1 out of bounds for length 3
+charAt 3: Index 3 out of bounds for length 3
+charAt 6: Index 6 out of bounds for length 3
+charAt -2147483648: Index -2147483648 out of bounds for length 3
+charAt 2147483647: Index 2147483647 out of bounds for length 3
+chars 2: 256 120
+charAt -1: Index -1 out of bounds for length 2
+charAt 2: Index 2 out of bounds for length 2
+charAt 5: Index 5 out of bounds for length 2
+charAt -2147483648: Index -2147483648 out of bounds for length 2
+charAt 2147483647: Index 2147483647 out of bounds for length 2
+chars 3: 55357 56832 33
+charAt -1: Index -1 out of bounds for length 3
+charAt 3: Index 3 out of bounds for length 3
+charAt 6: Index 6 out of bounds for length 3
+charAt -2147483648: Index -2147483648 out of bounds for length 3
+charAt 2147483647: Index 2147483647 out of bounds for length 3
+chars 7: 101 110 100 0 110 117 108
+charAt -1: Index -1 out of bounds for length 7
+charAt 7: Index 7 out of bounds for length 7
+charAt 10: Index 10 out of bounds for length 7
+charAt -2147483648: Index -2147483648 out of bounds for length 7
+charAt 2147483647: Index 2147483647 out of bounds for length 7
+as a CharSequence 5 55357 false true
 big -2071830186 true 207 197773930

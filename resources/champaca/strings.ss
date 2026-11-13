@@ -16,10 +16,16 @@
 
 (define string-value-slot #f)
 (define string-coder-slot #f)
+;; the String class and a byte[]'s interned element descriptor, looked up
+;; once: by name each is a string-table probe, and a concatenation made two
+(define string-class #f)
+(define byte-elem #f)
 (define (string-slots!)
   (unless string-value-slot
-    (set! string-value-slot (jfield-index "java/lang/String" "value"))
-    (set! string-coder-slot (jfield-index "java/lang/String" "coder"))))
+    (set! string-class (find-class "java/lang/String"))
+    (set! byte-elem (intern-elem "B"))
+    (set! string-coder-slot (jfield-index "java/lang/String" "coder"))
+    (set! string-value-slot (jfield-index "java/lang/String" "value"))))
 
 (define (code-units s)
   ;; Scheme string (code points) -> list of UTF-16 code units. A vector is a
@@ -79,6 +85,47 @@
              (let ([lo (utf16-unit-at v (fx+ i 2))])
                (loop (fx+ i 4) (cons (integer->char (fx+ #x10000 (fxsll (fx- u #xd800) 10) (fx- lo #xdc00))) acc)))]
             [else (loop (fx+ i 2) (cons (integer->char #xfffd) acc))])))))
+
+;; --- String.charAt, length and isEmpty at the call site --------------------------
+;; HotSpot intrinsifies these. In Java, charAt is isLatin1(), then
+;; StringLatin1.charAt, checkIndex and Preconditions before the byte is read:
+;; five calls for one array read, and a loop over a string pays them per
+;; character. The code generator writes these forms where a call names one
+;; of the three methods on java.lang.String (codegen.clj string-intrinsics).
+;; The receiver is already null-checked. An index in range reads the byte, or
+;; the two of a UTF-16 unit (low byte first, as the JDK stores them on the
+;; little-endian machines champaca runs on). Anything else calls the method
+;; itself, passed as slow, so the exception, its message and its stack trace
+;; are the JDK's own. The method is not overridden: a call through
+;; CharSequence still runs the Java code.
+(define-syntax jstring-value-vec   ; the byte[]'s vector, the slot numbers looked up once
+  (syntax-rules ()
+    [(_ slots)
+     (begin (when (#3%eq? string-value-slot #f) (string-slots!))
+            (jarr-vec (#3%vector-ref slots string-value-slot)))]))
+(define-syntax jstring-char-at
+  (syntax-rules ()
+    [(_ s i slow)
+     (let* ([o s] [k i] [slots (jobj-slots o)] [v (jstring-value-vec slots)])
+       (if (#3%eq? 0 (#3%vector-ref slots string-coder-slot))
+           (if (and (#3%fx>= k 0) (#3%fx< k (#3%vector-length v)))
+               (#3%fxlogand (#3%vector-ref v k) #xff)
+               (slow o k))
+           (let ([j (#3%fx* 2 k)])
+             (if (and (#3%fx>= k 0) (#3%fx< (#3%fx+ j 1) (#3%vector-length v)))
+                 (#3%fxlogor (#3%fxlogand (#3%vector-ref v j) #xff)
+                             (#3%fxsll (#3%fxlogand (#3%vector-ref v (#3%fx+ j 1)) #xff) 8))
+                 (slow o k)))))]))
+(define-syntax jstring-length
+  (syntax-rules ()
+    [(_ s slow)
+     (let* ([slots (jobj-slots s)] [v (jstring-value-vec slots)])
+       (#3%fxsra (#3%vector-length v) (#3%vector-ref slots string-coder-slot)))]))
+(define-syntax jstring-empty?
+  (syntax-rules ()
+    [(_ s slow)
+     (let* ([slots (jobj-slots s)] [v (jstring-value-vec slots)])
+       (if (#3%fx= 0 (#3%vector-length v)) 1 0))]))
 
 (define (jstring->scheme o)
   (string-slots!)
@@ -144,7 +191,7 @@
 ;; sees it; unlike jstring-of this keeps a lone surrogate
 (define (jstring-units-of x)
   (cond [(not x) (code-units "null")]
-        [(and (jobj? x) (string=? (jclass-cname (jobj-cls x)) "java/lang/String")) (jstring-units x)]
+        [(and (jobj? x) (eq? (jobj-cls x) string-class)) (jstring-units x)]
         [else (let ([s ((jvirt x "toString()Ljava/lang/String;") x)]) (if s (jstring-units s) (code-units "null")))]))
 
 ;; x's code units pushed onto acc, last first: x is a Scheme string, a list of
@@ -162,6 +209,7 @@
                            (cons (fx+ #xdc00 (fxlogand v #x3ff)) (cons (fx+ #xd800 (fxsrl v 10)) acc)))
                          (cons cp acc)))))))]
     [(vector? x) (units-onto (vector->list x) acc)]
+    [(fixnum? x) (units-onto (number->string x) acc)]
     [(not x) (units-onto "null" acc)]
     [(or (jobj? x) (jarr? x)) (units-onto (jstring-units-of x) acc)]
     [else (fold-left (lambda (a u) (cons u a)) acc x)]))
@@ -189,11 +237,21 @@
 ;; toString, or "null" (jstring-units-of does the same for the slow path)
 (define (concat-arg x)
   (cond [(not x) "null"]
-        [(and (jobj? x) (string=? (jclass-cname (jobj-cls x)) "java/lang/String")) x]
+        [(and (jobj? x) (eq? (jobj-cls x) string-class)) x]
+        ;; an int or a long goes as the number: its digits are written straight
+        ;; into the result (latin1-fill-fixnum!). One that isn't a fixnum, or
+        ;; whose negation isn't, is rare enough to print the usual way.
+        [(fixnum? x) (if (fx= x (most-negative-fixnum)) (number->string x) x)]
+        [(number? x) (number->string x)]
         ;; an array too: javac before 19 passes any reference raw (19+ calls
         ;; String.valueOf first), and Object's toString answers for arrays
         [(or (jobj? x) (jarr? x)) (or ((jvirt x "toString()Ljava/lang/String;") x) "null")]
         [else x]))
+;; the characters of a fixnum in decimal, its sign included (not the most
+;; negative fixnum, whose negation isn't one: concat-arg keeps that out)
+(define (fixnum-digits n)
+  (let count ([m (if (fx< n 0) (fx- 0 n) n)] [k (if (fx< n 0) 2 1)])
+    (if (fx< m 10) k (count (fxquotient m 10) (fx+ k 1)))))
 ;; a piece's byte length when it is Latin-1, else #f
 (define (concat-latin1-length p)
   (cond [(string? p) (let ([n (string-length p)])
@@ -203,21 +261,28 @@
                                [else #f])))]
         [(jobj? p) (and (eqv? 0 (vector-ref (jobj-slots p) string-coder-slot))
                         (vector-length (jarr-vec (vector-ref (jobj-slots p) string-value-slot))))]
+        [(fixnum? p) (fixnum-digits p)]
         [(pair? p) (let loop ([l p] [n 0]) (cond [(null? l) n] [(fx< (car l) 256) (loop (cdr l) (fx+ n 1))] [else #f]))]
         [(null? p) 0]
         [else #f]))
+;; jconcat-parts takes the recipe already parsed, as the code generator
+;; writes it for a call site (a quoted list: literals, 1 for the next
+;; argument, 2 for the next constant), so no lookup stands before the work.
+;; jconcat parses a recipe string, for a caller that has only that.
 (define (jconcat recipe args consts)
   (if (vector? recipe)
       (jconcat-units recipe args consts)
+      (jconcat-parts (concat-parts recipe) args consts)))
+(define (jconcat-parts parts args consts)
       (let* ([_ (string-slots!)]   ; concat-latin1-length reads the slots
-             [pieces (concat-pieces (concat-parts recipe) args consts)]
+             [pieces (concat-pieces parts args consts)]
              [total (concat-latin1-total pieces)])
         (if total
             (let ([v (make-vector total)])
               (string-slots!)
               (concat-latin1-fill! v pieces)
               (latin1-jstring v))
-            (units->jstring (reverse (fold-left (lambda (acc p) (units-onto p acc)) '() pieces)))))))
+            (units->jstring (reverse (fold-left (lambda (acc p) (units-onto p acc)) '() pieces))))))
 ;; the pieces of parsed recipe parts: a 1 takes the next argument's piece
 ;; (concat-arg), a 2 the next constant, a literal stays as it is
 (define (concat-pieces parts args consts)
@@ -242,14 +307,26 @@
   (syntax-rules ()
     [(_ v p at)
      (let ([n (string-length p)])
-       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (i2b (char->integer (string-ref p i)))))
-       (fx+ at n))]))
+       (do ([i 0 (#3%fx+ i 1)]) ((#3%fx= i n))
+         (let ([c (char->integer (#3%string-ref p i))])
+           (#3%vector-set! v (#3%fx+ at i) (if (#3%fx>= c 128) (#3%fx- c 256) c))))
+       (#3%fx+ at n))]))
 (define-syntax latin1-fill-jstring!   ; a Java String whose coder is Latin-1
   (syntax-rules ()
     [(_ v p at)
      (let* ([sv (jarr-vec (vector-ref (jobj-slots p) string-value-slot))] [n (vector-length sv)])
-       (do ([i 0 (fx+ i 1)]) ((fx= i n)) (vector-set! v (fx+ at i) (vector-ref sv i)))
-       (fx+ at n))]))
+       (do ([i 0 (#3%fx+ i 1)]) ((#3%fx= i n)) (#3%vector-set! v (#3%fx+ at i) (#3%vector-ref sv i)))
+       (#3%fx+ at n))]))
+;; an int's or a long's decimal digits, last first, with its sign
+(define-syntax latin1-fill-fixnum!
+  (syntax-rules ()
+    [(_ v p at)
+     (let* ([end (#3%fx+ at (fixnum-digits p))] [neg? (#3%fx< p 0)])
+       (let digit ([m (if neg? (#3%fx- 0 p) p)] [i (#3%fx- end 1)])
+         (#3%vector-set! v i (#3%fx+ 48 (#3%fxremainder m 10)))
+         (when (#3%fx>= m 10) (digit (#3%fxquotient m 10) (#3%fx- i 1))))
+       (when neg? (#3%vector-set! v at 45))
+       end)]))
 (define-syntax latin1-fill-units!   ; a list of code units, each under 256
   (syntax-rules ()
     [(_ v p at0)
@@ -265,11 +342,13 @@
         (loop (cdr ps)
               (cond [(string? p) (latin1-fill-string! v p at)]
                     [(jobj? p) (latin1-fill-jstring! v p at)]
+                    [(fixnum? p) (latin1-fill-fixnum! v p at)]
                     [else (latin1-fill-units! v p at)]))))))
 ;; a String with coder 0 (Latin-1) over the bytes in v
 (define (latin1-jstring v)
-  (let ([o (jnew "java/lang/String")])
-    (vector-set! (jobj-slots o) string-value-slot (make-jarr "B" v))
+  (string-slots!)
+  (let ([o (make-jobj string-class (vector-copy (jclass-template string-class)))])
+    (vector-set! (jobj-slots o) string-value-slot (make-jarr* byte-elem v))
     (vector-set! (jobj-slots o) string-coder-slot 0)
     o))
 ;; the slow path, for a code-unit recipe (a constant holding a lone surrogate)

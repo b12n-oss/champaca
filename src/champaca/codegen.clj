@@ -328,6 +328,14 @@
   (when (not= c (:this-class e))
     (stmt! e (sx "jinit-ic" ((:ic! e)) (str "'" (sym c)) (site pc)))))
 
+(def ^:private string-intrinsics
+  "The java.lang.String methods a call site does in line (strings.ss): the
+  form takes the null-checked receiver, the arguments, and the method
+  itself, which it calls when the fast path doesn't apply."
+  {"java/lang/String.charAt(I)C" "jstring-char-at"
+   "java/lang/String.length()I" "jstring-length"
+   "java/lang/String.isEmpty()Z" "jstring-empty?"})
+
 (defn- callee
   "What a direct call names: the callee inlined into this method when it is a
   small leaf (compile-method), else its top-level definition."
@@ -690,7 +698,9 @@
     ((:check-virtual resolve) class name desc)
     ((:check-kind resolve) (if (= op :invokeinterface) :interface :virtual) class name desc)
     (if-let [decl ((:direct-target resolve) class name desc)]
-      (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv)
+      (if-let [form (string-intrinsics (str decl "." name desc))]
+        (apply sx form (sx "nn-at" recv (site pc)) (concat argv [(at pc (method-global decl name desc))]))
+        (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv))
       (if-let [pp (and (= op :invokevirtual) ((:package-private-decl resolve) class name desc))]
         (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! e)) recv (key) (str "'" (sym pp)) (site pc))) recv argv)
         (apply sx (at pc (sx "jvirt-ic" ((:ic! e)) recv (key) (site pc))) recv argv)))))
@@ -736,6 +746,17 @@
 
 ;; --- invokedynamic -------------------------------------------------------------------
 
+(defn- recipe-parts
+  "A makeConcatWithConstants recipe as the text of its parts: each run of
+  literal characters as a string literal, \u0001 (the next argument) as 1
+  and \u0002 (the next constant) as 2."
+  [recipe]
+  (->> (partition-by #(contains? #{\u0001 \u0002} %) recipe)
+       (mapcat (fn [run]
+                 (if (contains? #{\u0001 \u0002} (first run))
+                   (map #(if (= % \u0001) "1" "2") run)
+                   [(str-lit (apply str run))])))))
+
 (defn- concat-call
   "makeConcatWithConstants: jconcat over the recipe, the arguments as text
   and the constants. A code-unit vector (a lone surrogate) is quoted, being
@@ -748,14 +769,19 @@
         consts (map #(lit (:value (cp %))) (rest (:args bsm)))
         conv (map (fn [t v]
                     (case t
-                      ("I" "S" "B" "J") (sx "number->string" v)
+                      ;; an int or a long as the number: jconcat writes its digits
+                      ("I" "S" "B" "J") v
                       "F" (sx "java-float->string" v)
                       "D" (sx "jdouble->string" v)
                       "C" (sx "list" v)
                       "Z" (sx "jbool->string" v)
                       v))
                   params argv)]
-    (sx "jconcat" (lit recipe) (apply sx "list" conv) (apply sx "list" consts))))
+    (if (vector? recipe)
+      (sx "jconcat" (lit recipe) (apply sx "list" conv) (apply sx "list" consts))
+      ;; the recipe parsed here, once: literals, 1 for the next argument, 2
+      ;; for the next constant (strings.ss jconcat-parts)
+      (sx "jconcat-parts" (str "'" (apply sx (recipe-parts recipe))) (apply sx "list" conv) (apply sx "list" consts)))))
 
 (defn- record-op-call
   "java.lang.runtime.ObjectMethods' bootstrap: a record's toString, equals or
