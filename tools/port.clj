@@ -32,7 +32,10 @@
         unchecked (count (remove some? reports))]
     (when (seq ported)                    ; non-null, for one, has no condition
       (println port/preamble)
-      (println))
+      (println)
+      (when-let [defs (seq (port/definitions ported))]
+        (run! println defs)
+        (println)))
     (doseq [[p r] (map vector ported reports)]
       (println (str ";; " (:method p) (when (:from p) " (called from the class being ported)")))
       (when (seq (:holds p)) (println (str ";; holds for: " (str/join ", " (map name (:holds p))))))

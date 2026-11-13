@@ -52,7 +52,7 @@ The names are the bytecode's local slots, since the class was compiled without d
 After the functions come the methods it left, each with the first thing in it that has no rule, and a count:
 
 ```
-;; 24 static methods: 21 ported (21 checked and agree, 0 disagree, 0 not checked), 3 left
+;; 26 static methods: 22 ported (22 checked and agree, 0 disagree, 0 not checked), 4 left
 ;; 4 static methods of 1 other class that those call: 3 ported (3 checked and agree, 0 disagree, 0 not checked), 1 left
 ;; 5 of the checks kept int and long parameters within -64 to 64 (the method loops or allocates by size); the others used the full range
 ```
@@ -95,7 +95,13 @@ A call of another static method of the same class becomes a call of that method'
 
 A call of a static method of another class of the program works the same way. That method is ported too, and so is what it calls, and those functions are printed after the class's own, each marked as called from the class being ported. Their names start with the class's simple name (`array-utils-is-empty-chars`), and they are checked like the rest. Classes of the JDK are never written out: a call into one needs a rule.
 
-A function has no class to initialize, so the initialization check before a call into another class is dropped. When that class has a static initializer, the port holds under the condition `initializers-without-effects`: it agrees with Java as long as the initializer does nothing a caller can see, such as throwing or printing. Nothing tests that when the function runs. A method that reads a static field is left, so a ported function never depends on what the initializer stored.
+A function has no class to initialize, so the initialization check before a call into another class is dropped. In Java the first call of a static method runs its class's static initializer. An initializer that only fills the class's own fields with constants and arrays does nothing a caller can see. One that calls a method, makes an object or throws might, so a port of a method of such a class, or of anything that calls one, holds under the condition `initializers-without-effects`. Nothing tests that when the function runs.
+
+## Static fields
+
+A read of a `static final` field becomes a `def` printed before the functions, when the field's value can't change: a number, a string, null, or an empty array. The tool reads the value once the class has initialized, so the initializer runs at port time under champaca. The def is named after the class and the field, the field in capitals (`array-utils-EMPTY-STRING-ARRAY`), and an empty array stays one object, as the field is.
+
+Any other static field read leaves the method, with the reason: the field isn't final, or it holds an array with elements or another object, which code can change.
 
 A method name used once gives the function its name in kebab case. An overloaded one has its parameter types after it (`within-int-int`, `within-int-int-int`), and a name `clojure.core` already has gets a star (`reverse*`).
 
@@ -109,11 +115,10 @@ A port whose parameters have no input generator is printed and counted as not ch
 
 ## On commons-lang
 
-`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 121 of them, and all 121 are checked and agree on 300 inputs each. Six of those checks kept int parameters within -64 to 64, and the rest used the full range. They call 13 static methods of six other classes, of which 8 are ported, checked and agree, and 5 are left. The other 39 of `StringUtils` were left. 30 of those call a method that was left, so they follow from the rest, and the rest lack these:
+`org.apache.commons.lang.StringUtils` in commons-lang 2.4 has 160 static methods with code. On 2026-11-14 the tool ported 139 of them, and all 139 are checked and agree on 300 inputs each. Twelve of those checks kept int parameters within -64 to 64, and the rest used the full range. They call 13 static methods of six other classes, of which 8 are ported, checked and agree, and 5 are left. The other 21 of `StringUtils` were left. 16 of those call a method that was left, so they follow from the rest, and the rest lack these:
 
 | What has no rule | Methods |
 |---|---|
-| a static field of another class (`ArrayUtils.EMPTY_STRING_ARRAY`) | 4 |
 | a `boolean[]`, a `switch`, a reference comparison, `Character.getType`, a constructor argument built with another `new` | 1 each |
 
 A first run with a dozen rules ported 9. Calls between the class's own methods took it to 53, rules for `indexOf(int)` and its relatives, `valueOf(char)`, `regionMatches` and the `List` and `Iterator` methods to 71, leaving out the initialization check before a static call into a JDK class to 89, and rules for case conversion, `StringBuffer.append(Object)` and a few constructors to 102.
@@ -123,6 +128,8 @@ Two of those 102 were wrong. They take a `char[]`, and an element read from one 
 A `char[]` has instructions of its own in the bytecode, so the plain form now marks its reads and writes and the port converts at each one. With that, rules for `toCharArray`, the `String` constructors from a `char[]`, `StringBuffer.reverse`, `Character.isTitleCase` and `List.toArray`, and `String[]` allocation, the count is 110. `Character.getType` stays without a rule: jolt and JDK 25 differ on 63 chars there.
 
 Following calls into the program's other classes took it to 121. Two of the five methods left in those classes have an exception handler or call `CharSet.contains`, an instance method.
+
+Reading `ArrayUtils.EMPTY_STRING_ARRAY` as a def brought in the split methods and their callers, which is the 139.
 
 Earlier nine ports had disagreed with their methods, all through `Character.isWhitespace`: jolt's own differs from the JDK's on five chars (U+001C to U+001F and U+0085, jolt-lang/jolt#1655). The rule settles those five itself, and `examples/port.clj` compares its form with the JDK's method on every char outside the surrogates.
 
@@ -146,6 +153,6 @@ Each count is of the first thing found in a method, so a method may lack more th
 
 ## What it doesn't do yet
 
-Instance methods, fields (a read of a static field leaves the method) and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. `boolean[]`, which the bytecode reads with the instruction that reads a `byte[]`, and reference arrays of anything but `String` and `Object`. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.
+Instance methods, instance fields, static fields whose value can change, and classes. Methods with exception handlers, `switch`, or long arithmetic beyond comparisons. `boolean[]`, which the bytecode reads with the instruction that reads a `byte[]`, and reference arrays of anything but `String` and `Object`. Local names from debug information. Each is left with its reason, and a left method still runs under champaca as it always did.
 
 Two limits aren't reported as reasons yet. Copying a join point into each path that reaches it has no size limit, so a method with many independent `if`s in a row grows with each one. And the code assumes loops don't nest with a group of blocks that call each other; the plain form it reads doesn't produce that today.

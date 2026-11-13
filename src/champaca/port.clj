@@ -21,7 +21,9 @@
   runs. A rule can carry a condition (a String read by index holds for
   characters up to U+FFFF); the conditions a port relies on come back with
   it, and champaca.portcheck checks the port against the method under them."
-  (:require [champaca.cgtext :refer [parse-desc]]
+  (:require [champaca.api :as ldk]
+            [champaca.bytecode :as bc]
+            [champaca.cgtext :refer [parse-desc]]
             [champaca.classfile :as cf]
             [champaca.jit :as jit]
             [champaca.link :as link]
@@ -79,10 +81,10 @@
   initialize. A call into another class of the program becomes a call of
   that method's function, and there the port holds only if the class's
   initializer does nothing a caller can see, which is noted as a condition
-  when the class has one."
+  when the initializer calls anything."
   [ctx x]
   (when-let [cname (init-of x)]
-    (when (and (not (jdk-class? cname)) ((:initializer? ctx) cname))
+    (when (and (not (jdk-class? cname)) ((:effects? ctx) cname))
       (vswap! (:holds ctx) conj :initializers-without-effects))
     true))
 
@@ -362,6 +364,15 @@
       (list op (value ctx a) (value ctx b))
       (left (str "no rule for " h)))))
 
+(defn- field-read
+  "A read of a static field: the name of the def that holds its constant.
+  The field is noted, since the def must come before the function."
+  [ctx global]
+  (let [{:keys [name] :as field} ((:field ctx) global)]
+    (when (:effects? field) (vswap! (:holds ctx) conj :initializers-without-effects))
+    (vswap! (:fields ctx) assoc name (:init field))
+    name))
+
 (defn- value
   "The Clojure form for a structured expression used for its value."
   [ctx x]
@@ -369,7 +380,7 @@
     ;; a local is l3, s0, l2_1; a name holding ( or : is a global, which here
     ;; can only be a static field read (a method's global is a call's
     ;; operator, handled before this)
-    (and (string? x) (re-find #"[(:]" x)) (left (str "a read of the static field " x))
+    (and (string? x) (re-find #"[(:]" x)) (field-read ctx x)
     (string? x) (symbol x)
     (number? x) x
     (false? x) nil
@@ -755,20 +766,21 @@
 (defn- kebab [s]
   (str/lower-case (str/replace s #"([a-z0-9])([A-Z])" "$1-$2")))
 
-(defn- defn-form [fname desc {:keys [statics initializer?]} form]
+(defn- defn-form [fname desc {:keys [statics effects? field]} form]
   (let [{:keys [ics params code]} (method-parts form)
         {:keys [args ret]} (parse-desc desc)
         holds (volatile! (sorted-set))
         calls (volatile! (sorted-set))
         sized (volatile! false)
+        fields (volatile! (sorted-map))
         ctx {:ics ics :blocks {} :ret ret :holds holds :calls calls :statics statics :sized sized
-             :initializer? initializer?}
+             :effects? effects? :field field :fields fields}
         code (do-form (body ctx code true))
         entry (entry-bindings params args)]
     {:form (apply list 'defn fname (mapv param-form params args)
                   (concat (guards @holds params args)
                           [(tidy (if (seq entry) (list 'let entry code) code))]))
-     :holds @holds :calls @calls :sized @sized}))
+     :holds @holds :calls @calls :sized @sized :fields @fields}))
 
 (def ^:private type-words
   {"I" "int" "J" "long" "Z" "boolean" "C" "char" "S" "short" "B" "byte" "D" "double" "F" "float"})
@@ -810,6 +822,64 @@
                 {:cname cname :mname name :desc desc
                  :name (if prefix? (symbol (str simple "-" base)) (free-name base))}]))))
 
+(def ^:private calling-ops
+  #{:invokestatic :invokevirtual :invokespecial :invokeinterface :invokedynamic :new :athrow})
+
+(defn- initializer-calls?
+  "Whether a class's static initializer calls a method, makes an object or
+  throws. One that only fills its own fields with constants and arrays does
+  nothing a caller can see, short of failing, and a class whose initializer
+  fails can't be ported from at all (field-constant runs it)."
+  [cls]
+  (boolean (when-let [clinit (some #(when (= "<clinit>" (:name %)) %) (:methods cls))]
+             (some #(calling-ops (:op %)) (bc/decode (:code (:code clinit)))))))
+
+(def ^:private no-constant ::no-constant)
+
+(defn- constant-form
+  "The Clojure form for the value v of a static final field of type desc,
+  or no-constant: a number, a string, null, or an empty array, which
+  nothing can change. A boolean is 1 or 0 and a char its code, as
+  everywhere in a port's body."
+  [desc v]
+  (cond
+    (#{"I" "S" "B" "J"} desc) v
+    (= "Z" desc) (if v 1 0)
+    (= "C" desc) (int v)
+    (nil? v) nil
+    (= "Ljava/lang/String;" desc) (if (string? v) v no-constant)
+    (and (str/starts-with? desc "[")
+         (zero? (ldk/invoke-static "java.lang.reflect.Array" "getLength" v)))
+    (let [elem (subs desc 1)]
+      (cond (array-makers elem) (list (array-makers elem) 0)
+            (element-classes elem) (list 'make-array (element-classes elem) 0)
+            :else no-constant))
+    :else no-constant))
+
+(defn- field-constant
+  "A static field read as a def: {:name :init :effects?}, or the method is
+  left. The field must be final and declared by a class of the program, and
+  its value, read here once the class has initialized, one constant-form
+  can write. The def's name is the class's simple name and the field's, the
+  field's in capitals so that no function's name can be the same."
+  [parsed global]
+  (let [[c f] (str/split global #":" 2)
+        why (fn [w] (left (str "a read of the static field " global ": " w)))
+        field (when-not (jdk-class? c) (some #(when (= f (:name %)) %) (:fields (parsed c))))]
+    (cond
+      (jdk-class? c) (why "a JDK class's field has no rule")
+      (nil? field) (why "the class named doesn't declare it")
+      (zero? (bit-and (:flags field) 0x0010)) (why "it isn't final")
+      :else
+      (let [v (try (ldk/get-static (str/replace c "/" ".") f)
+                   (catch Throwable e (why (str "its class didn't initialize (" (.getName (class e)) ")"))))
+            init (constant-form (:desc field) v)
+            simple (kebab (subs c (inc (or (str/last-index-of c "/") -1))))]
+        (when (= no-constant init) (why "its value isn't a number, a string, null or an empty array"))
+        {:name (symbol (str simple "-" (str/upper-case (str/replace f "_" "-"))))
+         :init init
+         :effects? (initializer-calls? (parsed c))}))))
+
 (defn- class-of-global
   "The class in a method's global name, a/b/C.name(desc)."
   [method]
@@ -834,7 +904,8 @@
                       (swap! tables assoc c t)
                       t)))]
     {:statics (fn [method] (when-let [c (class-of-global method)] ((table c) method)))
-     :initializer? (fn [c] (boolean (some #(= "<clinit>" (:name %)) (:methods (parsed c)))))}))
+     :effects? (memoize (fn [c] (initializer-calls? (parsed c))))
+     :field (memoize (fn [global] (field-constant parsed global)))}))
 
 ;; --- writing it out ----------------------------------------------------------------
 
@@ -906,9 +977,11 @@
         (left "a boolean[] in its signature: its elements aren't typed yet"))
       (let [[status shape] (structured (jit/method-text cname mname desc))]
         (when (= :left status) (left (str "the structuring pass left it (" shape ")")))
-        (let [{:keys [form holds calls sized]} (defn-form name desc program shape)]
+        (let [{:keys [form holds calls sized fields]} (defn-form name desc program shape)
+              ;; in Java a call of the method runs its class's initializer first
+              holds (cond-> holds ((:effects? program) cname) (conj :initializers-without-effects))]
           {:method method :name name :source (layout form 0) :holds holds :calls calls
-           :desc desc :sized sized}))
+           :desc desc :sized sized :fields fields}))
       (catch clojure.lang.ExceptionInfo e
         (if-let [why (::left (ex-data e))]
           {:method method :left why}
@@ -990,6 +1063,13 @@
         method (str cname "." mname desc)]
     (first (filter #(= method (:method %)) (port-class cname)))))
 
+(defn definitions
+  "The defs the functions of results read, one for each static final field
+  a port uses, as text: they come before the functions."
+  [results]
+  (for [[name init] (into (sorted-map) (mapcat :fields (remove :left results)))]
+    (str "(def " name " " (pr-str init) ")")))
+
 (defn- define!
   "Every port's function, defined in the namespace champaca.ported: the
   names declared first, since one may call another that comes later.
@@ -998,6 +1078,7 @@
   (binding [*ns* (create-ns 'champaca.ported)]
     (clojure.core/refer-clojure)
     (load-string preamble)
+    (run! load-string (definitions ported))
     (load-string (str "(declare " (str/join " " (map :name ported)) ")"))
     (into {} (map (fn [p] [(:method p) (load-string (:source p))]) ported))))
 

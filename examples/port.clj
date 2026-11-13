@@ -24,13 +24,14 @@
 (def sample "champaca.lib.PortSample")
 
 (deftest every-method-ports-and-agrees
-  ;; all but square, which reads a static field, countTrue, which takes a
-  ;; boolean[], and tabled, which calls a method of another class that is
-  ;; left; after them, the methods of that class they call
+  ;; all but square and calls, which read static fields with no constant
+  ;; value, countTrue, which takes a boolean[], and tabled, which calls a
+  ;; method of another class that is left; after them, the methods of that
+  ;; class they call
   (let [results (port/check-ports (port/port-class sample) 200)]
-    (is (= 24 (count (remove :from results))))
+    (is (= 26 (count (remove :from results))))
     (is (= ["champaca/lib/PortSample.square(I)I" "champaca/lib/PortSample.countTrue([Z)I"
-            "champaca/lib/PortSample.tabled(I)I"]
+            "champaca/lib/PortSample.calls()I" "champaca/lib/PortSample.tabled(I)I"]
            (map :method (filter :left (remove :from results)))))
     (doseq [r (remove :left results)]
       (is (nil? (:left r)) (str (:method r) " was left: " (:left r)))
@@ -117,13 +118,38 @@
                  c)]
     (is (empty? differ))))
 
-(deftest a-static-field-read-is-left
+(deftest a-static-field-with-no-constant-value-is-left
   ;; as a reason, for that method alone: the field's name must not reach the
   ;; function as a free symbol, which would stop every port of the class
-  ;; from loading
+  ;; from loading. SQUARES is an array with elements, which code can change
   (let [r (port/port-method sample "square" "(I)I")]
     (is (str/includes? (:left r) "static field"))
-    (is (str/includes? (:left r) "SQUARES"))))
+    (is (str/includes? (:left r) "SQUARES"))
+    (is (str/includes? (:left r) "empty array")))
+  (is (str/includes? (:left (port/port-method sample "calls" "()I")) "isn't final")))
+
+(deftest a-static-final-constant-is-a-def
+  ;; an empty array, a string, a number or null can't change, so the field
+  ;; is a def before the functions, named in capitals after its class
+  (let [results (port/check-ports (port/port-class sample) 100)
+        words (first (filter #(= "champaca/lib/PortSample.words(Ljava/lang/String;)[Ljava/lang/String;" (:method %)) results))
+        f @(ns-resolve 'champaca.ported 'words)]
+    (is (str/includes? (:source words) "port-sample-NO-WORDS"))
+    (is (some #{"(def port-sample-NO-WORDS (make-array String 0))"} (port/definitions results)))
+    (is (pc/agrees? (:report words)))
+    (is (identical? (f "") (f "")) "the same array each time, as the field is")
+    (is (= ["x"] (vec (f "x"))))))
+
+(deftest an-initializer-that-calls-is-a-condition
+  ;; PortSample's initializer only fills arrays; PortOther's calls
+  ;; String.valueOf, so its methods, and what calls them, hold only if that
+  ;; does nothing a caller can see
+  (let [by-method (into {} (map (juxt :method identity) (port/port-class sample)))]
+    (is (empty? (:holds (by-method "champaca/lib/PortSample.gcd(II)I"))))
+    (is (= #{:initializers-without-effects}
+           (set (:holds (by-method "champaca/lib/PortOther.clamp(III)I")))))
+    (is (contains? (set (:holds (by-method "champaca/lib/PortSample.vowels(Ljava/lang/String;)I")))
+                   :initializers-without-effects))))
 
 (deftest a-null-array-throws-as-in-java
   ;; jolt's aget answers nil for a nil array; the port keeps Java's check
@@ -211,7 +237,7 @@
     (is (= 'port-other-clamp-int-int (:name (by-method "champaca/lib/PortOther.clamp(II)I"))))
     (is (str/includes? (:source vowels) "(port-other-vowel "))
     (is (contains? (set (:holds vowels)) :initializers-without-effects)
-        "PortOther has a static initializer, which the function doesn't run")
+        "PortOther's static initializer calls a method, and the function doesn't run it")
     (doseq [r (remove :left other)]
       (is (pc/agrees? (:report r)) (str (:method r))))
     (is (= 3 (@(ns-resolve 'champaca.ported 'vowels) "a quiet one")) "six vowels, clamped to 3")

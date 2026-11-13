@@ -108,6 +108,17 @@ public class PortSample {
         for (int i = 0; i < a.length; i++) if (a[i]) n++;
         return n;
     }
+    static final String[] NO_WORDS = new String[0];
+    static int calls;
+    /** Reads a static final field holding an empty array: a def. */
+    public static String[] words(String s) {
+        if (s.length() == 0) return NO_WORDS;
+        String[] r = new String[1];
+        r[0] = s;
+        return r;
+    }
+    /** Reads a static field that isn't final: left. */
+    public static int calls() { return calls; }
     /** Calls into another class, whose methods are ported with this one. */
     public static int vowels(String s) {
         int n = 0;
