@@ -1,0 +1,90 @@
+name: Bug report
+description: Something behaves differently on champaca than on HotSpot, or fails outright.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Champaca's rule is that a program behaves as it does on HotSpot. The most useful report shows the same program on both. A security problem goes through private reporting instead (see SECURITY.md), not an issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you ran, what champaca did, and what HotSpot (or the docs) says it should do.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest program and the exact command. A short Java class with its main, or a jolt snippet.
+      placeholder: |
+        1. javac -d out Repro.java
+        2. java -cp out Repro                        # HotSpot prints ...
+        3. jolt -M -m champaca.main -cp out Repro    # champaca prints ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: Both outputs, stderr included. CHAMPACA_BT=1 adds Java frames to champaca's own errors.
+      render: text
+  - type: input
+    id: champaca-version
+    attributes:
+      label: Champaca commit
+      description: There's no release yet, so give the commit. In a checkout, git rev-parse --short HEAD; as a dependency, the :git/sha in your deps.edn.
+    validations:
+      required: true
+  - type: input
+    id: jolt-version
+    attributes:
+      label: jolt version
+      description: The output of jolt --version.
+    validations:
+      required: true
+  - type: input
+    id: jdk-version
+    attributes:
+      label: JDK
+      description: The first line of $JAVA_HOME/bin/java -version. Champaca needs JDK 25.
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How you run it
+      options:
+        - A Java program through champaca.main (jolt -M -m champaca.main)
+        - Java from jolt code (champaca.api)
+        - An app bundle (jolt bundle)
+        - Another way (say how above)
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS arm64
+        - macOS x86_64
+        - Linux arm64
+        - Linux x86_64
+        - Other (say which above)
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Your best guess; it's fine to leave it at the default.
+      options:
+        - Not sure
+        - The JDK's behavior (strings, collections, reflection, threads, files, sockets...)
+        - A library or framework (Spring, Quarkus, Jackson...)
+        - Another JVM language (Clojure, Groovy, Scala, Kawa, ABCL, Kotlin)
+        - Calling Java from jolt
+        - Native calls (java.lang.foreign)
+        - Class loading and the startup cache
+        - Speed or memory
+        - App bundles
+        - Docs

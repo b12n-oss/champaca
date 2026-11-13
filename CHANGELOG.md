@@ -370,6 +370,11 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- Issue forms for bug reports and feature requests (with the commit, jolt
+  and JDK versions, how champaca is run, the platform and the area), a
+  `SECURITY.md` that routes reports to GitHub's private vulnerability
+  reporting and names what to keep private (the startup cache, the nREPL
+  port, native libraries), and `CONTRIBUTING.md` pointing at both.
 - The Scheme runtime's last critical jolt-metrics findings are gone, so
   `jolt metrics:gate` holds `resources/` to none too. The four hot paths
   among them dispatch over `syntax-rules` steps, which expand in place, so

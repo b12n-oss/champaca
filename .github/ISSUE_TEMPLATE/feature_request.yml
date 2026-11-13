@@ -1,0 +1,23 @@
+name: Feature request
+description: Something champaca doesn't do yet that it should.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: task
+    attributes:
+      label: What you're trying to do
+      description: The program, library or task, and where champaca stops you. limitations.md lists the known gaps.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: What champaca could do instead. For anything HotSpot already does, "behave as HotSpot does" is enough.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What you do today
+      description: A workaround, another runtime, or nothing yet.
