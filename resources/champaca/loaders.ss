@@ -655,7 +655,7 @@
 (define (generated-domain? pd)
   (let ([cs (and pd (jslot pd (jfield-index "java/security/ProtectionDomain" "codesource")))])
     (or (not cs) (not (jslot cs (jfield-index "java/security/CodeSource" "location"))))))
-(define (definition-answer loader name v off len hidden? stamp pd)
+(define (definition-answer loader name text hidden? stamp pd)
   (guard (e [(and (not (jobj? e))
                   (let ([m (class-not-found-in e)])
                     (and m (fx> (hashtable-ref resolution-error-stamps m 0) stamp)
@@ -665,7 +665,7 @@
             [(and (not (jobj? e)) (class-not-found-in e)) => (lambda (m) (jthrow "java/lang/NoClassDefFoundError" m))]
             [(not (jobj? e)) (jthrow "java/lang/NoClassDefFoundError" (condition-text e))])
     (parameterize ([resolving-loader loader])
-      (define-class-hook* name (bytes->latin1 v off len) hidden?
+      (define-class-hook* name text hidden?
                          (and loader (not hidden?)
                               (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))
                          (generated-domain? pd)))))
@@ -699,7 +699,7 @@
             (format "Array region ~a..~a out of bounds for length ~a" off (+ off len) (vector-length v))))
   (let* ([stamp resolution-error-count]
          [name (and given (slashes (jstring->scheme given)))]
-         [r (definition-answer loader name v off len hidden? stamp pd)]
+         [r (definition-answer loader name (bytes->latin1 v off len) hidden? stamp pd)]
          [sp (let loop ([i 0]) (if (char=? (string-ref r i) #\space) i (loop (fx+ i 1))))]
          [kind (substring r 0 sp)]
          [arg (substring r (fx+ sp 1) (string-length r))])

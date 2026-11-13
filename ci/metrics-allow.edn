@@ -1,0 +1,15 @@
+;; What ci/metrics-gate.clj (jolt metrics:gate) holds the jolt-metrics report to.
+;;
+;; :critical-free: path prefixes where a CRITICAL finding (a function past a
+;; complexity, length, nesting or parameter limit, or a file past the file
+;; length limit) or a file jolt-metrics can't read fails the gate. There is no
+;; list of accepted criticals: a tree joins once it has none. resources/ still
+;; has seven, each a hot path or a fixed native signature (ROADMAP, Metrics).
+;;
+;; :unused-requires, :unused-private, :unused-public: unused code that stays,
+;; each with :why. The gate fails on an unused one missing here and on an entry
+;; here that's no longer reported.
+{:critical-free ["src/" "tools/" "bench/" "test/" "ci/" "examples/"]
+ :unused-requires []
+ :unused-private []
+ :unused-public []}

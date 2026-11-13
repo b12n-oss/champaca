@@ -19,7 +19,7 @@
   ;; this namespace's own pop! (a block-state helper) replaces clojure.core's
   (:refer-clojure :exclude [pop!])
   (:require [clojure.string :as str]
-            [champaca.bytecode :refer [array-loops backward-ranges blocks decode load-ops store-ops successors with-ret-targets]]
+            [champaca.bytecode :refer [array-loops backward-ranges blocks decode load-ops store-ops successors]]
             [champaca.cgtext :refer [*inline-site* *method-tag* at jstring-lit-form label method-global num-lit parse-desc site static-global str-lit sx sym wide?]]
             [champaca.lambdas :refer [condy const-datum lambda-expr]]
             [champaca.linkage :refer [bad-class local-names missing-class missing-method refused-class resolve-bsm-args! resolve-site! resolve-type! wrong-kind]]))

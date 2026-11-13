@@ -30,8 +30,6 @@
 
 (def mb #(quot % 1048576))
 
-(defn- type-name [t] (if (scm/call "record-type-descriptor?" t) (str "record " (scm/call "record-type-name" t)) (pr-str t)))
-
 (defn types []
   (binding [*out* *err*]
     (println "gc settings:" (scm/eval-string "(format \"trip ~a MB, radix ~a, reserve ~a, max gen ~a\" (quotient (collect-trip-bytes) 1048576) (collect-generation-radix) (heap-reserve-ratio) (collect-maximum-generation))"))
