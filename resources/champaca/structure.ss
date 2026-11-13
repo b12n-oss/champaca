@@ -16,7 +16,7 @@
 ;;
 ;; A method the pass can't follow is left alone: one with exception handlers
 ;; (jtry), assigned locals (set!), or any binding form other than let, let*,
-;; letrec and lambda. structure-stats counts those by reason.
+;; letrec and lambda (CHAMPACA_BT's fluid-let of jstack is followed). structure-stats counts those by reason.
 
 (define structured? (and (getenv "CHAMPACA_STRUCTURED") #t))
 (define structured-trace (getenv "CHAMPACA_STRUCTURED_TRACE"))
@@ -35,7 +35,7 @@
 ;; forms whose operands aren't all expressions in the enclosing scope, or
 ;; that assign: a method using one is left as generated
 (define st-declines
-  '(jtry dynamic-wind fluid-let define case-lambda do case guard let-values let*-values
+  '(jtry dynamic-wind define case-lambda do case guard let-values let*-values
          parameterize quasiquote named-lambda let-syntax letrec-syntax letrec*))
 
 (define (st-params ps)   ; the names a parameter list binds, or #f
@@ -68,6 +68,13 @@
     ;; a static field is a global, and nothing here moves a global's read
     ;; past anything; an assigned local would break the renames
     [(eq? h 'set!) (and (not (and (fx= 3 (length x)) (champaca-global-name? (cadr x)))) 'set!)]
+    ;; CHAMPACA_BT wraps a method's body in (fluid-let ((jstack ...)) ...), a
+    ;; global set and restored around it: its operands are expressions, and
+    ;; the generic walk follows them. Any other fluid-let isn't known.
+    [(eq? h 'fluid-let)
+     (and (not (and (pair? (cdr x)) (st-bindings? (cadr x))
+                    (for-all (lambda (b) (eq? (car b) 'jstack)) (cadr x))))
+          'fluid-let)]
     [(eq? h 'lambda) (and (not (and (pair? (cdr x)) (st-params (cadr x)))) 'lambda-shape)]
     [(memq h '(let let*)) (st-let-fault x)]
     [(eq? h 'letrec) (and (not (and (pair? (cdr x)) (st-bindings? (cadr x)))) 'letrec-shape)]
