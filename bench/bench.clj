@@ -184,43 +184,55 @@
     (str/trim (str/replace (:out (p/shell {:out :string} "sysctl" "-n" "vm.loadavg")) #"[{}]" ""))
     (str/join " " (take 3 (str/split (slurp "/proc/loadavg") #" ")))))
 
+(defn- header-lines
+  "A results table's header: title, the host, the JDK, champaca's commit,
+  extra lines, the jolt, then the table's column lines."
+  [title-line extra jolt columns]
+  (concat [title-line ""]
+          (host-lines)
+          [(str "- JDK: " (first (str/split-lines (:err (p/shell {:err :string} java "-version")))))
+           (str "- champaca: " (str/trim (:out (p/shell {:out :string :dir repo} "git" "describe" "--always" "--dirty"))))]
+          extra
+          [(str "- jolt: " jolt) ""]
+          columns))
+
+(defn- write-results!
+  "Print the load average and write the table to <t>/results.md."
+  [t lines rows]
+  (let [after (str "Load average after: " (load-after))]
+    (println)
+    (println after)
+    (spit (str t "/results.md") (str (str/join "\n" (concat lines rows ["" after])) "\n"))))
+
+(defn- print-row [row] (println row) (flush) row)
+
+(defn- app-row
+  "Time variant v of a command-line app: a warm variant's first run fills its
+  cache and is the output check; a cold variant checks its first timed run."
+  [jolt t v ref-out]
+  (log "Timing" (:name v))
+  (let [check (when-not (:cold v) (with-run jolt t v #(run! t %)))
+        timed (vec (for [_ (range (if (:cold v) cold-runs runs))] (with-run jolt t v #(run! t %))))
+        out (runner-output (:out (or check (first timed))))
+        ms (sort (map :ms timed))
+        rss (with-run jolt t v #(peak-rss t %))]
+    (print-row (format "| %s | %s | %s | %s | %s | %s |" (:name v)
+                       (fmt-ms (nth ms (quot (count ms) 2))) (fmt-ms (first ms)) (fmt-ms (last ms))
+                       (if rss (str rss " MB") "n/a")
+                       (if (= out ref-out) "same" "DIFFERENT")))))
+
 (defn- bench-app [jolt app-name {:keys [title reference variants]}]
   (let [t (str repo "/bench/" app-name "/target")
         ref-out (runner-output (:out (run! t {:cmd reference :env no-proxy})))
         vs (cond->> variants
              (System/getenv "SKIP_AOT") (remove :aot)
              (System/getenv "SKIP_CHAMPACA") (remove :champaca))
-        lines (concat
-               [(str "# " title " startup, " runs " runs each (cold champaca variants " cold-runs ")") ""]
-               (host-lines)
-               [(str "- JDK: " (first (str/split-lines (:err (p/shell {:err :string} java "-version")))))
-                (str "- champaca: " (str/trim (:out (p/shell {:out :string :dir repo} "git" "describe" "--always" "--dirty"))))
-                (str "- jolt: " jolt) ""
-                "| Variant | Median | Min | Max | Peak RSS | Output |" "|---|---|---|---|---|---|"])]
+        lines (header-lines (str "# " title " startup, " runs " runs each (cold champaca variants " cold-runs ")")
+                            [] jolt
+                            ["| Variant | Median | Min | Max | Peak RSS | Output |" "|---|---|---|---|---|---|"])]
     (when-not ref-out (throw (ex-info (str title ": the reference run printed no application output") {})))
     (doseq [l lines] (println l))
-    (let [rows
-          (doall
-           (for [v vs]
-             (let [_ (log "Timing" (:name v))
-                   ;; a warm variant's first run fills its cache and is the
-                   ;; output check; a cold variant checks its first timed run
-                   check (when-not (:cold v) (with-run jolt t v #(run! t %)))
-                   timed (vec (for [_ (range (if (:cold v) cold-runs runs))] (with-run jolt t v #(run! t %))))
-                   out (runner-output (:out (or check (first timed))))
-                   ms (sort (map :ms timed))
-                   rss (with-run jolt t v #(peak-rss t %))
-                   row (format "| %s | %s | %s | %s | %s | %s |" (:name v)
-                               (fmt-ms (nth ms (quot (count ms) 2))) (fmt-ms (first ms)) (fmt-ms (last ms))
-                               (if rss (str rss " MB") "n/a")
-                               (if (= out ref-out) "same" "DIFFERENT"))]
-               (println row)
-               (flush)
-               row)))
-          after (str "Load average after: " (load-after))]
-      (println)
-      (println after)
-      (spit (str t "/results.md") (str (str/join "\n" (concat lines rows ["" after])) "\n")))))
+    (write-results! t lines (doall (for [v vs] (app-row jolt t v ref-out))))))
 
 ;; --- servers ---------------------------------------------------------------------
 
@@ -255,40 +267,31 @@
         (deref proc 120000 nil)
         (fs/delete log-file)))))
 
+(defn- server-row
+  "Time variant v of a server: a warm variant's first run fills its cache
+  (saved on SIGTERM), then server-runs timed runs, their pages compared with
+  the reference's."
+  [{:keys [jolt t ref pages server-runs]} v]
+  (log "Timing" (:name v))
+  (when-not (:cold v) (with-run jolt t v #(server-run! t % pages)))
+  (let [timed (vec (for [_ (range server-runs)] (with-run jolt t v #(server-run! t % pages))))
+        ok (filter some? timed)
+        med (fn [k] (let [xs (sort (map k ok))] (when (seq xs) (fmt-ms (nth xs (quot (count xs) 2))))))
+        same (and (= (count ok) (count timed)) (every? #(= (:pages ref) (:pages %)) ok))]
+    (print-row (format "| %s | %s | %s | %s | %s |" (:name v) (or (med :start) "n/a") (or (med :first) "n/a")
+                       (or (med :all) "n/a") (if same "same" "DIFFERENT")))))
+
 (defn- bench-server [jolt app-name {:keys [title reference variants pages]}]
   (let [t (str repo "/bench/" app-name "/target")
         server-runs (env-long "SERVER_RUNS" 3)
         ref (server-run! t {:cmd reference :env no-proxy} pages)
         vs (cond->> variants (System/getenv "SKIP_CHAMPACA") (remove :champaca))
-        lines (concat
-               [(str "# " title ", " server-runs " runs each: started, " (count pages) " pages fetched, stopped with SIGTERM") ""]
-               (host-lines)
-               [(str "- JDK: " (first (str/split-lines (:err (p/shell {:err :string} java "-version")))))
-                (str "- champaca: " (str/trim (:out (p/shell {:out :string :dir repo} "git" "describe" "--always" "--dirty"))))
-                (str "- spring-petclinic: " (subs petclinic-commit 0 8))
-                (str "- jolt: " jolt) ""
-                "| Variant | Started (median) | First page | All pages | Pages |" "|---|---|---|---|---|"])]
+        lines (header-lines (str "# " title ", " server-runs " runs each: started, " (count pages) " pages fetched, stopped with SIGTERM")
+                            [(str "- spring-petclinic: " (subs petclinic-commit 0 8))] jolt
+                            ["| Variant | Started (median) | First page | All pages | Pages |" "|---|---|---|---|---|"])]
     (when-not ref (throw (ex-info (str title ": the reference run never started") {})))
     (doseq [l lines] (println l))
-    (let [rows
-          (doall
-           (for [v vs]
-             (let [_ (log "Timing" (:name v))
-                   ;; a warm variant's first run fills its cache (saved on SIGTERM)
-                   _ (when-not (:cold v) (with-run jolt t v #(server-run! t % pages)))
-                   timed (vec (for [_ (range server-runs)] (with-run jolt t v #(server-run! t % pages))))
-                   ok (filter some? timed)
-                   med (fn [k] (let [xs (sort (map k ok))] (when (seq xs) (fmt-ms (nth xs (quot (count xs) 2))))))
-                   same (and (= (count ok) (count timed)) (every? #(= (:pages ref) (:pages %)) ok))
-                   row (format "| %s | %s | %s | %s | %s |" (:name v) (or (med :start) "n/a") (or (med :first) "n/a")
-                               (or (med :all) "n/a") (if same "same" "DIFFERENT"))]
-               (println row)
-               (flush)
-               row)))
-          after (str "Load average after: " (load-after))]
-      (println)
-      (println after)
-      (spit (str t "/results.md") (str (str/join "\n" (concat lines rows ["" after])) "\n")))))
+    (write-results! t lines (doall (for [v vs] (server-row {:jolt jolt :t t :ref ref :pages pages :server-runs server-runs} v))))))
 
 (defn main [jolt args]
   (let [[app-name what] args
