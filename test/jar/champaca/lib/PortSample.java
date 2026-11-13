@@ -68,6 +68,46 @@ public class PortSample {
     /** Overloads: the functions are named by their parameter types. */
     public static boolean within(int x, int hi) { return within(x, 0, hi); }
     public static boolean within(int x, int lo, int hi) { return x >= lo && x < hi; }
+    /** Reads a char[]: an element is a char on the jolt side and its code here. */
+    public static int countIn(char[] a, char c) {
+        int n = 0;
+        for (int i = 0; i < a.length; i++) if (a[i] == c) n++;
+        return n;
+    }
+    /** Makes a char[], writes it, and makes a string of it. */
+    public static String mirror(String s) {
+        char[] a = s.toCharArray();
+        char[] b = new char[a.length * 2];
+        for (int i = 0; i < a.length; i++) {
+            b[i] = a[i];
+            b[b.length - 1 - i] = (char) (a[i] + 1);
+        }
+        return new String(b);
+    }
+    /** new String(char[], int, int), whose range Java checks. */
+    public static String slice(char[] a, int from, int count) {
+        return new String(a, from, count);
+    }
+    /** Writes into the caller's char[] and answers it. */
+    public static char[] fillFrom(char[] a, int from, char c) {
+        for (int i = from; i < a.length; i++) a[i] = c;
+        return a;
+    }
+    /** Makes a String[] and stores into it. */
+    public static String[] ends(String s) {
+        String[] r = new String[2];
+        if (s.length() > 0) {
+            r[0] = s.substring(0, 1);
+            r[1] = s.substring(s.length() - 1);
+        }
+        return r;
+    }
+    /** A boolean[] shares its instructions with a byte[]: left. */
+    public static int countTrue(boolean[] a) {
+        int n = 0;
+        for (int i = 0; i < a.length; i++) if (a[i]) n++;
+        return n;
+    }
     public static String joinTrim(List<String> parts, String sep) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < parts.size(); i++) {

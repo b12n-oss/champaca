@@ -30,7 +30,7 @@
         reports (mapv :report ported)
         failed (count (filter #(and % (not (pc/agrees? %))) reports))
         unchecked (count (remove some? reports))]
-    (when (some #(contains? (set (:holds %)) :strings-within-the-bmp) ported)
+    (when (seq ported)                    ; non-null, for one, has no condition
       (println port/preamble)
       (println))
     (doseq [[p r] (map vector ported reports)]

@@ -437,7 +437,10 @@
 
 (defn- emit-array-load [e {:keys [op pc]} _]
   (let [hv (hoisted e (- (stack-depth e) 2))]
-    (bin! e (fn [a i] (if-let [[v n] hv] (sx "vec-ref" v n i (site pc)) (sx (array-op e pc "array-ref") a i (site pc))))
+    (bin! e (fn [a i] (cond hv (let [[v n] hv] (sx "vec-ref" v n i (site pc)))
+                            ;; the port reads a char[]'s element as a char
+                            (and *plain* (= :caload op)) (sx "char-ref" a i (site pc))
+                            :else (sx (array-op e pc "array-ref") a i (site pc))))
           (array-load-types op "I"))))
 
 (defn- emit-aastore [e {:keys [pc]} _]
@@ -448,7 +451,9 @@
   (let [hv (hoisted e (- (stack-depth e) 3))
         [a i v] (popn! e 3)
         x (case op :bastore (sx "wrap-byte" v) :castore (sx "ix-and" v "#xffff") :sastore (sx "wrap-short" v) v)]
-    (stmt! e (if-let [[vv n] hv] (sx "vec-set!" vv n i x (site pc)) (sx (array-op e pc "array-set!") a i x (site pc))))))
+    (stmt! e (cond hv (let [[vv n] hv] (sx "vec-set!" vv n i x (site pc)))
+                   (and *plain* (= :castore op)) (sx "char-set!" a i x (site pc))
+                   :else (sx (array-op e pc "array-set!") a i x (site pc))))))
 
 (defn- below-top-cat2?
   "Whether the value n below the top of the stack is a long or double."

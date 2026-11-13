@@ -113,6 +113,19 @@
    {:form (fn [[r c i]] (list '.lastIndexOf r c i)) :holds :strings-within-the-bmp}
    "java/lang/String.lastIndexOf(Ljava/lang/String;I)I"
    {:form (fn [[r x i]] (list '.lastIndexOf r x i)) :holds :strings-within-the-bmp}
+   ;; a char[] of a string within the BMP has one element a char, as Java's;
+   ;; on a nil typed as a String jolt answers an empty array
+   "java/lang/String.toCharArray()[C"
+   {:form (fn [[r]] (list '.toCharArray (list 'non-null r))) :holds :strings-within-the-bmp}
+   ;; jolt makes "" of a nil array, where Java throws
+   "java/lang/String.valueOf([C)Ljava/lang/String;"
+   {:form (fn [[a]] (list 'String. (list 'non-null a)))}
+   "java/lang/StringBuffer.reverse()Ljava/lang/StringBuffer;"
+   {:form (fn [[r]] (list '.reverse r)) :holds :strings-within-the-bmp}
+   ;; the same as the JDK's on every char outside the surrogates
+   ;; (examples/port.clj checks each)
+   "java/lang/Character.isTitleCase(C)Z"
+   {:form (fn [[c]] (list 'if (list 'Character/isTitleCase (list 'char c)) 1 0))}
    "java/lang/String.valueOf(C)Ljava/lang/String;"
    {:form (fn [[c]] (list 'String/valueOf (list 'char c)))}
    "java/lang/String.equalsIgnoreCase(Ljava/lang/String;)Z"
@@ -192,6 +205,7 @@
    "iterator()Ljava/util/Iterator;" {:form (fn [[r]] (list '.iterator r))}
    "hasNext()Z" {:form (fn [[r]] (list 'if (list '.hasNext r) 1 0))}
    "next()Ljava/lang/Object;" {:form (fn [[r]] (list '.next r))}
+   "toArray([Ljava/lang/Object;)[Ljava/lang/Object;" {:form (fn [[r a]] (list '.toArray r a))}
    "toString()Ljava/lang/String;" {:form (fn [[r]] (list '.toString r))}})
 
 (def ^:private constructor-rules
@@ -202,6 +216,8 @@
          "java/lang/StringBuffer" {"()V" (fn [_] (list 'StringBuffer.))
                                    "(I)V" (fn [[n]] (list 'StringBuffer. n))
                                    "(Ljava/lang/String;)V" (fn [[x]] (list 'StringBuffer. x))}
+         "java/lang/String" {"([C)V" (fn [[a]] (list 'String. (list 'non-null a)))
+                             "([CII)V" (fn [[a off n]] (list 'string-of a off n))}
          "java/util/ArrayList" {"()V" (fn [_] (list 'java.util.ArrayList.))}}
         (for [c ["IllegalArgumentException" "NumberFormatException" "IllegalStateException"
                  "ArithmeticException" "IndexOutOfBoundsException" "UnsupportedOperationException"
@@ -209,11 +225,12 @@
           [(str "java/lang/" c) {"()V" (fn [_] (list (symbol (str c "."))))
                                  "(Ljava/lang/String;)V" (fn [[msg]] (list (symbol (str c ".")) msg))}])))
 
-;; No char[] and no boolean[]: an element read from one is a char or true
-;; and false in jolt, where the code here works on a char's code and on 1
-;; and 0, and nothing yet tracks which array is which.
+;; No boolean[]: an element read from one is true or false in jolt, where
+;; the code here works on 1 and 0, and a boolean[] is read by the same
+;; instruction as a byte[]. A char[] has instructions of its own (char-ref
+;; and char-set! in the plain form), so its elements cross as chars.
 (def ^:private array-makers
-  {"I" 'int-array "J" 'long-array "B" 'byte-array "S" 'short-array "D" 'double-array "F" 'float-array})
+  {"C" 'char-array "I" 'int-array "J" 'long-array "B" 'byte-array "S" 'short-array "D" 'double-array "F" 'float-array})
 
 (def ^:private int-ops {"ix+" '+ "ix-" '- "ix*" '* "ix-and" 'bit-and "ix-or" 'bit-or "ix-xor" 'bit-xor})
 (def ^:private wrapped-ops {"ix+" 'unchecked-add-int "ix-" 'unchecked-subtract-int "ix*" 'unchecked-multiply-int})
@@ -232,12 +249,19 @@
   (hold! ctx rule)
   ((:form rule) (mapv #(value ctx %) args)))
 
+(def ^:private element-classes
+  "Reference arrays the port makes: the element's class as jolt names it."
+  {"Ljava/lang/String;" 'String "Ljava/lang/Object;" 'Object})
+
 (defn- new-array [ctx [ic len]]
   (let [elem (text-of (second (get (:ics ctx) ic)))
-        maker (array-makers elem)]
-    (when-not maker (left (str "no rule for an array of " elem)))
+        maker (array-makers elem)
+        of (element-classes elem)]
+    (when-not (or maker of) (left (str "no rule for an array of " elem)))
     (vreset! (:sized ctx) true)            ; a size from an argument, perhaps
-    (list maker (value ctx len))))
+    (if maker
+      (list maker (value ctx len))
+      (list 'make-array of (value ctx len)))))
 
 (defn- sibling-call
   "A call of another static method of the class being ported: the function
@@ -306,6 +330,12 @@
     ;; class, where Java throws NullPointerException: non-null keeps Java's
     "array-ref" (list 'aget (list 'non-null (value ctx a)) (value ctx b))
     "array-set!" (list 'aset (list 'non-null (value ctx a)) (value ctx b) (value ctx c))
+    ;; a store into a reference array: (array-store! cell array index value)
+    "array-store!" (list 'aset (list 'non-null (value ctx b)) (value ctx c) (value ctx (nth x 4)))
+    "wrap-byte" (list 'unchecked-byte (value ctx a))
+    "wrap-short" (list 'unchecked-short (value ctx a))
+    "char-ref" (list 'int (list 'aget (list 'non-null (value ctx a)) (value ctx b)))
+    "char-set!" (list 'aset (list 'non-null (value ctx a)) (value ctx b) (list 'char (value ctx c)))
     "jstring-lit" (or (text-of a) (left "a string constant that isn't plain text"))
     "jcheckcast-ic" (value ctx b)
     "jconcat-parts" (concat-value ctx x)
@@ -664,7 +694,8 @@
   the test a function makes of its string parameters when it holds only for
   strings within the BMP: it throws, so a string the port wasn't checked on
   can't give an answer Java wouldn't. non-null is Java's null check on an
-  array that is read or written."
+  array that is read or written, and string-of is new String(char[], int,
+  int) with Java's checks."
   (str "(defn within-bmp!\n"
        "  \"Throws when s has a character above U+FFFF. Java indexes a string by\n"
        "  UTF-16 code unit and jolt by character, and a function ported from\n"
@@ -683,7 +714,17 @@
        "  \"x, or Java's exception when it is null. An array read or written goes\n"
        "  through this: jolt's aget answers nil for a nil array.\"\n"
        "  [x]\n"
-       "  (if (nil? x) (throw (NullPointerException.)) x))"))
+       "  (if (nil? x) (throw (NullPointerException.)) x))\n"
+       "\n"
+       "(defn string-of\n"
+       "  \"The string of n chars of a from off, as Java's new String(char[], int,\n"
+       "  int): jolt's own takes a nil array and a range outside it.\"\n"
+       "  [a off n]\n"
+       "  (let [a (non-null a)]\n"
+       "    (when (or (neg? off) (neg? n) (> off (- (alength a) n)))\n"
+       "      (throw (StringIndexOutOfBoundsException.\n"
+       "              (str \"offset \" off \", count \" n \", length \" (alength a)))))\n"
+       "    (String. a off n)))"))
 
 (defn- guards
   "The tests a function makes on entry for the conditions it holds under:
@@ -779,6 +820,7 @@
    "S" {:type :int :range [-32768 32767]}
    "B" {:type :int :range [-128 127]}
    "[I" {:type :ints :nil? true}
+   "[C" {:type :chars :nil? true}
    "Ljava/util/List;" {:type :strings :of {:nil? true} :nil? true}
    "Ljava/util/Collection;" {:type :strings :of {:nil? true} :nil? true}
    "[Ljava/lang/Object;" {:type :objects :nil? true}
@@ -809,8 +851,8 @@
   [cname statics method]
   (let [{:keys [mname desc name]} (statics method)]
     (try
-      (when (re-find #"\[[CZ]" desc)
-        (left "a char[] or boolean[] in its signature: array elements aren't typed yet"))
+      (when (re-find #"\[Z" desc)
+        (left "a boolean[] in its signature: its elements aren't typed yet"))
       (let [[status shape] (structured (jit/method-text cname mname desc))]
         (when (= :left status) (left (str "the structuring pass left it (" shape ")")))
         (let [{:keys [form holds calls sized]} (defn-form name desc statics shape)]

@@ -70,8 +70,10 @@ The first public version. Champaca is still experimental: the
   operations, and each JDK call goes through a rule, which may carry a
   condition. A method with anything no rule covers is left with the
   reason, and each port is checked against its method by
-  `champaca.portcheck`. On commons-lang 2.4's `StringUtils` it ports 100 of
-  160 static methods, every one checked and agreeing. `examples/port.clj`.
+  `champaca.portcheck`. A `char[]` is read and written as chars, and a
+  `String[]` can be made and stored into. On commons-lang 2.4's
+  `StringUtils` it ports 110 of 160 static methods, every one checked and
+  agreeing. `examples/port.clj`.
 - **`champaca.portcheck`**, a check for a jolt function written to replace a
   Java static method. It runs both on the same generated inputs (the Java
   side by champaca, from the class file) and compares the result, the
@@ -87,7 +89,6 @@ The first public version. Champaca is still experimental: the
   Methods with exception handlers are left as generated for now.
   `CHAMPACA_STRUCTURED_TRACE=<file>` writes the result. `jolt test` runs six
   programs with it on, and the whole suite passes with it.
-||||||| parent of b130b97 (WIP: portcheck)
 - **`jolt warm`**, a training run for the startup cache. It compiles the JDK
   paths programs reach early, so a first `String.format`, `SecureRandom` or
   time zone no longer costs seconds. A program using all three went from

@@ -24,10 +24,12 @@
 (def sample "champaca.lib.PortSample")
 
 (deftest every-method-ports-and-agrees
-  ;; all but square, which reads a static field
+  ;; all but square, which reads a static field, and countTrue, which takes
+  ;; a boolean[]
   (let [results (port/check-ports (port/port-class sample) 200)]
-    (is (= 16 (count results)))
-    (is (= ["champaca/lib/PortSample.square(I)I"] (map :method (filter :left results))))
+    (is (= 22 (count results)))
+    (is (= ["champaca/lib/PortSample.square(I)I" "champaca/lib/PortSample.countTrue([Z)I"]
+           (map :method (filter :left results))))
     (doseq [r (remove :left results)]
       (is (nil? (:left r)) (str (:method r) " was left: " (:left r)))
       (is (some? (:report r)) (str (:method r) " wasn't checked"))
@@ -145,11 +147,52 @@
     (is (every? newer? (differ #(.toLowerCase ^String %) "toLowerCase")))
     (is (= (ldk/invoke "ΟΔΟΣ" "toLowerCase") (.toLowerCase "ΟΔΟΣ")) "a final sigma")))
 
-(deftest a-char-array-in-the-signature-is-left
+(deftest a-char-array-is-read-and-written-as-chars
   ;; an element of a char[] is a char in jolt and its code in the ported
-  ;; code; until arrays are typed such a method isn't ported
-  (let [r (port/port-method "java.lang.String" "valueOf" "([C)Ljava/lang/String;")]
-    (is (str/includes? (:left r) "char[]"))))
+  ;; code, so a read converts one way and a write the other
+  (let [count-in (port/port-method sample "countIn" "([CC)I")
+        mirror (port/port-method sample "mirror" "(Ljava/lang/String;)Ljava/lang/String;")
+        fill (port/port-method sample "fillFrom" "([CIC)[C")]
+    (is (str/includes? (:source count-in) "(int (aget (non-null "))
+    (is (str/includes? (:source mirror) "(char-array "))
+    (is (re-find #"\(aset \(non-null [^)]+\) [^\n]*\(char " (:source mirror)))
+    (is (= [:strings-within-the-bmp] (vec (:holds mirror))) "toCharArray: one element a char only within the BMP")
+    (doseq [r (port/check-ports [count-in mirror fill] 300)]
+      (is (pc/agrees? (:report r)) (str (:method r))))
+    (is (= "abcdcb" (@(ns-resolve 'champaca.ported 'mirror) "abc")))
+    (is (thrown? NullPointerException (@(ns-resolve 'champaca.ported 'mirror) nil)))
+    (is (thrown? NullPointerException (@(ns-resolve 'champaca.ported 'count-in) nil \a)))))
+
+(deftest a-string-of-part-of-a-char-array-checks-its-range
+  ;; jolt's (String. a off n) takes a range outside the array and a nil
+  ;; array; the port's string-of throws as Java does
+  (let [r (first (port/check-ports [(port/port-method sample "slice" "([CII)Ljava/lang/String;")] 300))
+        slice @(ns-resolve 'champaca.ported 'slice)]
+    (is (str/includes? (:source r) "(string-of "))
+    (is (pc/agrees? (:report r)))
+    (is (= "bc" (slice (char-array "abcd") 1 2)))
+    (is (thrown? StringIndexOutOfBoundsException (slice (char-array "abcd") -1 0)))
+    (is (thrown? StringIndexOutOfBoundsException (slice (char-array "abcd") 3 2)))
+    (is (thrown? NullPointerException (slice nil 0 0)))))
+
+(deftest a-string-array-is-made-and-stored-into
+  (let [r (first (port/check-ports [(port/port-method sample "ends" "(Ljava/lang/String;)[Ljava/lang/String;")] 300))]
+    (is (str/includes? (:source r) "(make-array String 2)"))
+    (is (pc/agrees? (:report r)))
+    (is (= ["a" "c"] (vec (@(ns-resolve 'champaca.ported 'ends) "abc"))))))
+
+(deftest a-boolean-array-in-the-signature-is-left
+  ;; a boolean[] is read by the instruction that reads a byte[], and its
+  ;; elements are true and false in jolt: nothing tells the two apart yet
+  (let [r (port/port-method sample "countTrue" "([Z)I")]
+    (is (str/includes? (:left r) "boolean[]"))))
+
+(deftest is-title-case-is-the-jdks-on-every-char
+  (is (empty? (for [c (range 65536)
+                    :when (not (<= 0xD800 c 0xDFFF))
+                    :when (not= (boolean (Character/isTitleCase (char c)))
+                                (boolean (ldk/call-static "java/lang/Character" "isTitleCase" "(C)Z" (char c))))]
+                c))))
 
 (deftest what-has-no-rule-is-left-with-the-reason
   (let [r (port/port-method "java.lang.Integer" "toHexString" "(I)Ljava/lang/String;")]
