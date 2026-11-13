@@ -108,6 +108,14 @@ public class PortSample {
         for (int i = 0; i < a.length; i++) if (a[i]) n++;
         return n;
     }
+    /** Calls into another class, whose methods are ported with this one. */
+    public static int vowels(String s) {
+        int n = 0;
+        for (int i = 0; i < s.length(); i++) if (PortOther.vowel(s.charAt(i))) n++;
+        return PortOther.clamp(n, 3);
+    }
+    /** Calls a method of another class that is left, so this is left too. */
+    public static int tabled(int i) { return PortOther.tableAt(i & 1); }
     public static String joinTrim(List<String> parts, String sep) {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < parts.size(); i++) {

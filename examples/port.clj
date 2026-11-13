@@ -24,12 +24,14 @@
 (def sample "champaca.lib.PortSample")
 
 (deftest every-method-ports-and-agrees
-  ;; all but square, which reads a static field, and countTrue, which takes
-  ;; a boolean[]
+  ;; all but square, which reads a static field, countTrue, which takes a
+  ;; boolean[], and tabled, which calls a method of another class that is
+  ;; left; after them, the methods of that class they call
   (let [results (port/check-ports (port/port-class sample) 200)]
-    (is (= 22 (count results)))
-    (is (= ["champaca/lib/PortSample.square(I)I" "champaca/lib/PortSample.countTrue([Z)I"]
-           (map :method (filter :left results))))
+    (is (= 24 (count (remove :from results))))
+    (is (= ["champaca/lib/PortSample.square(I)I" "champaca/lib/PortSample.countTrue([Z)I"
+            "champaca/lib/PortSample.tabled(I)I"]
+           (map :method (filter :left (remove :from results)))))
     (doseq [r (remove :left results)]
       (is (nil? (:left r)) (str (:method r) " was left: " (:left r)))
       (is (some? (:report r)) (str (:method r) " wasn't checked"))
@@ -193,6 +195,29 @@
                     :when (not= (boolean (Character/isTitleCase (char c)))
                                 (boolean (ldk/call-static "java/lang/Character" "isTitleCase" "(C)Z" (char c))))]
                 c))))
+
+(deftest a-call-into-another-class-brings-its-method-along
+  ;; the methods of PortOther that PortSample calls are ported after its
+  ;; own, named with their class, and what PortOther's own methods call too
+  (let [results (port/check-ports (port/port-class sample) 100)
+        by-method (into {} (map (juxt :method identity) results))
+        other (filter :from results)
+        vowels (by-method "champaca/lib/PortSample.vowels(Ljava/lang/String;)I")]
+    (is (= #{"champaca/lib/PortOther"} (set (map :from other))))
+    (is (= #{"champaca/lib/PortOther.vowel(C)Z" "champaca/lib/PortOther.clamp(II)I"
+             "champaca/lib/PortOther.clamp(III)I" "champaca/lib/PortOther.tableAt(I)I"}
+           (set (map :method other))))
+    (is (= 'port-other-vowel (:name (by-method "champaca/lib/PortOther.vowel(C)Z"))))
+    (is (= 'port-other-clamp-int-int (:name (by-method "champaca/lib/PortOther.clamp(II)I"))))
+    (is (str/includes? (:source vowels) "(port-other-vowel "))
+    (is (contains? (set (:holds vowels)) :initializers-without-effects)
+        "PortOther has a static initializer, which the function doesn't run")
+    (doseq [r (remove :left other)]
+      (is (pc/agrees? (:report r)) (str (:method r))))
+    (is (= 3 (@(ns-resolve 'champaca.ported 'vowels) "a quiet one")) "six vowels, clamped to 3")
+    (is (= 1 (@(ns-resolve 'champaca.ported 'vowels) "xyz a")))
+    (is (str/includes? (:left (by-method "champaca/lib/PortOther.tableAt(I)I")) "static field"))
+    (is (str/includes? (:left (by-method "champaca/lib/PortSample.tabled(I)I")) "PortOther.tableAt"))))
 
 (deftest what-has-no-rule-is-left-with-the-reason
   (let [r (port/port-method "java.lang.Integer" "toHexString" "(I)Ljava/lang/String;")]

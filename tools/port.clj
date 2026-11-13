@@ -34,7 +34,7 @@
       (println port/preamble)
       (println))
     (doseq [[p r] (map vector ported reports)]
-      (println (str ";; " (:method p)))
+      (println (str ";; " (:method p) (when (:from p) " (called from the class being ported)")))
       (when (seq (:holds p)) (println (str ";; holds for: " (str/join ", " (map name (:holds p))))))
       (println (str ";; " (cond (nil? r) "not checked: a parameter type has no input generator"
                                 :else (str (pc/report-line r)
@@ -43,9 +43,20 @@
       (println))
     (doseq [l (filter :left results)]
       (println (str ";; left: " (:method l) ": " (:left l))))
-    (println (str ";; " (count results) " static methods: " (count ported) " ported ("
-                  (- (count ported) failed unchecked) " checked and agree, " failed " disagree, "
-                  unchecked " not checked), " (count (filter :left results)) " left"))
+    (let [own (remove :from results)
+          others (filter :from results)
+          line (fn [rs what]
+                 (let [done (remove :left rs)
+                       bad (count (filter #(and (:report %) (not (pc/agrees? (:report %)))) done))
+                       blind (count (remove :report done))]
+                   (str ";; " (count rs) " " what ": " (count done) " ported ("
+                        (- (count done) bad blind) " checked and agree, " bad " disagree, "
+                        blind " not checked), " (count (filter :left rs)) " left")))]
+      (println (line own "static methods"))
+      (when (seq others)
+        (let [k (count (distinct (map :from others)))]
+          (println (line others (str "static methods of " k (if (= 1 k) " other class" " other classes")
+                                     " that those call"))))))
     (println (str ";; " (count (filter #(and (:report %) (some :range (:args %))) ported))
                   " of the checks kept int and long parameters within -64 to 64 (the method loops or"
                   " allocates by size); the others used the full range"))

@@ -63,11 +63,28 @@
 (defn- safepoint? [x]
   (and (= "when" (head x)) (= ["jsafepoint"] (last x))))
 
-(defn- jdk-init?
-  "The initialization check before a static call into a JDK class. The call
-  goes through a rule to a jolt form, which has no class to initialize."
+(defn- jdk-class?
+  "A class the port never writes out: calls into it go through rules."
+  [cname]
+  (boolean (re-find #"^(java|javax|jdk|sun)/" cname)))
+
+(defn- init-of
+  "The class an initialization check names, or nil when x isn't one."
   [x]
-  (and (= "jinit-ic" (head x)) (str/starts-with? (str (quoted (nth x 2))) "java/")))
+  (when (= "jinit-ic" (head x)) (str (quoted (nth x 2)))))
+
+(defn- drop-init?
+  "Whether the initialization check x goes: every one does. A call into a
+  JDK class goes through a rule to a jolt form, which has no class to
+  initialize. A call into another class of the program becomes a call of
+  that method's function, and there the port holds only if the class's
+  initializer does nothing a caller can see, which is noted as a condition
+  when the class has one."
+  [ctx x]
+  (when-let [cname (init-of x)]
+    (when (and (not (jdk-class? cname)) ((:initializer? ctx) cname))
+      (vswap! (:holds ctx) conj :initializers-without-effects))
+    true))
 
 ;; --- rules: a JDK member and the jolt form that stands for it ----------------------
 ;; :form takes the arguments, already translated, receiver first. :holds names
@@ -264,8 +281,9 @@
       (list 'make-array of (value ctx len)))))
 
 (defn- sibling-call
-  "A call of another static method of the class being ported: the function
-  that method becomes. Its boolean and char parameters and result are
+  "A call of another static method the port writes out, of the class being
+  ported or of another class of the program: the function that method
+  becomes. Its boolean and char parameters and result are
   Clojure's there, and 1 or 0 and a code here. The call is noted, since this
   port stands only if that one does."
   [ctx {:keys [name desc]} f args]
@@ -283,7 +301,7 @@
   (let [f (unmark f)]
     (cond
       (= "jnewarray-interned" f) (new-array ctx args)
-      (and (string? f) (get (:statics ctx) f)) (sibling-call ctx (get (:statics ctx) f) f args)
+      (and (string? f) ((:statics ctx) f)) (sibling-call ctx ((:statics ctx) f) f args)
       (string? f) (apply-rule ctx (direct-rules f) f args)
       (= "jvirt-ic" (head f)) (let [k (quoted (nth f 3))] (apply-rule ctx (virtual-rules k) k args))
       :else (left "a call no rule covers"))))
@@ -391,7 +409,7 @@
 (defn- body
   "Forms in sequence, the last in tail position when tail? is."
   [ctx forms tail?]
-  (let [forms (vec (remove #(or (safepoint? %) (jdk-init? %)) forms))]
+  (let [forms (vec (remove #(or (safepoint? %) (drop-init? ctx %)) forms))]
     (concat (map #(statement (expr ctx % false)) (butlast forms))
             [(expr ctx (last forms) tail?)])))
 
@@ -737,13 +755,14 @@
 (defn- kebab [s]
   (str/lower-case (str/replace s #"([a-z0-9])([A-Z])" "$1-$2")))
 
-(defn- defn-form [fname desc statics form]
+(defn- defn-form [fname desc {:keys [statics initializer?]} form]
   (let [{:keys [ics params code]} (method-parts form)
         {:keys [args ret]} (parse-desc desc)
         holds (volatile! (sorted-set))
         calls (volatile! (sorted-set))
         sized (volatile! false)
-        ctx {:ics ics :blocks {} :ret ret :holds holds :calls calls :statics statics :sized sized}
+        ctx {:ics ics :blocks {} :ret ret :holds holds :calls calls :statics statics :sized sized
+             :initializer? initializer?}
         code (do-form (body ctx code true))
         entry (entry-bindings params args)]
     {:form (apply list 'defn fname (mapv param-form params args)
@@ -774,18 +793,48 @@
 
 (defn- statics
   "The static methods of cname that have code, by global name: {:name the
-  function's symbol, :mname :desc}. A method name used once is the
+  function's symbol, :cname :mname :desc}. A method name used once is the
   function's name in kebab case; an overloaded one has its parameter types
-  after it, since a Clojure function can't be overloaded by type."
-  [cname]
+  after it, since a Clojure function can't be overloaded by type. With
+  prefix?, for a class other than the one being ported, the class's simple
+  name comes first (array-utils-is-empty-chars)."
+  [cname prefix?]
   (let [ms (filter #(and (cf/static? %) (:code %) (not= "<clinit>" (:name %))) (:methods (link/parsed cname)))
-        overloaded (set (keep (fn [[n k]] (when (> k 1) n)) (frequencies (map :name ms))))]
-    (into {} (for [{:keys [name desc]} ms]
+        overloaded (set (keep (fn [[n k]] (when (> k 1) n)) (frequencies (map :name ms))))
+        simple (kebab (subs cname (inc (or (str/last-index-of cname "/") -1))))]
+    (into {} (for [{:keys [name desc]} ms
+                   :let [base (if (overloaded name)
+                                (str/join "-" (cons (kebab name) (map type-word (:args (parse-desc desc)))))
+                                (kebab name))]]
                [(str cname "." name desc)
-                {:mname name :desc desc
-                 :name (free-name (if (overloaded name)
-                                    (str/join "-" (cons (kebab name) (map type-word (:args (parse-desc desc)))))
-                                    (kebab name)))}]))))
+                {:cname cname :mname name :desc desc
+                 :name (if prefix? (symbol (str simple "-" base)) (free-name base))}]))))
+
+(defn- class-of-global
+  "The class in a method's global name, a/b/C.name(desc)."
+  [method]
+  (let [paren (str/index-of method "(")]
+    (when paren
+      (when-let [dot (str/last-index-of method "." paren)]
+        (subs method 0 dot)))))
+
+(defn- program
+  "What a port of cname looks methods up in: :statics, from a method's
+  global name to its entry, for cname's own static methods and, loaded as
+  they are met, those of the program's other classes; :initializer?,
+  whether a class has a static initializer."
+  [cname]
+  (let [tables (atom {cname (statics cname false)})
+        parsed (fn [c]
+                 (try (loader/ensure-loaded! c) (link/parsed c)
+                      (catch clojure.lang.ExceptionInfo _ nil)))
+        table (fn [c]
+                (or (@tables c)
+                    (let [t (if (and (not (jdk-class? c)) (parsed c)) (statics c true) {})]
+                      (swap! tables assoc c t)
+                      t)))]
+    {:statics (fn [method] (when-let [c (class-of-global method)] ((table c) method)))
+     :initializer? (fn [c] (boolean (some #(= "<clinit>" (:name %)) (:methods (parsed c)))))}))
 
 ;; --- writing it out ----------------------------------------------------------------
 
@@ -819,6 +868,8 @@
   {"I" :int "J" :long "Z" :boolean "C" :char
    "S" {:type :int :range [-32768 32767]}
    "B" {:type :int :range [-128 127]}
+   ;; an Object is tried with strings and null
+   "Ljava/lang/Object;" {:type :string :nil? true}
    "[I" {:type :ints :nil? true}
    "[C" {:type :chars :nil? true}
    "Ljava/util/List;" {:type :strings :of {:nil? true} :nil? true}
@@ -846,16 +897,16 @@
     (when (every? some? specs) (vec specs))))
 
 (defn- port-one
-  "One static method, given the class's statics: {:method :name :source
+  "One static method, given the program's lookups: {:method :name :source
   :holds :calls :args}, or {:method :left reason}."
-  [cname statics method]
-  (let [{:keys [mname desc name]} (statics method)]
+  [program method]
+  (let [{:keys [cname mname desc name]} ((:statics program) method)]
     (try
       (when (re-find #"\[Z" desc)
         (left "a boolean[] in its signature: its elements aren't typed yet"))
       (let [[status shape] (structured (jit/method-text cname mname desc))]
         (when (= :left status) (left (str "the structuring pass left it (" shape ")")))
-        (let [{:keys [form holds calls sized]} (defn-form name desc statics shape)]
+        (let [{:keys [form holds calls sized]} (defn-form name desc program shape)]
           {:method method :name name :source (layout form 0) :holds holds :calls calls
            :desc desc :sized sized}))
       (catch clojure.lang.ExceptionInfo e
@@ -884,7 +935,8 @@
         broken (fn [r] (first (filter #(:left (by-method %)) (:calls r))))
         next-results (mapv (fn [r]
                              (if-let [m (and (not (:left r)) (broken r))]
-                               {:method (:method r) :left (str "calls " m ", which is left")}
+                               (cond-> {:method (:method r) :left (str "calls " m ", which is left")}
+                                 (:from r) (assoc :from (:from r)))
                                r))
                            results)]
     (if (= next-results results)
@@ -901,22 +953,35 @@
             results)
       (recur next-results))))
 
+(defn- with-called
+  "results and, after them, the port of each method of another class that
+  they call, and of those those call, each marked :from its class."
+  [program results]
+  (loop [results results seen (set (map :method results))]
+    (let [more (distinct (remove seen (mapcat :calls results)))]
+      (if (empty? more)
+        results
+        (recur (into results (map #(assoc (port-one program %) :from (class-of-global %)) more))
+               (into seen more))))))
+
 (defn port-class
   "Each static method of cname that has code, in the class file's order, as
   a jolt function: {:method :name :source :holds :calls :args :small-ints},
   :args being champaca.portcheck's specs for it, :small-ints whether those
-  keep int and long parameters within [-64, 64], and :calls the other
-  methods of the class it calls; or {:method :left reason} when something
-  in it has no rule or it calls a method that was left."
+  keep int and long parameters within [-64, 64], and :calls the static
+  methods it calls; or {:method :left reason} when something in it has no
+  rule or it calls a method that was left. After them come the static
+  methods of the program's other classes that those call, each with :from
+  its class: a port needs the functions of all it calls."
   [cname]
   (let [cname (str/replace cname "." "/")
         _ (loader/ensure-loaded! cname)
-        table (statics cname)
+        program (program cname)
         order (for [m (:methods (link/parsed cname))
                     :let [k (str cname "." (:name m) (:desc m))]
-                    :when (table k)]
+                    :when ((:statics program) k)]
                 k)]
-    (settle (mapv #(port-one cname table %) order))))
+    (settle (with-called program (mapv #(port-one program %) order)))))
 
 (defn port-method
   "port-class's answer for one method of cname."
