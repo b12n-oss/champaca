@@ -406,6 +406,15 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- Reflective calls. A `Method` or `Constructor` object works out its class,
+  descriptor and procedure on its first call and keeps them, where every
+  call found the member's fields by name, parsed the descriptor and interned
+  the procedure's name; boxing and unboxing a primitive interned their
+  method names on every call too, and `getCallerClass`, which every
+  access-checked call runs, now reads class names alone from the stack.
+  `Constructor.newInstance()` went from 1,540 to 539 ns and
+  `Method.invoke()` from 1,925 to 691 ns, 165 and 234 ns after
+  `setAccessible(true)`. `ReflectCacheCheck` is new.
 - Finding a class without its name. `getClass()` answers an object's
   class record, and an array's from a table per element type, where it
   hashed the class's name back into the class table: 48.3 to 6.6 ns on an

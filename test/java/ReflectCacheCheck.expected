@@ -1,0 +1,30 @@
+override per receiver (pass 0): Base Base.pkg Sub Sub.pkg Base Base.pkg Sub Sub.pkg
+private, own class (pass 0): Base.priv Base.priv
+static (pass 0): 42 8
+interface (pass 0): N1 N2 N1
+primitives (pass 0): false 2 b 3 4 5 6.0 7.5
+constructors (pass 0): 0/none 0/made 7/widened
+wrong receiver (pass 0): java.lang.IllegalArgumentException: object of type java.lang.String is not an instance of ReflectCacheCheck$Base
+null receiver (pass 0): java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+thrown inside (pass 0): java.lang.reflect.InvocationTargetException: null <- java.lang.IllegalStateException: from go
+wrong argument (pass 0): java.lang.IllegalArgumentException: argument type mismatch <- java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number (java.lang.String and java.lang.Number are in module java.base of loader 'bootstrap')
+override per receiver (pass 1): Base Base.pkg Sub Sub.pkg Base Base.pkg Sub Sub.pkg
+private, own class (pass 1): Base.priv Base.priv
+static (pass 1): 42 8
+interface (pass 1): N1 N2 N1
+primitives (pass 1): false 2 b 3 4 5 6.0 7.5
+constructors (pass 1): 0/none 1/made 7/widened
+wrong receiver (pass 1): java.lang.IllegalArgumentException: object of type java.lang.String is not an instance of ReflectCacheCheck$Base
+null receiver (pass 1): java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+thrown inside (pass 1): java.lang.reflect.InvocationTargetException: null <- java.lang.IllegalStateException: from go
+wrong argument (pass 1): java.lang.IllegalArgumentException: argument type mismatch <- java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number (java.lang.String and java.lang.Number are in module java.base of loader 'bootstrap')
+override per receiver (pass 2): Base Base.pkg Sub Sub.pkg Base Base.pkg Sub Sub.pkg
+private, own class (pass 2): Base.priv Base.priv
+static (pass 2): 42 8
+interface (pass 2): N1 N2 N1
+primitives (pass 2): false 2 b 3 4 5 6.0 7.5
+constructors (pass 2): 0/none 2/made 7/widened
+wrong receiver (pass 2): java.lang.IllegalArgumentException: object of type java.lang.String is not an instance of ReflectCacheCheck$Base
+null receiver (pass 2): java.lang.NullPointerException: Cannot invoke "Object.getClass()" because "obj" is null
+thrown inside (pass 2): java.lang.reflect.InvocationTargetException: null <- java.lang.IllegalStateException: from go
+wrong argument (pass 2): java.lang.IllegalArgumentException: argument type mismatch <- java.lang.ClassCastException: class java.lang.String cannot be cast to class java.lang.Number (java.lang.String and java.lang.Number are in module java.base of loader 'bootstrap')

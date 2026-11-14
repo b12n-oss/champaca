@@ -529,3 +529,19 @@ After `ldc`, a profile of Clojure loading libraries from source still showed cla
 
 The Clojure run itself didn't move (7.82 against 7.93 s warm, median of three, interleaved, load average 7 to 10): after `ldc`, these were under 1% of its samples. Code that asks `getClass` or `Class.forName` often, as frameworks and reflection do, is where it shows. `GetClassCheck` compares `getClass()` with literals and `Class.forName` for JDK, application and anonymous classes, arrays, a lambda's hidden class, a proxy and a class another loader defined, three passes each.
 
+### Reflective calls
+
+`Method.invoke` and `Constructor.newInstance` did their lookups by name on every call. They read the member's `clazz` and `slot` fields through `jfield-index`, parsed the descriptor, and built and interned the name of the procedure to call. Boxing the result did the same for `valueOf`, and unboxing an argument interned `intValue` and the like. A member now resolves on its first call to a small record: its class, its meta entry, its parameter and return types, and the symbols for its procedure and vtable key. Each later call reads that record. The record holds the symbol rather than the procedure, because a method compiled on first call replaces its global's value. The box classes' symbols are made once.
+
+An access-checked call also asks `getCallerClass` for its caller. That walk read each frame's pending-call marker from Chez's inspector information to work out pcs and inlined callees. A caller class needs neither: an inlined leaf calls nothing but `Object`'s constructor, so it is never the caller. The walk for `getCallerClass` now reads class names alone.
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| `Constructor.newInstance()` | 1,540 ns | 539 ns | 7 ns |
+| `Constructor.newInstance(int, String)` | 2,006 ns | 818 ns | 14 ns |
+| `Method.invoke()` | 1,925 ns | 691 ns | 10 ns |
+| `newInstance()` after `setAccessible(true)` | 748 ns | 165 ns | |
+| `invoke()` after `setAccessible(true)` | 1,075 ns | 234 ns | |
+
+The access check is most of what remains, about 390 ns. `ReflectCacheCheck` runs the same `Method` and `Constructor` objects over several passes and receivers: an override chosen per receiver, private, package-private, static and interface methods, every primitive in and out, a wrong or null receiver, and an exception from inside, all as HotSpot answers.
+

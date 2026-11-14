@@ -478,29 +478,33 @@
                                         (add-method-frame m (or d pending) acc n))])
                 (loop (cdr fs) #f acc n)))))))
 
-;; The innermost limit Java frames of continuation k, as java-frames-of
-;; gives them, walking only as far as it takes. A merge or an inlined callee
-;; changes only the frame added last, so once limit + 1 frames are there the
-;; first limit are final. getCallerClass needs two; java-frames-of walked
-;; and named every frame of the stack.
-(define (java-frames-upto k limit)
-  (let loop ([k k] [steps 0] [pending #f] [acc '()] [n 0])
+;; The classes of the innermost limit Java frames of continuation k, in
+;; java-frames-of's order, walking only as far as it takes: what
+;; getCallerClass needs. A frame's pc and an inlined callee's activation come
+;; from its pending call's marker (return-sexpr, a search of the code's
+;; inspector information), and neither is wanted here: an inlined leaf calls
+;; nothing but Object's constructor, so it is never the method that asked
+;; for its caller, nor that method's caller. What remains is the one rule
+;; that makes or merges a frame: a block frame and its method's frame under
+;; it are one activation. Once limit + 1 are there, the first limit are final.
+(define (java-frame-classes-upto k limit)
+  (let loop ([k k] [steps 0] [acc '()] [n 0])   ; acc: (m . block?), newest first
     (if (or (fx> n limit) (eq? k #%$null-continuation) (not (#%$continuation? k)) (fx= steps 8192))
-        (let ([fs (reverse (map (lambda (f) (list-head f 4)) acc))])
-          (if (fx> n limit) (list-head fs limit) fs))
+        (let ([cs (map caar (reverse acc))])
+          (if (fx> n limit) (list-head cs limit) cs))
         (begin
           (#%$split-continuation k 0)
-          (let* ([code (#%$continuation-return-code k)]
-                 [name (#%$code-name code)]
-                 [m (and (string? name) (frame-method name))]
-                 [d (frame-marker (return-sexpr code (#%$continuation-return-offset k)))]
-                 [next (#%$continuation-link k)])
-            (if (not m)
-                (loop next (fx+ steps 1) (or pending d) acc n)
-                (let-values ([(acc n) (if (block-frame-merges? m acc)
-                                          (merge-block-frame m (or d pending) acc n)
-                                          (add-method-frame m (or d pending) acc n))])
-                  (loop next (fx+ steps 1) #f acc n))))))))
+          (let-values ([(acc n) (frame-class-step (#%$code-name (#%$continuation-return-code k)) acc n)])
+            (loop (#%$continuation-link k) (fx+ steps 1) acc n))))))
+;; acc and its count after the frame of code named name: no change for a
+;; frame that isn't Java, a method's frame merged into its block frame on
+;; top, or a new frame
+(define (frame-class-step name acc n)
+  (let ([m (and (string? name) (frame-method name))])
+    (cond [(not m) (values acc n)]
+          [(and (not (cadddr m)) (pair? acc) (cdar acc) (same-frame-method? (caar acc) m))
+           (values (cons (cons m #f) (cdr acc)) n)]
+          [else (values (cons (cons m (cadddr m)) acc) (fx+ n 1))])))
 
 (define (java-frame-class name)
   ;; "pkg/Cls.meth(desc)#B4" -> "pkg/Cls"
@@ -543,8 +547,7 @@
 (defnative "jdk/internal/reflect/Reflection.getCallerClass()Ljava/lang/Class;" ()
   (let* ([few (and (not (pair? jstack)) (not caller-debug?)
                    ;; walked inside call/1cc, while its continuation is live
-                   (map (lambda (f) (list (car f)))
-                        (call/1cc (lambda (k) (java-frames-upto k caller-frames)))))]
+                   (map list (call/1cc (lambda (k) (java-frame-classes-upto k caller-frames)))))]
          [cname (or (and few (caller-of-frames few))
                     (let ([fs (java-frames)])
                       (when caller-debug?
@@ -614,9 +617,9 @@
                                          "Value()\" because the return value of \"sun.invoke.util.ValueConversions"
                                          ".primitiveConversion(sun.invoke.util.Wrapper, Object, boolean)\" is null")))))]
          [(not e) (mismatch)]
-         [(string=? (car e) t) (junbox t v)]
+         [(string=? (car e) t) (refl-unbox t v)]
          [(let ([w (assoc (car e) prim-widenings)]) (and w (member t (cdr w))))
-          (widen (car e) t (junbox (car e) v))]
+          (widen (car e) t (refl-unbox (car e) v))]
          [else (mismatch)]))]
     [(or (not v) (jinstance? v (desc->class-name t))) v]
     [else (mismatch)]))
@@ -627,7 +630,8 @@
 (define (reflect-receiver obj cname)
   (unless obj
     (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"o\" is null"))
-  (unless (jinstance? obj cname)
+  ;; an object answers from its class's table, keyed by the plan's name
+  (unless (if (jobj? obj) (class-instance-of? (jobj-cls obj) cname) (jinstance? obj cname))
     (jthrow "java/lang/IllegalArgumentException"
             (string-append "object of type " (binary-name (class-name-of obj))
                            " is not an instance of " (binary-name cname)))))
@@ -681,49 +685,109 @@
 ;; (the JDK's other path needs java.lang.invoke).
 (define-override! "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor.invoke(Ljava/lang/Object;[Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;"
   (lambda (this obj args caller)
-    (let* ([cn "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor"]
-           [adapter (jslot this (jfield-index cn "csmAdapter"))])
+    (let* ([slots (native-accessor-slots)]
+           [adapter (jslot this (car slots))])
       (if adapter
           (reflect-invoke adapter obj
                           (make-jarr "Ljava/lang/Object;"
                                      (list->vector (append (if args (vector->list (jarr-vec args)) '()) (list caller)))))
-          (reflect-invoke (jslot this (jfield-index cn "method")) obj args)))))
+          (reflect-invoke (jslot this (cdr slots)) obj args)))))
+;; the accessor's csmAdapter and method slots, found by name once
+(define native-accessor-slot-cache #f)
+(define (native-accessor-slots)
+  (or native-accessor-slot-cache
+      (let ([cn "jdk/internal/reflect/DirectMethodHandleAccessor$NativeAccessor"])
+        (set! native-accessor-slot-cache (cons (jfield-index cn "csmAdapter") (jfield-index cn "method")))
+        native-accessor-slot-cache)))
+
+;; Boxing for reflection's hot paths, each primitive's box class, valueOf
+;; global and xxxValue key made once: runtime.ss's jbox and junbox built and
+;; interned the names on every call, a third of a reflective call's time.
+;; The box class's jinit is skipped once it has run.
+(define-record-type refl-box-plan (fields cname value-of unbox-key (mutable ready?)) (sealed #t))
+(define refl-box-plans
+  (map (lambda (e)
+         (cons (car e)
+               (make-refl-box-plan (cadr e)
+                                   (string->symbol (string-append (cadr e) ".valueOf(" (car e) ")L" (cadr e) ";"))
+                                   (string->symbol (caddr e))
+                                   #f)))
+       box-classes))
+(define (refl-box-plan-of t) (cdr (assoc t refl-box-plans)))
+(define (refl-box t v)
+  (let ([p (refl-box-plan-of t)])
+    (unless (refl-box-plan-ready? p)
+      (jinit (refl-box-plan-cname p))
+      (refl-box-plan-ready?-set! p (eq? (jclass-state (find-class (refl-box-plan-cname p))) 'initialized)))
+    ((top-level-value (refl-box-plan-value-of p)) v)))
+(define (refl-unbox t v)
+  ((jvirt v (refl-box-plan-unbox-key (refl-box-plan-of t))) v))
+
+;; What a Method or Constructor object resolves to, worked out on its first
+;; call and kept for the object's life: its class, its meta entry, the name
+;; and descriptor key, the parameter and return types, and the symbol whose
+;; value is its procedure (the symbol, not the procedure: a method compiled
+;; on first call replaces its global's value). Each call found the member's
+;; clazz and slot fields by name, parsed the descriptor and interned the
+;; procedure's name again, half of a reflective call's time.
+(define-record-type member-plan
+  (fields class meta cname key key-sym ptypes ret sym static?)
+  (sealed #t))
+(define member-plans (make-weak-eq-hashtable))
+(define (member-plan-of member kind)
+  (or (#3%eq-hashtable-ref member-plans member #f)
+      (let-values ([(c meta) (reflected-member kind member)])
+        (let* ([cname (jclass-cname c)] [desc (cadr meta)] [key (string-append (car meta) desc)]
+               [p (make-member-plan c meta cname key (string->symbol key) (desc-args desc) (desc-ret desc)
+                                    (string->symbol (string-append cname "." key))
+                                    (static-flag? (caddr meta)))])
+          (eq-hashtable-set! member-plans member p)
+          p))))
+;; the procedure an instance method's call runs on obj, as virtual-target
+;; finds it, with the plan's symbols: a private method is its own, a
+;; package-private one is selected by run-time package (runtime.ss), any
+;; other through obj's vtable by the key's symbol (jvirt interned a string)
+(define (plan-target p obj)
+  (let ([flags (caddr (member-plan-meta p))])
+    (cond [(fxpositive? (fxlogand flags #x0002)) (nn obj) (top-level-value (member-plan-sym p))]
+          [(fxzero? (fxlogand flags #x0005)) (virtual-target obj (member-plan-cname p) (member-plan-key p) flags)]
+          [else (jvirt obj (member-plan-key-sym p))])))
+;; jinit for the class record in hand: no name lookup once it's initialized
+(define (jinit-class! c)
+  (unless (eq? (jclass-state c) 'initialized) (jinit (jclass-cname c))))
 
 (define (reflect-invoke m obj args)
-  (let-values ([(c meta) (reflected-member "java/lang/reflect/Method" m)])
-    (let* ([cname (jclass-cname c)] [desc (cadr meta)] [key (string-append (car meta) desc)]
-           [static? (static-flag? (caddr meta))]
-           [argv (begin (unless static? (reflect-receiver obj cname))
-                        (reflect-arg-list (desc-args desc) args))]
-           [ret (desc-ret desc)])
-      (when static? (jinit cname))
-      (let ([r (invoke-wrapped
-                (lambda ()
-                  (if static?
-                      (apply (method-proc cname key) argv)
-                      ;; a private method is its own, a package-private one
-                      ;; selected by run-time package (runtime.ss)
-                      (apply (virtual-target obj cname key (caddr meta)) obj argv))))])
-        (cond [(string=? ret "V") #f] [(prim-desc? ret) (jbox ret r)] [else r])))))
+  (let* ([p (member-plan-of m "java/lang/reflect/Method")]
+         [cname (member-plan-cname p)]
+         [static? (member-plan-static? p)]
+         [argv (begin (unless static? (reflect-receiver obj cname))
+                      (reflect-arg-list (member-plan-ptypes p) args))]
+         [ret (member-plan-ret p)])
+    (when static? (jinit-class! (member-plan-class p)))
+    (let ([r (invoke-wrapped
+              (lambda ()
+                (if static?
+                    (apply (top-level-value (member-plan-sym p)) argv)
+                    (apply (plan-target p obj) obj argv))))])
+      (cond [(string=? ret "V") #f] [(prim-desc? ret) (refl-box ret r)] [else r]))))
 
 (defnative "jdk/internal/reflect/DirectConstructorHandleAccessor$NativeAccessor.newInstance0(Ljava/lang/reflect/Constructor;[Ljava/lang/Object;)Ljava/lang/Object;"
   (ctor args)
-  (let-values ([(c meta) (reflected-member "java/lang/reflect/Constructor" ctor)])
-    (let* ([cname (jclass-cname c)] [desc (cadr meta)]
-           ;; a serialization constructor allocates the serializable class and
-           ;; runs its first non-serializable superclass's constructor on it
-           [serial (eq-hashtable-ref serial-allocs ctor #f)]
-           [alloc (or serial cname)])
-      ;; the class first, then the arguments: the JVM initializes the class
-      ;; even when an argument doesn't fit
-      (jinit alloc)
-      (let ([argv (reflect-arg-list (desc-args desc) args 'ctor)])
-        (invoke-wrapped
-         (lambda ()
-           (when serial (check-allocatable alloc))
-           (let ([o (jnew alloc)])
-             (apply (method-proc cname (string-append "<init>" desc)) o argv)
-             o)))))))
+  (let* ([p (member-plan-of ctor "java/lang/reflect/Constructor")]
+         [c (member-plan-class p)]
+         ;; a serialization constructor allocates the serializable class and
+         ;; runs its first non-serializable superclass's constructor on it
+         [serial (eq-hashtable-ref serial-allocs ctor #f)])
+    ;; the class first, then the arguments: the JVM initializes the class
+    ;; even when an argument doesn't fit
+    (if serial (jinit serial) (jinit-class! c))
+    (let ([argv (reflect-arg-list (member-plan-ptypes p) args 'ctor)])
+      (invoke-wrapped
+       (lambda ()
+         (when serial (check-allocatable serial))
+         (let ([o (if serial (jnew serial) (make-jobj c (#3%vector-copy (jclass-template c))))])
+           (apply (top-level-value (member-plan-sym p)) o argv)
+           o))))))
 
 ;; HotSpot's check_valid_for_instantiation, for the class a serialization
 ;; constructor allocates: the JVM's allocator throws these out of newInstance
@@ -934,7 +998,7 @@
 (define-override! "java/lang/reflect/Field.get(Ljava/lang/Object;)Ljava/lang/Object;"
   (lambda (this obj)
     (let-values ([(get set desc what qname read-only?) (field-access this obj 'get)])
-      (let ([v (get)]) (if (prim-desc? desc) (jbox desc v) v)))))
+      (let ([v (get)]) (if (prim-desc? desc) (refl-box desc v) v)))))
 
 ;; set takes v as Method.invoke takes an argument: a box unboxed and
 ;; widened for a primitive field, null or an instance for a reference one
@@ -948,7 +1012,7 @@
              [(prim-desc? desc)
               (let ([e (and v (jobj? v) (find (lambda (b) (string=? (cadr b) (class-name-of v))) box-classes))])
                 (if (and e (prim-widens? (car e) desc))
-                    (widen (car e) desc (junbox (car e) v))
+                    (widen (car e) desc (refl-unbox (car e) v))
                     (refuse "java/lang/IllegalArgumentException")))]
              [(or (not v) (jinstance? v (desc->class-name desc))) v]
              [else (refuse "java/lang/IllegalArgumentException")])))))
@@ -1030,7 +1094,7 @@
 (defnative "java/lang/reflect/Array.get(Ljava/lang/Object;I)Ljava/lang/Object;" (a i)
   (let* ([a (reflect-array a)] [e (jarr-elem a)])
     (reflect-index a i)
-    (let ([v (vector-ref (jarr-vec a) i)]) (if (prim-desc? e) (jbox e v) v))))
+    (let ([v (vector-ref (jarr-vec a) i)]) (if (prim-desc? e) (refl-box e v) v))))
 
 (defnative "java/lang/reflect/Array.set(Ljava/lang/Object;ILjava/lang/Object;)V" (a i v)
   (let* ([a (reflect-array a)] [e (jarr-elem a)])
@@ -1040,7 +1104,7 @@
        (reflect-index a i)
        (let ([p (box-prim-of v)])
          (unless p (reflect-type-mismatch))
-         (reflect-prim-set! a i p (junbox p v)))]
+         (reflect-prim-set! a i p (refl-unbox p v)))]
       [else
        (reflect-index a i)
        (when (and v (not (array-store-ok? a v)))
