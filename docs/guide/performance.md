@@ -208,14 +208,14 @@ Much of what every call cost was the API reaching the runtime. Each entry point 
 
 Each call also wrapped its work in two closures, one for the lock and one for turning an exception into an `ex-info`, and converted its arguments through `apply` over a lazy `map`, which cost about as much as the call into Java. Those run in line now (`java-call`), and `invoke`, `invoke-static` and `construct` take up to three arguments without `apply`.
 
-| Call | Before | Procedures kept | In line too |
-|---|---|---|---|
-| `invoke` `Point.getX` | 2,791 ns | 1,272 ns | 552 ns |
-| `get-field` | 2,229 ns | 663 ns | 521 ns |
-| `get-static` `Integer.MAX_VALUE` | 2,664 ns | 1,271 ns | 1,121 ns |
-| `invoke-static` `Integer.valueOf` | 3,582 ns | 1,902 ns | 1,033 ns |
+| Call | Before | Procedures kept | In line too | Statics kept |
+|---|---|---|---|---|
+| `invoke` `Point.getX` | 2,791 ns | 1,272 ns | 552 ns | 552 ns |
+| `get-field` | 2,229 ns | 663 ns | 521 ns | 521 ns |
+| `get-static` `Integer.MAX_VALUE` | 2,664 ns | 1,271 ns | 1,121 ns | 395 ns |
+| `invoke-static` `Integer.valueOf` | 3,582 ns | 1,902 ns | 1,033 ns | 780 ns |
 
-`get-static` keeps most of its cost on the Scheme side, which finds the field by name on every call.
+`get-static` and `set-static!` used to find the field by name on every call, turning the class name's dots into slashes and building the field's global name each time. They keep what they found now, per class-name string and field name, so a jolt literal finds it again with one `eq?` lookup; `invoke-static`'s cached call site keeps its class's record, and an initialized class costs one field read. A scalar argument (a number, a string, nil) also skips `->arg`'s collection tests. Of `get-static`'s 395 ns, about 30 are now on the Scheme side; taking the runtime's lock and giving it back costs about 165 ns from jolt.
 
 Measuring this from `jolt -e` overstates every number, because a top-level form's var lookups cost more there than in a namespace's compiled code.
 

@@ -415,6 +415,14 @@
   (ldk/define-class "demo.classes.Broken" {:static-fields ["V"] :static-init (fn [] nil)})
   (is (= "java.lang.NoClassDefFoundError: Could not initialize class demo.classes.Broken"
          (thrown #(ldk/get-static "demo.classes.Broken" "V"))))
+  ;; a static method's call site is kept from the first, failed call; the
+  ;; class is checked again on each later one
+  (ldk/define-class "demo.classes.BrokenCall"
+    {:static-methods {"f()I" (fn [] 1)} :static-init (fn [] (throw (ex-info "no" {})))})
+  (is (= "java.lang.ExceptionInInitializerError" (thrown #(ldk/invoke-static "demo.classes.BrokenCall" "f"))))
+  (dotimes [_ 2]
+    (is (= "java.lang.NoClassDefFoundError: Could not initialize class demo.classes.BrokenCall"
+           (thrown #(ldk/invoke-static "demo.classes.BrokenCall" "f")))))
   ;; an Error passes as itself
   (ldk/define-class "demo.classes.Fatal"
     {:static-fields ["V"] :static-init (fn [] (throw (ldk/construct "java.lang.AssertionError" "fatal")))})
