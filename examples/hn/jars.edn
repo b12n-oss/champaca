@@ -1,0 +1,7 @@
+;; The jars hn runs on, each with the SHA-1 Maven Central publishes for it.
+;; jolt hn:fetch downloads any missing from ~/.m2 and keeps a jar only when
+;; its digest matches.
+[["com.squareup.okhttp3:okhttp:4.12.0" "2f4525d4a200e97e1b87449c2cd9bd2e25b7e8cd"]   ; Kotlin: HTTP
+ ["com.squareup.okio:okio-jvm:3.6.0" "5600569133b7bdefe1daf9ec7f4abeb6d13e1786"]      ; Kotlin: OkHttp's I/O
+ ["org.jetbrains.kotlin:kotlin-stdlib:1.9.22" "d6c44cd08d8f3f9bece8101216dbe6553365c6e3"] ; Kotlin's standard library
+ ["org.jsoup:jsoup:1.18.1" "cb7cd991d47b44101cbe4655dec611cdc01f8a02"]]               ; Java: HTML

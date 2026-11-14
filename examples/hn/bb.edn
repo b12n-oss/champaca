@@ -1,0 +1,68 @@
+;; Copyright (C) 2026  champaca contributors
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+;; hn's tasks, for jolt (or bb): jolt run, jolt test, jolt dist, jolt fetch.
+;; JOLT names the jolt to run (default: jolt on PATH), CHAMPACA_HOME the
+;; champaca checkout jolt dist bundles with (default: ../.., this repo).
+{:min-bb-version "1.0.0"
+ :tasks
+ {:requires ([babashka.fs :as fs]
+             [clojure.edn :as edn]
+             [clojure.string :as str])
+  :init (do
+          (defn jolt-bin [] (or (System/getenv "JOLT") "jolt"))
+          (defn champaca-home [] (str (fs/canonicalize (or (System/getenv "CHAMPACA_HOME") "../.."))))
+          (def jars (edn/read-string (slurp "jars.edn")))
+          (defn m2-path [coord]
+            (let [[g a v] (str/split coord (re-pattern ":"))]
+              (str (str/replace g "." "/") "/" a "/" v "/" a "-" v ".jar")))
+          (defn m2-jar [coord] (str (System/getenv "HOME") "/.m2/repository/" (m2-path coord)))
+          ;; the class path champaca reads the Java and Kotlin classes from
+          (defn classpath [] (str/join ":" (map (fn [[c _]] (m2-jar c)) jars)))
+          (defn sha1 [f]
+            (first (str/split (str/trim (:out (shell {:out :string} "openssl" "dgst" "-sha1" "-r" (str f))))
+                              (re-pattern " ")))))
+
+  fetch {:doc "Download the jars in jars.edn missing from ~/.m2 from Maven Central, each kept only when its SHA-1 is the pinned one"
+         :task (doseq [[c sha] jars
+                       :let [f (m2-jar c)]
+                       :when (not (fs/exists? f))]
+                 (let [part (str f ".part")]
+                   (fs/create-dirs (fs/parent f))
+                   (shell "curl -fsSL --retry 2 --connect-timeout 15 --max-time 300 -o" part
+                          (str "https://repo1.maven.org/maven2/" (m2-path c)))
+                   (if (= sha (sha1 part))
+                     (do (fs/move part f {:replace-existing true}) (println "fetched" c))
+                     (do (fs/delete-if-exists part)
+                         (println "REFUSED" c ": its SHA-1 isn't the pinned" sha)
+                         (System/exit 1)))))}
+
+  run {:override-builtin true
+       :doc "The front page from source: jolt run [--limit N] [--file PAGE] [--edn] [--help]. The first run compiles what it needs, later ones start warm"
+       :depends [fetch]
+       :task (System/exit (:exit (apply shell {:continue true :extra-env {"CHAMPACA_CLASSPATH" (classpath)}}
+                                        (jolt-bin) "-M" "-m" "hn.main" *command-line-args*)))}
+
+  test {:override-builtin true
+        :doc "The tests, on a hand-made front page (test/hn/frontpage.html), so no network"
+        :depends [fetch]
+        :task (System/exit (:exit (shell {:continue true :extra-env {"CHAMPACA_CLASSPATH" (classpath)}}
+                                         (jolt-bin) "-A:test" "-M" "-e"
+                                         (str "(require 'hn.main-test)"
+                                              " (let [r (clojure.test/run-tests 'hn.main-test)]"
+                                              "   (champaca.api/save-cache!)"
+                                              "   (System/exit (if (zero? (+ (:fail r) (:error r))) 0 1)))"))))}
+
+  dist {:doc "target/hn: hn as one file you can copy and run, no JDK needed (champaca's jolt bundle --single, its cache trained on one live fetch). target/hn-bundle is the directory it unpacks on its first run. Needs JAVA_HOME a JDK 25 and a champaca checkout (CHAMPACA_HOME)"
+         :depends [fetch]
+         :task (let [here (str (fs/canonicalize "."))
+                     bundle (str here "/target/hn-bundle")]
+                 (fs/delete-tree bundle)
+                 (fs/delete-if-exists (str here "/target/hn"))
+                 (fs/create-dirs (str here "/target"))
+                 (System/exit (:exit (shell {:dir (champaca-home) :continue true}
+                                            (jolt-bin) "bundle" "-o" bundle "--jolt" "hn.main" "--project" here
+                                            "--name" "hn" "-cp" (classpath) "--single" (str here "/target/hn")
+                                            "--train" "--limit" "3"
+                                            ;; the training run's fetch, behind a proxy that re-signs TLS
+                                            (if-let [ts (System/getenv "HN_TRUST_STORE")] (str "--trust-store=" ts) "--limit=3")))))}}}

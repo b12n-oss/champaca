@@ -1,0 +1,9 @@
+;; Copyright (C) 2026  champaca contributors
+;; SPDX-License-Identifier: GPL-3.0-or-later WITH Classpath-exception-2.0
+
+;; The hn example: a jolt program on champaca (see README.md). The Java
+;; side's jars aren't here: jars.edn pins them, jolt hn:fetch downloads them,
+;; and the tasks hand them to champaca as CHAMPACA_CLASSPATH.
+{:paths ["src"]
+ :deps {champaca/champaca {:local/root "../.."}}
+ :aliases {:test {:extra-paths ["test"]}}}

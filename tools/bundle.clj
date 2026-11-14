@@ -30,6 +30,11 @@
 ;;                          macOS); it needs a C compiler. macOS refuses to start
 ;;                          a downloaded unsigned binary: sign and notarize a
 ;;                          bundle before handing it to anyone
+;;   --single FILE          also write FILE, the bundle as one executable file:
+;;                          a shell header and the bundle as a tar.gz. Its first
+;;                          run unpacks the bundle under
+;;                          ${CHAMPACA_SINGLE_DIR:-~/.cache/champaca/single}/
+;;                          NAME-<digest>/ and later runs start it from there
 ;;   --train ARGS...        run the program once with ARGS at build time, so
 ;;                          the cache holds the code that run compiled (the
 ;;                          rest of the command line); without it only the
@@ -61,7 +66,7 @@
 (def ^:private value-options
   "The options that take a value, and the key each sets."
   {"-o" :out "-cp" :cp "--class-path" :cp "-m" :main "--jolt" :jolt "--project" :project
-   "--name" :name "--add-modules" :add-modules "--locales" :locales})
+   "--name" :name "--add-modules" :add-modules "--locales" :locales "--single" :single})
 
 (defn- parse [args]
   (loop [[a & more :as args] args, opts {}]
@@ -259,8 +264,57 @@
   (when-not train
     (println "bundle: only the boot is cached; --train ARGS caches what a run of the program compiles")))
 
+(defn- single-header
+  "The shell header of a --single file whose payload, a tar.gz digested as
+  id, starts at byte offset (counted from 1, as tail -c + counts)."
+  [name id offset]
+  (str "#!/bin/sh\n"
+       "# " name ": a champaca app in one file (jolt bundle --single). It needs no JDK.\n"
+       "# The first run unpacks the bundle under CHAMPACA_SINGLE_DIR (default\n"
+       "# ~/.cache/champaca/single), and later runs start it from there.\n"
+       "set -e\n"
+       "root=${CHAMPACA_SINGLE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/champaca/single}\n"
+       "dir=$root/" name "-" id "\n"
+       "if [ ! -x \"$dir/bin/" name "\" ]; then\n"
+       "  mkdir -p \"$root\"\n"
+       "  tmp=$(mktemp -d \"$root/." name "-XXXXXX\")\n"
+       "  echo \"" name ": first run, unpacking into $dir\" >&2\n"
+       "  tail -c +" offset " \"$0\" | tar -xzf - -C \"$tmp\" || true\n"
+       "  if [ ! -x \"$tmp/bin/" name "\" ]; then\n"
+       "    rm -rf \"$tmp\"; echo \"" name ": couldn't unpack $0\" >&2; exit 1\n"
+       "  fi\n"
+       "  # a run that got there first keeps its copy; a broken one is replaced\n"
+       "  if [ -x \"$dir/bin/" name "\" ]; then rm -rf \"$tmp\"; else rm -rf \"$dir\"; mv \"$tmp\" \"$dir\"; fi\n"
+       "fi\n"
+       "exec \"$dir/bin/" name "\" \"$@\"\n"))
+
+(defn- header-for
+  "The header whose own length puts the payload at the offset it names: the
+  offset's digits change the length, so render until the two agree."
+  [name id]
+  (loop [offset 1]
+    (let [h (single-header name id offset)
+          next (inc (count (.getBytes ^String h "UTF-8")))]
+      (if (= next offset) h (recur next)))))
+
+(defn- write-single!
+  "FILE: the bundle at out as one executable, a header and out as a tar.gz.
+  The payload's SHA-256 names the directory a run unpacks it into, so a new
+  build never starts from an older one's files."
+  [out name file]
+  (let [payload (str (fs/path (fs/parent out) (str (fs/file-name out) ".tar.gz")))
+        _ (sh! "tar" "-czf" payload "-C" out ".")
+        id (subs (first (str/split (:out (p/shell {:out :string} "openssl" "dgst" "-sha256" "-r" payload)) #"\s")) 0 16)
+        target (str (fs/absolutize file))]
+    (some-> (fs/parent target) fs/create-dirs)
+    (spit target (header-for name id))
+    (sh! "sh" "-c" "cat \"$1\" >> \"$2\"" "sh" payload target)
+    (fs/delete payload)
+    (fs/set-posix-file-permissions target "rwxr-xr-x")
+    (println (str "bundle: wrote " file ", one file of " (mb (fs/size target))))))
+
 (defn- build! [repo jolt made args]
-  (let [{:keys [out cp main project name add-modules train signable locales] jolt-ns :jolt :as opts} (parse args)]
+  (let [{:keys [out cp main project name add-modules train signable locales single] jolt-ns :jolt :as opts} (parse args)]
     (check-args! opts jolt)
     (let [entries (cp-entries cp)
           _ (check-out-outside! out entries)
@@ -282,7 +336,8 @@
         (jolt-build! jolt (fs/canonicalize project) jolt-ns (fs/path out "lib" name) signable))
       (let [bin (write-launcher! out name (launcher-exec main name rel))]
         (warm-cache! out rt champaca-bin bin name train)
-        (print-sizes! out name train)))))
+        (print-sizes! out name train)
+        (when single (write-single! out name single))))))
 
 (defn -main [repo jolt & args]
   (let [made (volatile! nil)]
