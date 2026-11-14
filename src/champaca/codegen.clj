@@ -20,7 +20,7 @@
   (:refer-clojure :exclude [pop!])
   (:require [clojure.string :as str]
             [champaca.bytecode :refer [array-loops backward-ranges blocks decode load-ops store-ops successors]]
-            [champaca.cgtext :refer [*inline-site* *method-tag* at jstring-lit-form label method-global num-lit parse-desc site static-global str-lit sx sym wide?]]
+            [champaca.cgtext :refer [*inline-site* *method-tag* at jstring-lit-arg jstring-lit-form label method-global num-lit parse-desc site static-global str-lit sx sym wide?]]
             [champaca.intrinsics :refer [direct-form static-form]]
             [champaca.lambdas :refer [condy const-datum lambda-expr]]
             [champaca.linkage :refer [bad-class local-names missing-class missing-method refused-class resolve-bsm-args! resolve-site! resolve-type! wrong-kind]]))
@@ -391,10 +391,19 @@
       :long (push-const! e (:value c) "J")
       :float (push! e (num-lit (:value c)) "F")
       :double (push! e (num-lit (:value c)) "D")
-      :string (push! e (jstring-lit-form (:value c)) "A")
-      ;; resolved when it runs, as the JVM resolves it, through this class's
-      ;; defining loader (runtime.ss jldc-class)
-      :class (push! e (sx "jldc-class" (str-lit (:name c)) (str-lit this-class)) "A")
+      ;; each kept in the site's cell once made (strings.ss jstring-lit-ic,
+      ;; modules.ss jldc-class-ic); the plain form keeps the bare calls the
+      ;; port reads
+      :string (push! e (if *plain*
+                         (jstring-lit-form (:value c))
+                         (sx "jstring-lit-ic" ((:ic! e)) (jstring-lit-arg (:value c))))
+                     "A")
+      ;; resolved when it first runs, as the JVM resolves it, through this
+      ;; class's defining loader (modules.ss jldc-class)
+      :class (push! e (if *plain*
+                        (sx "jldc-class" (str-lit (:name c)) (str-lit this-class))
+                        (sx "jldc-class-ic" ((:ic! e)) (str-lit (:name c)) (str-lit this-class)))
+                    "A")
       (:methodtype :methodhandle :dynamic)
       (let [d (if (= :dynamic (:tag c)) (:desc c) "Ljava/lang/Object;")]
         ;; resolved once per constant-pool entry (const-datum's entry)

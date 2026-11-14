@@ -192,6 +192,8 @@ public class LinkCheck {
         for (Map.Entry<String, Callable0> p : PROBES.entrySet()) row(p.getKey() + " run", fails(p.getValue()));
         // the failed resolution is the same error a second time
         row("new again", fails(LinkCheck::newInstance));
+        // and an ldc's: its site keeps only a class it resolved
+        row("ldc again", fails(LinkCheck::ldc));
         try { newInstance(); } catch (NoClassDefFoundError e) { row("cause", e.getCause()); }
         // through the probe, not a direct call: champaca inlines a small static
         // callee, resolving what it names when the caller compiles

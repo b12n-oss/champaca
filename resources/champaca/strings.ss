@@ -61,6 +61,14 @@
     (or (hashtable-ref t s #f)
         (let ([o (jstring s)]) (hashtable-set! t s o) o))))
 
+;; an ldc of a string keeps the interned String in its site's cell: the
+;; lookup hashed the literal's whole text on every run of the instruction
+(define-syntax jstring-lit-ic
+  (syntax-rules ()
+    [(_ ic s)
+     (let ([c ic])
+       (or (car c) (let ([o (jstring-lit s)]) (set-car! c o) o)))]))
+
 (define (latin1-chars->string v n)
   (let ([s (make-string n)])
     (do ([i 0 (fx+ i 1)]) ((fx= i n) s)
