@@ -459,6 +459,19 @@ The same kind of benchmark for the basics (calls, field access, `new`, boxing, t
 
 Each figure includes the benchmark's loop, about 2 ns an iteration. The string rows start from the numbers before the section above.
 
-What the benchmark showed and nothing here changes: entering a `try` block costs about 23 ns (a one-shot continuation, a handler pushed on Chez's handler stack and a `dynamic-wind`), and a `synchronized` block pays that plus the monitor, 43 ns against HotSpot's 10. A plain call costs 1.5 to 3 ns and a lambda call 7.
+What the benchmark showed and nothing here changes: a plain call costs 1.5 to 3 ns and a lambda call 7.
+
+### Entering a try block
+
+Entering a `try` block took a one-shot continuation, a handler pushed on Chez's handler stack, and a `dynamic-wind` to pop the handler however the region ended. A `synchronized` block pays the same entry plus the monitor. The `dynamic-wind` was about 7 ns of it, and `jtry` now pops the handler itself when the continuation returns, either with the body's value or with the thunk a caught exception escapes with. Any other way out of the region passes through something that restores the stack on its own: an outer `jtry`, or the `parameterize` inside Chez's `with-exception-handler` and `guard`, which the launcher, the thread body and jolt's `try` use.
+
+On the same benchmark (2026-11-14, median of three runs, interleaved with main, load average 6 to 7):
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| A `try` block with a call | 26.0 ns | 19.0 ns | 0.2 ns |
+| A `synchronized` block | 44.0 ns | 35.8 ns | 10.2 ns |
+
+HotSpot's `try` costs nothing until something is thrown, because it finds the handler from a table of pc ranges. Doing that here would mean marking every point where Scheme code calls into Java, so it's left for now. `TryCheck` covers leaving a region every way it can be left, including a throw after an inner region caught and catches inside a lambda the JDK calls.
 
 `RangeCheckCheck` has every check in and out of range, directly and through the collections and strings built on them; `BoxCheck` the identity of cached and fresh boxes for each type; `PolyCallCheck` one site calling twelve classes, in order, reversed and interleaved.
