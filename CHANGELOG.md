@@ -406,6 +406,11 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- The jolt API keeps each static field it found, per class-name string and
+  field name, where `get-static` and `set-static!` searched for it by name
+  on every call, and `invoke-static`'s cached call site keeps its class's
+  record for the initialization check. `get-static` went from 1,121 to
+  395 ns, `invoke-static` from 1,033 to 780 ns.
 - The jolt API's calls run their lock and their exception handling in line
   (`java-call`) instead of in two closures, and `invoke`, `invoke-static`
   and `construct` take up to three arguments without `apply` over a lazy

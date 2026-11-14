@@ -66,6 +66,20 @@
     (is (= "field str in champaca/lib/Fields has type java.lang.String, which the value doesn't fit" (err #(ldk/set-field! o "str" 5))))
     (is (= "-7 12345678901 -128 300 A 2.5 1.25 true null 3 [1, two, three] 2:4" (ldk/invoke o "describe")))))
 
+(deftest statics-by-any-spelling
+  ;; the API keeps each field it found per class-name string; a name built
+  ;; at run time, a slashed one and the literal all see the same field
+  (ldk/set-static! F "count" 5)
+  (is (= [5 5 5] [(ldk/get-static F "count")
+                  (ldk/get-static (str "champaca.lib." "Fields") (str "co" "unt"))
+                  (ldk/get-static "champaca/lib/Fields" "count")]))
+  (ldk/set-static! "champaca/lib/Fields" "count" 6)
+  (is (= [6 7] [(ldk/get-static F "count") (ldk/invoke-static F "bump")]))
+  (is (= 7 (ldk/get-static (str "champaca.lib." "Fields") "count")))
+  ;; a field that isn't there is refused every time, never kept
+  (dotimes [_ 2]
+    (is (= "no static field nope in champaca/lib/Fields" (err #(ldk/get-static F "nope"))))))
+
 (deftest refused-statics
   (is (= "field FIXED in champaca/lib/Fields is final" (err #(ldk/set-static! F "FIXED" 2))))
   (is (= "no static field nope in champaca/lib/Fields" (err #(ldk/set-static! F "nope" 1)))))

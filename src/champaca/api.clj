@@ -182,7 +182,10 @@
   tagged, to become a LinkedHashMap, LinkedHashSet or ArrayList, and keywords
   become strings (their name, with any namespace)."
   [x]
-  (cond (vector? x) (apply @proc-list (map ->arg x))
+  ;; numbers and strings first: they are most arguments, and each collection
+  ;; test costs about as much as the conversion of a scalar
+  (cond (or (number? x) (string? x) (nil? x)) x
+        (vector? x) (apply @proc-list (map ->arg x))
         (map? x) (s/call "make-jolt-map" (apply @proc-list (map (fn [[k v]] (@proc-cons (->arg k) (->arg v))) x)))
         (set? x) (s/call "make-jolt-set" (apply @proc-list (map ->arg x)))
         (seq? x) (s/call "make-jolt-list" (apply @proc-list (map ->arg x)))

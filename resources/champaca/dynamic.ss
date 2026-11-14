@@ -415,7 +415,7 @@
 ;; The entry keeps the method's symbol, not its procedure: a method compiles on
 ;; first call and its top-level value is replaced then.
 
-(define-record-type call-site (fields pick packed? mkey sym arg-ds ret-d) (sealed #t) (nongenerative champaca-call-site))
+(define-record-type call-site (fields pick packed? mkey sym arg-ds ret-d cls) (sealed #t) (nongenerative champaca-call-site-2))
 
 (define call-cache (make-hashtable equal-hash equal?))
 (define call-cache-on? (not (equal? (getenv "CHAMPACA_CALL_CACHE") "off")))
@@ -466,7 +466,7 @@
                [pick (car chosen)] [desc (caddr pick)]
                [mkey (string-append (cadr pick) desc)]
                [site (make-call-site pick (not (eq? (cdr chosen) args)) mkey (sym-of (car pick) mkey)
-                                     (desc-args desc) (desc-ret desc))])
+                                     (desc-args desc) (desc-ret desc) (find-class (car pick)))])
           (when key
             (when (fx>= (hashtable-size call-cache) call-cache-limit) (hashtable-clear! call-cache))
             (hashtable-set! call-cache key site))
@@ -520,9 +520,9 @@
                               (choose "invoke-static" cname name (candidates cname name (length args) #t)
                                       (varargs-candidates cname name (length args) #t) args)))
                           static-sym)])
+    (api-init! (call-site-cls site))
     (with-java-errors
      (lambda ()
-       (jinit (car (call-site-pick site)))
        (dyn-out (call-site-ret-d site)
                 (apply (top-level-value (call-site-sym site)) (map convert-arg args (call-site-arg-ds site))))))))
 
@@ -559,6 +559,29 @@
     f))
 (define (static-sym-of f fname) (string->symbol (string-append (car f) ":" fname)))
 
+;; The declaring class initialized, as the first getstatic or invokestatic
+;; does, a failure as a jolt error; a class already initialized costs one
+;; field read (reflect.ss's jinit-class! does the rest).
+(define (api-init! c)
+  (unless (eq? (jclass-state c) 'initialized)
+    (with-java-errors (lambda () (jinit-class! c)))))
+
+;; get-static and set-static! keep what static-field found, per class-name
+;; string object (a jolt literal is the same string on every call) and field
+;; name: the field, its global and the declaring class's record. A miss, or
+;; a field that isn't there, goes through static-field as before.
+(define-record-type static-plan (fields field sym cls) (sealed #t) (nongenerative champaca-static-plan))
+(define static-plans (make-weak-eq-hashtable))
+(define (static-plan-of cname fname)
+  (let* ([row (hashtable-ref static-plans cname '())]
+         [hit (or (assq fname row) (assoc fname row))])
+    (if hit
+        (let ([p (cdr hit)]) (api-init! (static-plan-cls p)) p)
+        (let* ([f (static-field cname fname)]
+               [p (make-static-plan f (static-sym-of f fname) (find-class (car f)))])
+          (hashtable-set! static-plans cname (cons (cons fname p) row))
+          p))))
+
 ;; a descriptor as Java writes the type: int, java.lang.String, int[]
 (define (desc-java-name d)
   (case (string-ref d 0)
@@ -582,11 +605,11 @@
     (convert-arg v d)))
 
 (define (dyn-get-static cname fname)
-  (let ([f (static-field cname fname)])
-    (dyn-out (cadr f) (top-level-value (static-sym-of f fname)))))
+  (let ([p (static-plan-of cname fname)])
+    (dyn-out (cadr (static-plan-field p)) (top-level-value (static-plan-sym p)))))
 (define (dyn-set-static! cname fname v)
-  (let* ([f (static-field cname fname)] [x (field-value f fname v)])
-    (set-top-level-value! (static-sym-of f fname) x)
+  (let* ([p (static-plan-of cname fname)] [x (field-value (static-plan-field p) fname v)])
+    (set-top-level-value! (static-plan-sym p) x)
     (void)))
 
 (define (dyn-get-field obj fname)
