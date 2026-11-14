@@ -474,6 +474,8 @@ On the same benchmark (2026-11-14, median of three runs, interleaved with main, 
 
 HotSpot's `try` costs nothing until something is thrown, because it finds the handler from a table of pc ranges. Doing that here would mean marking every point where Scheme code calls into Java, so it's left for now. `TryCheck` covers leaving a region every way it can be left, including a throw after an inner region caught and catches inside a lambda the JDK calls.
 
+`Arrays.fill` is one of these call-site forms too. A whole array is one `vector-fill!` and a range a loop of unchecked stores, where the JDK's loop paid an indexed store per element and, for a reference array, an array-store check per element; the value is checked once here. A null array, a bad range or a value the array can't hold goes to the JDK's method, so `Arrays.rangeCheck`'s messages and frame are unchanged. Filling 1,024 elements: `int[]` 1,422 to 557 ns, `Object[]` 3,570 to 1,612 ns (HotSpot 203 and 871 ns). `ArrayFillCheck` covers every element type, whole and over a range, and each case that reaches the method.
+
 `RangeCheckCheck` has every check in and out of range, directly and through the collections and strings built on them; `BoxCheck` the identity of cached and fresh boxes for each type; `PolyCallCheck` one site calling twelve classes, in order, reversed and interleaved.
 
 ### `Class.isInstance` and `isAssignableFrom`

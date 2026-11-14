@@ -102,3 +102,36 @@
 (define-syntax jbox-float
   (syntax-rules ()
     [(_ cell sym v tag pc slow) (jbox-fresh cell sym float-value-slot "java/lang/Float" v tag pc)]))
+
+;; Arrays.fill at the call site: a whole array is one vector-fill!, a range
+;; one loop of unchecked stores, where the JDK's loop paid an indexed store
+;; per element (and for a reference array an aastore check per element; the
+;; value is checked once here). A null array, a bad range or a value the
+;; array can't hold goes to the method, so its exception and its frames are
+;; the JDK's (Arrays.rangeCheck's messages).
+(define (jarray-fill-span! v from to x)
+  (let loop ([i from]) (when (#3%fx< i to) (#3%vector-set! v i x) (loop (#3%fx+ i 1)))))
+(define-syntax jarray-range-ok?
+  (syntax-rules ()
+    [(_ a from to) (and (#3%fx<= 0 from) (#3%fx<= from to) (#3%fx<= to (#3%vector-length (jarr-vec a))))]))
+(define-syntax jarray-fill            ; a value, method
+  (syntax-rules ()
+    [(_ a v slow) (let ([x a] [y v]) (if (jarr? x) (#3%vector-fill! (jarr-vec x) y) (slow x y)))]))
+(define-syntax jarray-fill-range      ; a from to value, method
+  (syntax-rules ()
+    [(_ a f t v slow)
+     (let ([x a] [from f] [to t] [y v])
+       (if (and (jarr? x) (jarray-range-ok? x from to)) (jarray-fill-span! (jarr-vec x) from to y) (slow x from to y)))]))
+(define-syntax jarray-fill-ref        ; Object[]: the value checked once
+  (syntax-rules ()
+    [(_ a v slow)
+     (let ([x a] [y v])
+       (if (and (jarr? x) (or (not y) (array-store-ok? x y))) (#3%vector-fill! (jarr-vec x) y) (slow x y)))]))
+(define-syntax jarray-fill-ref-range
+  (syntax-rules ()
+    [(_ a f t v slow)
+     (let ([x a] [from f] [to t] [y v])
+       (if (and (jarr? x) (jarray-range-ok? x from to) (or (not y) (array-store-ok? x y)))
+           (jarray-fill-span! (jarr-vec x) from to y)
+           (slow x from to y)))]))
+

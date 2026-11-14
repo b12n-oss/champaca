@@ -34,6 +34,14 @@
      "java/util/Objects.requireNonNull(Ljava/lang/Object;)Ljava/lang/Object;" "jrequire-non-null"
      "java/util/Objects.requireNonNull(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;" "jrequire-non-null"}))
 
+(def ^:private fill-forms
+  "java.util.Arrays.fill, whole and over a range, for each element type."
+  (into {"java/util/Arrays.fill([Ljava/lang/Object;Ljava/lang/Object;)V" "jarray-fill-ref"
+         "java/util/Arrays.fill([Ljava/lang/Object;IILjava/lang/Object;)V" "jarray-fill-ref-range"}
+        (mapcat (fn [t] [[(str "java/util/Arrays.fill([" t t ")V") "jarray-fill"]
+                         [(str "java/util/Arrays.fill([" t "II" t ")V") "jarray-fill-range"]])
+                ["Z" "B" "C" "S" "I" "J" "F" "D"])))
+
 (def ^:private box-forms
   "valueOf for the boxes: [form class]. A value the box's cache holds goes
   to the method; any other is allocated at the call site with its value
@@ -58,7 +66,7 @@
   names a fresh inline-cache cell, taken only by a form that allocates;
   site is the call's tag and pc."
   [k argv method cell! site]
-  (if-let [form (static-forms k)]
+  (if-let [form (or (static-forms k) (fill-forms k))]
     (apply sx form (concat argv [method]))
     (when-let [[form cname] (box-forms k)]
       (sx form (cell!) (str "'" (sym cname)) (first argv) site method))))

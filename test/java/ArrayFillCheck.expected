@@ -1,0 +1,14 @@
+whole: [true, true, true, true, true][-3, -3, -3, -3, -3][q, q, q, q, q][300, 300, 300, 300, 300][-7, -7, -7, -7, -7][-9223372036854775808, -9223372036854775808, -9223372036854775808, -9223372036854775808, -9223372036854775808][1.5, 1.5, 1.5, 1.5, 1.5][NaN, NaN, NaN, NaN, NaN]
+ranges: [true, false, false, true, true][9, 9, -3, -3, -3][q, q, q, q, z][300, 300, 300, 300, 300][42, 42, 42, 42, 42][-9223372036854775808, -9223372036854775808, -9223372036854775808, 7, -9223372036854775808][1.5, -0.0, -0.0, -0.0, 1.5][2.25, NaN, NaN, NaN, NaN]
+references: [1, 1, 1, 1][s, null, null, s][7, 7, 3.5, 3.5]
+empty Object[] with a wrong value: no exception
+String[] with an Integer: java.lang.ArrayStoreException: java.lang.Integer at java.util.Arrays.fill
+String[] range with an Integer: java.lang.ArrayStoreException: java.lang.Integer at java.util.Arrays.fill
+String[] empty range with an Integer: no exception
+null int[]: java.lang.NullPointerException: Cannot read the array length because "a" is null at java.util.Arrays.fill
+null Object[]: java.lang.NullPointerException: Cannot read the array length because "a" is null at java.util.Arrays.fill
+from > to: java.lang.IllegalArgumentException: fromIndex(3) > toIndex(2) at java.util.Arrays.rangeCheck
+from < 0: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: -1 at java.util.Arrays.rangeCheck
+to > length: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: 6 at java.util.Arrays.rangeCheck
+Object[] to > length: java.lang.ArrayIndexOutOfBoundsException: Array index out of range: 9 at java.util.Arrays.rangeCheck
+untouched after failures: [42, 42, 42, 42, 42][1, 1, 1, 1]

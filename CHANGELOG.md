@@ -406,6 +406,12 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- `Arrays.fill` runs at the call site: a whole array is one `vector-fill!`
+  and a range one loop of unchecked stores, with a reference array's value
+  checked once. A null array, a bad range or a value the array can't hold
+  goes to the JDK's method, so its exception and frames are unchanged.
+  Filling an `int[1024]` went from 1,422 to 557 ns and an `Object[1024]`
+  from 3,570 to 1,612 ns. `ArrayFillCheck` is new.
 - `Class.forName` keeps what it worked out for a `String` it was given:
   the converted and checked name and, through a built-in loader, the class
   found, and each class keeps whether each built-in loader sees it once the
