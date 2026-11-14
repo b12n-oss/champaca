@@ -310,6 +310,12 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A `getstatic` or `putstatic` through a class that inherits a field of that
+  name from both an interface and a superclass found the superclass's, where
+  the JVM searches the class's interfaces first (JVMS 5.4.3.2), and it
+  initialized the wrong class. javac refuses such a read, but a class
+  compiled before one of the two fields existed can hold one
+  (`test/java/FieldOrderCheck.java`).
 - A method restored from the library cache could name a call site's lambda
   class this run never made, and threw `NoClassDefFoundError` (seen in
   Scala's `LazyList$.<clinit>`, reached through fansi). The class's
