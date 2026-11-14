@@ -220,21 +220,44 @@
   (install-hooks!)
   (run-boot!))
 
+(def ^:private init-module-options
+  "init!'s module options: [key, the launcher option's property suffix, and
+  whether a list is one comma-separated value (as --add-modules a,b) or one
+  occurrence per element (as --add-opens given twice)]."
+  [[:add-modules "addmods" :joined]
+   [:limit-modules "limitmods" :joined]
+   [:enable-native-access "enable.native.access" :joined]
+   [:add-opens "addopens" :each]
+   [:add-exports "addexports" :each]
+   [:add-reads "addreads" :each]])
+
+(defn- module-option-values
+  "opts' module options as the launcher's [suffix value] pairs, in
+  init-module-options' order: a string is one value as given."
+  [opts]
+  (for [[k sfx kind] init-module-options
+        :let [v (get opts k)]
+        :when (seq v)
+        value (cond (string? v) [v]
+                    (= kind :joined) [(str/join "," v)]
+                    :else v)]
+    [sfx value]))
+
 (defn init!
   "Boot the JDK once (System.initPhase1 and what precedes it) with the given
   user classpath dirs. Returns 0 on success; a second call is a no-op.
   opts: {:preview true} turns on this release's preview features, as
-  --enable-preview does, before the boot (never after: the JDK reads it once);
-  :add-modules [\"jdk.incubator.vector\" ...] (or one comma-separated string)
-  adds root modules to the boot layer, as --add-modules does."
+  --enable-preview does, before the boot (never after: the JDK reads it once).
+  The launcher's module options, each a vector or one string as on the
+  command line: :add-modules [\"jdk.incubator.vector\" ...], :limit-modules
+  and :enable-native-access (module lists), :add-opens, :add-exports and
+  :add-reads [\"java.base/java.lang=ALL-UNNAMED\" ...] (one option each)."
   ([classpath] (init! classpath {}))
-  ([classpath {:keys [preview add-modules]}]
+  ([classpath opts]
    (or (:boot-status @state)
-       (do (when preview (reset! cf/preview-enabled true))
-           ;; a string is one module list, as the option's value
-           (when (seq add-modules)
-             (swap! state update :module-options (fnil conj [])
-                    ["addmods" (if (string? add-modules) add-modules (str/join "," add-modules))]))
+       (do (when (:preview opts) (reset! cf/preview-enabled true))
+           (when-let [vs (seq (module-option-values opts))]
+             (swap! state update :module-options (fnil into []) vs))
            (swap! state assoc :classpath (with-manifest-class-paths (vec classpath))
                   ;; java.class.path is what was given, as the JVM's launcher has it
                   :classpath-given (vec classpath))
