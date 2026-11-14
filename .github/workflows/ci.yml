@@ -260,6 +260,12 @@ jobs:
         run: |
           case ",$BATTERY_MODES," in *,libs,*) jolt libs:fetch ;; esac
           jolt battery
+      # examples/hn, a jolt project on a Kotlin library (OkHttp) and a Java one
+      # (jsoup): its tests run on a saved page, its jars come from its own
+      # fetch task
+      - name: examples/hn
+        if: matrix.platform == 'macos' && contains(format(',{0},', matrix.modes), ',libs,')
+        run: jolt hn test
       # the foreign calls Chez 10.4.1 misplaces, made for real: the battery's
       # pinned jolt is a source build without jolt's Chez patches, so it
       # refuses them, while the release binary setup-jolt put on PATH has them

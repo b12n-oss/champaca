@@ -205,6 +205,13 @@ The first public version. Champaca is still experimental: the
 
 #### Libraries
 
+- `examples/hn`, a standalone jolt project: the Hacker News front page in
+  the terminal, fetched with OkHttp (Kotlin) and read with jsoup (Java), with
+  tasks to run, test and pack it (`jolt hn`, or `jolt run`, `test`, `dist`
+  inside it). `jolt bundle --single FILE` writes a bundle as one executable
+  file that unpacks itself under `~/.cache/champaca/single` on its first run;
+  `examples/hn`'s is 80.8 MB and runs with no JDK installed. Guide page:
+  `docs/guide/a-command-line-tool.md`.
 - Bouncy Castle 1.79, Commons Math 3.6.1 and Lucene 10.0.0 join the
   libraries `jolt libs` checks against the JVM, making twenty-three: a
   signed jar as a JCE provider, numerics, and an index searched through
