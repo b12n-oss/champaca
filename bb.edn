@@ -90,6 +90,7 @@
                          ["jars" "a jar and other JDK modules"]
                          ["collections" "jolt collections as java.util and back"]
                          ["callsite" "the call-site cache"]
+                         ["library-cache" "what the library cache records about a class's dependencies"]
                          ["jolt-after-init" "jolt itself still works after init!"]
                          ["threads" "Java threads started from jolt"]
                          ["files" "files and MessageDigest from jolt"]
