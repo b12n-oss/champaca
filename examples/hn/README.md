@@ -1,6 +1,6 @@
 # hn
 
-The Hacker News front page in your terminal. A jolt program fetches it with OkHttp, which is written in Kotlin, and reads it with jsoup, which is written in Java. Both run inside the jolt process on champaca, with no JVM.
+The Hacker News front page in your terminal. A jolt program fetches it with OkHttp, which is written in Kotlin, reads it with jsoup, which is written in Java, and colours it with fansi, which is written in Scala. All three run inside the jolt process on champaca, with no JVM.
 
 ```sh
 jolt fetch           # the jars in jars.edn, into ~/.m2

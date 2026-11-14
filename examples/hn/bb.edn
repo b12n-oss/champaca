@@ -38,7 +38,7 @@
                          (System/exit 1)))))}
 
   run {:override-builtin true
-       :doc "The front page from source: jolt run [--limit N] [--file PAGE] [--edn] [--help]. The first run compiles what it needs, later ones start warm"
+       :doc "The front page from source: jolt run [--limit N] [--file PAGE] [--edn] [--color auto|always|never] [--help]. The first run compiles what it needs, later ones start warm"
        :depends [fetch]
        :task (System/exit (:exit (apply shell {:continue true :extra-env {"CHAMPACA_CLASSPATH" (classpath)}}
                                         (jolt-bin) "-M" "-m" "hn.main" *command-line-args*)))}
@@ -63,6 +63,7 @@
                  (System/exit (:exit (shell {:dir (champaca-home) :continue true}
                                             (jolt-bin) "bundle" "-o" bundle "--jolt" "hn.main" "--project" here
                                             "--name" "hn" "-cp" (classpath) "--single" (str here "/target/hn")
-                                            "--train" "--limit" "3"
+                                            ;; colours on, so fansi's code is in the cache for a terminal's runs
+                                            "--train" "--limit" "3" "--color=always"
                                             ;; the training run's fetch, behind a proxy that re-signs TLS
                                             (if-let [ts (System/getenv "HN_TRUST_STORE")] (str "--trust-store=" ts) "--limit=3")))))}}}

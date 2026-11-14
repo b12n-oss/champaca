@@ -1,6 +1,6 @@
 # A command-line tool
 
-`examples/hn` is a small jolt project that prints the Hacker News front page. It fetches the page with [OkHttp](https://square.github.io/okhttp/), a library written in Kotlin, and reads it with [jsoup](https://jsoup.org), one written in Java. Both run inside the jolt process on champaca, and `jolt dist` packs the whole thing into one file you can copy to another Mac and run, with no JDK installed.
+`examples/hn` is a small jolt project that prints the Hacker News front page. It fetches the page with [OkHttp](https://square.github.io/okhttp/), a library written in Kotlin, reads it with [jsoup](https://jsoup.org), one written in Java, and colours it on a terminal with [fansi](https://github.com/com-lihaoyi/fansi), one written in Scala. All three run inside the jolt process on champaca, and `jolt dist` packs the whole thing into one file you can copy to another Mac and run, with no JDK installed.
 
 It's a standalone project with its own `deps.edn` and `bb.edn`, so you can copy the directory out and start your own tool from it.
 
@@ -21,11 +21,11 @@ jolt test                # the tests, on a hand-made page, no network
      https://github.com/ggml-org/ggml/releases/tag/v1.0.0
 ```
 
-`--file page.html` reads a saved page instead, `--edn` prints a map per story, and `--help` lists the rest.
+`--file page.html` reads a saved page instead, `--edn` prints a map per story, `--color never` turns the colours off (they're on only for a terminal, and `NO_COLOR` turns them off too), and `--help` lists the rest.
 
 ## The code
 
-`src/hn/main.clj` is about 130 lines. Java and Kotlin classes are reached through `champaca.api` by name, so the jolt side doesn't change with the language a library was written in:
+`src/hn/main.clj` is about 180 lines. Java, Kotlin and Scala classes are all reached through `champaca.api` by name, so the jolt side barely changes with the language a library was written in:
 
 ```clojure
 (let [client (ldk/construct "okhttp3.OkHttpClient")
@@ -36,7 +36,18 @@ jolt test                # the tests, on a hand-made page, no network
   (ldk/invoke (ldk/invoke response "body") "string"))
 ```
 
-jsoup's CSS selectors do the reading: each story is a `tr.athing` row and the row after it. The options come from `babashka.cli`, which jolt ships. `jars.edn` lists the four jars (OkHttp, Okio, Kotlin's standard library, jsoup), and the tasks hand them to champaca as `CHAMPACA_CLASSPATH`, which `(ldk/init!)` reads.
+jsoup's CSS selectors do the reading: each story is a `tr.athing` row and the row after it.
+
+Scala needs two things a Java library doesn't. An `object`'s members reach Java as static methods of the same name, so fansi's `Color.Cyan` is `(ldk/invoke-static "fansi.Color" "Cyan")`. A parameter with a default value has no default from Java, so `Str.apply`, whose second parameter says what to do with stray escapes, gets one, read from the `MODULE$` field of the Scala object that holds it:
+
+```clojure
+(let [strip (ldk/get-static "fansi.ErrorMode$Strip$" "MODULE$")]
+  (-> (ldk/invoke-static "fansi.Color" "Cyan")
+      (ldk/invoke "apply" (ldk/invoke-static "fansi.Str" "apply" text strip))
+      (ldk/invoke "render")))
+```
+
+The options come from `babashka.cli`, which jolt ships. `jars.edn` lists the seven jars (OkHttp, Okio and Kotlin's standard library, jsoup, fansi, sourcecode and Scala's standard library), and the tasks hand them to champaca as `CHAMPACA_CLASSPATH`, which `(ldk/init!)` reads.
 
 ## One file
 
@@ -44,19 +55,19 @@ jsoup's CSS selectors do the reading: each story is a `tr.athing` row and the ro
 jolt dist                # writes target/hn
 ```
 
-`jolt dist` runs champaca's `jolt bundle` with `--single`, so it needs `JAVA_HOME` pointing at a JDK 25 and a champaca checkout (`CHAMPACA_HOME`, by default the repository the example sits in). The bundle is a directory: native builds of champaca and of `hn.main`, a trimmed JDK runtime, the four jars and a startup cache, warmed by one live run at build time ([app-bundles](app-bundles.md)). `--single` packs it into `target/hn`, a shell header followed by the directory as a `tar.gz`.
+`jolt dist` runs champaca's `jolt bundle` with `--single`, so it needs `JAVA_HOME` pointing at a JDK 25 and a champaca checkout (`CHAMPACA_HOME`, by default the repository the example sits in). The bundle is a directory: native builds of champaca and of `hn.main`, a trimmed JDK runtime, the seven jars and a startup cache, warmed by one live run at build time ([app-bundles](app-bundles.md)). `--single` packs it into `target/hn`, a shell header followed by the directory as a `tar.gz`.
 
-The first run of `target/hn` unpacks it under `~/.cache/champaca/single/hn-<digest>/` (`CHAMPACA_SINGLE_DIR` changes the place), and every later run starts it from there. A new build has a new digest, so it never runs an older build's files. A damaged copy stops with "couldn't unpack" and leaves nothing behind.
+The first run of `target/hn` unpacks it under `~/.cache/champaca/single/hn-<digest>/` (`CHAMPACA_SINGLE_DIR` changes the place), and every later run starts it from there. A new build has a new digest, so it never runs an older build's files, and its first run deletes the copies of older builds that no run has used for a week. Deleting `~/.cache/champaca/single` is always safe: the next run unpacks again. A damaged copy stops with "couldn't unpack" and leaves nothing behind.
 
 Measured on an M1 Pro, 2026-11-14, the file copied to another directory and run with `env -i`, so with no `JAVA_HOME`:
 
 | | |
 |---|---|
-| `target/hn` | 80.8 MB |
-| unpacked | 167 MB |
-| first run, unpacking included | 7.7 s |
-| later runs, live front page | 2.3 s (fetching it with curl took about 1 s on that network) |
-| later runs, `--file` | 0.63 s |
+| `target/hn` | 88.0 MB |
+| unpacked | 176 MB |
+| first run, unpacking included | 9.2 s |
+| later runs, live front page | 2.4 s (fetching it with curl took about 1 s on that network) |
+| later runs, `--file` | 0.7 s |
 
 The file runs on the OS and processor it was built on, here macOS on Apple Silicon. The binaries inside it aren't signed. Before handing it to other people, build them signable and sign them as [app-bundles](app-bundles.md) describes.
 

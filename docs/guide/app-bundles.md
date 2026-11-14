@@ -60,9 +60,9 @@ On macOS, the first launch of a freshly copied binary costs about 0.4 s more whi
 
 ## One file
 
-`--single FILE` also writes the bundle as one executable file: a short shell header followed by the directory as a `tar.gz`. Its first run unpacks the bundle into `~/.cache/champaca/single/NAME-<digest>/` (`CHAMPACA_SINGLE_DIR` changes the place, and `XDG_CACHE_HOME` is honoured), and every run after that starts it from there, the cache in that copy included. The digest is the payload's SHA-256, so a new build unpacks beside an old one instead of over it. The header unpacks into a temporary directory and moves it into place only once the launcher is there, so two first runs at once don't trip over each other, and a damaged file stops with `couldn't unpack` and leaves nothing behind.
+`--single FILE` also writes the bundle as one executable file: a short shell header followed by the directory as a `tar.gz`. Its first run unpacks the bundle into `~/.cache/champaca/single/NAME-<digest>/` (`CHAMPACA_SINGLE_DIR` changes the place, and `XDG_CACHE_HOME` is honoured), and every run after that starts it from there, the cache in that copy included. The digest is the payload's SHA-256, so a new build unpacks beside an old one instead of over it. Every run touches its copy, and a first run deletes the same app's other copies left untouched for a week, so rebuilds don't pile up. The header unpacks into a temporary directory and moves it into place only once the launcher is there, so two first runs at once don't trip over each other, and a damaged file stops with `couldn't unpack` and leaves nothing behind.
 
-The file is the bundle compressed, about half its size: 80.8 MB for the 167 MB of `examples/hn` ([a command-line tool](a-command-line-tool.md)). Its first run, unpacking included, took 7.7 s, and later ones 2.3 s.
+The file is the bundle compressed, about half its size: 88.0 MB for the 176 MB of `examples/hn` ([a command-line tool](a-command-line-tool.md)). Its first run, unpacking included, took 9.2 s, and later ones 2.4 s.
 
 ## Read-only bundles
 

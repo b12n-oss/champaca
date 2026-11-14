@@ -4,4 +4,7 @@
 [["com.squareup.okhttp3:okhttp:4.12.0" "2f4525d4a200e97e1b87449c2cd9bd2e25b7e8cd"]   ; Kotlin: HTTP
  ["com.squareup.okio:okio-jvm:3.6.0" "5600569133b7bdefe1daf9ec7f4abeb6d13e1786"]      ; Kotlin: OkHttp's I/O
  ["org.jetbrains.kotlin:kotlin-stdlib:1.9.22" "d6c44cd08d8f3f9bece8101216dbe6553365c6e3"] ; Kotlin's standard library
- ["org.jsoup:jsoup:1.18.1" "cb7cd991d47b44101cbe4655dec611cdc01f8a02"]]               ; Java: HTML
+ ["org.jsoup:jsoup:1.18.1" "cb7cd991d47b44101cbe4655dec611cdc01f8a02"]                ; Java: HTML
+ ["com.lihaoyi:fansi_2.13:0.5.1" "ccb013464b11361dbd0d1fc8238d095209538383"]          ; Scala: terminal colours
+ ["com.lihaoyi:sourcecode_2.13:0.4.0" "05e754d24fe657d4a58dffed67910f58b26bb953"]     ; Scala: fansi's dependency
+ ["org.scala-lang:scala-library:2.13.15" "ed6f1d58968b16c5f9067d5cac032d952552de58"]] ; Scala's standard library
