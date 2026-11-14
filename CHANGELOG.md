@@ -386,6 +386,11 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- An object's identity hash lives in its own record, in the field that
+  holds its monitor, and moves into the monitor when the object is first
+  locked. It was kept in a weak table for every object. `new Object()` and
+  its `hashCode()` went from 61.0 to 11.3 ns (HotSpot 65.2). Arrays still
+  keep theirs in the table. `IdentityHashCheck` is new.
 - Subtype questions outside type-test sites (`Class.isInstance`,
   `Class.isAssignableFrom`, method handle checks) are one lookup in a set of
   every name a class answers to, built once per class from its supertypes'

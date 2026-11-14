@@ -505,6 +505,7 @@
 ;; make-jobj is a macro over the record's own constructor, so an allocation
 ;; is in line where it's written: a protocol's constructor is a closure,
 ;; called for every new.
+;; lock: #f, the identity hash (a fixnum), or the jmonitor (threads.ss)
 (define-record-type (jobj make-jobj* jobj?) (fields cls slots (mutable lock))
   (sealed #t) (nongenerative champaca-jobj))
 (define-syntax make-jobj
@@ -1254,14 +1255,28 @@
 
 ;; --- identity hash ------------------------------------------------------------
 
+;; An object keeps its identity hash in its lock field, as a fixnum, until it
+;; gets a monitor, and in the monitor after that (threads.ss monitor-of moves
+;; it), so asking again is a field read. HotSpot keeps it in the object's
+;; header the same way. An array or any other value keeps it in a weak table.
 (define id-hashes (make-weak-eq-hashtable))
 (define id-counter 0)
+(define (stored-hash x)
+  (if (jobj? x)
+      (let ([l (jobj-lock x)])
+        (cond [(fixnum? l) l] [l (jmonitor-hash l)] [else #f]))
+      (eq-hashtable-ref id-hashes x #f)))
+(define (store-hash! x h)
+  (let ([l (and (jobj? x) (jobj-lock x))])
+    (cond [(not (jobj? x)) (eq-hashtable-set! id-hashes x h)]
+          [(and l (not (fixnum? l))) (jmonitor-hash-set! l h)]
+          [else (jobj-lock-set! x h)])))
 (define (identity-hash x)
   (if (not x) 0
-      (or (eq-hashtable-ref id-hashes x #f)
+      (or (stored-hash x)
           (begin (set! id-counter (fx+ id-counter 1))
                  (let ([h (fxlogand (fx* id-counter 1103515245) #x7fffffff)])
-                   (eq-hashtable-set! id-hashes x h) h)))))
+                   (store-hash! x h) h)))))
 
 ;; --- native methods -------------------------------------------------------------
 ;; Native methods are looked up by global name when their class registers.

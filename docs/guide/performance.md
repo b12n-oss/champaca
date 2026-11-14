@@ -489,3 +489,9 @@ Eight million calls of each over eight interfaces and eight JDK classes (`Assign
 
 On Clojure loading five libraries from source (above), peak memory didn't change (1003 against 1005 MB, the median of three warm runs), and the time didn't move outside the noise of a loaded machine, since `isAssignableFrom` was about 6% of that run's profile. `InstanceMemoCheck` asks both of them, and `instanceof` and `checkcast`, about fifteen kinds of object and class, twice over, against HotSpot's answers.
 
+### Identity hashes
+
+`Object.hashCode` and `System.identityHashCode` kept every object's hash in a weak table, so the first call was an insert into it and each later one a lookup. An object now keeps its hash in the field that holds its monitor, as a fixnum, and the monitor takes the hash over when the object is first locked. Asking again is a field read. Arrays and other values still use the table.
+
+On the same benchmark (2026-11-14, median of three runs, interleaved with main, load average 6 to 11), `new Object()` and its `hashCode()` went from 61.0 to 11.3 ns. HotSpot took 65.2 ns on that row. `IdentityHashCheck` takes hashes before, inside and after locks, across `wait` and `notify`, on clones and arrays, and over 20,000 objects in an `IdentityHashMap`, and prints what HotSpot prints.
+
