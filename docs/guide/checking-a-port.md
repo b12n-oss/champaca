@@ -1,8 +1,8 @@
 # Checking a jolt port of a Java method
 
-Say you've rewritten a Java static method as a jolt function, by hand or with a tool, and want to know the two do the same thing. `champaca.portcheck` runs both on the same generated inputs and compares what a caller can see. The Java side is the method itself, run by champaca from its class file, so no JVM is needed.
+Say you've rewritten a Java static method as a jolt function, by hand or with a tool, and want to know whether the two do the same thing. `champaca.portcheck` runs both on the same generated inputs and compares what a caller can see. Champaca runs the Java side, the method itself, from its class file, so no JVM is needed.
 
-It is a test. Agreement covers the inputs that ran and says nothing about the others, so every report names how many inputs there were and the seed they came from.
+A check is a test, so agreement covers only the inputs that ran. Every report names how many there were and the seed they came from.
 
 ## A check
 
@@ -64,9 +64,9 @@ Exception messages aren't compared. Jolt's wording for a null receiver differs f
 | `:string-array` | a `String[]` of up to four strings and nulls | `:of` |
 | `:chars` | a `char[]` of up to eight chars | `:chars` |
 
-`:runs` sets the number of inputs (300 if left out) and `:seed` the generator's seed (84). `:desc`, the method's descriptor such as `"([I)I"`, picks one overload exactly and reaches a private method; without it the method is found by name and arguments, which fails when two overloads both accept a null. The same seed gives the same inputs on every machine. `float` and `double` parameters aren't supported yet.
+`:runs` sets the number of inputs (300 if left out) and `:seed` the generator's seed (84), and the same seed gives the same inputs on every machine. `:desc`, the method's descriptor such as `"([I)I"`, picks one overload exactly and reaches a private method. Without it the method is found by name and arguments, which fails when two overloads both accept a null. `float` and `double` parameters aren't supported yet.
 
-The sharp values are drawn that often for a reason. The first generator missed a seeded bug that shows only for `Integer.MIN_VALUE / -1`, because 300 inputs rarely paired those two numbers.
+The sharp values come up that often because the first generator missed a seeded bug that shows only for `Integer.MIN_VALUE / -1`. In 300 inputs it rarely paired those two numbers.
 
 ## Conditions
 
@@ -78,13 +78,13 @@ Then run it once with the condition broken, `:chars :any`. That run should fail.
 hash31, given characters above U+FFFF: DIFFERS at input 19 (seed 84): ["😀_\t﻿0"] java {:result -1445628731, :args []} jolt {:result -1370286988, :args []}
 ```
 
-If it passes, the condition wasn't needed. That happened with `countChar`, which counts one `char` in a string: a `char` is never half of a surrogate pair, so both sides count the same, and the port holds for any string.
+If it passes, the condition wasn't needed. `countChar`, which counts one `char` in a string, passed that way: a `char` is never half of a surrogate pair, so both sides count the same and the port holds for any string.
 
 ## The example and its seeded bugs
 
-`examples/portcheck.clj` ports the eleven methods of `PortSample` and checks each. It then checks eleven wrong versions, each with one mistake of the kind a person or a translator makes: `+` for `unchecked-add-int`, `mod` for `rem`, a missing exception, a loop that stops one step early, `str/join` and `str/trim` for a `StringBuilder` loop and `String.trim`. The check has to report every one, since a check that passes everything shows nothing. `jolt test` runs the file, and `jolt example portcheck` runs it alone.
+`examples/portcheck.clj` ports the eleven methods of `PortSample` and checks each. Then it checks eleven wrong versions, each with one mistake of the kind a person or a translator makes: `+` for `unchecked-add-int`, `mod` for `rem`, a missing exception, a loop that stops one step early, and `str/join` and `str/trim` for a `StringBuilder` loop and `String.trim`. The check has to report every one, because a check that passes everything shows nothing. `jolt test` runs the file, and `jolt example portcheck` runs it alone.
 
-The last of those is worth a look, because it is the version a Clojure programmer would write first:
+The last of those is the version a Clojure programmer would write first:
 
 ```clojure
 (defn join-trim [parts sep] (str/join sep (map str/trim parts)))

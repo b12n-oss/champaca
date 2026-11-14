@@ -2,7 +2,9 @@
 
 ## The classpath
 
-`init!` takes a `:classpath` of jars and directories, searched in order like `java -cp`. A class in a package one of the JDK's modules owns is never taken from it, as on the JVM: an old jar carrying its own copy of `javax.xml` classes gets the JDK's (`test/java/ShadowCheck.java`). With no `:classpath` it uses `CHAMPACA_CLASSPATH`'s entries, which an [app bundle](app-bundles.md)'s launcher sets, so a bundled program needn't know where its jars went. One difference from Java: the classpath is searched before the JDK's modules, so a jar that ships its own copy of a JDK class would win. Java looks in the JDK first.
+`init!` takes a `:classpath` of jars and directories, searched in order like `java -cp`. With no `:classpath` it uses `CHAMPACA_CLASSPATH`'s entries, which an [app bundle](app-bundles.md)'s launcher sets, so a bundled program needn't know where its jars went.
+
+A class in a package one of the JDK's modules owns is never taken from the classpath, as on the JVM, so an old jar carrying its own copy of `javax.xml` classes gets the JDK's (`test/java/ShadowCheck.java`). One difference from Java remains: the classpath is searched before the JDK's modules, so a jar that ships its own copy of a JDK class would win, where Java looks in the JDK first.
 
 ```clojure
 (ldk/init! {:classpath ["target/lib.jar"]})
@@ -11,13 +13,15 @@
 
 (`target/lib.jar` is the small test library `jolt test` builds from `test/jar`. `examples/jars.clj` uses it.)
 
-A directory holds `.class` files in package folders, the way `javac -d` writes them. A jar is read in place, nothing gets unpacked. Classes load lazily: a class is read, parsed and registered the first time something names it, and each method compiles the first time it's called.
+A directory holds `.class` files in package folders, the way `javac -d` writes them, and a jar is read in place without unpacking. Classes load lazily. Each one is read, parsed and registered the first time something names it, and each method compiles the first time it's called.
 
-Pass the whole classpath on the first `init!`. A second call does nothing, so it can't add jars later.
+Pass the whole classpath on the first `init!`, because a second call does nothing and can't add jars later.
 
-A jar or directory compiled with `javac --enable-preview`, whose classes use one of JDK 25's preview features, needs `:preview true` on that first call, as `java` needs `--enable-preview`: `(ldk/init! {:classpath ["classes"] :preview true})`. Without it such a class is refused with HotSpot's `UnsupportedClassVersionError` the first time something names it. The option also turns the JDK's preview features on, such as structured concurrency and stable values ([running Java programs](running-java-programs.md) has the version rules, `examples/preview.clj` loads one).
+Classes compiled with `javac --enable-preview` that use one of JDK 25's preview features need `:preview true` on that first call, as `java` needs `--enable-preview`: `(ldk/init! {:classpath ["classes"] :preview true})`. Without it, HotSpot's `UnsupportedClassVersionError` refuses such a class the first time something names it. The option also turns on the JDK's own preview features, such as structured concurrency and stable values. [Running Java programs](running-java-programs.md) has the version rules, and `examples/preview.clj` loads one.
 
-A module outside the JDK's default module graph, such as the Vector API's `jdk.incubator.vector`, needs `:add-modules` on that first call, as `java` needs `--add-modules`: `(ldk/init! {:add-modules ["jdk.incubator.vector"]})` puts it in the boot layer (`examples/vector.clj`). Without it the module's classes aren't there, and a call naming one throws `NoClassDefFoundError`. Lane-wise arithmetic, compares, masks, shuffles and reductions then give HotSpot's results, and so do the operations that change a vector's shape or lane type (`castShape`, `reinterpretAs*`, `test(IS_NAN)`) and loads and stores through a `MemorySegment`, but none of it is accelerated ([limitations](limitations.md)).
+A module outside the JDK's default module graph, such as the Vector API's `jdk.incubator.vector`, needs `:add-modules` on that first call, as `java` needs `--add-modules`. `(ldk/init! {:add-modules ["jdk.incubator.vector"]})` puts it in the boot layer (`examples/vector.clj`); without it, a call naming one of the module's classes throws `NoClassDefFoundError`.
+
+With the module in, lane-wise arithmetic, compares, masks, shuffles and reductions give HotSpot's results. So do the operations that change a vector's shape or lane type (`castShape`, `reinterpretAs*`, `test(IS_NAN)`) and loads and stores through a `MemorySegment`. None of it is accelerated, though ([limitations](limitations.md)).
 
 ### A real library
 
@@ -49,9 +53,11 @@ Twenty-three libraries have been run this way and checked against the JVM, with 
 | picocli 4.7.6 | annotated options and positional parameters with type conversion, split values, a map option, subcommands with a mixin and `@ParentCommand`, usage and version help, error messages, a command defined by an interface (a `Proxy`), `parseArgs` results |
 | SnakeYAML 2.3 | loading and dumping maps, beans with generic `List` and `Map` properties, public fields and enums, anchors and merge keys, multi-document streams, block style, timestamps, error messages with their line and column marks |
 
-Five other JVM languages run in the same gate, each through its own launcher on a probe in `test/libs`: Clojure 1.12.4 (`clojure.main` on `Clj.clj`: protocols, records, multimethods, spec, refs, agents, futures, `pprint`, `eval`), Groovy 5.0.8 (`GroovyMain` on `Grv.groovy`, every call one of Groovy's own `invokedynamic` sites: closures, metaclasses, traits, `@CompileStatic`, JSON, XML) Scala 2.13.18 (`MainGenericRunner`, which compiles `Scl.scala` in memory with scalac and runs it) Kawa 3.1.1 (`kawa.repl` on `Kwa.scm`, Scheme compiled to bytecode form by form: records, `syntax-rules`, tail calls, `call/cc`, `dynamic-wind`, `guard`, Java interop) and ABCL 1.9.2 (`org.armedbear.lisp.Main` on `Abcl.lisp`: CLOS, conditions, restarts, `compile`, Java interop; its boot defines classes of the same name from many loaders). Each is a `:run` entry in `libs.edn`: a main class and its arguments, with nothing for javac to compile. From a fresh cache the five take about five minutes between them, most of it Clojure's and scalac's compilers translated for the first time.
+Five other JVM languages run in the same gate, each through its own launcher on a probe in `test/libs`. They are Clojure 1.12.4 (`clojure.main` on `Clj.clj`: protocols, records, multimethods, spec, refs, agents, futures, `pprint`, `eval`), Groovy 5.0.8 (`GroovyMain` on `Grv.groovy`, every call one of Groovy's own `invokedynamic` sites: closures, metaclasses, traits, `@CompileStatic`, JSON, XML), Scala 2.13.18 (`MainGenericRunner`, which compiles `Scl.scala` in memory with scalac and runs it), Kawa 3.1.1 (`kawa.repl` on `Kwa.scm`, Scheme compiled to bytecode form by form: records, `syntax-rules`, tail calls, `call/cc`, `dynamic-wind`, `guard`, Java interop), and ABCL 1.9.2 (`org.armedbear.lisp.Main` on `Abcl.lisp`: CLOS, conditions, restarts, `compile`, Java interop; its boot defines classes of the same name from many loaders). Each is a `:run` entry in `libs.edn`, a main class and its arguments, so javac has nothing to compile. From a fresh cache the five take about five minutes between them, mostly spent translating Clojure's and scalac's compilers for the first time.
 
-`jolt libs` reruns all twenty-three and the five languages, from the probe programs in `test/libs`. Each one runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, whose logging goes there). The jars come from `$HOME/.m2/repository`, and each one's SHA-1 is checked against the pin in `test/libs/libs.edn` before it's used. A library whose jars are missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. `jolt libs:fetch` downloads the missing jars from Maven Central and keeps a jar only when its SHA-1 matches its pin. `jolt libs Gua Yml` runs just those two, and an unknown name is an error. None of this is part of `jolt test`, which needs no network.
+`jolt libs` reruns all twenty-three and the five languages from their probes. Each runs on the JVM and through champaca, from a fresh cache, and the outputs and exit codes have to match (stderr too, for SLF4J, which logs there). `jolt libs Gua Yml` runs just those two, and an unknown name is an error.
+
+The jars come from `$HOME/.m2/repository`, each checked against its SHA-1 pin in `test/libs/libs.edn` before use. `jolt libs:fetch` downloads missing jars from Maven Central and keeps one only when its SHA-1 matches. A library whose jars are still missing is skipped and named, and a skip fails the run unless you pass `--allow-skip`. A run that compares nothing fails either way. None of this is part of `jolt test`, which needs no network.
 
 To call one of them from jolt, with the jars in `~/.m2`:
 
@@ -67,33 +73,37 @@ To call one of them from jolt, with the jars in `~/.m2`:
 ;=> {"name" "champaca", "tags" ["a" "b"]}
 ```
 
-Champaca doesn't resolve Maven coordinates, so a library's dependencies have to be listed too, as Jackson's three jars are here, unless a jar names them in its manifest's `Class-Path`, which is followed as on the JVM.
+Champaca doesn't resolve Maven coordinates, so you list a library's dependencies too, as with Jackson's three jars here. The exception is a jar that names them in its manifest's `Class-Path`, which is followed as on the JVM.
 
 ### Resources
 
-A jar's other files are reachable the way Java code expects. `getResourceAsStream` reads them, `getResource` gives a `jar:` URL (a `file:` URL for a directory on the classpath, where a directory itself is a resource too, and `""` the entry's root, as on the JVM) that opens like any other, and `ServiceLoader` finds the providers listed under `META-INF/services`. That last one is how SLF4J 2 finds its logging backend: without it, SLF4J prints "No SLF4J providers were found" and logs nothing. `test/java/JarCheck.java` loads a service, a properties file and a URL from `test/jar`.
+A jar's other files are reachable the way Java code expects. `getResourceAsStream` reads them, and `getResource` gives a `jar:` URL that opens like any other. For a directory on the classpath it's a `file:` URL instead; there a directory is a resource too, and `""` is the entry's root, as on the JVM.
 
-A class loader of your program's own, such as a `URLClassLoader` over a jar a plugin system found, answers `getResource`, `getResourceAsStream` and `getResources` the way the JDK has it: its parent first, then its own `findResource`. A class it defines finds its resources through it, and its `getProtectionDomain()` is the one the loader gave `defineClass`. A classpath class's code source is its entry's URL, a jar's or a directory's, which is how Quarkus's launcher and Spring Boot find their own jar (`test/java/ResourceCheck.java`).
+`ServiceLoader` finds the providers listed under `META-INF/services`, which is how SLF4J 2 finds its logging backend. Without that, SLF4J prints "No SLF4J providers were found" and logs nothing. `test/java/JarCheck.java` loads a service, a properties file and a URL from `test/jar`.
+
+A class loader of your program's own, such as a `URLClassLoader` over a jar a plugin system found, answers `getResource`, `getResourceAsStream` and `getResources` as the JDK does: its parent first, then its own `findResource`. A class it defines finds its resources through it, and has the `getProtectionDomain()` the loader gave `defineClass`. A classpath class's code source is its entry's URL, a jar's or a directory's. Quarkus's launcher and Spring Boot find their own jar that way (`test/java/ResourceCheck.java`).
 
 Resources inside the JDK's own modules, such as the ICU data the JDK uses for Unicode normalization, can be read as streams but have no URL.
 
 ## JDK modules
 
-The JDK's own classes come from `$JAVA_HOME/lib/modules`, the runtime image that `jlink` writes and the JVM loads its classes from. `java.base` is where boot starts, but nothing limits you to it:
+The JDK's own classes come from `$JAVA_HOME/lib/modules`, the runtime image that `jlink` writes and the JVM loads its classes from. Boot starts in `java.base`, and you can reach any other module too:
 
 ```clojure
 (ldk/invoke (ldk/construct "java.sql.Date" 0) "getTime")                              ;=> 0       java.sql
 (ldk/invoke (ldk/get-static "java.util.logging.Level" "WARNING") "getName")           ;=> "WARNING"  java.logging
 ```
 
-The image's format is jimage, read the way the JDK's own `jdk.internal.jimage.BasicImageReader` reads it. A header and an index come first, then every entry's bytes. The index is a perfect hash over full names like `/java.base/java/lang/Object.class`, and each package has an entry of its own, `/packages/java.lang`, naming its module. So a class lookup finds its package's module, then the class, and reads just those bytes from where they lie. Only the index is held in memory, about 1.5 MB for JDK 25, and nothing is copied or indexed beforehand.
+The image's format is jimage, read the way the JDK's own `jdk.internal.jimage.BasicImageReader` reads it. A header and an index come first, then every entry's bytes. The index is a perfect hash over full names like `/java.base/java/lang/Object.class`, and each package has an entry of its own, `/packages/java.lang`, naming its module. A class lookup finds its package's module, then the class, and reads just those bytes in place. Only the index stays in memory, about 1.5 MB for JDK 25, and nothing is copied or indexed beforehand.
 
-Every JDK has an image, so any build of JDK 25 works. That includes Temurin's, which ship no jmods (JDK 24's JEP 493 made them optional). The image is also what the JVM runs, which isn't quite what the jmods hold: jlink generates a few classes as it links, such as `jdk.internal.module.SystemModules$all` and the `java.lang.invoke` holder classes, 21 of the roughly 27,850 in JDK 25.0.2.
+Every JDK has an image, so any build of JDK 25 works, Temurin's included, though they ship no jmods (JDK 24's JEP 493 made them optional). The image is also what the JVM runs. It differs a little from the jmods, because jlink generates a few classes as it links, such as `jdk.internal.module.SystemModules$all` and the `java.lang.invoke` holder classes: 21 of the roughly 27,850 in JDK 25.0.2.
 
-A runtime built with `jlink` works as `JAVA_HOME` too, as long as it has the modules your code uses. One made with `--compress zip-6` (or any `zip-N`) is inflated as it's read. jlink's older string-sharing compression, `--compress 1`, isn't supported, and champaca says so the first time it reads a class from such an image.
+A runtime built with `jlink` works as `JAVA_HOME` too, if it has the modules your code uses. One made with `--compress zip-6` (or any `zip-N`) is inflated as it's read. jlink's older string-sharing compression, `--compress 1`, isn't supported; champaca says so the first time it reads a class from such an image.
 
-The module system boots on top of that, as on the JVM: `System.initPhase2()` builds the boot layer from the module graph jlink resolved into the image, so `ModuleLayer.boot().modules()` lists what the JVM's does for the same JDK, `ServiceLoader` finds the providers those modules declare (`jdk.localedata`'s locale data, `jdk.charsets`' charsets, `jdk.jartool`'s `ToolProvider`), a JDK class's `getModule()` is its named module, and reflection into a package the module doesn't export or open fails the way it does on the JVM. Your own classes are in the application loader's unnamed module and report that loader, as on the JVM, but nothing reads a `module-info` from your jars, so there's no module path and no checks between your own packages ([limitations](limitations.md#other-gaps)).
+The module system boots on top of that, as on the JVM. `System.initPhase2()` builds the boot layer from the module graph jlink resolved into the image, so `ModuleLayer.boot().modules()` lists what the JVM's does for the same JDK. `ServiceLoader` finds the providers those modules declare (`jdk.localedata`'s locale data, `jdk.charsets`' charsets, `jdk.jartool`'s `ToolProvider`). A JDK class's `getModule()` is its named module, and reflection into a package the module doesn't export or open fails as it does on the JVM.
+
+Your own classes sit in the application loader's unnamed module and report that loader, as on the JVM. Nothing reads a `module-info` from your jars, though, so there's no module path and no checks between your own packages ([limitations](limitations.md#other-gaps)).
 
 ## `sun.misc.Unsafe`
 
-Some libraries still reach for `sun.misc.Unsafe`, which lives in `jdk.unsupported`. It works, and `Shelf.bumpThroughUnsafe` in the test jar uses it. JDK 25 prints a warning on stderr the first time a program touches memory through it (the default, `warn`), and champaca prints the same one, word for word; `-Dsun.misc.unsafe.memory.access=allow` turns it off and `deny` makes the call throw, as on the JVM.
+Some libraries still reach for `sun.misc.Unsafe`, which lives in `jdk.unsupported`. It works, and `Shelf.bumpThroughUnsafe` in the test jar uses it. The first time a program touches memory through it, JDK 25 prints a warning on stderr (the default, `warn`), and champaca prints the same one word for word. As on the JVM, `-Dsun.misc.unsafe.memory.access=allow` turns it off and `deny` makes the call throw.

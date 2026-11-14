@@ -5,7 +5,7 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 ## Using it
 
 - [getting-started](getting-started.md): what you need installed, the first call, and depending on champaca from your own project.
-- [calling-java](calling-java.md): `construct`, `invoke`, `invoke-static` and the field getters and setters, how an overload gets picked, jolt fns as Java interfaces, proxies, real Java classes defined from jolt, threads, and what an exception looks like on the jolt side.
+- [calling-java](calling-java.md): `construct`, `invoke`, `invoke-static` and the field getters and setters, how an overload gets picked, jolt fns as Java interfaces, proxies, Java classes defined from jolt, threads, and what an exception looks like on the jolt side.
 - [data-conversion](data-conversion.md): what jolt values turn into on the way in (arrays, collections, boxes) and how `->clj` and `->java` copy data across.
 - [jars-and-modules](jars-and-modules.md): a classpath of jars and directories, and classes from JDK modules beyond `java.base`.
 - [running-java-programs](running-java-programs.md): running a compiled Java `main` straight from the command line, and Spring Boot and Quarkus applications in their packagings.
@@ -31,4 +31,4 @@ Champaca runs Java bytecode inside a jolt process, so jolt code can call Java li
 - [contributing](contributing.md): how a change gets in, from its test against the JVM to the pull request, and the licensing rules for new code.
 - [development](development.md): every task and `CHAMPACA_*` switch, the checks to run before a merge, and the metrics report.
 
-The top-level [README](../../README.md) is the short version. The files in `examples/` are tests that `jolt test` runs, each asserting what its calls return, so they make a good second reference.
+The top-level [README](../../README.md) is the short version. For a second reference, read the files in `examples/`: they're tests that `jolt test` runs, each asserting what its calls return.

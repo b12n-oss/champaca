@@ -3,11 +3,11 @@
 ## What you need
 
 - **jolt 0.8.24 or later.** Champaca's `deps.edn` declares it as `:jolt/min-version "0.8.24"`.
-- **JDK 25, with `JAVA_HOME` set.** Champaca doesn't run a JVM. It reads the JDK's classes out of its runtime image, `$JAVA_HOME/lib/modules`, and compiles them itself, so it needs only that, plus `javac` if you want to compile Java of your own. It's tested with OpenJDK 25.0.2 (the build from jdk.java.net) on macOS and Linux. GraalVM CE 25.0.1, Temurin 25.0.4.1 on macOS and a `jlink`-built runtime compressed with `--compress zip-6` passed earlier, smaller versions of the suite and haven't been run against today's.
+- **JDK 25, with `JAVA_HOME` set.** Champaca doesn't run a JVM. It reads the JDK's classes out of the runtime image, `$JAVA_HOME/lib/modules`, and compiles them itself, so that's all it needs, plus `javac` for compiling Java of your own. The suite runs on OpenJDK 25.0.2, the build from jdk.java.net, on macOS and Linux. GraalVM CE 25.0.1, Temurin 25.0.4.1 on macOS and a `jlink`-built runtime compressed with `--compress zip-6` passed earlier, smaller versions of it and haven't been tried on the current one.
 
-The JDK is needed where a program is built and developed. A machine that only runs it can do without one: `jolt bundle` packs the slice of the JDK a program needs, champaca built into a native binary and a warmed cache into a directory that runs anywhere on the same OS and architecture ([app-bundles](app-bundles.md)).
+You need the JDK where a program is built and developed, but a machine that only runs it can do without. `jolt bundle` packs the slice of the JDK a program needs, champaca built into a native binary, and a warmed cache into one directory, which runs anywhere on the same OS and architecture ([app-bundles](app-bundles.md)).
 
-The repo's tasks live in `bb.edn`, which jolt reads as it is; `jolt tasks` lists them. Inside this repo, `jolt jolt` builds the jolt commit pinned in `deps.edn` and `jolt test` prefers it. That's optional; [performance](performance.md#the-pinned-jolt) explains why the pin exists.
+The repo's tasks live in `bb.edn`, which jolt reads as it is, and `jolt tasks` lists them. Inside this repo `jolt jolt` builds the jolt commit pinned in `deps.edn`, and `jolt test` prefers that build. It's optional. [performance](performance.md#the-pinned-jolt) explains why the pin exists.
 
 ## The first call
 
@@ -56,11 +56,11 @@ Add champaca as a dependency. A local checkout is the simplest:
 
 `jolt -M -m app.main` prints `champaca has 12 tepals` and then `CHAMPACA`.
 
-Call `init!` once per process, before any other champaca function. A second call returns `:ok` and does nothing else, and that includes ignoring a different `:classpath` or `:preview`, so pass the full classpath the first time. To load classes from your own jars: `(ldk/init! {:classpath ["lib/gson-2.13.2.jar"]})`. [jars-and-modules](jars-and-modules.md) has the details.
+Call `init!` once per process, before any other champaca function. A second call returns `:ok` and does nothing else. It ignores a different `:classpath` or `:preview` too, so pass the full classpath the first time. Classes from your own jars load with `(ldk/init! {:classpath ["lib/gson-2.13.2.jar"]})`, and [jars-and-modules](jars-and-modules.md) has the details.
 
 ## From an editor
 
-Each file in `examples/` is a namespace of `clojure.test` tests, so it shows a call next to the value it returns. `jolt examples` lists them, and `jolt example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields`, `serialization` and `classes` need `target/lib.jar`, which `jolt test` builds from `test/jar`. `jolt example` builds that jar too, when it's missing or older than its sources.
+Each file in `examples/` is a namespace of `clojure.test` tests, so every call sits next to the value it returns. `jolt examples` lists them. `jolt example interop` runs one file's tests through `test/run_example.clj`, which also saves the startup cache. `jars`, `fields`, `serialization` and `classes` need `target/lib.jar`, built by `jolt test` from `test/jar`, and `jolt example` builds it too when it's missing or older than its sources.
 
 To work live from an editor, start jolt's nREPL server from the repo root:
 
@@ -68,22 +68,28 @@ To work live from an editor, start jolt's nREPL server from the repo root:
 jolt nrepl
 ```
 
-It binds a free port on 127.0.0.1 and writes it to `.nrepl-port`, which CIDER and Calva read. In Emacs, `M-x cider-connect-clj` with host `localhost` offers that port. `jolt nrepl 7890`, or `CHAMPACA_NREPL_PORT=7890`, asks for a port of your own, and a busy one is refused rather than swapped for another. When `.nrepl-port` already names a server that answers, `jolt nrepl` says so and stops, so connect to that one instead. Stop the server with `^C`, which also removes the file.
+It binds a free port on 127.0.0.1 and writes it to `.nrepl-port`, which CIDER and Calva read. In Emacs, `M-x cider-connect-clj` with host `localhost` offers that port.
 
-Since `init!` runs once per process, as above, the first form to evaluate in a fresh session is
+`jolt nrepl 7890`, or `CHAMPACA_NREPL_PORT=7890`, asks for a port of your own. A busy one is refused, never swapped for another. If `.nrepl-port` already names a server that answers, `jolt nrepl` says so and stops, and you connect to that one. `^C` stops the server and removes the file.
+
+`init!` runs once per process, so the first form to evaluate in a fresh session is
 
 ```clojure
 (require '[champaca.api :as ldk])
 (ldk/init! {:classpath ["target/lib.jar"]})
 ```
 
-After that every example loads in the same session (`C-c C-k` in CIDER), because their own `init!` calls do nothing. Skip that form and load `interop.clj` first, though, and its plain `init!` wins: `jars.clj` then can't find its classes until you restart the server.
+After that every example loads in the same session (`C-c C-k` in CIDER), because their own `init!` calls do nothing. Load `interop.clj` first instead and its plain `init!` wins, so `jars.clj` can't find its classes until you restart the server.
 
-Loading a file only defines its tests. Evaluate any form inside a `deftest` to see its value, or `(clojure.test/run-tests)` in the file's namespace to run them all. jolt's server has eval, load-file and completion but no test or lookup op, so CIDER's own test commands, its jump to definition and its documentation popups don't work. One test passes only the first time it runs in a session, because a class initializes once per process: `class-initialization` in `fields.clj`.
+Loading a file only defines its tests. Evaluate any form inside a `deftest` to see its value, or `(clojure.test/run-tests)` in the file's namespace to run them all. jolt's server has eval, load-file and completion but no test or lookup op, so CIDER's test commands, jump to definition and documentation popups don't work.
+
+One test, `class-initialization` in `fields.clj`, passes only the first time it runs in a session, because a class initializes once per process.
 
 ## The docs site
 
-These guides can be read as a local site. `jolt site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `jolt site:serve 4000` asks for a port of your own, and a busy one is refused rather than swapped for another. `jolt site:build` only builds, and `jolt site:clean` deletes `_site/`. The rendering is done by [jlt-commons/docs-engine](https://github.com/jlt-commons/docs-engine), which must be checked out at `$JLT_DOCS_ENGINE`, `~/dev/jlt-commons/docs-engine` or `../docs-engine` (`git clone https://github.com/jlt-commons/docs-engine ~/dev/jlt-commons/docs-engine`). The engine's config for this project is `docs/site.edn`.
+These guides can be read as a local site. `jolt site:serve` builds `docs/` into `_site/` and serves it on the first free port from 3000, printing the URL (`http://localhost:<port>/champaca/`). `jolt site:serve 4000` asks for a port of your own and refuses a busy one. `jolt site:build` only builds, and `jolt site:clean` deletes `_site/`.
+
+[jlt-commons/docs-engine](https://github.com/jlt-commons/docs-engine) does the rendering. It must be checked out at `$JLT_DOCS_ENGINE`, `~/dev/jlt-commons/docs-engine` or `../docs-engine` (`git clone https://github.com/jlt-commons/docs-engine ~/dev/jlt-commons/docs-engine`), and its config for this project is `docs/site.edn`.
 
 ## Running the tests
 
@@ -91,7 +97,11 @@ These guides can be read as a local site. `jolt site:serve` builds `docs/` into 
 jolt test
 ```
 
-It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as its standard input, one with a `.options` file gets that file's lines as launcher options (`-D` ones) before the classpath, and one that runs past five minutes fails. Those programs share one startup cache, so a handful that exercise features a program runs on its own (foreign calls and upcalls, sockets, serialization, lambdas, processes, the management beans, the Vector API, modules, classes defined at run time, stack traces) run again alone, each on a fresh cache, cold and then warm: a bug that only a program's own second run shows hides behind a cache the others filled. `test/libcache` runs three programs (`LibCacheMain`, `LamMain`, `EditMain`) over jars and directories that change between runs, twenty-five runs in all, which checks the cache of classpath classes. It runs upstream OpenLDK's own `aaa` test programs the same way as `test/java`'s, from `test/aaa` (its README says how they're laid out). Then it runs the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line says which jolt it used.
+It compiles `test/java/*.java` with `javac`, runs each program through champaca and compares the output with a `.expected` file recorded from the JVM. A program with a `.stdin` file next to it reads that file as standard input. One with a `.options` file gets that file's lines as launcher options (`-D` ones) before the classpath. A program that runs past five minutes fails.
+
+All those programs share one startup cache, and a bug that shows only on a program's own second run would hide behind a cache the others filled. So a handful run again alone, each on a fresh cache, cold and then warm. These cover features a program exercises on its own: foreign calls and upcalls, sockets, serialization, lambdas, processes, the management beans, the Vector API, modules, classes defined at run time and stack traces.
+
+`test/libcache` checks the cache of classpath classes. It runs three programs (`LibCacheMain`, `LamMain`, `EditMain`) over jars and directories that change between runs, twenty-five runs in all. Upstream OpenLDK's own `aaa` test programs run the same way as `test/java`'s, from `test/aaa`, whose README says how they're laid out. Last come the tests in each `examples/*.clj` file, each file in a process of its own that saves the startup cache when its tests are done. The first line of output says which jolt it used.
 
 ## Where next
 

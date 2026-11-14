@@ -46,7 +46,11 @@ CHAMPACA_CALL_CACHE=off ...  # choose the overload again on every invoke, invoke
 
 ## Before a merge
 
-A change merges once `jolt test`, the battery and the Linux run all pass. The battery runs the whole suite four ways on a worktree of the ref: cold, warm, with the cache off and with `CHAMPACA_BT=1`. Then it runs the twenty-three libraries. `BATTERY_MODES=structured` is one more mode, the whole suite with `CHAMPACA_STRUCTURED=1`; it isn't in the default list, and CI's nightly lane runs it. It deletes every battery worktree and cache under `target/battery` when it starts, so each run starts cold, and a second battery started while one runs (even a `BATTERY_MODES` subset) pulls the first one's tree out from under it. `jolt linux` needs Docker: it builds the `ci/linux` image, fetches the library jars into `~/.m2` on this machine (`jolt libs:fetch`, which needs the network), then runs `jolt jolt`, `jolt test` and `jolt libs` in a container that mounts them read-only.
+A change merges once `jolt test`, the battery and the Linux run all pass.
+
+The battery runs the whole suite four ways on a worktree of the ref: cold, warm, with the cache off and with `CHAMPACA_BT=1`. Then it runs the twenty-three libraries. `BATTERY_MODES=structured` is one more mode, the whole suite with `CHAMPACA_STRUCTURED=1`, which the default list leaves out and CI's nightly lane runs. When it starts, the battery deletes every battery worktree and cache under `target/battery`, so each run starts cold. That also means a second battery started while one runs, even a `BATTERY_MODES` subset, pulls the first one's tree out from under it.
+
+`jolt linux` needs Docker. It builds the `ci/linux` image and fetches the library jars into `~/.m2` on this machine (`jolt libs:fetch`, which needs the network). Then it runs `jolt jolt`, `jolt test` and `jolt libs` in a container that mounts them read-only.
 
 ```sh
 jolt battery <ref>
@@ -59,6 +63,10 @@ jolt linux arm64          # or amd64
 
 ## Code health
 
-`jolt metrics` runs jolt-metrics over the source and prints the functions most worth splitting, the files that are both complex and often changed, and cleanup candidates. The report itself fails nothing. `jolt metrics:json` and `jolt metrics:edn` give the same data for tools, and `jolt metrics:html` makes one page to share.
+`jolt metrics` runs jolt-metrics over the source and prints the functions most worth splitting, the files that are both complex and often changed, and cleanup candidates. The report fails nothing. `jolt metrics:json` and `jolt metrics:edn` give the same data for tools, and `jolt metrics:html` makes one page to share.
 
-`jolt metrics:gate` is the check CI runs on every push, and `ci ok` waits for it. It fails on a critical finding (a function past a complexity, length, nesting or parameter limit, or a file past the length limit) under the paths `ci/metrics-allow.edn` lists as `:critical-free`, which is every source tree. There's no list of accepted criticals, so a function that crosses a limit gets split. In the Scheme runtime under `resources/`, a hot path splits into `syntax-rules` steps, which expand in place: a top-level procedure there is a binding Chez can't inline, and splitting string concatenation into procedures once cost it 3%. It also fails on an unused require, private function or public function, unless the allowlist names it with the reason it stays, and on an allowlist entry that's no longer reported. The gate follows the one jolt's CI added in [jolt#1640](https://github.com/jolt-lang/jolt/pull/1640), at the same jolt-metrics commit.
+`jolt metrics:gate` is the check CI runs on every push, and `ci ok` waits for it. It fails on a critical finding under the paths `ci/metrics-allow.edn` lists as `:critical-free`, which is every source tree. A critical finding is a function past a complexity, length, nesting or parameter limit, or a file past the length limit. There's no list of accepted criticals, so a function that crosses a limit gets split.
+
+In the Scheme runtime under `resources/`, a hot path splits into `syntax-rules` steps, which expand in place. A top-level procedure there is a binding Chez can't inline, and splitting string concatenation into procedures once cost it 3%.
+
+The gate also fails on an unused require, private function or public function unless the allowlist names it with the reason it stays, and on an allowlist entry that's no longer reported. It follows the gate jolt's CI added in [jolt#1640](https://github.com/jolt-lang/jolt/pull/1640), at the same jolt-metrics commit.

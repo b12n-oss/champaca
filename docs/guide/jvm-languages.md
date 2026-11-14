@@ -1,6 +1,6 @@
 # Other JVM languages
 
-Champaca runs the bytecode, so it doesn't matter which compiler wrote it. Six languages that compile to the JVM have been run through it and compared with HotSpot line by line: Clojure, Groovy, Scala, Kawa Scheme, ABCL Common Lisp and Kotlin. Their compilers run here too. scalac and the Kotlin compiler write the same class files on champaca as on HotSpot, byte for byte.
+Champaca runs bytecode, whichever compiler wrote it. Six languages that compile to the JVM have been run through it and compared with HotSpot line by line: Clojure, Groovy, Scala, Kawa Scheme, ABCL Common Lisp and Kotlin. Their compilers run here too, and scalac and the Kotlin compiler write the same class files on champaca as on HotSpot, byte for byte.
 
 Five of them are rows of `jolt libs`, so every change to champaca is checked against them in CI ([jars and modules](jars-and-modules.md)). Kotlin was checked by hand, because its probe needs `kotlinc` to build it first.
 
@@ -20,7 +20,7 @@ jolt -M -m champaca.main -cp "$CP" clojure.main < forms.clj    # the REPL, fed o
 
 What's been checked: protocols, records, `deftype` and `reify`, multimethods, spec, atoms, refs, agents, futures and `pmap`, transducers, `pprint`, `eval` and `read-string`, Java interop, and hashing (`test/libs/Clj.clj`). The REPL reports errors at the same line HotSpot does (`Execution error ... (REPL:1)`). AOT compilation works both ways: classes `compile` writes on champaca run on HotSpot, and the other way round. They differ from HotSpot's only by gensym counters, which depend on what was evaluated first.
 
-Loading a library from source is the slow part. Clojure compiles every form of a source-only library when it loads it, and that compiler is Java code champaca runs. Five source-only libraries (core.logic, core.match, test.check, data.json, tools.reader) take 10 s warm against HotSpot's 1.5 s, nearly all of it Java code running. It was 26 s until type tests at sites that see many classes stopped walking the class hierarchy (see [performance](performance.md)). An AOT-compiled library loads at the speed of any other jar.
+Loading a library from source is the slow part. Clojure compiles every form of a source-only library as it loads it, and that compiler is Java code champaca runs. Five source-only libraries (core.logic, core.match, test.check, data.json, tools.reader) take 10 s warm against HotSpot's 1.5 s, nearly all of it in that Java code. It's down from 26 s because type tests at sites that see many classes don't walk the class hierarchy ([performance](performance.md)). An AOT-compiled library loads at the speed of any other jar.
 
 ## Groovy
 
@@ -33,7 +33,7 @@ CP=$G/groovy/5.0.8/groovy-5.0.8.jar:$G/groovy-json/5.0.8/groovy-json-5.0.8.jar:$
 jolt -M -m champaca.main -cp "$CP" groovy.ui.GroovyMain script.groovy
 ```
 
-Every call in a Groovy script goes through one of Groovy's own `invokedynamic` call sites, which champaca runs for real (it compiles only the JDK's bootstraps itself). Checked: closures, currying and composition, metaclasses and `Expando`, `methodMissing`, traits, `@CompileStatic` classes, JSON and XML, `Eval.me`, a second `GroovyShell`, threads (`test/libs/Grv.groovy`). Groovy 4.0 can't read JDK 25's class files, on HotSpot either, so use 5.0.
+Every call in a Groovy script goes through one of Groovy's own `invokedynamic` call sites. Champaca runs those as they are and compiles only the JDK's bootstraps itself. Checked: closures, currying and composition, metaclasses and `Expando`, `methodMissing`, traits, `@CompileStatic` classes, JSON and XML, `Eval.me`, a second `GroovyShell`, threads (`test/libs/Grv.groovy`). Groovy 4.0 can't read JDK 25's class files, on HotSpot either, so use 5.0.
 
 ## Scala
 
@@ -48,7 +48,7 @@ jolt -M -m champaca.main -cp "out:$S/scala-library/2.13.18/scala-library-2.13.18
 jolt -M -m champaca.main -cp "$CP" scala.tools.nsc.MainGenericRunner -usejavacp -nc Probe.scala  # compile in memory and run
 ```
 
-Checked: case classes and pattern matching, sealed traits, implicits, `Enumeration`, collections, `LazyList`, for comprehensions, `Option`, `Either` and `Try`, `BigInt` and `BigDecimal`, `Future`s, threads (`test/libs/Scl.scala`). The class files scalac writes on champaca are byte for byte the ones it writes on HotSpot.
+Checked: case classes and pattern matching, sealed traits, implicits, `Enumeration`, collections, `LazyList`, for comprehensions, `Option`, `Either` and `Try`, `BigInt` and `BigDecimal`, `Future`s, threads (`test/libs/Scl.scala`).
 
 ## Kawa Scheme
 
@@ -69,9 +69,9 @@ jolt -M -m champaca.main -cp ~/.m2/repository/org/abcl/abcl/1.9.2/abcl-1.9.2.jar
   org.armedbear.lisp.Main --noinform --noinit --batch --load script.lisp
 ```
 
-Checked: CLOS with generic functions and inheritance, structs, macros, conditions and restarts, `loop`, `compile`, bignums and ratios, Java calls (`test/libs/Abcl.lisp`). ABCL is the language that needs the most from champaca's class loading. Its boot loads each compiled Lisp file through a class loader of its own, and several of those define classes of the same name. A class one loader defines can share its name with another loader's, as on the JVM ([how classes of one name coexist](limitations.md#native-code)). Its Lisp also runs in a thread of its own, which calls `System.exit`, and the startup cache is saved then too ([running Java programs](running-java-programs.md)).
+Checked: CLOS with generic functions and inheritance, structs, macros, conditions and restarts, `loop`, `compile`, bignums and ratios, Java calls (`test/libs/Abcl.lisp`). Of the six, ABCL asks the most of champaca's class loading. Its boot loads each compiled Lisp file through a class loader of its own, and several of those loaders define classes of the same name, which coexist as they do on the JVM ([how classes of one name coexist](limitations.md#native-code)). Its Lisp also runs in a thread of its own that calls `System.exit`, and the startup cache is saved then too ([running Java programs](running-java-programs.md)).
 
-ABCL prints one line on stderr at startup that HotSpot prints too (it can't make virtual threads accessible); the module identity it names differs from run to run on both.
+At startup ABCL prints one line on stderr saying it can't make virtual threads accessible. HotSpot prints it too, and on both the module identity it names differs from run to run.
 
 ## Kotlin
 
@@ -86,13 +86,13 @@ jolt -M -m champaca.main --enable-native-access=ALL-UNNAMED -Dkotlin.home=$KOTLI
   org.jetbrains.kotlin.cli.jvm.K2JVMCompiler Hello.kt -d out
 ```
 
-A program `kotlinc` built (data, sealed and value classes, enums, delegation with `lazy` and `observable`, `lateinit` errors, reified generics, `tailrec`, collections and sequences, unsigned numbers, `kotlin-reflect`, threads) prints what it prints on HotSpot. So does the compiler, whose class files are HotSpot's byte for byte. The compiler prints one extra line on stderr: Jansi, the terminal library it bundles, can't load its JNI library here and falls back to plain output ([limitations](limitations.md#native-code)).
+A program `kotlinc` built prints what it prints on HotSpot. The one checked covers data, sealed and value classes, enums, delegation with `lazy` and `observable`, `lateinit` errors, reified generics, `tailrec`, collections and sequences, unsigned numbers, `kotlin-reflect` and threads. The compiler matches HotSpot too, apart from one extra line on stderr: Jansi, the terminal library it bundles, can't load its JNI library here and falls back to plain output ([limitations](limitations.md#native-code)).
 
 The compiler opens its JDK with `FileSystems.newFileSystem(jrt:/, {java.home: ...})`, which the JDK serves by loading that JDK's `jrt-fs.jar` through a loader of its own. That works for this JDK and for another one's home.
 
 ## Speed
 
-Measured on an Apple M1 Pro on 2026-11-13. Cold is a fresh startup cache, warm is the run after. The machine was busy for some of these (the ABCL runs had a load average near 20), so read them as orders of magnitude.
+Measured on an Apple M1 Pro on 2026-11-13. Cold is a fresh startup cache and warm is the run after. The machine was busy for some of these, with a load average near 20 for the ABCL runs, so read them as orders of magnitude.
 
 | Program | HotSpot | champaca, cold | champaca, warm |
 |---|---|---|---|
@@ -106,7 +106,7 @@ Measured on an Apple M1 Pro on 2026-11-13. Cold is a fresh startup cache, warm i
 | Kotlin program | 0.3 s | 27 s | 1 s |
 | Kotlin compiler, one small file | 2.8 s | 109 s | 9 s |
 
-A cold run pays for translating and compiling everything the language's runtime touches, its compiler included. The cache keeps that for every later run. What stays slow warm is code that runs a lot: a language compiler working through source runs as translated Java, at a few times HotSpot's speed at best ([performance](performance.md)).
+A cold run pays for translating and compiling everything the language's runtime touches, its compiler included, and the cache keeps that work for every later run. What stays slow warm is code that runs a lot. A language compiler working through source runs as translated Java, at a few times HotSpot's speed at best ([performance](performance.md)).
 
 ## When something differs
 
