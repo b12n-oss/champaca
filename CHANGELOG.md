@@ -406,6 +406,11 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- The jolt API's calls run their lock and their exception handling in line
+  (`java-call`) instead of in two closures, and `invoke`, `invoke-static`
+  and `construct` take up to three arguments without `apply` over a lazy
+  `map`. `invoke` went from 1,272 to 552 ns, `invoke-static` from 1,902 to
+  1,033 ns.
 - The jolt API resolves the Scheme procedures it calls on every crossing
   (the lock, `dyn-invoke` and the rest) once and keeps them, where
   `jolt.scheme/call` looked each name up on every call, three or four times

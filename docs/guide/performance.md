@@ -206,12 +206,16 @@ So a cached `invoke` comes close to the descriptor-based `call`.
 
 Much of what every call cost was the API reaching the runtime. Each entry point called Scheme through `jolt.scheme/call`, which looks the procedure's name up on every call (it has to, since a program may redefine one), and a call made three or four of those: taking the runtime's lock, the call itself, giving the lock back. The API now resolves the procedures it calls on every crossing once, through `jolt.scheme/proc`, and keeps them. A `define-class!` a test replaces is still looked up each time. Measured from a compiled namespace, 2026-11-15:
 
-| Call | Before | Now |
-|---|---|---|
-| `invoke` `Point.getX` | 2,791 ns | 1,272 ns |
-| `get-field` | 2,229 ns | 663 ns |
-| `get-static` `Integer.MAX_VALUE` | 2,664 ns | 1,271 ns |
-| `invoke-static` `Integer.valueOf` | 3,582 ns | 1,902 ns |
+Each call also wrapped its work in two closures, one for the lock and one for turning an exception into an `ex-info`, and converted its arguments through `apply` over a lazy `map`, which cost about as much as the call into Java. Those run in line now (`java-call`), and `invoke`, `invoke-static` and `construct` take up to three arguments without `apply`.
+
+| Call | Before | Procedures kept | In line too |
+|---|---|---|---|
+| `invoke` `Point.getX` | 2,791 ns | 1,272 ns | 552 ns |
+| `get-field` | 2,229 ns | 663 ns | 521 ns |
+| `get-static` `Integer.MAX_VALUE` | 2,664 ns | 1,271 ns | 1,121 ns |
+| `invoke-static` `Integer.valueOf` | 3,582 ns | 1,902 ns | 1,033 ns |
+
+`get-static` keeps most of its cost on the Scheme side, which finds the field by name on every call.
 
 Measuring this from `jolt -e` overstates every number, because a top-level form's var lookups cost more there than in a namespace's compiled code.
 
