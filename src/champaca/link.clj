@@ -187,9 +187,23 @@
                   cands)]
     (filter (fn [[_ m]] (:code m)) maximal)))
 
+(defn- field-lookup-order
+  "The types a field reference through cname searches, in JVMS 5.4.3.2's
+  order: the class, its direct superinterfaces each with theirs, depth first,
+  then its superclass the same way. A type reached twice is searched once."
+  [cname]
+  (loop [stack (list cname) seen #{} out []]
+    (if-let [c (first stack)]
+      (if (seen c)
+        (recur (rest stack) seen out)
+        (let [info (class-info c)]
+          (recur (concat (:interfaces info) (when-let [s (and (not (cf/interface? info)) (:super info))] [s]) (rest stack))
+                 (conj seen c) (conj out c))))
+      out)))
+
 (defn resolve-static-field [cname fname]
   (or (some (fn [c] (when (some #(and (:static %) (= fname (:name %))) (:fields (class-info c))) c))
-            (ancestry cname))
+            (field-lookup-order cname))
       (throw (ex-info "no such static field" {:class cname :field fname}))))
 
 (defn field-index [cname fname]
