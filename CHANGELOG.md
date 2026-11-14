@@ -406,6 +406,12 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- An `ldc` of a class or a string keeps what it resolved in its site's
+  inline-cache cell, as the JVM keeps a resolved constant: each run of the
+  instruction hashed the class's name into the class table, or the
+  literal's text into the intern table. `Foo.class` in a loop went from
+  180.0 to 2.9 ns and a string literal from 45.9 to 2.8 ns. `LdcCheck` is
+  new, and `LinkCheck` runs a failing `ldc` twice.
 - `instanceof` and `checkcast` on an array remember their answers per
   array type, keyed by its interned element descriptor, as an object's class
   already did. A miss built the array's class name and took substrings of it

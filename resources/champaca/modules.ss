@@ -281,4 +281,13 @@
   (if (hashtable-contains? classes name)
       (jmirror-of name)
       (parameterize ([resolving-loader (hashtable-ref class-loaders from #f)]) (jmirror-of name))))
+;; an ldc's site keeps what it resolved in its inline-cache cell, as the JVM
+;; keeps a resolved constant-pool entry: jldc-class hashed the class's name
+;; into the class table on every run of the instruction, 2% of Clojure
+;; loading libraries from source. A failure isn't kept, so it's thrown again.
+(define-syntax jldc-class-ic
+  (syntax-rules ()
+    [(_ ic name from)
+     (let ([c ic])
+       (or (car c) (let ([m (jldc-class name from)]) (set-car! c m) m)))]))
 (define (mirror-class m) (or (eq-hashtable-ref mirror->class (nn m) #f) (error 'champaca "not a mirror" m)))

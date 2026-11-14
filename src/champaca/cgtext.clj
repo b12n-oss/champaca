@@ -52,10 +52,16 @@
                          s))
          "\"")))
 
+(defn jstring-lit-arg
+  "A String constant's text as jstring-lit takes it: a string literal, or a
+  quoted vector of UTF-16 units for one Scheme can't hold."
+  [s]
+  (if (vector? s) (str "'" (str-lit s)) (str-lit s)))
+
 (defn jstring-lit-form
   "The expression for a String constant: the interned java.lang.String."
   [s]
-  (sx "jstring-lit" (if (vector? s) (str "'" (str-lit s)) (str-lit s))))
+  (sx "jstring-lit" (jstring-lit-arg s)))
 
 (defn num-lit [x]
   (cond

@@ -48,6 +48,7 @@ lambda interface run: java.lang.NoClassDefFoundError: LinkGoneListener
 field type run: ran (null)
 parameter type run: ran (null)
 new again: java.lang.NoClassDefFoundError: LinkGone
+ldc again: java.lang.NoClassDefFoundError: LinkGone
 cause: java.lang.ClassNotFoundException: LinkGone
 array cause: java.lang.NoClassDefFoundError: [LLinkGone; | cause java.lang.ClassNotFoundException: LinkGone
 array of orphans: java.lang.NoClassDefFoundError: LinkGone

@@ -508,3 +508,9 @@ The per-class answers above covered objects only. An `instanceof` or `checkcast`
 
 The Clojure run went from 8.53 to 8.31 s warm (median of three, interleaved, load average 5 to 7), with the same peak memory and output. Most of its time is the compiler itself running. `ArrayTypeCheck` tests fifteen kinds of value, arrays of objects, interfaces, primitives and nested arrays among them, against eleven array and interface targets, three times over and in reverse order, and prints what HotSpot prints, failed casts included.
 
+### Constants from the constant pool
+
+An `ldc` of a class (`Foo.class`) found the class by hashing its name into the class table every time the instruction ran, and an `ldc` of a string hashed the literal's whole text into the intern table. In a profile of Clojure loading five libraries from source they were 72 and 31 of 3551 samples, about 3% together. The JVM resolves a constant-pool entry once and keeps the result. Each `ldc` site here now keeps what it resolved in its inline-cache cell, the class's mirror or the interned `String`. A class that fails to load isn't kept, so the next run of the instruction throws again, as `LinkCheck`'s "ldc again" row checks.
+
+`Ldc` (2026-11-14): `ArrayList.class` read in a loop went from 180.0 to 2.9 ns, and a string literal from 45.9 to 2.8 ns. `LdcCheck` checks the identities: the same literal from two methods, a lambda and `intern()` is one object, and a class constant is the `Class` that `forName` returns, on each of three passes.
+

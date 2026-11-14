@@ -1,0 +1,24 @@
+two methods, one String (pass 0): true
+the interned String (pass 0): true
+from a lambda (pass 0): true
+a constant expression (pass 0): true
+outside the BMP (pass 0): true
+ArrayList.class (pass 0): true
+Integer[][].class (pass 0): true [[Ljava.lang.Integer;
+its own class (pass 0): true
+two methods, one String (pass 1): true
+the interned String (pass 1): true
+from a lambda (pass 1): true
+a constant expression (pass 1): true
+outside the BMP (pass 1): true
+ArrayList.class (pass 1): true
+Integer[][].class (pass 1): true [[Ljava.lang.Integer;
+its own class (pass 1): true
+two methods, one String (pass 2): true
+the interned String (pass 2): true
+from a lambda (pass 2): true
+a constant expression (pass 2): true
+outside the BMP (pass 2): true
+ArrayList.class (pass 2): true
+Integer[][].class (pass 2): true [[Ljava.lang.Integer;
+its own class (pass 2): true
