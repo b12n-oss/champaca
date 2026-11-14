@@ -324,6 +324,11 @@ program may notice, and changes to the tasks.
   make, such as one `ConstantBootstraps.invoke` computes, failed to
   translate. Such a site now runs the JDK's own `SwitchBootstraps`, as
   primitive patterns already did (`test/java/CondyLabelCheck.java`).
+- A class path resource whose name starts like a URL scheme with no protocol
+  handler (`a:b.txt`), or `jar:` without `!/`, was found where the JVM finds
+  nothing: its class path loader makes the resource's URL from the name and
+  refuses one it can't parse. A colon after a `/` or a leading digit is found
+  as before (`test/java/ColonResourceCheck.java`).
 - A method restored from the library cache could name a call site's lambda
   class this run never made, and threw `NoClassDefFoundError` (seen in
   Scala's `LazyList$.<clinit>`, reached through fansi). The class's

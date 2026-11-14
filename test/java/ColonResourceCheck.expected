@@ -1,0 +1,10 @@
+cc-scheme:dir.txt: url null, stream null, all 0, class false, system false
+cc-scheme:jar.txt: url null, stream null, all 0, class false, system false
+CC-Scheme+1.x:dir.txt: url null, stream null, all 0, class false, system false
+CC-Scheme+1.x:jar.txt: url null, stream null, all 0, class false, system false
+jar:cc-dir.txt: url null, stream null, all 0, class false, system false
+jar:cc-jar.txt: url null, stream null, all 0, class false, system false
+9cc:dir.txt: url dir 9cc:dir.txt, stream from the directory, all 1, class true, system true
+9cc:jar.txt: url jar 9cc:jar.txt, stream from the jar, all 1, class true, system true
+cc-dir/cc:x.txt: url dir cc-dir/cc:x.txt, stream from the directory, all 1, class true, system true
+cc-jar/cc:x.txt: url jar cc-jar/cc:x.txt, stream from the jar, all 1, class true, system true
