@@ -229,4 +229,18 @@ Every 2 ms of wall time (`PROF_US` sets the interval) a profiler thread sends `S
 
 The samples arrive only when the main method is entered through champaca's jolt API, since champaca.main's own run path doesn't deliver them. So for a jar, give the class path and the `Main-Class` by hand. Profile a warm cache, or the compiler's work is most of what you see. Spike 72 wrote the profiler to find where a Spring Boot fat jar's start went ([performance](performance.md#a-framework-loaders-own-work)).
 
+A sample is taken when the thread next checks for interrupts, so time spent with interrupts off is counted at the place they come back on. A stack walk, `call/1cc` and a `dynamic-wind`'s winders all run that way. When most samples sit on one `enable-interrupts < dynamic-wind < ...` row under a single frame, the time went into whatever ran just before that point, not into the row itself. To find it, time the pieces from Scheme. After `init!`, `jolt.scheme/eval-string` reaches the runtime's own procedures, so a native and its helpers can each be timed in a loop:
+
+```clojure
+(require '[champaca.api :as ldk] '[jolt.scheme :as s])
+(ldk/init!)
+(s/eval-string
+ "(let* ([f (hashtable-ref natives \"java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;\" #f)]
+         [name (jstring-lit \"java.util.ArrayList\")] [n 200000] [t0 (real-time)])
+    (do ([i 0 (fx+ i 1)]) ((fx= i n)) (f name 1 (app-loader) #f))
+    (/ (* 1000000.0 (- (real-time) t0)) n))")   ; ns a call
+```
+
+That is how the reflective calls and `Class.forName` were taken apart in November 2026. For `Constructor.newInstance` the profiler put nearly every sample on `enable-interrupts < dynamic-wind < invoke-wrapped`, while timing the pieces found the lookups by name before it.
+
 The signal goes to one thread with `pthread_kill`, not from an interval timer, because a process-directed signal can land on jolt's shutdown watcher. On macOS that watcher's `sigwait` then answered as if a signal of its own had come and ended the process with status 128 ([jolt #1461](https://github.com/jolt-lang/jolt/issues/1461), fixed by jolt PR #1462).
