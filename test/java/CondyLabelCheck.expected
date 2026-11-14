@@ -1,0 +1,10 @@
+Integer 42 -> 0
+Integer 43 -> 2
+String 7 -> 1
+String 8 -> 3
+Integer 7 -> 2
+Character x -> 3
+Short 42 -> 0
+Byte 42 -> 0
+Double 4.2 -> 2
+null -> -1
