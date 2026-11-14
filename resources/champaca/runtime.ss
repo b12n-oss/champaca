@@ -799,12 +799,26 @@
 
 (define (class-of x) (find-class (class-name-of x)))
 
+;; Every name a class answers to: its own, its superclasses' and all their
+;; interfaces'. Built the first time something asks, from the supertypes'
+;; own sets, so a subtype question is one string-table probe where it was a
+;; walk over the hierarchy comparing names. Weak on the class.
+(define ancestor-sets (make-weak-eq-hashtable))
+(define (ancestor-names c)
+  (or (eq-hashtable-ref ancestor-sets c #f)
+      (let ([set (make-hashtable string-hash string=?)])
+        (hashtable-set! set (jclass-cname c) #t)
+        (for-each (lambda (name)
+                    (when name
+                      (vector-for-each (lambda (k) (hashtable-set! set k #t))
+                                       (hashtable-keys (ancestor-names (find-class name))))))
+                  (cons (jclass-super c) (jclass-interfaces c)))
+        (eq-hashtable-set! ancestor-sets c set)
+        set)))
 (define (subclass? cname target)
   (and cname
        (or (string=? cname target)
-           (let ([c (find-class cname)])
-             (or (subclass? (jclass-super c) target)
-                 (exists (lambda (i) (subclass? i target)) (jclass-interfaces c)))))))
+           (hashtable-contains? (ancestor-names (find-class cname)) target))))
 
 ;; elem descriptors: "I", "Ljava/lang/String;", "[I" ...
 (define (desc->class-name d)
