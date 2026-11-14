@@ -41,6 +41,11 @@ public class Fields implements FieldConsts {
         public int hidden = 2;
         public int baseHidden() { return ((Base) this).hidden; }
     }
+    // x in the second slot, where java.awt.Point has it in the first
+    public static class Swapped {
+        public int y = 1;
+        public int x = 2;
+    }
 }
 
 interface FieldConsts {

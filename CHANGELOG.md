@@ -406,6 +406,10 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- The jolt API keeps each instance field it found, per class and field name,
+  where `get-field` and `set-field!` walked the class's fields and built the
+  slot's key string on every call. The Scheme side of a `get-field` went
+  from 161 to 14 ns.
 - The jolt API keeps each static field it found, per class-name string and
   field name, where `get-static` and `set-static!` searched for it by name
   on every call, and `invoke-static`'s cached call site keeps its class's
