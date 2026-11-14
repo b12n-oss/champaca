@@ -217,6 +217,8 @@ Each call also wrapped its work in two closures, one for the lock and one for tu
 
 `get-static` and `set-static!` used to find the field by name on every call, turning the class name's dots into slashes and building the field's global name each time. They keep what they found now, per class-name string and field name, so a jolt literal finds it again with one `eq?` lookup; `invoke-static`'s cached call site keeps its class's record, and an initialized class costs one field read. A scalar argument (a number, a string, nil) also skips `->arg`'s collection tests. Of `get-static`'s 395 ns, about 30 are now on the Scheme side; taking the runtime's lock and giving it back costs about 165 ns from jolt.
 
+`get-field` and `set-field!` keep what they found the same way, per class and field name: the field and its slot. The Scheme side of a `get-field` went from 161 to 14 ns, so most of what's left of it is the lock and the trip from jolt, about 150 ns less than the table's 521.
+
 Measuring this from `jolt -e` overstates every number, because a top-level form's var lookups cost more there than in a namespace's compiled code.
 
 `CHAMPACA_CALL_CACHE=off` turns it off, which is handy for checking whether a surprising result comes from the cache. `examples/callsite.clj` exercises it: one call site gets arguments that need a different overload each time.

@@ -612,13 +612,36 @@
     (set-top-level-value! (static-plan-sym p) x)
     (void)))
 
+;; get-field and set-field! keep what instance-field found, per class record
+;; (eq?, so a class defined again starts over) and field name: the field and
+;; its slot. A miss, or a field that isn't there, goes the long way.
+(define-record-type field-plan (fields field index) (sealed #t) (nongenerative champaca-field-plan))
+(define field-plans (make-weak-eq-hashtable))
+(define (field-plan-of obj fname)
+  (let* ([c (jobj-cls (nn obj))]
+         [row (hashtable-ref field-plans c '())]
+         [hit (or (assq fname row) (assoc fname row))])
+    (if hit
+        (cdr hit)
+        (let* ([f (instance-field obj fname)]
+               [p (make-field-plan f (jfield-index (car f) fname))])
+          (hashtable-set! field-plans c (cons (cons fname p) row))
+          p))))
+
 (define (dyn-get-field obj fname)
-  (let ([f (instance-field obj fname)])
-    (dyn-out (cadr f) (vector-ref (jobj-slots obj) (jfield-index (car f) fname)))))
+  (if (jobj? obj)
+      (let ([p (field-plan-of obj fname)])
+        (dyn-out (cadr (field-plan-field p)) (vector-ref (jobj-slots obj) (field-plan-index p))))
+      (let ([f (instance-field obj fname)])
+        (dyn-out (cadr f) (vector-ref (jobj-slots obj) (jfield-index (car f) fname))))))
 (define (dyn-set-field! obj fname v)
-  (let* ([f (instance-field obj fname)] [x (field-value f fname v)])
-    (vector-set! (jobj-slots obj) (jfield-index (car f) fname) x)
-    (void)))
+  (if (jobj? obj)
+      (let* ([p (field-plan-of obj fname)] [x (field-value (field-plan-field p) fname v)])
+        (vector-set! (jobj-slots obj) (field-plan-index p) x)
+        (void))
+      (let* ([f (instance-field obj fname)] [x (field-value f fname v)])
+        (vector-set! (jobj-slots obj) (jfield-index (car f) fname) x)
+        (void))))
 
 ;; arrays stay Java arrays across the boundary; ->clj copies one out
 (define (dyn-array? v) (jarr? v))

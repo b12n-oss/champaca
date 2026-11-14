@@ -66,6 +66,27 @@
     (is (= "field str in champaca/lib/Fields has type java.lang.String, which the value doesn't fit" (err #(ldk/set-field! o "str" 5))))
     (is (= "-7 12345678901 -128 300 A 2.5 1.25 true null 3 [1, two, three] 2:4" (ldk/invoke o "describe")))))
 
+(deftest fields-by-any-spelling
+  ;; the API keeps each instance field it found per class and field name; a
+  ;; name built at run time and the literal see the same slot, and two
+  ;; classes with a field of one name keep their own
+  (let [o (ldk/construct F) p (ldk/construct "java.awt.Point" 3 4)
+        r (ldk/construct "java.awt.Rectangle" 1 2 5 6) w (ldk/construct "champaca.lib.Fields$Swapped")]
+    (ldk/set-field! o "i" 41)
+    (ldk/set-field! o (str "i") 42)
+    (is (= [42 42] [(ldk/get-field o "i") (ldk/get-field o (str "" "i"))]))
+    (is (= [3 1 4 2] [(ldk/get-field p "x") (ldk/get-field r "x") (ldk/get-field p "y") (ldk/get-field r "y")]))
+    ;; Point keeps x in its first slot, Swapped in its second
+    (is (= [3 2 4 1] [(ldk/get-field p "x") (ldk/get-field w "x") (ldk/get-field p "y") (ldk/get-field w "y")]))
+    (ldk/set-field! r "x" 9)
+    (is (= [3 9 9] [(ldk/get-field p "x") (ldk/get-field r "x") (long (ldk/invoke r "getX"))]))
+    ;; a field that isn't there is refused every time, never kept
+    (dotimes [_ 2]
+      (is (= "no field nope in champaca/lib/Fields" (err #(ldk/get-field o "nope")))))
+    ;; the kept field still refuses a value that doesn't fit
+    (dotimes [_ 2]
+      (is (= "field b in champaca/lib/Fields has type byte, which the value doesn't fit" (err #(ldk/set-field! o "b" 128)))))))
+
 (deftest statics-by-any-spelling
   ;; the API keeps each field it found per class-name string; a name built
   ;; at run time, a slashed one and the literal all see the same field
