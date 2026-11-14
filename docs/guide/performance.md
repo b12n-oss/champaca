@@ -202,7 +202,18 @@ Microseconds per call after warm-up, cache off and on:
 | `construct` `StringBuilder(String)` | 5.71 | 3.05 |
 | `call` `length` with its descriptor | 0.85 | 0.85 |
 
-So a cached `invoke` comes close to the descriptor-based `call`. Nobody has profiled the gap that remains, but converting arguments and results is the likely cost, along with turning a jolt string receiver into a Java `String`.
+So a cached `invoke` comes close to the descriptor-based `call`.
+
+Much of what every call cost was the API reaching the runtime. Each entry point called Scheme through `jolt.scheme/call`, which looks the procedure's name up on every call (it has to, since a program may redefine one), and a call made three or four of those: taking the runtime's lock, the call itself, giving the lock back. The API now resolves the procedures it calls on every crossing once, through `jolt.scheme/proc`, and keeps them. A `define-class!` a test replaces is still looked up each time. Measured from a compiled namespace, 2026-11-15:
+
+| Call | Before | Now |
+|---|---|---|
+| `invoke` `Point.getX` | 2,791 ns | 1,272 ns |
+| `get-field` | 2,229 ns | 663 ns |
+| `get-static` `Integer.MAX_VALUE` | 2,664 ns | 1,271 ns |
+| `invoke-static` `Integer.valueOf` | 3,582 ns | 1,902 ns |
+
+Measuring this from `jolt -e` overstates every number, because a top-level form's var lookups cost more there than in a namespace's compiled code.
 
 `CHAMPACA_CALL_CACHE=off` turns it off, which is handy for checking whether a surprising result comes from the cache. `examples/callsite.clj` exercises it: one call site gets arguments that need a different overload each time.
 

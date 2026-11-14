@@ -406,6 +406,11 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- The jolt API resolves the Scheme procedures it calls on every crossing
+  (the lock, `dyn-invoke` and the rest) once and keeps them, where
+  `jolt.scheme/call` looked each name up on every call, three or four times
+  per call. `invoke` went from 2,791 to 1,272 ns, `get-field` from 2,229 to
+  663 ns.
 - `Arrays.fill` runs at the call site: a whole array is one `vector-fill!`
   and a range one loop of unchecked stores, with a reference array's value
   checked once. A null array, a bad range or a value the array can't hold

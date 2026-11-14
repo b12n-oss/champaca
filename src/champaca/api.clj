@@ -25,14 +25,44 @@
 (defonce ^:private dynamic-loaded (atom false))
 (defonce ^:private gil-released (atom false))
 
+;; The Scheme procedures the API calls on every crossing, each resolved on
+;; its first use and kept in a delay. s/call resolves its name on every call
+;; (a gil-enter!/gil-leave! pair cost 934 ns through it, 238 kept). Only these
+;; are kept: none is redefined once the runtime is up, while a name a program
+;; may replace (define-class!, which a test does) is looked up by s/call each
+;; time as before.
+(defmacro ^:private defproc [sym scheme-name]
+  (list 'def (vary-meta sym assoc :private true) (list 'delay (list 's/proc scheme-name))))
+(defproc proc-gil-enter! "gil-enter!")
+(defproc proc-gil-leave! "gil-leave!")
+(defproc proc-list "list")
+(defproc proc-cons "cons")
+(defproc proc-dyn-new "dyn-new")
+(defproc proc-dyn-invoke "dyn-invoke")
+(defproc proc-dyn-invoke-static "dyn-invoke-static")
+(defproc proc-dyn-get-static "dyn-get-static")
+(defproc proc-dyn-get-field "dyn-get-field")
+(defproc proc-dyn-set-static! "dyn-set-static!")
+(defproc proc-dyn-set-field! "dyn-set-field!")
+(defproc proc-dyn-array? "dyn-array?")
+(defproc proc-dyn-aref "dyn-aref")
+(defproc proc-dyn-alength "dyn-alength")
+(defproc proc-dyn-instance? "dyn-instance?")
+(defproc proc-dyn-map-array "dyn-map-array")
+(defproc proc-dyn-coll-array "dyn-coll-array")
+(defproc proc-dyn->java "dyn->java")
+(defproc proc-ldk-new "ldk-new")
+(defproc proc-ldk-call "ldk-call")
+(defproc proc-ldk-call-static "ldk-call-static")
+
 (defn- with-gil
   "Run f holding the runtime's global lock, which one thread at a time holds
   while it runs Java code (natives.ss). Between calls jolt code runs without
   it, so Java threads started from here keep going. Re-entrant: a jolt fn
   that Java calls back can call Java again."
   [f]
-  (s/call "gil-enter!")
-  (try (f) (finally (s/call "gil-leave!"))))
+  (@proc-gil-enter!)
+  (try (f) (finally (@proc-gil-leave!))))
 
 (defn- rethrow*
   [f]
@@ -105,19 +135,19 @@
      (reset! dynamic-loaded true))
    ;; boot ran holding the lock; from here on each call takes it
    (when (compare-and-set! gil-released false true)
-     (s/call "gil-leave!"))
+     (@proc-gil-leave!))
    :ok))
 
 (defn call-static [cls mname desc & args]
   (rethrow #(do (loader/ensure-loaded! cls)
-                (apply s/call "ldk-call-static" cls mname desc args))))
+                (apply @proc-ldk-call-static cls mname desc args))))
 
 (defn new-object [cls desc & args]
   (rethrow #(do (loader/ensure-loaded! cls)
-                (apply s/call "ldk-new" cls desc args))))
+                (apply @proc-ldk-new cls desc args))))
 
 (defn call [obj mname desc & args]
-  (rethrow #(apply s/call "ldk-call" obj mname desc args)))
+  (rethrow #(apply @proc-ldk-call obj mname desc args)))
 
 (defn implement
   "A Java object implementing the single-method interface iface, whose
@@ -143,10 +173,10 @@
   tagged, to become a LinkedHashMap, LinkedHashSet or ArrayList, and keywords
   become strings (their name, with any namespace)."
   [x]
-  (cond (vector? x) (apply s/call "list" (map ->arg x))
-        (map? x) (s/call "make-jolt-map" (apply s/call "list" (map (fn [[k v]] (s/call "cons" (->arg k) (->arg v))) x)))
-        (set? x) (s/call "make-jolt-set" (apply s/call "list" (map ->arg x)))
-        (seq? x) (s/call "make-jolt-list" (apply s/call "list" (map ->arg x)))
+  (cond (vector? x) (apply @proc-list (map ->arg x))
+        (map? x) (s/call "make-jolt-map" (apply @proc-list (map (fn [[k v]] (@proc-cons (->arg k) (->arg v))) x)))
+        (set? x) (s/call "make-jolt-set" (apply @proc-list (map ->arg x)))
+        (seq? x) (s/call "make-jolt-list" (apply @proc-list (map ->arg x)))
         (keyword? x) (subs (str x) 1)
         :else x))
 
@@ -159,40 +189,40 @@
 (defn construct
   "Construct cls with the constructor that fits args."
   [cls & args]
-  (rethrow #(apply s/call "dyn-new" cls (map ->arg args))))
+  (rethrow #(apply @proc-dyn-new cls (map ->arg args))))
 
 (defn invoke
   "Call the instance method mname on obj (a Java object, or a jolt string
   as java.lang.String) with the overload that fits args."
   [obj mname & args]
-  (rethrow #(apply s/call "dyn-invoke" obj mname (map ->arg args))))
+  (rethrow #(apply @proc-dyn-invoke obj mname (map ->arg args))))
 
 (defn invoke-static
   "Call the static method mname of cls with the overload that fits args."
   [cls mname & args]
-  (rethrow #(apply s/call "dyn-invoke-static" cls mname (map ->arg args))))
+  (rethrow #(apply @proc-dyn-invoke-static cls mname (map ->arg args))))
 
 (defn get-static
   "The static field fname of cls, or of the superinterface or superclass
   that declares it. Initializes the declaring class first."
   [cls fname]
-  (rethrow #(s/call "dyn-get-static" cls fname)))
+  (rethrow #(@proc-dyn-get-static cls fname)))
 (defn get-field
   "The instance field fname of obj, from obj's class up."
   [obj fname]
-  (rethrow #(s/call "dyn-get-field" obj fname)))
+  (rethrow #(@proc-dyn-get-field obj fname)))
 
 (defn set-static!
   "Store v in the static field fname of cls (found as get-static finds it),
   converted as an argument of the field's type would be. Refuses a final
   field and a value that doesn't fit. Returns nil."
   [cls fname v]
-  (rethrow #(s/call "dyn-set-static!" cls fname (->arg v)))
+  (rethrow #(@proc-dyn-set-static! cls fname (->arg v)))
   nil)
 (defn set-field!
   "Store v in the instance field fname of obj, as set-static! does."
   [obj fname v]
-  (rethrow #(s/call "dyn-set-field!" obj fname (->arg v)))
+  (rethrow #(@proc-dyn-set-field! obj fname (->arg v)))
   nil)
 
 (declare ->clj*)
@@ -209,20 +239,20 @@
 
 (defn- ->clj* [x key-fn]
   (cond
-    (s/call "dyn-array?" x)
-    (mapv #(->clj* (s/call "dyn-aref" x %) key-fn) (range (s/call "dyn-alength" x)))
-    (s/call "dyn-instance?" x "java/util/Map")
-    (let [a (s/call "dyn-map-array" x)]
+    (@proc-dyn-array? x)
+    (mapv #(->clj* (@proc-dyn-aref x %) key-fn) (range (@proc-dyn-alength x)))
+    (@proc-dyn-instance? x "java/util/Map")
+    (let [a (@proc-dyn-map-array x)]
       ;; a key-fn can map two keys to one; that throws rather than drop one
       (reduce (fn [m i]
-                (let [k (->clj* (s/call "dyn-aref" a i) key-fn)
+                (let [k (->clj* (@proc-dyn-aref a i) key-fn)
                       k' (if (string? k) (key-fn k) k)]
                   (when (contains? m k')
                     (throw (ex-info (str "->clj: :key-fn maps two keys to " (pr-str k')) {:key k'})))
-                  (assoc m k' (->clj* (s/call "dyn-aref" a (inc i)) key-fn))))
-              {} (range 0 (s/call "dyn-alength" a) 2)))
-    (s/call "dyn-instance?" x "java/util/Set") (set (->clj* (s/call "dyn-coll-array" x) key-fn))
-    (s/call "dyn-instance?" x "java/util/Collection") (->clj* (s/call "dyn-coll-array" x) key-fn)
+                  (assoc m k' (->clj* (@proc-dyn-aref a (inc i)) key-fn))))
+              {} (range 0 (@proc-dyn-alength a) 2)))
+    (@proc-dyn-instance? x "java/util/Set") (set (->clj* (@proc-dyn-coll-array x) key-fn))
+    (@proc-dyn-instance? x "java/util/Collection") (->clj* (@proc-dyn-coll-array x) key-fn)
     :else x))
 
 (defn ->java
@@ -230,7 +260,7 @@
   LinkedHashMap, a set a LinkedHashSet, a vector or seq an ArrayList, and
   strings, numbers and keywords (as strings) are converted as Objects."
   [x]
-  (rethrow #(s/call "dyn->java" (->arg x))))
+  (rethrow #(@proc-dyn->java (->arg x))))
 
 (defn proxy
   "A java.lang.reflect.Proxy implementing the interfaces ifaces (class
@@ -250,7 +280,7 @@
                                  (ifn? f) (fn [& args] (apply f args))
                                  :else (throw (ex-info (str "proxy: " (pr-str k) " is not a fn") {:method k})))]))
                  methods)]
-    (rethrow #(s/call "dyn-proxy" (apply s/call "list" ifaces) (fn [n] (get fs n))))))
+    (rethrow #(s/call "dyn-proxy" (apply @proc-list ifaces) (fn [n] (get fs n))))))
 
 ;; --- classes defined from jolt -------------------------------------------------------
 
@@ -334,7 +364,7 @@
 (defn- class-element
   "A Class, or a type name (\"void\" too) whose class exists."
   [who v]
-  (cond (with-gil #(s/call "dyn-instance?" v "java/lang/Class")) ["c" (invoke v "descriptorString")]
+  (cond (with-gil #(@proc-dyn-instance? v "java/lang/Class")) ["c" (invoke v "descriptorString")]
         (string? v) (let [d (if (= v "void") "V" (type-desc v))
                           e (str/replace d #"^\[+" "")]
                       (when (and (str/starts-with? e "L") (not (class-exists? (subs e 1 (dec (count e))))))
@@ -427,10 +457,10 @@
 (defn- scm-annotation [[desc elems]]
   (letfn [(value [[tag & xs :as v]]
             (case tag
-              "@" (s/call "list" tag (scm-annotation (first xs)))
-              "[" (apply s/call "list" tag (map value xs))
-              (apply s/call "list" v)))]
-    (apply s/call "list" desc (map (fn [[n v]] (s/call "cons" n (value v))) elems))))
+              "@" (@proc-list tag (scm-annotation (first xs)))
+              "[" (apply @proc-list tag (map value xs))
+              (apply @proc-list v)))]
+    (apply @proc-list desc (map (fn [[n v]] (@proc-cons n (value v))) elems))))
 
 (defn- as-fn
   "f as a Scheme procedure: a var, a keyword or a map is wrapped, since
@@ -542,7 +572,7 @@
              ;; printed, so a NaN element compares equal to itself
              (some? sinit) ctors (some? cinit) (some? post) (pr-str anns)]}))
 
-(defn- scm-list [kvs] (apply s/call "list" (map (fn [[k v]] (s/call "cons" k v)) kvs)))
+(defn- scm-list [kvs] (apply @proc-list (map (fn [[k v]] (@proc-cons k v)) kvs)))
 
 (defn- redefine-class!
   "The same shape again swaps in the plan's fns and answers the class;
@@ -564,8 +594,8 @@
   "The class's annotations as a jolt-class-spec holds them: a list of the
   class's, then an alist for each of fields, methods and constructors."
   [[canns fanns manns cnanns]]
-  (let [alist (fn [m] (scm-list (map (fn [[k v]] [k (apply s/call "list" (map scm-annotation v))]) m)))]
-    (s/call "list" (apply s/call "list" (map scm-annotation canns))
+  (let [alist (fn [m] (scm-list (map (fn [[k v]] [k (apply @proc-list (map scm-annotation v))]) m)))]
+    (@proc-list (apply @proc-list (map scm-annotation canns))
             (alist fanns) (alist manns) (alist cnanns))))
 
 (defn- define-new-class!
@@ -579,7 +609,7 @@
         ccell (when cinit (s/call "box" cinit))
         pcell (when post (s/call "box" post))
         c (s/call "dyn-define-class"
-                  (s/call "make-jolt-class-spec" cname extends (apply s/call "list" implements)
+                  (s/call "make-jolt-class-spec" cname extends (apply @proc-list implements)
                           (scm-list fields) (scm-list cells) (scm-list sfields) (scm-list scells) (or icell false)
                           (if ctors (scm-list ctors) false) (or ccell false) (or pcell false)
                           (scm-annotations anns)))]
