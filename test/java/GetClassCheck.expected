@@ -1,0 +1,36 @@
+String (pass 0): true
+ArrayList (pass 0): true
+application class (pass 0): true
+anonymous (pass 0): GetClassCheck$1 true
+int[] (pass 0): true
+String[][] (pass 0): true
+Local[] (pass 0): true
+an element of a nested array (pass 0): true
+lambda (pass 0): true
+proxy (pass 0): true true
+another loader's class (pass 0): true true GetClassCheck$Local
+another loader's array (pass 0): true
+String (pass 1): true
+ArrayList (pass 1): true
+application class (pass 1): true
+anonymous (pass 1): GetClassCheck$1 true
+int[] (pass 1): true
+String[][] (pass 1): true
+Local[] (pass 1): true
+an element of a nested array (pass 1): true
+lambda (pass 1): true
+proxy (pass 1): true true
+another loader's class (pass 1): true true GetClassCheck$Local
+another loader's array (pass 1): true
+String (pass 2): true
+ArrayList (pass 2): true
+application class (pass 2): true
+anonymous (pass 2): GetClassCheck$1 true
+int[] (pass 2): true
+String[][] (pass 2): true
+Local[] (pass 2): true
+an element of a nested array (pass 2): true
+lambda (pass 2): true
+proxy (pass 2): true true
+another loader's class (pass 2): true true GetClassCheck$Local
+another loader's array (pass 2): true

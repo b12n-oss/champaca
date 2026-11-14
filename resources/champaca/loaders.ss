@@ -421,6 +421,22 @@
        (let ([m ((method-proc "java/lang/Throwable" "getMessage()Ljava/lang/String;") e)])
          (and m (string=? (jstring->scheme m) n)))))
 (define (try-class n)
+  ;; one already in the table is the answer find-class would give at once,
+  ;; with nothing for the guard below to catch, except where class-exists?
+  ;; says no to the name: a primitive's pseudo-class (int, void) and a
+  ;; hidden class
+  (or (let ([c (hashtable-ref classes n #f)])
+        (and c (not (prim-name? n)) (not (and (has-0x-part? n) (hidden-class? n))) c))
+      (try-class-loading n)))
+;; every hidden class's name has a "/0x" part (Name/0x<n>, a call site's
+;; caller$$Lambda/0x<n>), so a name without one needs no hidden-class? hash
+(define (has-0x-part? n)
+  (let ([len (string-length n)])
+    (let loop ([i 0])
+      (and (fx< (fx+ i 2) len)
+           (or (and (char=? (string-ref n i) #\/) (char=? (string-ref n (fx+ i 1)) #\0) (char=? (string-ref n (fx+ i 2)) #\x))
+               (loop (fx+ i 1)))))))
+(define (try-class-loading n)
   (and (class-exists? n)
        ;; a JDK class outside the boot layer is "class not found" from the
        ;; linker (classpath.clj outside-boot-layer?), which find-class makes a

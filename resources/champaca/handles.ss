@@ -472,7 +472,7 @@
   (lambda (this receiver name mt)
     (unless receiver
       (jthrow "java/lang/NullPointerException" "Cannot invoke \"Object.getClass()\" because \"receiver\" is null"))
-    (let* ([c (find-class (class-name-of receiver))] [name (str-of name)] [desc (mt-desc mt)]
+    (let* ([c (class-of receiver)] [name (str-of name)] [desc (mt-desc mt)]
            [hit (begin (check-symbolic-class! this c) (find-method c name desc))])
       (unless hit (no-such-method c name desc "invokeSpecial"))
       (when (static-flag? (caddr (cdr hit)))

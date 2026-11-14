@@ -406,6 +406,15 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- Finding a class without its name. `getClass()` answers an object's
+  class record, and an array's from a table per element type, where it
+  hashed the class's name back into the class table: 48.3 to 6.6 ns on an
+  object, 70.6 to 9.9 ns on an array. `Reflection.getCallerClass` walks
+  the stack only until it has the caller, where it named every frame of
+  the stack first; `Class.forName` ten frames deep went from 4.4 to 1.7
+  us. A stack walk keys each frame's parse by its code name's object, and
+  `Class.forName` takes a class already in the table without a guard.
+  `GetClassCheck` is new.
 - An `ldc` of a class or a string keeps what it resolved in its site's
   inline-cache cell, as the JVM keeps a resolved constant: each run of the
   instruction hashed the class's name into the class table, or the
