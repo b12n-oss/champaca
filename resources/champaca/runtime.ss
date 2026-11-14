@@ -897,12 +897,30 @@
           (eq-hashtable-set! t target r)
           r)
         a)))
+;; An array's answers the same way, by its element descriptor, which is one
+;; interned string for every array of that type (jnewarray-interned, clone).
+;; jinstance? on an array built its class name with string-append and took
+;; substrings of it on every test: Clojure's PersistentHashMap.cloneAndSet
+;; (a cast of a cloned INode[]) and ArraySeq.<init> (a test for Object[])
+;; had at least 5% of a profiled run from source there. An element string that isn't the
+;; interned one only misses the table, so it answers right either way.
+(define array-answers (make-weak-eq-hashtable))
+(define (array-instance-of? elem target)
+  (let* ([t (or (#3%eq-hashtable-ref array-answers elem #f)
+                (let ([t (make-weak-eq-hashtable)]) (eq-hashtable-set! array-answers elem t) t))]
+         [a (#3%eq-hashtable-ref t target 'unknown)])
+    (if (eq? a 'unknown)
+        (let ([r (and (class-assignable? (string-append "[" elem) target) #t)])
+          (eq-hashtable-set! t target r)
+          r)
+        a)))
 (define (jinstance-miss ic o target)
-  (if (jobj? o)
-      (let ([r (class-instance-of? (jobj-cls o) target)])
-        (set-car! ic (jobj-cls o)) (set-cdr! ic r)
-        r)
-      (jinstance? o target)))
+  (cond [(jobj? o)
+         (let ([r (class-instance-of? (jobj-cls o) target)])
+           (set-car! ic (jobj-cls o)) (set-cdr! ic r)
+           r)]
+        [(jarr? o) (array-instance-of? (jarr-elem o) target)]
+        [else (jinstance? o target)]))
 (define-syntax jcheckcast-ic
   (syntax-rules ()
     [(_ ic x target) (jcheckcast-ic ic x target #f -1)]

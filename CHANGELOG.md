@@ -393,6 +393,13 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- `instanceof` and `checkcast` on an array remember their answers per
+  array type, keyed by its interned element descriptor, as an object's class
+  already did. A miss built the array's class name and took substrings of it
+  on every test. An array `instanceof` went from 147.9 to 9.4 ns and a
+  clone of an `Object[]` with its cast from 267.5 to 53.2 ns. Clojure's
+  `PersistentHashMap.cloneAndSet` and `ArraySeq.<init>` spent at least 5% of
+  a profiled run from source there. `ArrayTypeCheck` is new.
 - An object's identity hash lives in its own record, in the field that
   holds its monitor, and moves into the monitor when the object is first
   locked. It was kept in a weak table for every object. `new Object()` and
