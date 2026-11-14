@@ -4,7 +4,7 @@
 
 `init!` takes a `:classpath` of jars and directories, searched in order like `java -cp`. With no `:classpath` it uses `CHAMPACA_CLASSPATH`'s entries, which an [app bundle](app-bundles.md)'s launcher sets, so a bundled program needn't know where its jars went.
 
-A class in a package one of the JDK's modules owns is never taken from the classpath, as on the JVM, so an old jar carrying its own copy of `javax.xml` classes gets the JDK's (`test/java/ShadowCheck.java`). One difference from Java remains: the classpath is searched before the JDK's modules, so a jar that ships its own copy of a JDK class would win, where Java looks in the JDK first.
+A class in a package one of the JDK's modules owns is never taken from the classpath, as on the JVM, so an old jar carrying its own copy of `javax.xml` classes gets the JDK's (`test/java/ShadowCheck.java`).
 
 ```clojure
 (ldk/init! {:classpath ["target/lib.jar"]})
@@ -102,7 +102,7 @@ A runtime built with `jlink` works as `JAVA_HOME` too, if it has the modules you
 
 The module system boots on top of that, as on the JVM. `System.initPhase2()` builds the boot layer from the module graph jlink resolved into the image, so `ModuleLayer.boot().modules()` lists what the JVM's does for the same JDK. `ServiceLoader` finds the providers those modules declare (`jdk.localedata`'s locale data, `jdk.charsets`' charsets, `jdk.jartool`'s `ToolProvider`). A JDK class's `getModule()` is its named module, and reflection into a package the module doesn't export or open fails as it does on the JVM.
 
-Your own classes sit in the application loader's unnamed module and report that loader, as on the JVM. Nothing reads a `module-info` from your jars, though, so there's no module path and no checks between your own packages ([limitations](limitations.md#other-gaps)).
+Your own classes sit in the application loader's unnamed module and report that loader, as on the JVM. A `module-info` on the class path is never read, as on the JVM, so there are no checks between the packages there. Named modules of your own come from a module path (`-p`, `-m`, [running-java-programs](running-java-programs.md)), with the differences [limitations](limitations.md#other-gaps) lists.
 
 ## `sun.misc.Unsafe`
 

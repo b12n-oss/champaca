@@ -46,7 +46,7 @@ A class generated at run time keeps its lines, meaning one defined with no code 
 
 Without the lines a frame can go missing too. When a method of a class without them calls nothing and throws from one of champaca's own checks (a division by zero, an array index, a cast, an array's size) while inlined into its caller, Chez has folded the inlined code into the caller's, so the trace shows the caller's frame where the JVM shows the method's own. `test/libcache/StackCheck-lines-off.expected` has the shape, and `CHAMPACA_LINES=all` restores the frame along with the lines.
 
-Two other differences from the JVM: a native champaca wrote in Scheme has no frame, where the JVM prints `Native Method`, and the stacks of other threads aren't available.
+Two other differences from the JVM: a native champaca wrote in Scheme has no frame, where the JVM prints `Native Method`, and another thread's stack starts at the Java method that blocked, without the native under it ([limitations](limitations.md#native-code)).
 
 `CHAMPACA_BT=1` is for errors in champaca itself. It keeps a shadow stack of Java frames, so a Chez error inside a native, which has no Java trace, still prints where in the Java program it happened, and it names each missing native on stderr as it's hit. It changes the generated code, so it gets its own startup cache, and the first run with it on is a cold one.
 
