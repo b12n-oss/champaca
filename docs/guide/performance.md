@@ -514,3 +514,18 @@ An `ldc` of a class (`Foo.class`) found the class by hashing its name into the c
 
 `Ldc` (2026-11-14): `ArrayList.class` read in a loop went from 180.0 to 2.9 ns, and a string literal from 45.9 to 2.8 ns. `LdcCheck` checks the identities: the same literal from two methods, a lambda and `intern()` is one object, and a class constant is the `Class` that `forName` returns, on each of three passes.
 
+### Finding a class without its name
+
+After `ldc`, a profile of Clojure loading libraries from source still showed class names being hashed. `getClass()` took an object's class record, wrote out its name and hashed that back into the class table to find the same record, and for an array built the name first with `string-append`. It now answers the record, and an array's class comes from a weak table keyed by its interned element descriptor.
+
+`Reflection.getCallerClass`, which `Class.forName` and every other caller-sensitive method call, built the whole Java stack, with each frame's full name written out, and then took the second frame. It now walks the continuation only until the frames it needs are final: an inlined callee or a block frame merging into its method can change only the frame added last. Every stack walk also looked up each frame's parsed name by hashing its text; the code name is the same string object on every walk, so a weak table keyed by that object answers first.
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| `getClass()` on an object | 48.3 ns | 6.6 ns | 1.2 ns |
+| `getClass()` on an array | 70.6 ns | 9.9 ns | 1.1 ns |
+| `Class.forName`, 10 frames deep | 4.4 us | 1.7 us | 0.33 us |
+| `new Throwable`, 20 frames deep | 1.17 us | 1.10 us | 0.52 us |
+
+The Clojure run itself didn't move (7.82 against 7.93 s warm, median of three, interleaved, load average 7 to 10): after `ldc`, these were under 1% of its samples. Code that asks `getClass` or `Class.forName` often, as frameworks and reflection do, is where it shows. `GetClassCheck` compares `getClass()` with literals and `Class.forName` for JDK, application and anonymous classes, arrays, a lambda's hidden class, a proxy and a class another loader defined, three passes each.
+

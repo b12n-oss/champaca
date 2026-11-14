@@ -356,10 +356,19 @@
 ;; copy per call site), the callee's own activation. champaca's own classes
 ;; (lambda bodies) aren't frames the JVM has. Cached per name.
 (define frame-methods (make-hashtable string-hash string=?))
-(define (frame-method name)
+(define (frame-method-of-text name)
   (let ([hit (hashtable-ref frame-methods name 'none)])
     (if (eq? hit 'none)
         (let ([m (parse-frame-method name)]) (hashtable-set! frame-methods name m) m)
+        hit)))
+;; A frame's name is its code object's name string, the same object on every
+;; walk, so a table keyed by the object answers without hashing the text,
+;; which every frame of every stack walk (getCallerClass, a throw) did.
+(define frame-methods-by-object (make-weak-eq-hashtable))
+(define (frame-method name)
+  (let ([hit (#3%eq-hashtable-ref frame-methods-by-object name 'none)])
+    (if (eq? hit 'none)
+        (let ([m (frame-method-of-text name)]) (eq-hashtable-set! frame-methods-by-object name m) m)
         hit)))
 (define (parse-frame-method name)
   (let* ([inl (string-find-sub name "#I:")]
@@ -469,6 +478,30 @@
                                         (add-method-frame m (or d pending) acc n))])
                 (loop (cdr fs) #f acc n)))))))
 
+;; The innermost limit Java frames of continuation k, as java-frames-of
+;; gives them, walking only as far as it takes. A merge or an inlined callee
+;; changes only the frame added last, so once limit + 1 frames are there the
+;; first limit are final. getCallerClass needs two; java-frames-of walked
+;; and named every frame of the stack.
+(define (java-frames-upto k limit)
+  (let loop ([k k] [steps 0] [pending #f] [acc '()] [n 0])
+    (if (or (fx> n limit) (eq? k #%$null-continuation) (not (#%$continuation? k)) (fx= steps 8192))
+        (let ([fs (reverse (map (lambda (f) (list-head f 4)) acc))])
+          (if (fx> n limit) (list-head fs limit) fs))
+        (begin
+          (#%$split-continuation k 0)
+          (let* ([code (#%$continuation-return-code k)]
+                 [name (#%$code-name code)]
+                 [m (and (string? name) (frame-method name))]
+                 [d (frame-marker (return-sexpr code (#%$continuation-return-offset k)))]
+                 [next (#%$continuation-link k)])
+            (if (not m)
+                (loop next (fx+ steps 1) (or pending d) acc n)
+                (let-values ([(acc n) (if (block-frame-merges? m acc)
+                                          (merge-block-frame m (or d pending) acc n)
+                                          (add-method-frame m (or d pending) acc n))])
+                  (loop next (fx+ steps 1) #f acc n))))))))
+
 (define (java-frame-class name)
   ;; "pkg/Cls.meth(desc)#B4" -> "pkg/Cls"
   (let ([paren (let find ([i 0]) (cond [(fx= i (string-length name)) #f]
@@ -498,14 +531,26 @@
 ;; The JVM answers the caller of the method that called getCallerClass,
 ;; skipping reflection's own frames.
 (define caller-debug? (getenv "CHAMPACA_CALLER_DEBUG"))
+(define (caller-of-frames fs)
+  (let loop ([fs (if (pair? fs) (cdr fs) fs)])
+    (cond [(null? fs) #f]
+          [(reflection-frame? (caar fs)) (loop (cdr fs))]
+          [else (caar fs)])))
+;; the first few frames, walked no further, and the whole stack only when
+;; reflection's frames fill them (under CHAMPACA_BT the shadow stack, as
+;; java-frames gives it)
+(define caller-frames 8)
 (defnative "jdk/internal/reflect/Reflection.getCallerClass()Ljava/lang/Class;" ()
-  (let ([fs (java-frames)])
-    (when caller-debug?
-      (put-string (current-error-port) (format "getCallerClass frames: ~s\n" (map cdr (list-head fs (min 5 (length fs)))))))
-    (let loop ([fs (if (pair? fs) (cdr fs) fs)])
-      (cond [(null? fs) #f]
-            [(reflection-frame? (caar fs)) (loop (cdr fs))]
-            [else (jmirror-of (caar fs))]))))
+  (let* ([few (and (not (pair? jstack)) (not caller-debug?)
+                   ;; walked inside call/1cc, while its continuation is live
+                   (map (lambda (f) (list (car f)))
+                        (call/1cc (lambda (k) (java-frames-upto k caller-frames)))))]
+         [cname (or (and few (caller-of-frames few))
+                    (let ([fs (java-frames)])
+                      (when caller-debug?
+                        (put-string (current-error-port) (format "getCallerClass frames: ~s\n" (map cdr (list-head fs (min 5 (length fs)))))))
+                      (caller-of-frames fs)))])
+    (and cname (jmirror-of cname))))
 (defnative "jdk/internal/reflect/Reflection.getClassAccessFlags(Ljava/lang/Class;)I" (c)
   (fxlogand (jclass-flags (mirror-class c)) #xffff))
 

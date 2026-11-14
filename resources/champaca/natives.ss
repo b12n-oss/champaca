@@ -372,6 +372,9 @@
                         (not (char=? (string-ref n (fx- i 1)) #\nul))
                         (loop (fx+ i 1) (fx+ i 1)))]
                   [else (loop (fx+ i 1) start)]))])))))
+(define (string-has-char? s ch)
+  (let ([len (string-length s)])
+    (let loop ([i 0]) (and (fx< i len) (or (char=? (string-ref s i) ch) (loop (fx+ i 1)))))))
 (define (valid-class-name? n)
   (let ([len (string-length n)])
     (and (fx> len 0)
@@ -479,7 +482,7 @@
               ;; Class.c: a name with a slash is not found as given; one whose
               ;; slashed form isn't a class name or descriptor (an empty name,
               ;; over 255 dimensions) is not found by that slashed form
-              [(memv #\/ (string->list s)) (jthrow "java/lang/ClassNotFoundException" s)]
+              [(string-has-char? s #\/) (jthrow "java/lang/ClassNotFoundException" s)]
               [(not (valid-class-name? n)) (jthrow "java/lang/ClassNotFoundException" n)]
               ;; one Scheme char is at most 6 bytes of modified UTF-8 (a code
               ;; point beyond the BMP), so a shorter name can't be too long
@@ -496,7 +499,7 @@
     (unless c
       (jthrow "java/lang/ClassNotFoundException"
               (cond [(not loader) n] [(and array? (string? element)) element] [else s])))
-    (when (eqv? init 1) (jinit (jclass-cname c)))
+    (when (and (eqv? init 1) (not (eq? (jclass-state c) 'initialized))) (jinit (jclass-cname c)))
     (jmirror c)))
 
 ;; --- strings and numbers -------------------------------------------------------

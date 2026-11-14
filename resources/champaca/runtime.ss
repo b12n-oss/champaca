@@ -798,7 +798,20 @@
         [(backtrace? x) "java/lang/Object"]
         [else (error 'champaca "not a Java value" x)]))
 
-(define (class-of x) (find-class (class-name-of x)))
+;; An object's class is its record already; it went to its name and hashed
+;; that back into the class table, on every getClass. An array's comes from
+;; a table keyed by its element descriptor, one interned string per array
+;; type, so its name is built and hashed once per type.
+(define array-classes (make-weak-eq-hashtable))
+(define (class-of x)
+  (cond [(jobj? x) (jobj-cls x)]
+        [(jarr? x)
+         (let ([elem (jarr-elem x)])
+           (or (#3%eq-hashtable-ref array-classes elem #f)
+               (let ([c (find-class (class-name-of x))])
+                 (eq-hashtable-set! array-classes elem c)
+                 c)))]
+        [else (find-class (class-name-of x))]))
 
 ;; Every name a class answers to: its own, its superclasses' and all their
 ;; interfaces'. Built the first time something asks, from the supertypes'
