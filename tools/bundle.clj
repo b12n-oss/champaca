@@ -34,7 +34,9 @@
 ;;                          a shell header and the bundle as a tar.gz. Its first
 ;;                          run unpacks the bundle under
 ;;                          ${CHAMPACA_SINGLE_DIR:-~/.cache/champaca/single}/
-;;                          NAME-<digest>/ and later runs start it from there
+;;                          NAME-<digest>/ and later runs start it from there;
+;;                          a first run also removes the same app's other
+;;                          copies no run has touched for a week
 ;;   --train ARGS...        run the program once with ARGS at build time, so
 ;;                          the cache holds the code that run compiled (the
 ;;                          rest of the command line); without it only the
@@ -285,7 +287,12 @@
        "  fi\n"
        "  # a run that got there first keeps its copy; a broken one is replaced\n"
        "  if [ -x \"$dir/bin/" name "\" ]; then rm -rf \"$tmp\"; else rm -rf \"$dir\"; mv \"$tmp\" \"$dir\"; fi\n"
+       "  # other builds' copies nothing ran for a week, and unpacks a killed run left\n"
+       "  find \"$root\" -maxdepth 1 -name '" name "-*' ! -name '" name "-" id "' -mtime +7 -exec rm -rf {} + 2>/dev/null || true\n"
+       "  find \"$root\" -maxdepth 1 -name '." name "-*' -mtime +1 -exec rm -rf {} + 2>/dev/null || true\n"
        "fi\n"
+       "# a copy in use stays recent, so another build's first run keeps it\n"
+       "touch \"$dir\" 2>/dev/null || true\n"
        "exec \"$dir/bin/" name "\" \"$@\"\n"))
 
 (defn- header-for

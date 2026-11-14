@@ -1274,7 +1274,7 @@
                                   (fs/delete-if-exists part)
                                   (System/exit 1))))
                           (finally (fs/delete-if-exists part)))))}
-  hn {:doc "examples/hn, a standalone jolt project: the Hacker News front page in the terminal, fetched with OkHttp (Kotlin) and read with jsoup (Java) on champaca. Runs its own tasks there: jolt hn [run|test|dist|fetch] [args] (run by default; see examples/hn/README.md)"
+  hn {:doc "examples/hn, a standalone jolt project: the Hacker News front page in the terminal, fetched with OkHttp (Kotlin), read with jsoup (Java) and coloured with fansi (Scala) on champaca. Runs its own tasks there: jolt hn [run|test|dist|fetch] [args] (run by default; see examples/hn/README.md)"
       :task (let [[t & args] *command-line-args*
                   [t args] (if (contains? #{"run" "test" "dist" "fetch"} t) [t args] ["run" (remove nil? (cons t args))])]
               (System/exit (:exit (apply shell {:dir "examples/hn" :continue true} (jolt-bin) t args))))}

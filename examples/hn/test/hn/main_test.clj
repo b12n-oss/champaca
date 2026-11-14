@@ -46,8 +46,22 @@
 
 (deftest options
   (is (= 0 (hn/run {:help true})))
-  (is (str/starts-with? (with-out-str (hn/run {:file "test/hn/frontpage.html" :limit 1}))
-                        "  1. Running Java without a JVM")))
+  (is (str/starts-with? (with-out-str (hn/run {:file "test/hn/frontpage.html" :limit 1 :color "never"}))
+                        "  1. Running Java without a JVM"))
+  (is (true? (hn/color? "always")))
+  (is (false? (hn/color? "never"))))
+
+(defn- strip-ansi [s] (str/replace s (re-pattern "\u001b\\[[0-9;]*m") ""))
+
+(deftest colour-through-fansi
+  ;; fansi (Scala) puts the escapes in; without them the text is the plain one
+  (let [ss (hn/stories page)
+        plain (with-out-str (hn/print-stories ss false false))
+        coloured (with-out-str (hn/print-stories ss false true))]
+    (is (str/includes? coloured "\u001b[1mRunning Java without a JVM"))
+    (is (str/includes? coloured "\u001b[36mexample.org"))
+    (is (not= plain coloured))
+    (is (= plain (strip-ansi coloured)))))
 
 (deftest a-fetch-through-okhttp-that-fails
   ;; OkHttp (Kotlin) refuses a URL with no scheme with its own message,

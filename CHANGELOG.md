@@ -205,6 +205,11 @@ The first public version. Champaca is still experimental: the
 
 #### Libraries
 
+- `examples/hn` colours its output on a terminal with fansi, a Scala
+  library (`--color auto|always|never`, `NO_COLOR`), so it runs Kotlin, Java
+  and Scala code in one jolt process. A `--single` file's first run now
+  deletes the same app's other unpacked copies that no run touched for a
+  week, and every run touches its own.
 - `examples/hn`, a standalone jolt project: the Hacker News front page in
   the terminal, fetched with OkHttp (Kotlin) and read with jsoup (Java), with
   tasks to run, test and pack it (`jolt hn`, or `jolt run`, `test`, `dist`
