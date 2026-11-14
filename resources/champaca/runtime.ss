@@ -380,21 +380,30 @@
                (eq-hashtable-set! overflows-seen e o)
                o))]
         [else e]))
+;; A try region: body runs with a handler pushed on Chez's handler stack, and
+;; the stack is put back as it was when call/1cc returns, whichever way: body's
+;; value, or the thunk a caught exception escapes with (the trampoline calls
+;; it outside the region). The escape alone would leave the stack as raise had
+;; it, since raise calls the handler under a parameterize of the stack. Any
+;; other way out runs through something that restores the stack itself: an
+;; outer jtry, or the parameterize in Chez's with-exception-handler and guard
+;; (run-guarded, thread-body, jolt's try). No dynamic-wind, which cost 7 of a
+;; try entry's 18 ns.
 (define-syntax jtry
   (syntax-rules ()
     [(_ e ([test next] ...) body)
-     (call/1cc
-      (lambda (k)
-        (let* ([old (#%$current-handler-stack)]
-               [new (cons (lambda (raised)
-                            (let ([e (java-raise-of raised)])
-                              (cond [test (k (lambda () next))] ...
-                                    [else (raise-continuable raised)])))
-                          old)])
-          (dynamic-wind
-           (lambda () (#%$current-handler-stack new))
-           (lambda () body)
-           (lambda () (#%$current-handler-stack old))))))]))
+     (let* ([old (#%$current-handler-stack)]
+            [v (call/1cc
+                (lambda (k)
+                  (#%$current-handler-stack
+                   (cons (lambda (raised)
+                           (let ([e (java-raise-of raised)])
+                             (cond [test (k (lambda () next))] ...
+                                   [else (raise-continuable raised)])))
+                         old))
+                  body))])
+       (#%$current-handler-stack old)
+       v)]))
 ;; int shifts: a and the result are ints, so fixnums. ishl first drops the bits
 ;; that would leave the low 32, so the shift can't overflow a fixnum.
 (define-syntax int-shl

@@ -14,4 +14,6 @@ propagated five
 10 2 1.5
 a.c!.a..c! exits 7
 100001
+inner five, then outer five | , then none
+3 caught in forEach, then five outside
 main caught java.lang.IllegalStateException five

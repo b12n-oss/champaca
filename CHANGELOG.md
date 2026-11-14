@@ -386,6 +386,12 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- Entering a `try` block no longer sets up a `dynamic-wind`: `jtry` pops
+  its handler itself when its continuation returns, with the body's value
+  or with a caught exception's thunk. A `try` block with a call went from
+  26.0 to 19.0 ns and a `synchronized` block from 44.0 to 35.8 ns.
+  `TryCheck` gains a throw after an inner region caught and catches inside a
+  lambda the JDK calls.
 - Allocation, boxing and range checks. `new` no longer calls a constructor
   closure and a by-name `vector-copy` (12.5 to 7.6 ns with a constructor),
   which reaches everything that allocates: `HashMap.put` 92.6 to 65.9 ns,

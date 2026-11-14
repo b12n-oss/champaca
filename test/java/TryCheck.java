@@ -238,6 +238,35 @@ public class TryCheck {
         return n;
     }
 
+    // an inner region catches, then the outer region throws the same type:
+    // the outer handler must get it, not the inner one, whose region is over
+    static String nestedThenThrow(int x) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            try { boom(x); } catch (IllegalStateException e) { sb.append("inner ").append(e.getMessage()); }
+            sb.append(", then ");
+            boom(x);
+            return sb.append("none").toString();
+        } catch (IllegalStateException e) {
+            return sb.append("outer ").append(e.getMessage()).toString();
+        }
+    }
+
+    // catches inside a lambda the JDK calls, then a throw of the same type
+    // outside it
+    static String catchesInCallback() {
+        int[] caught = new int[1];
+        java.util.List.of(5, 1, 5, 5).forEach(x -> {
+            try { boom(x); } catch (IllegalStateException e) { caught[0]++; }
+        });
+        try {
+            boom(5);
+            return "none";
+        } catch (IllegalStateException e) {
+            return caught[0] + " caught in forEach, then " + e.getMessage() + " outside";
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         System.out.println(loopThrows());
         System.out.println(setBefore(3) + " | " + setBefore(4));
@@ -255,6 +284,8 @@ public class TryCheck {
         System.out.println(params(5, 1, 3.0));
         System.out.println(finallyPaths());
         System.out.println(normalExits());
+        System.out.println(nestedThenThrow(5) + " | " + nestedThenThrow(1));
+        System.out.println(catchesInCallback());
         try {
             boom(5);
         } catch (RuntimeException e) {
