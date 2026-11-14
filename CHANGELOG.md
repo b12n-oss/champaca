@@ -417,6 +417,11 @@ program may notice, and changes to the tasks.
   `Package.getPackage` find your packages, and a `URLClassLoader`'s class
   reports the package it defined from its jar's manifest
   (`test/java/PackageCheck.java`).
+- A stack frame from an application module printed without its module
+  (`app@1.0/app.Main.main(Main.java:5)` on the JVM), and every frame's
+  `getModuleVersion()` and `getClassLoaderName()` answered null. They're
+  filled from the class's module and loader as HotSpot fills them, and
+  `StackTraceElement` decides what prints (`test/modpath` frames).
 
 ### Performance
 

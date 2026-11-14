@@ -588,16 +588,43 @@
 
 ;; ste for cname.mname desc at pc, its format bits still to compute; pc -2
 ;; is a native method's frame, whose line -2 prints as Native Method
+;; A named module's version as HotSpot's module entry has it: the
+;; descriptor's raw version, the string Module hands defineModule0, or #f;
+;; per Module object, which never changes its descriptor
+(define module-versions (make-weak-eq-hashtable))
+(define (module-raw-version mod)
+  (let ([hit (eq-hashtable-ref module-versions mod 'none)])
+    (if (eq? hit 'none)
+        (let* ([d ((method-proc "java/lang/Module" "getDescriptor()Ljava/lang/module/ModuleDescriptor;") mod)]
+               [o (and d ((method-proc "java/lang/module/ModuleDescriptor" "rawVersion()Ljava/util/Optional;") d))]
+               [v (and o ((method-proc "java/util/Optional" "orElse(Ljava/lang/Object;)Ljava/lang/Object;") o #f))])
+          (eq-hashtable-set! module-versions mod v)
+          v)
+        hit)))
+
+;; ste for cname.mname desc at pc, its format bits still to compute; pc -2
+;; is a native method's frame, whose line -2 prints as Native Method. As
+;; HotSpot's fill_in: the class's module name and version once its module
+;; is named (an application module's included; during the boot, before
+;; modules are defined, the module the image puts the class in), and its
+;; loader's name. StackTraceElement's own format then decides what prints
+;; (no JDK module version, no built-in loader's name).
 (define (fill-ste! ste cname mname desc pc)
   (let* ([info (if frame-hook (frame-hook cname mname desc (if (eqv? pc -2) -1 pc)) (vector "" -1 ""))]
          [file (vector-ref info 0)] [line (if (eqv? pc -2) -2 (vector-ref info 1))] [module (vector-ref info 2)]
+         [c (find-class cname)]
+         [mod (class-module c)]
+         [named (and mod (jslot mod (jfield-index "java/lang/Module" "name")))]
+         [ld (class-loader-of c)]
          [set (lambda (f v) (jslot-set! ste (slot-of "java/lang/StackTraceElement" f) v))])
-    (set "declaringClassObject" (jmirror-of cname))
+    (set "declaringClassObject" (jmirror c))
     (set "declaringClass" (jstring (slashes->dots (plain-class-name cname))))
     (set "methodName" (jstring mname))
     (set "fileName" (and (fx> (string-length file) 0) (jstring file)))
     (set "lineNumber" line)
-    (set "moduleName" (and (fx> (string-length module) 0) (jstring module)))
+    (set "moduleName" (or named (and (fx> (string-length module) 0) (jstring module))))
+    (set "moduleVersion" (and named (module-raw-version mod)))
+    (set "classLoaderName" (and ld (jslot ld (jfield-index "java/lang/ClassLoader" "name"))))
     ste))
 
 ;; the elements filled in, their format still to compute (computeFormat

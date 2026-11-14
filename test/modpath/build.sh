@@ -9,7 +9,7 @@
 # Lays the module path probes out under the directory given:
 #   mods/greet.jar (com.greet, a provider and two resources), mods/app/
 #   (exploded, requires com.greet, uses the service)
-#   mods2/greet.jar, mods2/app.jar (app with ModuleMainClass app.Main)
+#   mods2/greet.jar, mods2/app.jar (app 1.0 with ModuleMainClass app.Main)
 #   cp/ (cp.Probe naming com.greet.Greeter, cp.Res asking for its resources)
 #   split/ (com.greet.Extra on the class path, in com.greet's package)
 #   mods3/ (seven modules with META-INF/x, and om requiring them)
@@ -26,8 +26,9 @@ cp "$src/com.greet/top.txt" "$out/tmp/com.greet/"
 mkdir -p "$out/tmp/com.greet/META-INF" && cp "$src/com.greet/META-INF/greet.txt" "$out/tmp/com.greet/META-INF/"
 "${bin}jar" cf "$out/mods/greet.jar" -C "$out/tmp/com.greet" .
 cp "$out/mods/greet.jar" "$out/mods2/greet.jar"
-"${bin}javac" -p "$out/mods" -d "$out/mods/app" "$src/app/module-info.java" "$src/app/app/Main.java" "$src/app/app/Plain.java" "$src/app/app/Split.java"
-"${bin}jar" --create --file "$out/mods2/app.jar" --main-class app.Main -C "$out/mods/app" .
+"${bin}javac" -p "$out/mods" -d "$out/mods/app" "$src/app/module-info.java" "$src/app/app/Main.java" "$src/app/app/Plain.java" "$src/app/app/Split.java" "$src/app/app/Frames.java"
+# mods2's app has a version, which its stack frames print (app@1.0/)
+"${bin}jar" --create --file "$out/mods2/app.jar" --main-class app.Main --module-version 1.0 -C "$out/mods/app" .
 "${bin}javac" -cp "$out/tmp/com.greet" -d "$out/cp" "$src/cp/cp/Probe.java" "$src/cp/cp/Res.java"
 # split/: com.greet.Extra, a class path class in com.greet's package
 "${bin}javac" -d "$out/split" "$src/split/com/greet/Extra.java"

@@ -1,0 +1,8 @@
+exit 0
+app@1.0/app.Frames.show(Frames.java) | module app version 1.0 loader app
+app@1.0/app.Frames.lambda$main$1(Frames.java) | module app version 1.0 loader app
+jdk java.util.ImmutableCollections$List12 | module java.base version is java.version true loader null text starts true
+app@1.0/app.Frames.lambda$main$0(Frames.java) | module app version 1.0 loader app
+com.greet/com.greet.Greeter.call(Greeter.java) | module com.greet version null loader app
+app@1.0/app.Frames.main(Frames.java) | module app version 1.0 loader app
+--- stderr
