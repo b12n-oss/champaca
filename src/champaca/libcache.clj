@@ -82,7 +82,12 @@
     ;; a class outside java.base is :layer, there only when the boot layer
     ;; holds its module (--limit-modules may leave it out of a later run,
     ;; outside-boot-layer?)
-    :jdk (cond (str/starts-with? n "champaca/") :present
+    ;; a call site's lambda class (caller$$Lambda/0x<n>) is synthetic too:
+    ;; it carries :origin :jdk but sits in its caller's package, so without
+    ;; this it was :layer, which outside-boot-layer? always passes, and a
+    ;; cached method was restored in a run whose table lacked its lambda
+    ;; (NoClassDefFoundError: Scala's LazyList$.<clinit>)
+    :jdk (cond (or (str/starts-with? n "champaca/") (str/includes? n "$$Lambda/0x")) :present
                (not= "java.base" (layer-module n)) :layer
                :else nil)
     :user (or (:fp (class-source n)) ::unchecked)

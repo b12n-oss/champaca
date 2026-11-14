@@ -305,6 +305,14 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- A method restored from the library cache could name a call site's lambda
+  class this run never made, and threw `NoClassDefFoundError` (seen in
+  Scala's `LazyList$.<clinit>`, reached through fansi). The class's
+  dependency on a lambda whose caller sits in a classpath package was
+  recorded as a JDK class outside `java.base`, which every run accepts; it
+  is now `:present`, as champaca's other synthetic classes are, so the
+  method is restored only when the lambda is in the table, and compiled
+  again otherwise. `examples/library-cache.clj` is new.
 - An array too large to make is `OutOfMemoryError` with HotSpot's messages
   (`Requested array size exceeds VM limit` above `Integer.MAX_VALUE - 2`,
   `Java heap space` when there is no room), from `new`, multi-dimensional
