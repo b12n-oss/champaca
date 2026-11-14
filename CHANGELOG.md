@@ -437,6 +437,13 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- `champaca.port` moves two parts into namespaces of their own:
+  `champaca.port.rules` holds the tables of JDK members and the jolt forms
+  that stand for them, and `champaca.port.tidy` holds the pass that makes
+  the written Clojure readable. `port.clj` had grown to 974 code lines, close
+  to the metrics gate's limit of 1000. `jolt port` writes the same output
+  for `PortSample`, `PortOther` and commons-lang 2.4's `StringUtils` before
+  and after, and `examples/port.clj` passes.
 - CI's nightly lane runs the whole suite with `CHAMPACA_STRUCTURED=1` on
   Linux x86_64 and macOS (`BATTERY_MODES=structured`). A push checks the
   structuring pass on six programs, and the four programs that caught its

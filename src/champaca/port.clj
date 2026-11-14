@@ -28,6 +28,8 @@
             [champaca.jit :as jit]
             [champaca.link :as link]
             [champaca.loader :as loader]
+            [champaca.port.rules :as rules]
+            [champaca.port.tidy :refer [do-form mentions? tidy]]
             [champaca.portcheck :as pc]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -88,174 +90,6 @@
       (vswap! (:holds ctx) conj :initializers-without-effects))
     true))
 
-;; --- rules: a JDK member and the jolt form that stands for it ----------------------
-;; :form takes the arguments, already translated, receiver first. :holds names
-;; the condition the rule needs, if any. A boolean result is 1 or 0 in the
-;; structured form, so a rule for a method returning boolean gives that.
-
-(def ^:private direct-rules
-  {"java/lang/String.length()I"
-   {:form (fn [[r]] (list '.length r)) :holds :strings-within-the-bmp}
-   "java/lang/String.charAt(I)C"
-   {:form (fn [[r i]] (list 'int (list '.charAt r i))) :holds :strings-within-the-bmp}
-   "java/lang/String.trim()Ljava/lang/String;"
-   {:form (fn [[r]] (list '.trim r))}
-   "java/lang/String.isEmpty()Z"
-   {:form (fn [[r]] (list 'if (list '.isEmpty r) 1 0))}
-   "java/lang/StringBuilder.append(Ljava/lang/String;)Ljava/lang/StringBuilder;"
-   {:form (fn [[r x]] (list '.append r x))}
-   "java/lang/StringBuilder.append(C)Ljava/lang/StringBuilder;"
-   {:form (fn [[r x]] (list '.append r (list 'char x)))}
-   "java/lang/StringBuilder.append(I)Ljava/lang/StringBuilder;"
-   {:form (fn [[r x]] (list '.append r x))}
-   "java/lang/StringBuilder.toString()Ljava/lang/String;"
-   {:form (fn [[r]] (list '.toString r))}
-   "java/lang/StringBuilder.length()I"
-   {:form (fn [[r]] (list '.length r)) :holds :strings-within-the-bmp}
-   "java/lang/String.substring(I)Ljava/lang/String;"
-   {:form (fn [[r i]] (list '.substring r i)) :holds :strings-within-the-bmp}
-   "java/lang/String.substring(II)Ljava/lang/String;"
-   {:form (fn [[r i j]] (list '.substring r i j)) :holds :strings-within-the-bmp}
-   "java/lang/String.indexOf(Ljava/lang/String;)I"
-   {:form (fn [[r x]] (list '.indexOf r x)) :holds :strings-within-the-bmp}
-   "java/lang/String.indexOf(Ljava/lang/String;I)I"
-   {:form (fn [[r x i]] (list '.indexOf r x i)) :holds :strings-within-the-bmp}
-   "java/lang/String.lastIndexOf(Ljava/lang/String;)I"
-   {:form (fn [[r x]] (list '.lastIndexOf r x)) :holds :strings-within-the-bmp}
-   "java/lang/String.indexOf(I)I"
-   {:form (fn [[r c]] (list '.indexOf r c)) :holds :strings-within-the-bmp}
-   "java/lang/String.indexOf(II)I"
-   {:form (fn [[r c i]] (list '.indexOf r c i)) :holds :strings-within-the-bmp}
-   "java/lang/String.lastIndexOf(I)I"
-   {:form (fn [[r c]] (list '.lastIndexOf r c)) :holds :strings-within-the-bmp}
-   "java/lang/String.lastIndexOf(II)I"
-   {:form (fn [[r c i]] (list '.lastIndexOf r c i)) :holds :strings-within-the-bmp}
-   "java/lang/String.lastIndexOf(Ljava/lang/String;I)I"
-   {:form (fn [[r x i]] (list '.lastIndexOf r x i)) :holds :strings-within-the-bmp}
-   ;; a char[] of a string within the BMP has one element a char, as Java's;
-   ;; on a nil typed as a String jolt answers an empty array
-   "java/lang/String.toCharArray()[C"
-   {:form (fn [[r]] (list '.toCharArray (list 'non-null r))) :holds :strings-within-the-bmp}
-   ;; jolt makes "" of a nil array, where Java throws
-   "java/lang/String.valueOf([C)Ljava/lang/String;"
-   {:form (fn [[a]] (list 'String. (list 'non-null a)))}
-   "java/lang/StringBuffer.reverse()Ljava/lang/StringBuffer;"
-   {:form (fn [[r]] (list '.reverse r)) :holds :strings-within-the-bmp}
-   ;; the same as the JDK's on every char outside the surrogates
-   ;; (examples/port.clj checks each)
-   "java/lang/Character.isTitleCase(C)Z"
-   {:form (fn [[c]] (list 'if (list 'Character/isTitleCase (list 'char c)) 1 0))}
-   "java/lang/String.valueOf(C)Ljava/lang/String;"
-   {:form (fn [[c]] (list 'String/valueOf (list 'char c)))}
-   "java/lang/String.equalsIgnoreCase(Ljava/lang/String;)Z"
-   {:form (fn [[r x]] (list 'if (list '.equalsIgnoreCase r x) 1 0))}
-   "java/lang/String.regionMatches(ZILjava/lang/String;II)Z"
-   {:form (fn [[r ic i x j n]] (list 'if (list '.regionMatches r (list 'not= 0 ic) i x j n) 1 0))
-    :holds :strings-within-the-bmp}
-   "java/lang/String.replace(CC)Ljava/lang/String;"
-   {:form (fn [[r a b]] (list '.replace r (list 'char a) (list 'char b)))}
-   "java/lang/String.equals(Ljava/lang/Object;)Z"
-   {:form (fn [[r x]] (list 'if (list '.equals r x) 1 0))}
-   "java/lang/String.startsWith(Ljava/lang/String;)Z"
-   {:form (fn [[r x]] (list 'if (list '.startsWith r x) 1 0))}
-   "java/lang/String.endsWith(Ljava/lang/String;)Z"
-   {:form (fn [[r x]] (list 'if (list '.endsWith r x) 1 0))}
-   "java/lang/String.concat(Ljava/lang/String;)Ljava/lang/String;"
-   {:form (fn [[r x]] (list '.concat r x))}
-   ;; jolt 0.8.27's Character/isWhitespace differs from the JDK's on five
-   ;; chars: it leaves out U+001C to U+001F and takes U+0085. With those
-   ;; settled here the form agrees with the JDK on every char
-   ;; outside the surrogates (examples/port.clj checks each).
-   "java/lang/Character.isWhitespace(C)Z"
-   {:form (fn [[c]] (list 'let ['ch c]
-                          (list 'if (list 'and (list 'not= 'ch 0x85)
-                                          (list 'or (list '<= 0x1c 'ch 0x1f) (list 'Character/isWhitespace (list 'char 'ch))))
-                                1 0)))}
-   "java/lang/Character.isDigit(C)Z"
-   {:form (fn [[c]] (list 'if (list 'Character/isDigit (list 'char c)) 1 0))}
-   ;; jolt's Unicode tables and JDK 25's differ on eight chars it calls
-   ;; letters and the JDK doesn't (U+088F, U+0C5C, U+0CDC and five in U+A7CE
-   ;; to U+A7F1)
-   "java/lang/Character.isLetter(C)Z"
-   {:form (fn [[c]] (list 'if (list 'Character/isLetter (list 'char c)) 1 0)) :holds :letters-jolt-knows}
-   "java/lang/Character.isLetterOrDigit(C)Z"
-   {:form (fn [[c]] (list 'if (list 'Character/isLetterOrDigit (list 'char c)) 1 0)) :holds :letters-jolt-knows}
-   ;; case: jolt and JDK 25 agree on every char but three each way
-   ;; (U+A7CE to U+A7D5, from a newer Unicode), so these hold for the
-   ;; letters both know
-   "java/lang/Character.toLowerCase(C)C"
-   {:form (fn [[c]] (list 'int (list 'Character/toLowerCase (list 'char c)))) :holds :letters-jolt-knows}
-   "java/lang/Character.toUpperCase(C)C"
-   {:form (fn [[c]] (list 'int (list 'Character/toUpperCase (list 'char c)))) :holds :letters-jolt-knows}
-   "java/lang/Character.toTitleCase(C)C"
-   {:form (fn [[c]] (list 'int (list 'Character/toTitleCase (list 'char c)))) :holds :letters-jolt-knows}
-   "java/lang/Character.isUpperCase(C)Z"
-   {:form (fn [[c]] (list 'if (list 'Character/isUpperCase (list 'char c)) 1 0)) :holds :letters-jolt-knows}
-   "java/lang/Character.isLowerCase(C)Z"
-   {:form (fn [[c]] (list 'if (list 'Character/isLowerCase (list 'char c)) 1 0)) :holds :letters-jolt-knows}
-   "java/lang/String.toUpperCase()Ljava/lang/String;"
-   {:form (fn [[r]] (list '.toUpperCase r)) :holds :letters-jolt-knows}
-   "java/lang/String.toLowerCase()Ljava/lang/String;"
-   {:form (fn [[r]] (list '.toLowerCase r)) :holds :letters-jolt-knows}
-   "java/lang/StringBuffer.append(Ljava/lang/Object;)Ljava/lang/StringBuffer;"
-   {:form (fn [[r x]] (list '.append r x))}
-   "java/lang/StringBuilder.append(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
-   {:form (fn [[r x]] (list '.append r x))}
-   "java/lang/Math.min(II)I" {:form (fn [[a b]] (list 'min a b))}
-   "java/lang/Math.max(II)I" {:form (fn [[a b]] (list 'max a b))}
-   "java/lang/StringBuffer.append(Ljava/lang/String;)Ljava/lang/StringBuffer;"
-   {:form (fn [[r x]] (list '.append r x))}
-   "java/lang/StringBuffer.append(C)Ljava/lang/StringBuffer;"
-   {:form (fn [[r x]] (list '.append r (list 'char x)))}
-   "java/lang/StringBuffer.append(I)Ljava/lang/StringBuffer;"
-   {:form (fn [[r x]] (list '.append r x))}
-   "java/lang/StringBuffer.toString()Ljava/lang/String;"
-   {:form (fn [[r]] (list '.toString r))}
-   "java/lang/StringBuffer.length()I"
-   {:form (fn [[r]] (list '.length r)) :holds :strings-within-the-bmp}})
-
-(def ^:private virtual-rules
-  "By method name and descriptor: the receiver's class isn't in the call.
-  These hold for a java.util.List jolt implements."
-  {"size()I" {:form (fn [[r]] (list '.size r))}
-   "get(I)Ljava/lang/Object;" {:form (fn [[r i]] (list '.get r i))}
-   "isEmpty()Z" {:form (fn [[r]] (list 'if (list '.isEmpty r) 1 0))}
-   "add(Ljava/lang/Object;)Z" {:form (fn [[r x]] (list 'if (list '.add r x) 1 0))}
-   "iterator()Ljava/util/Iterator;" {:form (fn [[r]] (list '.iterator r))}
-   "hasNext()Z" {:form (fn [[r]] (list 'if (list '.hasNext r) 1 0))}
-   "next()Ljava/lang/Object;" {:form (fn [[r]] (list '.next r))}
-   "toArray([Ljava/lang/Object;)[Ljava/lang/Object;" {:form (fn [[r a]] (list '.toArray r a))}
-   "toString()Ljava/lang/String;" {:form (fn [[r]] (list '.toString r))}})
-
-(def ^:private constructor-rules
-  "By class, then constructor descriptor."
-  (into {"java/lang/StringBuilder" {"()V" (fn [_] (list 'StringBuilder.))
-                                    "(I)V" (fn [[n]] (list 'StringBuilder. n))
-                                    "(Ljava/lang/String;)V" (fn [[x]] (list 'StringBuilder. x))}
-         "java/lang/StringBuffer" {"()V" (fn [_] (list 'StringBuffer.))
-                                   "(I)V" (fn [[n]] (list 'StringBuffer. n))
-                                   "(Ljava/lang/String;)V" (fn [[x]] (list 'StringBuffer. x))}
-         "java/lang/String" {"([C)V" (fn [[a]] (list 'String. (list 'non-null a)))
-                             "([CII)V" (fn [[a off n]] (list 'string-of a off n))}
-         "java/util/ArrayList" {"()V" (fn [_] (list 'java.util.ArrayList.))}}
-        (for [c ["IllegalArgumentException" "NumberFormatException" "IllegalStateException"
-                 "ArithmeticException" "IndexOutOfBoundsException" "UnsupportedOperationException"
-                 "RuntimeException" "NullPointerException"]]
-          [(str "java/lang/" c) {"()V" (fn [_] (list (symbol (str c "."))))
-                                 "(Ljava/lang/String;)V" (fn [[msg]] (list (symbol (str c ".")) msg))}])))
-
-;; No boolean[]: an element read from one is true or false in jolt, where
-;; the code here works on 1 and 0, and a boolean[] is read by the same
-;; instruction as a byte[]. A char[] has instructions of its own (char-ref
-;; and char-set! in the plain form), so its elements cross as chars.
-(def ^:private array-makers
-  {"C" 'char-array "I" 'int-array "J" 'long-array "B" 'byte-array "S" 'short-array "D" 'double-array "F" 'float-array})
-
-(def ^:private int-ops {"ix+" '+ "ix-" '- "ix*" '* "ix-and" 'bit-and "ix-or" 'bit-or "ix-xor" 'bit-xor})
-(def ^:private wrapped-ops {"ix+" 'unchecked-add-int "ix-" 'unchecked-subtract-int "ix*" 'unchecked-multiply-int})
-(def ^:private compare-ops
-  {"ix=" '= "ix<>" 'not= "ix<" '< "ix<=" '<= "ix>" '> "ix>=" '>= "=" '= "<" '< "<=" '<= ">" '> ">=" '>=})
-
 ;; --- values -----------------------------------------------------------------------
 
 (declare value)
@@ -274,7 +108,7 @@
 
 (defn- new-array [ctx [ic len]]
   (let [elem (text-of (second (get (:ics ctx) ic)))
-        maker (array-makers elem)
+        maker (rules/array-makers elem)
         of (element-classes elem)]
     (when-not (or maker of) (left (str "no rule for an array of " elem)))
     (vreset! (:sized ctx) true)            ; a size from an argument, perhaps
@@ -304,8 +138,8 @@
     (cond
       (= "jnewarray-interned" f) (new-array ctx args)
       (and (string? f) ((:statics ctx) f)) (sibling-call ctx ((:statics ctx) f) f args)
-      (string? f) (apply-rule ctx (direct-rules f) f args)
-      (= "jvirt-ic" (head f)) (let [k (quoted (nth f 3))] (apply-rule ctx (virtual-rules k) k args))
+      (string? f) (apply-rule ctx (rules/direct-rules f) f args)
+      (= "jvirt-ic" (head f)) (let [k (quoted (nth f 3))] (apply-rule ctx (rules/virtual-rules k) k args))
       :else (left "a call no rule covers"))))
 
 (defn- concat-piece
@@ -333,7 +167,7 @@
 (defn- wrapped
   "(wrap-int x): an int operation that wraps, or a fold to 32 bits."
   [ctx x]
-  (if-let [op (wrapped-ops (head x))]
+  (if-let [op (rules/wrapped-ops (head x))]
     (list op (value ctx (nth x 1)) (value ctx (nth x 2)))
     (list 'unchecked-int (value ctx x))))
 
@@ -360,7 +194,7 @@
     "jcheckcast-ic" (value ctx b)
     "jconcat-parts" (concat-value ctx x)
     "void" nil
-    (if-let [op (int-ops h)]
+    (if-let [op (rules/int-ops h)]
       (list op (value ctx a) (value ctx b))
       (left (str "no rule for " h)))))
 
@@ -393,7 +227,7 @@
   (cond
     (string? t) (list 'some? (symbol t))
     (= "not" (head t)) (list 'nil? (value ctx (second t)))
-    (compare-ops (head t)) (list (compare-ops (head t)) (value ctx (nth t 1)) (value ctx (nth t 2)))
+    (rules/compare-ops (head t)) (list (rules/compare-ops (head t)) (value ctx (nth t 1)) (value ctx (nth t 2)))
     :else (left (str "no rule for the test " (head t)))))
 
 ;; --- control ----------------------------------------------------------------------
@@ -424,13 +258,10 @@
     (concat (map #(statement (expr ctx % false)) (butlast forms))
             [(expr ctx (last forms) tail?)])))
 
-(defn- do-form [forms]
-  (if (= 1 (count forms)) (first forms) (apply list 'do forms)))
-
 (defn- constructor-rule [ctx cname desc]
-  (or (get-in constructor-rules [cname desc]) (left (str "no rule for new " cname)))
+  (or (get-in rules/constructor-rules [cname desc]) (left (str "no rule for new " cname)))
   (when (= "(I)V" desc) (vreset! (:sized ctx) true))   ; a capacity
-  (get-in constructor-rules [cname desc]))
+  (get-in rules/constructor-rules [cname desc]))
 
 (declare constructor-call)
 
@@ -485,13 +316,6 @@
     (list 'let
           (vec (concat (:binds call) [(symbol v) (make (mapv #(value ctx %) (:args call)))]))
           (do-form (body ctx (rest rest-forms) tail?)))))
-
-(defn- mentions?
-  "Whether the Clojure form uses the symbol."
-  [sym form]
-  (cond (symbol? form) (= sym form)
-        (coll? form) (boolean (some #(mentions? sym %) form))
-        :else false))
 
 (defn- sequential-bindings
   "Scheme's let and a block's parameters bind all at once; Clojure's let and
@@ -619,109 +443,6 @@
       (contains? (:blocks ctx) h) (jump ctx x)
       tail? (returned ctx (value ctx x))
       :else (value ctx x))))
-
-;; --- tidying the Clojure ------------------------------------------------------------
-;; The structured form has a let for each value and passes every local to
-;; every block. Written as Clojure that is correct and noisy, so: a binding
-;; of a name to itself goes, nested lets become one, (let [x E] x) is E, and a
-;; loop keeps only the locals some recur changes.
-
-(defn- recurs
-  "The argument lists of the recur forms that belong to the loop whose body
-  form is: not those of a loop or fn inside it."
-  [form]
-  (cond (not (seq? form)) (if (vector? form) (mapcat recurs form) [])
-        (= 'recur (first form)) [(vec (rest form))]
-        (contains? #{'loop 'fn 'letfn} (first form)) []
-        :else (mapcat recurs form)))
-
-(defn- drop-recur-args
-  "form with the recur arguments at the positions in gone removed, in the
-  same loop only."
-  [gone form]
-  (let [keep (fn [xs] (keep-indexed (fn [i x] (when-not (gone i) x)) xs))]
-    (cond (vector? form) (mapv #(drop-recur-args gone %) form)
-          (not (seq? form)) form
-          (= 'recur (first form)) (apply list 'recur (keep (rest form)))
-          (contains? #{'loop 'fn 'letfn} (first form)) form
-          :else (apply list (map #(drop-recur-args gone %) form)))))
-
-(defn- binds?
-  "Whether form binds the name p anywhere: in a let or loop vector, or as a
-  fn's parameter."
-  [p form]
-  (cond (vector? form) (boolean (some #(binds? p %) form))
-        (not (seq? form)) false
-        (contains? #{'let 'loop} (first form))
-        (or (boolean (some #(= p %) (take-nth 2 (second form)))) (boolean (some #(binds? p %) (rest form))))
-        :else (boolean (some #(binds? p %) form))))
-
-(defn- tidy-loop
-  "A loop without the locals that never change: one whose initial value is
-  the outer name itself, that every recur passes on under that name, and
-  that nothing in the body binds again (a recur naming an inner binding of
-  the same name passes a new value)."
-  [[_ bindings & forms]]
-  (let [pairs (vec (partition 2 bindings))
-        args (mapcat recurs forms)
-        gone (set (keep-indexed (fn [i [p init]]
-                                  (when (and (= p init)
-                                             (every? #(= p (nth % i)) args)
-                                             (not (some #(binds? p %) forms)))
-                                    i))
-                                pairs))
-        kept (vec (mapcat identity (keep-indexed (fn [i pair] (when-not (gone i) pair)) pairs)))]
-    (apply list 'loop kept (map #(drop-recur-args gone %) forms))))
-
-(defn- unused-pairs-dropped
-  "pairs without those whose name nothing after them uses and whose value is
-  a name or a constant, so costs nothing to leave out: a local the method
-  sets and this path never reads."
-  [pairs forms]
-  (loop [kept [] pairs (vec pairs)]
-    (if-let [[n init :as pair] (first pairs)]
-      (let [later (concat (map second (rest pairs)) forms)
-            plain? (or (symbol? init) (number? init) (string? init) (nil? init))]
-        (recur (if (and plain? (not-any? #(mentions? n %) later)) kept (conj kept pair)) (subvec pairs 1)))
-      kept)))
-
-(defn- tidy-let [[_ bindings & forms]]
-  (let [pairs (remove (fn [[n init]] (= n init)) (partition 2 bindings))
-        inner (first forms)
-        merged? (and (= 1 (count forms)) (seq? inner) (= 'let (first inner)))
-        pairs (if merged? (concat pairs (partition 2 (second inner))) pairs)
-        forms (if merged? (drop 2 inner) forms)
-        pairs (unused-pairs-dropped pairs forms)]
-    (cond (empty? pairs) (do-form forms)
-          (and (= 1 (count forms)) (= (first forms) (first (last pairs))) (= 1 (count pairs))) (second (first pairs))
-          :else (apply list 'let (vec (mapcat identity pairs)) forms))))
-
-(defn- as-statement
-  "A form whose value nothing uses. (let [... x E] nil), a call with an
-  unused result after its arguments' lets, is (let [...] E)."
-  [form]
-  (if (and (seq? form) (= 'let (first form)) (= 3 (count form)) (nil? (nth form 2)))
-    (let [pairs (partition 2 (second form))]
-      (tidy-let (list 'let (vec (mapcat identity (butlast pairs))) (second (last pairs)))))
-    form))
-
-(defn- tidy-do
-  "A do with the dos inside it spliced in and its statements simplified."
-  [[_ & forms]]
-  (let [flat (mapcat #(if (and (seq? %) (= 'do (first %))) (rest %) [%]) forms)]
-    (do-form (concat (map as-statement (butlast flat)) [(last flat)]))))
-
-(defn- tidy
-  "form with its lets, loops and dos tidied, innermost first."
-  [form]
-  (cond (vector? form) (mapv tidy form)
-        (not (seq? form)) form
-        :else (let [form (apply list (map tidy form))]
-                (case (first form)
-                  let (tidy-let form)
-                  loop (tidy-loop form)
-                  do (tidy-do form)
-                  form))))
 
 ;; --- a method ---------------------------------------------------------------------
 
@@ -884,7 +605,7 @@
     (and (str/starts-with? desc "[")
          (zero? (ldk/invoke-static "java.lang.reflect.Array" "getLength" v)))
     (let [elem (subs desc 1)]
-      (cond (array-makers elem) (list (array-makers elem) 0)
+      (cond (rules/array-makers elem) (list (rules/array-makers elem) 0)
             (element-classes elem) (list 'make-array (element-classes elem) 0)
             :else no-constant))
     :else no-constant))
