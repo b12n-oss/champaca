@@ -495,3 +495,16 @@ On Clojure loading five libraries from source (above), peak memory didn't change
 
 On the same benchmark (2026-11-14, median of three runs, interleaved with main, load average 6 to 11), `new Object()` and its `hashCode()` went from 61.0 to 11.3 ns. HotSpot took 65.2 ns on that row. `IdentityHashCheck` takes hashes before, inside and after locks, across `wait` and `notify`, on clones and arrays, and over 20,000 objects in an `IdentityHashMap`, and prints what HotSpot prints.
 
+### Type tests on arrays
+
+The per-class answers above covered objects only. An `instanceof` or `checkcast` that met an array built the array's class name with `string-append` and walked `class-assignable?`, which takes the element apart with `substring`, on every test. Clojure meets arrays at its busiest sites: `PersistentHashMap.cloneAndSet` casts a cloned `INode[]`, and `ArraySeq`'s constructor tests for `Object[]`. Together they had at least 5% of the samples of the warm Clojure run from source in that path. An array now answers the same way an object does, from a weak table keyed by its element descriptor, which is one interned string for every array of a type.
+
+`ArrCast` (2026-11-14):
+
+| Operation | Before | Now | JVM |
+|---|---|---|---|
+| An array `instanceof` | 147.9 ns | 9.4 ns | 1.9 ns |
+| Clone of an `Object[]` and its cast | 267.5 ns | 53.2 ns | 12.9 ns |
+
+The Clojure run went from 8.53 to 8.31 s warm (median of three, interleaved, load average 5 to 7), with the same peak memory and output. Most of its time is the compiler itself running. `ArrayTypeCheck` tests fifteen kinds of value, arrays of objects, interfaces, primitives and nested arrays among them, against eleven array and interface targets, three times over and in reverse order, and prints what HotSpot prints, failed casts included.
+

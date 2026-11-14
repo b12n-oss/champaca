@@ -1,0 +1,36 @@
+pass 0: Object[]=O-------Ks- String[]=OCS-----Ks- Integer[]=OCS-----KsN Sq[]=OC-HQ---Ks- Shape[]=O--H----Ks- Object[][]=O-S--2--Ks- String[][]=O-S--2--Ks- int[]=------i-Ks- long[]=-------lKs- int[][]=O-S-----Ks- Comparable[]=OC------Ks- Number[]=O-S-----KsN String=---------s- Integer=---------s- null=-----------
+pass 1: Object[]=O-------Ks- String[]=OCS-----Ks- Integer[]=OCS-----KsN Sq[]=OC-HQ---Ks- Shape[]=O--H----Ks- Object[][]=O-S--2--Ks- String[][]=O-S--2--Ks- int[]=------i-Ks- long[]=-------lKs- int[][]=O-S-----Ks- Comparable[]=OC------Ks- Number[]=O-S-----KsN String=---------s- Integer=---------s- null=-----------
+pass 2: Object[]=O-------Ks- String[]=OCS-----Ks- Integer[]=OCS-----KsN Sq[]=OC-HQ---Ks- Shape[]=O--H----Ks- Object[][]=O-S--2--Ks- String[][]=O-S--2--Ks- int[]=------i-Ks- long[]=-------lKs- int[][]=O-S-----Ks- Comparable[]=OC------Ks- Number[]=O-S-----KsN String=---------s- Integer=---------s- null=-----------
+reversed: null=----------- Integer=---------s- String=---------s- Number[]=O-S-----KsN Comparable[]=OC------Ks- int[][]=O-S-----Ks- long[]=-------lKs- int[]=------i-Ks- String[][]=O-S--2--Ks- Object[][]=O-S--2--Ks- Shape[]=O--H----Ks- Sq[]=OC-HQ---Ks- Integer[]=OCS-----KsN String[]=OCS-----Ks- Object[]=O-------Ks-
+cast 0 Object[]: Object[] ok / CCE class [Ljava.lang.Object; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 String[]: Object[] ok / CCE class [Ljava.lang.String; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 Integer[]: Object[] ok / CCE class [Ljava.lang.Integer; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 Sq[]: Object[] ok / Shape[] ok
+cast 0 Shape[]: Object[] ok / Shape[] ok
+cast 0 Object[][]: Object[] ok / CCE class [[Ljava.lang.Object; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 String[][]: Object[] ok / CCE class [[Ljava.lang.String; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 int[]: CCE class [I cannot be cast to class [Ljava.lang.Object; / CCE class [I cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 long[]: CCE class [J cannot be cast to class [Ljava.lang.Object; / CCE class [J cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 int[][]: Object[] ok / CCE class [[I cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 Comparable[]: Object[] ok / CCE class [Ljava.lang.Comparable; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 Number[]: Object[] ok / CCE class [Ljava.lang.Number; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 String: CCE class java.lang.String cannot be cast to class [Ljava.lang.Object; / CCE class java.lang.String cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 Integer: CCE class java.lang.Integer cannot be cast to class [Ljava.lang.Object; / CCE class java.lang.Integer cannot be cast to class [LArrayTypeCheck$Shape;
+cast 0 null: Object[] ok / Shape[] ok
+cast 1 Object[]: Object[] ok / CCE class [Ljava.lang.Object; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 String[]: Object[] ok / CCE class [Ljava.lang.String; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 Integer[]: Object[] ok / CCE class [Ljava.lang.Integer; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 Sq[]: Object[] ok / Shape[] ok
+cast 1 Shape[]: Object[] ok / Shape[] ok
+cast 1 Object[][]: Object[] ok / CCE class [[Ljava.lang.Object; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 String[][]: Object[] ok / CCE class [[Ljava.lang.String; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 int[]: CCE class [I cannot be cast to class [Ljava.lang.Object; / CCE class [I cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 long[]: CCE class [J cannot be cast to class [Ljava.lang.Object; / CCE class [J cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 int[][]: Object[] ok / CCE class [[I cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 Comparable[]: Object[] ok / CCE class [Ljava.lang.Comparable; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 Number[]: Object[] ok / CCE class [Ljava.lang.Number; cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 String: CCE class java.lang.String cannot be cast to class [Ljava.lang.Object; / CCE class java.lang.String cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 Integer: CCE class java.lang.Integer cannot be cast to class [Ljava.lang.Object; / CCE class java.lang.Integer cannot be cast to class [LArrayTypeCheck$Shape;
+cast 1 null: Object[] ok / Shape[] ok
+clone of String[]: String[] true false
+ArrayStoreException java.lang.Integer
