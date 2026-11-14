@@ -494,7 +494,23 @@
 ;; it delegates by package to the module's loader, as the JDK's does, and its
 ;; callers check the module), while the boot loader proper delegates to no
 ;; one and sees the boot modules only.
+;; After the boot layer is built, whether a loader sees a class depends on
+;; nothing that changes: the class's defining loader, whether it's a
+;; classpath class, its module and package. So each class keeps its answer
+;; per loader (Class.forName asked it on every call, several name hashes
+;; each time); during the boot the layer is still growing, so it's asked
+;; afresh. A null loader is the boot loader proper, assq finds it as #f.
+(define loader-sight (make-weak-eq-hashtable))   ; class -> ((loader . sees?) ...)
 (define (builtin-loader-sees? this c)
+  (if (not boot-layer-complete)
+      (builtin-loader-sees?* this c)
+      (let* ([known (#3%eq-hashtable-ref loader-sight c '())] [hit (assq this known)])
+        (if hit
+            (cdr hit)
+            (let ([a (builtin-loader-sees?* this c)])
+              (eq-hashtable-set! loader-sight c (cons (cons this a) known))
+              a)))))
+(define (builtin-loader-sees?* this c)
   (let* ([e (element-name c)] [dl (hashtable-ref class-loaders e #f)])
     (cond [dl (eq? dl this)]
           ;; a class of a named application module (java -p) is the app

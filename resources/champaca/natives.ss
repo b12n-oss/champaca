@@ -458,6 +458,17 @@
       (jthrow "java/lang/ClassNotFoundException"
               (cn-overlong-message (cn-mutf8-bytes units) size)))))
 
+;; a String forName0 was given -> #(its text, slashed, the class once found
+;; through a built-in loader), for the names that passed its checks
+(define forname-names (make-weak-eq-hashtable))
+(define builtin-loader-class "jdk/internal/loader/BuiltinClassLoader")
+;; try-class for the name n of entry known, remembering a class it finds: a
+;; class record, once there, stays the answer to its name
+(define (known-class known n)
+  (or (and known (vector-ref known 2))
+      (let ([c (try-class n)])
+        (when (and c known) (vector-set! known 2 c))
+        c)))
 (defnative "java/lang/Class.forName0(Ljava/lang/String;ZLjava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/Class;"
   (name init loader caller)
   ;; a binary name: one with slashes is not found, as on the JVM. A loader
@@ -466,9 +477,10 @@
   ;; it is asked for the element class, a primitive element needing no one.
   ;; The built-in loaders (null is the boot loader) go to the class table
   ;; and see what that loader would load (builtin-loader-sees?)
-  (let* ([s (jstring->scheme name)]
-         [n (slashes s)]
-         [own? (and loader (not (jinstance? loader "jdk/internal/loader/BuiltinClassLoader")))]
+  (let* ([known (and name (#3%eq-hashtable-ref forname-names name #f))]
+         [s (if known (vector-ref known 0) (jstring->scheme name))]
+         [n (if known (vector-ref known 1) (slashes s))]
+         [own? (and loader (not (class-instance-of? (jobj-cls loader) builtin-loader-class)))]
          [array? (and (fxpositive? (string-length s)) (char=? (string-ref s 0) #\[))]
          [element (and array? (array-element-binary-name s))]
          ;; a class by binary name, through the loader given
@@ -476,9 +488,10 @@
                     (if own?
                         (let ([m ((jvirt loader "loadClass(Ljava/lang/String;)Ljava/lang/Class;") loader (jstring bn))])
                           (and m (mirror-class m)))
-                        (let ([c (try-class (slashes bn))])
+                        (let ([c (if (eq? bn s) (known-class known n) (try-class (slashes bn)))])
                           (and c (builtin-loader-sees? loader c) c))))]
          [_ (cond
+              [known (void)]   ; it passed what follows before
               ;; Class.c: a name with a slash is not found as given; one whose
               ;; slashed form isn't a class name or descriptor (an empty name,
               ;; over 255 dimensions) is not found by that slashed form
@@ -486,7 +499,10 @@
               [(not (valid-class-name? n)) (jthrow "java/lang/ClassNotFoundException" n)]
               ;; one Scheme char is at most 6 bytes of modified UTF-8 (a code
               ;; point beyond the BMP), so a shorter name can't be too long
-              [(fx> (string-length s) 10922) (overlong-class-name name)])]
+              [(fx> (string-length s) 10922) (overlong-class-name name)]
+              ;; one that passed is kept for its String: a name in code is a
+              ;; literal, the same object on every call
+              [(not known) (set! known (vector s n #f)) (eq-hashtable-set! forname-names name known)])]
          ;; an array with a class element exists once the element resolves
          ;; through the loader (its pseudo-class would be made for any name,
          ;; and mirrored, it loads its element)

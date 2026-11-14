@@ -406,6 +406,12 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- `Class.forName` keeps what it worked out for a `String` it was given:
+  the converted and checked name and, through a built-in loader, the class
+  found, and each class keeps whether each built-in loader sees it once the
+  boot layer is built. The native went from 935 to 165 ns and `Class.forName`
+  from 1,400 to 840 ns. A failed lookup and a bad name aren't kept, so a
+  class defined later is found. `ForNameCacheCheck` is new.
 - Reflective calls. A `Method` or `Constructor` object works out its class,
   descriptor and procedure on its first call and keeps them, where every
   call found the member's fields by name, parsed the descriptor and interned

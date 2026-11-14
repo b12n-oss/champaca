@@ -545,3 +545,11 @@ An access-checked call also asks `getCallerClass` for its caller. That walk read
 
 The access check is most of what remains, about 390 ns. `ReflectCacheCheck` runs the same `Method` and `Constructor` objects over several passes and receivers: an override chosen per receiver, private, package-private, static and interface methods, every primitive in and out, a wrong or null receiver, and an exception from inside, all as HotSpot answers.
 
+### `Class.forName`
+
+Its native, `forName0`, did all its work again on every call. It converted the name from a Java `String`, checked it, decided whether the loader was one of the JDK's own by walking the loader's class, and hashed the name into the class table. Then it asked whether that loader sees the class, which took several more name hashes: the class's defining loader, whether it comes from the class path, its module and its package. Measured from Scheme, those parts took 75, 140 and 245 ns of the native's 935.
+
+Now a `String` it was given, usually a literal and so the same object every time, keeps its checked name and the class once found. After the boot layer is built, nothing a loader's answer depends on changes, so each class keeps that answer per loader. The loader test goes through its class's remembered answers. A failed lookup and a name that fails the checks aren't kept, so a class defined after a miss is found on the next call.
+
+`forName0` went from 935 to 165 ns, and `Class.forName` from about 1,400 to 840 ns at any stack depth (HotSpot 330 ns). The rest is the JDK's Java around the native and `getCallerClass`. `ForNameCacheCheck` asks with the same `String` objects over three passes: through the boot, platform and app loaders in two orders, for arrays and for bad names, and for a class that is missing and then defined. It prints what HotSpot prints.
+

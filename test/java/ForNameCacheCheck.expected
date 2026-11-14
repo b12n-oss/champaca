@@ -1,0 +1,22 @@
+java.sql.Date by boot, platform, app (pass 0): ClassNotFoundException: java/sql/Date | java.sql.Date@platform | java.sql.Date@platform
+java.sql.Date by app, boot (pass 0): java.sql.Date@platform | ClassNotFoundException: java/sql/Date
+ArrayList by each (pass 0): java.util.ArrayList@boot | java.util.ArrayList@boot | java.util.ArrayList@boot
+own class by boot, app (pass 0): ClassNotFoundException: ForNameCacheCheck | ForNameCacheCheck@app
+arrays (pass 0): ClassNotFoundException: [Ljava/sql/Date; | [Ljava.sql.Date;@platform | [[I@boot
+bad names (pass 0): ClassNotFoundException:  | ClassNotFoundException: java/util/ArrayList | ClassNotFoundException: [ | ClassNotFoundException: [Ljava/lang/String | ClassNotFoundException: int | ClassNotFoundException: no.such.Thing | 
+java.sql.Date by boot, platform, app (pass 1): ClassNotFoundException: java/sql/Date | java.sql.Date@platform | java.sql.Date@platform
+java.sql.Date by app, boot (pass 1): java.sql.Date@platform | ClassNotFoundException: java/sql/Date
+ArrayList by each (pass 1): java.util.ArrayList@boot | java.util.ArrayList@boot | java.util.ArrayList@boot
+own class by boot, app (pass 1): ClassNotFoundException: ForNameCacheCheck | ForNameCacheCheck@app
+arrays (pass 1): ClassNotFoundException: [Ljava/sql/Date; | [Ljava.sql.Date;@platform | [[I@boot
+bad names (pass 1): ClassNotFoundException:  | ClassNotFoundException: java/util/ArrayList | ClassNotFoundException: [ | ClassNotFoundException: [Ljava/lang/String | ClassNotFoundException: int | ClassNotFoundException: no.such.Thing | 
+java.sql.Date by boot, platform, app (pass 2): ClassNotFoundException: java/sql/Date | java.sql.Date@platform | java.sql.Date@platform
+java.sql.Date by app, boot (pass 2): java.sql.Date@platform | ClassNotFoundException: java/sql/Date
+ArrayList by each (pass 2): java.util.ArrayList@boot | java.util.ArrayList@boot | java.util.ArrayList@boot
+own class by boot, app (pass 2): ClassNotFoundException: ForNameCacheCheck | ForNameCacheCheck@app
+arrays (pass 2): ClassNotFoundException: [Ljava/sql/Date; | [Ljava.sql.Date;@platform | [[I@boot
+bad names (pass 2): ClassNotFoundException:  | ClassNotFoundException: java/util/ArrayList | ClassNotFoundException: [ | ClassNotFoundException: [Ljava/lang/String | ClassNotFoundException: int | ClassNotFoundException: no.such.Thing | 
+before it is defined: true
+before it is defined, again: true
+after it is defined: ForNameCacheCheck$Later@app
+after it is defined, again: ForNameCacheCheck$Later@app
