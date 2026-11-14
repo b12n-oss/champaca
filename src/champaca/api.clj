@@ -64,32 +64,41 @@
   (@proc-gil-enter!)
   (try (f) (finally (@proc-gil-leave!))))
 
-(defn- rethrow*
-  [f]
-  (try (f)
-       (catch :default e
-         (cond
-           ;; System.exit from Java ends the process, as on a JVM
-           (s/call "java-halt?" e)
-           (System/exit (s/call "java-halt-status" e))
-           (s/call "ldk-java-exception?" e)
-           (let [x (s/call "ldk-exception-object" e)]
-             ;; a jolt error that left a jolt fn through Java comes back as itself
-             (if-let [j (s/call "ldk-jolt-error-of" x)]
-               (throw j)
-               (let [m (s/call "ldk-exception-message" e) d {:java/exception x}
-                     c (s/call "ldk-jolt-cause" x)]
-                 (throw (if c (ex-info m d c) (ex-info m d))))))
-           (and @dynamic-loaded (s/call "ldk-api-error?" e))
-           (throw (ex-info (s/call "ldk-api-error-message" e) {:champaca/error :lookup}))
-           :else (throw e)))))
+(defn- java-error!
+  "Throw what jolt code sees for e, raised while Java ran: System.exit ends
+  the process, a Java exception becomes an ex-info, a jolt error that left a
+  jolt fn through Java is itself again, an API lookup error says so."
+  [e]
+  (cond
+    ;; System.exit from Java ends the process, as on a JVM
+    (s/call "java-halt?" e)
+    (System/exit (s/call "java-halt-status" e))
+    (s/call "ldk-java-exception?" e)
+    (let [x (s/call "ldk-exception-object" e)]
+      ;; a jolt error that left a jolt fn through Java comes back as itself
+      (if-let [j (s/call "ldk-jolt-error-of" x)]
+        (throw j)
+        (let [m (s/call "ldk-exception-message" e) d {:java/exception x}
+              c (s/call "ldk-jolt-cause" x)]
+          (throw (if c (ex-info m d c) (ex-info m d))))))
+    (and @dynamic-loaded (s/call "ldk-api-error?" e))
+    (throw (ex-info (s/call "ldk-api-error-message" e) {:champaca/error :lookup}))
+    :else (throw e)))
+
+(defmacro ^:private java-call
+  "body, which calls Java, run holding the lock, with java-error! for what
+  it raises: with-gil and rethrow in line, without their two closures."
+  [& body]
+  `(do (@proc-gil-enter!)
+       (try (try ~@body (catch :default e# (java-error! e#)))
+            (finally (@proc-gil-leave!)))))
 
 (defn- rethrow
   "Run f, which calls Java, holding the lock, and turn the runtime's
   java-exception condition into an ex-info (its message is the exception's
   toString, more Java)."
   [f]
-  (with-gil #(rethrow* f)))
+  (java-call (f)))
 
 (defn- java-error-of
   "The Java exception to raise for c, a condition escaping a jolt fn that
@@ -186,31 +195,45 @@
 ;; a jolt fn passed for a single-method interface is wrapped as one, and
 ;; boxed results come back as jolt numbers, booleans and chars.
 
+;; construct, invoke and invoke-static take up to three arguments without
+;; apply and a lazy seq of conversions, which cost about as much as the call
+;; itself; each argument is still converted inside the lock.
 (defn construct
   "Construct cls with the constructor that fits args."
-  [cls & args]
-  (rethrow #(apply @proc-dyn-new cls (map ->arg args))))
+  ([cls] (java-call (@proc-dyn-new cls)))
+  ([cls a] (java-call (@proc-dyn-new cls (->arg a))))
+  ([cls a b] (java-call (@proc-dyn-new cls (->arg a) (->arg b))))
+  ([cls a b c] (java-call (@proc-dyn-new cls (->arg a) (->arg b) (->arg c))))
+  ([cls a b c & more] (java-call (apply @proc-dyn-new cls (->arg a) (->arg b) (->arg c) (map ->arg more)))))
 
 (defn invoke
   "Call the instance method mname on obj (a Java object, or a jolt string
   as java.lang.String) with the overload that fits args."
-  [obj mname & args]
-  (rethrow #(apply @proc-dyn-invoke obj mname (map ->arg args))))
+  ([obj mname] (java-call (@proc-dyn-invoke obj mname)))
+  ([obj mname a] (java-call (@proc-dyn-invoke obj mname (->arg a))))
+  ([obj mname a b] (java-call (@proc-dyn-invoke obj mname (->arg a) (->arg b))))
+  ([obj mname a b c] (java-call (@proc-dyn-invoke obj mname (->arg a) (->arg b) (->arg c))))
+  ([obj mname a b c & more]
+   (java-call (apply @proc-dyn-invoke obj mname (->arg a) (->arg b) (->arg c) (map ->arg more)))))
 
 (defn invoke-static
   "Call the static method mname of cls with the overload that fits args."
-  [cls mname & args]
-  (rethrow #(apply @proc-dyn-invoke-static cls mname (map ->arg args))))
+  ([cls mname] (java-call (@proc-dyn-invoke-static cls mname)))
+  ([cls mname a] (java-call (@proc-dyn-invoke-static cls mname (->arg a))))
+  ([cls mname a b] (java-call (@proc-dyn-invoke-static cls mname (->arg a) (->arg b))))
+  ([cls mname a b c] (java-call (@proc-dyn-invoke-static cls mname (->arg a) (->arg b) (->arg c))))
+  ([cls mname a b c & more]
+   (java-call (apply @proc-dyn-invoke-static cls mname (->arg a) (->arg b) (->arg c) (map ->arg more)))))
 
 (defn get-static
   "The static field fname of cls, or of the superinterface or superclass
   that declares it. Initializes the declaring class first."
   [cls fname]
-  (rethrow #(@proc-dyn-get-static cls fname)))
+  (java-call (@proc-dyn-get-static cls fname)))
 (defn get-field
   "The instance field fname of obj, from obj's class up."
   [obj fname]
-  (rethrow #(@proc-dyn-get-field obj fname)))
+  (java-call (@proc-dyn-get-field obj fname)))
 
 (defn set-static!
   "Store v in the static field fname of cls (found as get-static finds it),
