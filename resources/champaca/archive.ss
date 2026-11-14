@@ -91,7 +91,7 @@
             [(or (jobj? x) (jarr? x))
              (let ([s (eq-hashtable-ref statics x #f)])
                (if s
-                   (begin (let ([h (eq-hashtable-ref id-hashes x #f)])
+                   (begin (let ([h (stored-hash x)])
                             (when (and h (not (assoc s static-hashes))) (set! static-hashes (cons (cons s h) static-hashes))))
                           (cons 's s))
                    (cons 'r (visit x))))]
@@ -101,7 +101,7 @@
           (let ([id n])
             (set! n (fx+ n 1))
             (eq-hashtable-set! ids x id)
-            (let ([h (eq-hashtable-ref id-hashes x #f)])
+            (let ([h (stored-hash x)])
               (cond
                 [(eq-hashtable-ref interns x #f)
                  => (lambda (k) (add-row! (vector id 's "" h k)))]
@@ -116,7 +116,7 @@
                  (let ([cn (jclass-cname (jobj-cls x))])
                    (when (identity-class? (jobj-cls x))
                      (module-graph-refuse (string-append "a " cn " no constant holds")))
-                   (when (jobj-lock x) (module-graph-refuse (string-append "a locked " cn)))
+                   (when (jmonitor? (jobj-lock x)) (module-graph-refuse (string-append "a locked " cn)))
                    (let ([p (vector-map enc (jobj-slots x))])
                      (add-row! (vector id 'o cn h p))))]))
             id)))
@@ -168,8 +168,8 @@
 (define (check-static-hashes! static-hashes)
   (for-each
    (lambda (sh)
-     (let* ([o (archived-static (car sh))] [now (eq-hashtable-ref id-hashes o #f)])
-       (cond [(not now) (eq-hashtable-set! id-hashes o (cdr sh))]
+     (let* ([o (archived-static (car sh))] [now (stored-hash o)])
+       (cond [(not now) (store-hash! o (cdr sh))]
              [(not (eqv? now (cdr sh))) (error 'champaca "constant hashed otherwise" (car sh))])))
    static-hashes))
 
@@ -206,8 +206,8 @@
          [(a) (fill! (jarr-vec o) p)]
          [(o) (fill! (jobj-slots o) p)]
          [else (void)])
-       (when (and h (not (eq? kind 's)) (not (eq-hashtable-ref id-hashes o #f)))
-         (eq-hashtable-set! id-hashes o h))))
+       (when (and h (not (eq? kind 's)) (not (stored-hash o)))
+         (store-hash! o h))))
    rows))
 
 (define (module-graph-write! path)

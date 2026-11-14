@@ -208,8 +208,9 @@
 ;; good elsewhere (the Reference Handler) would otherwise make every exit
 ;; take the GIL's mutex and broadcast, which cost 60% on synchronized code.
 
-(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked) (mutable seq))
-  (sealed #t) (nongenerative champaca-jmonitor-2))
+;; hash: the object's identity hash once it has one (runtime.ss identity-hash)
+(define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked) (mutable seq) (mutable hash))
+  (sealed #t) (nongenerative champaca-jmonitor-3))
 ;; An object keeps its monitor in its lock field; an array's sits in a weak
 ;; table. Only the GIL's owner runs Java code, so no other thread races the
 ;; first lock.
@@ -219,10 +220,13 @@
 (define monitor-seq 0)
 (define (monitor-of o)
   (if (jobj? o)
-      (or (jobj-lock o)
-          (let ([m (make-jmonitor #f 0 '() 0 0)]) (jobj-lock-set! o m) m))
+      (let ([l (jobj-lock o)])
+        (if (jmonitor? l)
+            l
+            ;; l is #f or the identity hash, which the monitor keeps
+            (let ([m (make-jmonitor #f 0 '() 0 0 l)]) (jobj-lock-set! o m) m)))
       (or (eq-hashtable-ref monitors o #f)
-          (let ([m (make-jmonitor #f 0 '() 0 0)]) (eq-hashtable-set! monitors o m) m))))
+          (let ([m (make-jmonitor #f 0 '() 0 0 #f)]) (eq-hashtable-set! monitors o m) m))))
 
 ;; wait, holding the GIL, until o's monitor m is free, then own it with
 ;; count n
@@ -662,7 +666,7 @@
 (define (state-of-thread t) (if (eq? t current-jthread) gil-owner (eq-hashtable-ref thread-states t #f)))
 ;; the Thread owning o's monitor, without making a monitor for o
 (define (monitor-owner-thread o)
-  (let* ([m (if (jobj? o) (jobj-lock o) (eq-hashtable-ref monitors o #f))]
+  (let* ([m (if (jobj? o) (let ([l (jobj-lock o)]) (and (jmonitor? l) l)) (eq-hashtable-ref monitors o #f))]
          [s (and m (jmonitor-owner m))])
     (and s (jthread-state-jthread s))))
 (define aos "java/util/concurrent/locks/AbstractOwnableSynchronizer")
@@ -701,7 +705,7 @@
                           v)))))]
         [mons '()] [syncs '()])
     (define (note-monitor! o m)
-      (when (and m (jmonitor-owner m))
+      (when (and (jmonitor? m) (jmonitor-owner m))
         (set! mons (cons (cons o (cons (jmonitor-owner m) (jmonitor-seq m))) mons))))
     (for-each (lambda (gen)
                 (for-each (lambda (p)

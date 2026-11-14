@@ -1,0 +1,19 @@
+hashCode is stable: true
+same inside a lock taken after the hash: true
+holdsLock after the hash: true
+same after the lock: true
+lock released: true
+same inside a nested lock: true
+hash first taken inside a lock, same after: true
+same after wait and notify: true
+same after the other thread locked it: true
+a clone is another object: true
+the clone's own monitor is free: true
+the original keeps its hash: true
+the clone's hash is stable: true
+an array's hash inside its lock: true
+an array's hash after: true
+null's identityHashCode is 0: true
+IdentityHashMap over 20000 objects: true
+hashes mostly distinct: true
+still found after a collection: true
