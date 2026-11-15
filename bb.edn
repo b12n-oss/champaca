@@ -1287,6 +1287,9 @@
         :task (let [args *command-line-args*]
                 (when (< (count args) 2) (println "usage: jolt port <classpath> <Class>") (System/exit 2))
                 (System/exit (:exit (apply shell {:continue true} (jolt-bin) "-M" "tools/port.clj" args))))}
+  bench:compare {:doc "Two commits' startup benchmarks side by side: jolt bench:compare <dir> reads the results.md files saved there as <app>-<base|head>-r<n>.md and prints a Markdown table per app (bench/compare.clj; .github/workflows/bench.yml makes them)"
+                 :task (do (load-file "bench/compare.clj")
+                           ((resolve (symbol "bench.compare" "main")) *command-line-args*))}
   bench:port {:doc "Time each test/jar PortSample method four ways, ns a call: HotSpot, champaca, champaca with CHAMPACA_STRUCTURED=1, and the hand translation in examples/portcheck.clj on jolt (bench/port.clj). Prints a table; champaca's columns are from a second, warm run"
               :task (let [_ (when (lib-jar-stale?) (lib-jar!))
                           rows (fn [out] (into {} (keep (fn [l] (let [[n v] (str/split l (re-pattern " "))]
