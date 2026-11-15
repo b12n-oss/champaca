@@ -436,6 +436,13 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- `BufferedReader.readLine` reads 73 to 85 MB/s, up from 52.
+  `StringUTF16.compress`, `StringLatin1.inflate` and
+  `StringCoding.countPositives`, which HotSpot intrinsifies, are Scheme
+  loops with one range check (`strings.ss`). Out of range or given a null
+  array, they follow the Java loop's order and throw HotSpot's exception
+  (StringDecodeCheck)
+
 - Files, sockets and zlib move bytes between native memory and a `byte[]`
   four at a time after one bounds check (1.2 ns a byte, was 2.8), and a file
   read or write moves up to 64 KB per system call (was 4 KB).
