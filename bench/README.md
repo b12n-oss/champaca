@@ -22,6 +22,16 @@ peak RSS (`/usr/bin/time`). The table goes to stdout and to
 `bench/<app>/target/results.md`. `SKIP_AOT=1` leaves out the JDK AOT cache
 variants, and `SKIP_CHAMPACA=1` the champaca ones.
 
+## Comparing two commits
+
+Whether a change made startup faster is a question about two commits on the same machine at the same time, and a workstation that's busy with anything else answers it badly. The `bench` workflow runs on a GitHub macOS arm64 runner. It checks out both commits, builds each application once and copies the build to the other side, then times the two sides in turn, alternating which goes first each round:
+
+```bash
+gh workflow run bench -f base=<ref> [-f head=main] [-f apps=spring-boot,quarkus,petclinic] [-f rounds=2] [-f runs=3]
+```
+
+The run's summary page gets a table per application, with each round's median for both sides and the change between their means. HotSpot runs on both sides too, so its rows show how much the runner itself moved. A hosted runner's absolute times vary from one job to the next, so read the difference, not the numbers. Every `results.md` is kept as the run's artifact. On a workstation, `jolt bench:compare <dir>` prints the same table from files saved as `<app>-<base|head>-r<n>.md`.
+
 ## The applications
 
 `demo.boot.BootApp` (Spring Boot 4.1.2, Spring Framework 7) uses

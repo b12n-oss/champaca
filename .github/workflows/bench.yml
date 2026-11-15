@@ -1,0 +1,131 @@
+# Startup benchmarks of two commits on one machine: Spring Boot, Quarkus and
+# Spring PetClinic (bench/README.md), each built once and timed through both
+# commits' champaca in turn, so a change between them isn't a change of
+# runner. A hosted runner's absolute times vary from job to job; what one job
+# can show is the difference between its two sides, and HotSpot's rows, the
+# same JVM on both, show how much of that is the machine. The table goes on
+# the run's summary page; every results.md is kept as an artifact.
+#
+# By hand only:
+#   gh workflow run bench -f base=<ref> [-f head=main] [-f apps=spring-boot,quarkus] [-f rounds=2]
+#
+# Rounds alternate which side runs first. macOS arm64 only: the Linux battery
+# runs in ci/linux's image, and these apps haven't been run outside it.
+
+name: bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      base:
+        description: the commit, branch or tag to compare against
+        required: true
+      head:
+        description: the commit, branch or tag to measure
+        default: main
+      apps:
+        description: comma-separated, from spring-boot, quarkus, petclinic
+        default: spring-boot,quarkus,petclinic
+      rounds:
+        description: runs of each side per app, alternating which goes first
+        default: "2"
+      runs:
+        description: timed runs of each variant per round (RUNS; COLD_RUNS and SERVER_RUNS are 1)
+        default: "3"
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: macos-15
+    timeout-minutes: 300
+    env:
+      APPS: ${{ inputs.apps }}
+      ROUNDS: ${{ inputs.rounds }}
+      SKIP_AOT: "1"
+      RUNS: ${{ inputs.runs }}
+      COLD_RUNS: "1"
+      SERVER_RUNS: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.head }}
+          path: head
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.base }}
+          path: base
+
+      # OpenJDK 25.0.2 and the pinned jolt over Homebrew's Chez, as ci.yml's
+      # macOS battery; each side builds its own pin (a no-op when they match)
+      - name: install OpenJDK 25.0.2
+        run: |
+          f=openjdk-25.0.2_macos-aarch64_bin.tar.gz
+          curl -fsSLo "$RUNNER_TEMP/$f" "https://download.java.net/java/GA/jdk25.0.2/b1e0dfa218384cb9959bdcb897162d4e/10/GPL/$f"
+          echo "7581b0d1752cd5acbf39e286c03f07b6cd6c205b562eb2fe753ff0253cf4c1bf  $RUNNER_TEMP/$f" | shasum -a 256 -c
+          tar -xzf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          home="$RUNNER_TEMP/jdk-25.0.2.jdk/Contents/Home"
+          echo "JAVA_HOME=$home" >> "$GITHUB_ENV"
+          echo "$home/bin" >> "$GITHUB_PATH"
+      - uses: jlt-commons/setup-jolt@v1
+        with:
+          version: "0.8.27"
+      - name: restore the jolt build
+        id: jolt
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/champaca/jolt/*/jolt
+          key: jolt-macos-arm64-${{ hashFiles('head/deps.edn', 'head/tools/build-jolt.sh') }}
+      - name: build the pinned jolt
+        run: |
+          brew install chezscheme && chez --version
+          (cd head && sh tools/build-jolt.sh)
+          (cd base && sh tools/build-jolt.sh)
+      - name: save the jolt build
+        if: steps.jolt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/champaca/jolt/*/jolt
+          key: ${{ steps.jolt.outputs.cache-primary-key }}
+
+      # each app built once, by head, and copied to base without a cache, so
+      # both sides time the same application bytes
+      - name: build the applications
+        run: |
+          mvn --version
+          for app in ${APPS//,/ }; do
+            (cd head && jolt bench "$app" build)
+            mkdir -p "base/bench/$app/target"
+            rsync -a --exclude champaca-cache --exclude results.md "head/bench/$app/target/" "base/bench/$app/target/"
+          done
+
+      - name: time both sides
+        run: |
+          out="$RUNNER_TEMP/results"; mkdir -p "$out"
+          for app in ${APPS//,/ }; do
+            for r in $(seq 1 "$ROUNDS"); do
+              if [ $((r % 2)) -eq 1 ]; then order="base head"; else order="head base"; fi
+              for side in $order; do
+                echo "::group::$app round $r $side (load $(sysctl -n vm.loadavg))"
+                (cd "$side" && jolt bench "$app" bench)
+                cp "$side/bench/$app/target/results.md" "$out/$app-$side-r$r.md"
+                echo "::endgroup::"
+              done
+            done
+          done
+
+      - name: the comparison
+        if: always()
+        run: |
+          {
+            echo "## Startup: $(git -C base rev-parse --short HEAD) (base, ${{ inputs.base }}) vs $(git -C head rev-parse --short HEAD) (head, ${{ inputs.head }})"
+            echo
+            (cd head && jolt bench:compare "$RUNNER_TEMP/results")
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: keep the results
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: bench-results
+          path: ${{ runner.temp }}/results
