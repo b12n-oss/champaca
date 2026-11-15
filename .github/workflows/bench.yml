@@ -140,8 +140,8 @@ jobs:
                 echo "::group::$app round $r $side (load $(sysctl -n vm.loadavg))"
                 (cd "$side" && jolt bench "$app" bench)
                 cp "$side/bench/$app/target/results.md" "$out/$app-$side-r$r.md"
-                # a server run that failed kept its log
-                for f in "$side/bench/$app/target"/failed-server-*.log; do
+                # a server run that failed kept its log (and a sample if it hung)
+                for f in "$side/bench/$app/target"/failed-server-*; do
                   [ -e "$f" ] && mv "$f" "$out/$app-$side-r$r-$(basename "$f")"
                 done
                 echo "::endgroup::"

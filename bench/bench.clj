@@ -237,11 +237,13 @@
 ;; --- servers ---------------------------------------------------------------------
 
 ;; [status body] of one GET, asking for HTML as a browser does; a fetch curl
-;; can't finish (exit 52, the server closed the connection with no reply) is
-;; the status "curl exit <n>", which no reference page has
+;; can't finish (exit 52, the server closed the connection with no reply;
+;; exit 28, no answer within page-limit seconds) is the status "curl exit
+;; <n>", which no reference page has
+(def page-limit (env-long "PAGE_LIMIT" 300))
 (defn- http-get [port path]
   (let [f (str (fs/create-temp-file {:prefix "page-"}))
-        r (p/shell {:out :string :env no-proxy :continue true} "curl" "-s" "-o" f "-w" "%{http_code}"
+        r (p/shell {:out :string :env no-proxy :continue true} "curl" "-s" "-m" (str page-limit) "-o" f "-w" "%{http_code}"
                    "-H" "Accept: text/html" (str "http://127.0.0.1:" port path))
         body (slurp f)]
     (fs/delete f)
@@ -252,10 +254,16 @@
 ;; a run that never started or lost a page keeps its server's log, as
 ;; <t>/failed-server-<n>.log, and prints its end
 (def ^:private failed-runs (atom 0))
-(defn- keep-failed-log! [t log-file why]
-  (let [kept (str t "/failed-server-" (swap! failed-runs inc) ".log")
+(defn- keep-failed-log! [t log-file why proc]
+  (let [n (swap! failed-runs inc)
+        kept (str t "/failed-server-" n ".log")
         lines (str/split-lines (slurp log-file))]
     (fs/copy log-file kept {:replace-existing true})
+    ;; a server still running when it failed is sampled first (macOS), so a
+    ;; hang shows where each thread waits
+    (when (and mac? (p/alive? proc))
+      (p/shell {:continue true :out :string :err :string}
+               "sample" (str (.pid ^Process (:proc proc))) "5" "-file" (str t "/failed-server-" n ".sample.txt")))
     (binding [*out* *err*]
       (println (str "  " why "; the server's log is " kept ", its last lines:"))
       (doseq [l (take-last 30 lines)] (println "   " l)))))
@@ -273,11 +281,17 @@
                    (when (and (p/alive? proc) (< (ms) 1800000)) (recur))))]
     (try
       (if-not port
-        (do (keep-failed-log! t log-file "the server never said it started") nil)
+        (do (keep-failed-log! t log-file "the server never said it started" proc) nil)
         (let [started (ms)
-              fetched (mapv (fn [path] (let [[code body] (http-get port path)] [path code body (ms)])) pages)]
+              ;; after a failed page the rest are "skipped": a hung server
+              ;; would otherwise cost page-limit seconds per page
+              fetched (reduce (fn [acc path]
+                                (if (some #(string? (second %)) acc)
+                                  (conj acc [path "skipped" "" (ms)])
+                                  (let [[code body] (http-get port path)] (conj acc [path code body (ms)]))))
+                              [] pages)]
           (when-let [[path code] (first (filter #(string? (second %)) fetched))]
-            (keep-failed-log! t log-file (str path " failed: " code)))
+            (keep-failed-log! t log-file (str path " failed: " code) proc))
           {:start started :first (nth (first fetched) 3) :all (nth (peek fetched) 3)
            :pages (mapv (fn [[path code body]] [path code body]) fetched)}))
       (finally
