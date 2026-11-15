@@ -372,15 +372,29 @@
   (when-let [root (get (app-roots) mn)]
     (when (plain-resource-path? path) (entry-bytes root path))))
 
+(defn module-entry-url
+  "path's URL in an application module's jar or directory, as the JDK's
+  module readers answer, or nil when it isn't there. A jar's is
+  jar:file:///<jar>!/<entry name>, the name as the jar holds it (a
+  directory's with its /, though path may lack it) and not encoded; a
+  directory's is its file's URI, ending in / for a directory."
+  [root path]
+  (if (jar-entry? root)
+    (when-let [e (and (not= path "")
+                      (or (.getEntry (jar root) path)
+                          (when-not (str/ends-with? path "/") (.getEntry (jar root) (str path "/")))))]
+      (str "jar:file://" (subs (entry-url root) 5) "!/" (.getName e)))
+    (let [f (io/file root path)]
+      (when (.exists f)
+        (str (entry-url root) (encode-path path)
+             (when (and (.isDirectory f) (not= path "") (not (str/ends-with? path "/"))) "/"))))))
+
 (defn module-resource-url
   "The URL of a named application module's resource in its own jar or
   directory, as module-resource-bytes finds it, or nil."
   [mn path]
   (when (module-resource-bytes mn path)
-    (let [root (get (app-roots) mn)]
-      (if (jar-entry? root)
-        (str "jar:" (entry-url root) "!/" (encode-path path))
-        (str (entry-url root) (encode-path path))))))
+    (module-entry-url (get (app-roots) mn) path)))
 
 (defn jdk-resource-bytes
   "path from the module holding its directory. The image counts a directory
@@ -555,16 +569,19 @@
   loader answers. JDK resources have none: their jrt: URLs need the runtime
   image."
   [path]
-  (for [entry (when (or (= path "") (plain-resource-path? path)) (resource-entries path))
-        :let [jar? (jar-entry? entry)]
-        :when (if jar?
-                (and (not= path "") (some? (.getEntry (jar entry) path)))
-                (.exists (io/file entry path)))]
-    ;; the name as given, a directory's trailing / kept, as the JDK's
-    ;; loaders join it to the entry's URL
-    (if jar?
-      (str "jar:" (entry-url entry) "!/" (encode-path path))
-      (str (entry-url entry) (encode-path path)))))
+  (let [module-roots (set (vals (app-roots)))]
+    (for [entry (when (or (= path "") (plain-resource-path? path)) (resource-entries path))
+          :let [jar? (jar-entry? entry)
+                url (cond
+                      ;; a module's reader answers in its own form
+                      (module-roots entry) (module-entry-url entry path)
+                      ;; the name as given, a directory's trailing / kept, as
+                      ;; the JDK's class path loaders join it to the entry's URL
+                      jar? (when (and (not= path "") (some? (.getEntry (jar entry) path)))
+                             (str "jar:" (entry-url entry) "!/" (encode-path path)))
+                      (.exists (io/file entry path)) (str (entry-url entry) (encode-path path)))]
+          :when url]
+      url)))
 
 (defn percent-decode
   "%xx escapes decoded as the bytes of UTF-8 text, as a URL's path is."

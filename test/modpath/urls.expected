@@ -1,0 +1,14 @@
+exit 0
+com/greet/msg.txt -> null | all []
+com/greet/open/o.txt -> jar:file://<cwd>/mods/greet.jar!/com/greet/open/o.txt | all [jar:file://<cwd>/mods/greet.jar!/com/greet/open/o.txt]
+com/greet/open/ -> jar:file://<cwd>/mods/greet.jar!/com/greet/open/ | all [jar:file://<cwd>/mods/greet.jar!/com/greet/open/]
+com/greet/open -> jar:file://<cwd>/mods/greet.jar!/com/greet/open/ | all [jar:file://<cwd>/mods/greet.jar!/com/greet/open/]
+META-INF/greet.txt -> jar:file://<cwd>/mods/greet.jar!/META-INF/greet.txt | all [jar:file://<cwd>/mods/greet.jar!/META-INF/greet.txt]
+top.txt -> jar:file://<cwd>/mods/greet.jar!/top.txt | all [jar:file://<cwd>/mods/greet.jar!/top.txt]
+app/Main.class -> file:<cwd>/mods/app/app/Main.class | all [file:<cwd>/mods/app/app/Main.class]
+app/ -> file:<cwd>/mods/app/app/ | all [file:<cwd>/mods/app/app/]
+app -> file:<cwd>/mods/app/app/ | all [file:<cwd>/mods/app/app/]
+Hi open/o.txt -> jar:file://<cwd>/mods/greet.jar!/com/greet/open/o.txt
+Hi /top.txt -> jar:file://<cwd>/mods/greet.jar!/top.txt
+Urls Main.class -> file:<cwd>/mods/app/app/Main.class
+--- stderr
