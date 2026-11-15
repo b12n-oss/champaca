@@ -120,18 +120,21 @@
   classes, :preview true to load class files compiled with --enable-preview
   (and turn on the JDK's preview features), as java --enable-preview does,
   :add-modules [\"jdk.incubator.vector\"] (or a comma-separated string) for
-  modules outside the default boot layer, as java --add-modules does. With
+  modules outside the default boot layer, as java --add-modules does, and
+  the launcher's other module options the same way: :limit-modules and
+  :enable-native-access take module lists, :add-opens, :add-exports and
+  :add-reads [\"java.base/java.lang=ALL-UNNAMED\" ...], one option each. With
   no :classpath, the entries of CHAMPACA_CLASSPATH (separated as a class
   path is), which an app bundle's launcher sets. Only the first call boots,
   so a later call's options are ignored."
   ([] (init! {}))
-  ([{:keys [classpath preview add-modules]}]
+  ([{:keys [classpath] :as opts}]
    ;; with no :classpath, CHAMPACA_CLASSPATH's entries (a bundle's launcher sets
    ;; it: jolt bundle --jolt)
    (let [classpath (or classpath
                        (some-> (System/getenv "CHAMPACA_CLASSPATH") not-empty
                                (str/split (re-pattern java.io.File/pathSeparator))))
-         status (boot/init! (or classpath []) {:preview preview :add-modules add-modules})]
+         status (boot/init! (or classpath []) (dissoc opts :classpath))]
      (when-not (zero? status) (throw (ex-info "JDK boot failed" {:status status}))))
    (when-not @interop-loaded
      (s/eval-string (slurp (io/resource "champaca/interop.ss")))

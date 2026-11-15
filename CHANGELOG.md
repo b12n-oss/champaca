@@ -31,6 +31,10 @@ The first public version. Champaca is still experimental: the
   as single-method interfaces, `->clj` and the data conversions, `proxy`,
   and `define-class` for real Java classes (constructors, statics, static
   initializers, annotations) whose methods are jolt fns.
+- `champaca.api/init!` takes the launcher's other module options next to
+  `:add-modules`: `:limit-modules`, `:add-opens`, `:add-exports`,
+  `:add-reads` and `:enable-native-access`, each a vector or one string as
+  on the command line (`examples/module_options.clj`).
 - **A `java`-like launcher** (`champaca.main`): `-cp` with wildcards, `-jar`,
   `-D`, `-ea`/`-da`, `-p`/`-m` and the module options, source files, preview
   features, `-version`, and the JDK's rules for finding `main`.

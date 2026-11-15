@@ -19,7 +19,15 @@ Pass the whole classpath on the first `init!`, because a second call does nothin
 
 Classes compiled with `javac --enable-preview` that use one of JDK 25's preview features need `:preview true` on that first call, as `java` needs `--enable-preview`: `(ldk/init! {:classpath ["classes"] :preview true})`. Without it, HotSpot's `UnsupportedClassVersionError` refuses such a class the first time something names it. The option also turns on the JDK's own preview features, such as structured concurrency and stable values. [Running Java programs](running-java-programs.md) has the version rules, and `examples/preview.clj` loads one.
 
-A module outside the JDK's default module graph, such as the Vector API's `jdk.incubator.vector`, needs `:add-modules` on that first call, as `java` needs `--add-modules`. `(ldk/init! {:add-modules ["jdk.incubator.vector"]})` puts it in the boot layer (`examples/vector.clj`); without it, a call naming one of the module's classes throws `NoClassDefFoundError`.
+A module outside the JDK's default module graph, such as the Vector API's `jdk.incubator.vector`, needs `:add-modules` on that first call, as `java` needs `--add-modules`. `(ldk/init! {:add-modules ["jdk.incubator.vector"]})` puts it in the boot layer (`examples/vector.clj`); without it, a call naming one of the module's classes throws `NoClassDefFoundError`. The launcher's other module options work the same way, each a vector or one string as you'd write it after the switch. `:limit-modules` and `:enable-native-access` take module names, while `:add-opens`, `:add-exports` and `:add-reads` take one option per element:
+
+```clojure
+(ldk/init! {:limit-modules ["java.base" "java.logging"]
+            :add-opens ["java.base/java.lang=ALL-UNNAMED"]
+            :enable-native-access "ALL-UNNAMED"})
+```
+
+`examples/module_options.clj` checks each against what HotSpot answers for the same command line.
 
 With the module in, lane-wise arithmetic, compares, masks, shuffles and reductions give HotSpot's results. So do the operations that change a vector's shape or lane type (`castShape`, `reinterpretAs*`, `test(IS_NAN)`) and loads and stores through a `MemorySegment`. None of it is accelerated, though ([limitations](limitations.md)).
 
