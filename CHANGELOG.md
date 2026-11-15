@@ -580,6 +580,7 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- The `bench` workflow sets `JOLT_MAX_HEAP=4g`, and a results header names it. Under jolt's default ceiling, a quarter of the runner's 7 GB, champaca's PetClinic answered its first page with OutOfMemoryError, which read as a hung server.
 - `champaca.port` moves two parts into namespaces of their own:
   `champaca.port.rules` holds the tables of JDK members and the jolt forms
   that stand for them, and `champaca.port.tidy` holds the pass that makes

@@ -47,6 +47,12 @@ jobs:
       RUNS: ${{ inputs.runs }}
       COLD_RUNS: "1"
       SERVER_RUNS: "1"
+      # jolt's heap ceiling is a quarter of RAM by default, 1.75 GB on this
+      # 7 GB runner, and champaca's PetClinic holds 960 MB live once started
+      # and 1.2 GB after its pages: under the default its first page was
+      # OutOfMemoryError.
+      # HotSpot doesn't read it.
+      JOLT_MAX_HEAP: "4g"
     steps:
       # the whole history, then head and base as worktrees of it: git
       # resolves a short commit, a branch or a tag there, where
