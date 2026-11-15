@@ -225,6 +225,19 @@ Measuring this from `jolt -e` overstates every number, because a top-level form'
 
 The table holds at most 4096 entries and empties itself when full, so a call site that sees endless new argument kinds can't make it grow without bound.
 
+## Files
+
+A Java `byte[]` is a Scheme vector with one word per element, so every byte a file, socket or zlib stream moves gets copied between native memory and that vector one element at a time. That copy checks the slice's bounds once and then moves four bytes per loop turn, about 1.2 ns per byte. A file read or write moves up to 64 KB per system call, as a `read` into a 64 KB buffer asks for. Measured on 2026-11-15 over a 100 MB file in the page cache, warm:
+
+| | HotSpot | champaca |
+|---|---|---|
+| `FileInputStream.read` into 64 KB | 8,985 MB/s | 735 to 752 MB/s |
+| `Files.readAllBytes` | 4,584 MB/s | 223 to 250 MB/s |
+| `BufferedReader.readLine` | 945 MB/s | 46 MB/s |
+| `FileOutputStream.write` from 64 KB | 509 MB/s | 673 to 688 MB/s |
+
+Before that change, the copy cost 2.8 ns a byte and a read stopped at 4 KB, which made reads and writes 2 to 3 times slower (236 and 311 MB/s). What's left is the element-per-word layout itself, plus, for text, decoding characters in Java code, which no copy can speed up. Writes landing above HotSpot's figure shouldn't be read as champaca being faster: a single run against the page cache varies that much.
+
 ## The pinned jolt
 
 Inside this repo, `deps.edn` names a jolt commit, the v0.8.27 tag (the tasks need 0.8.26 or later, for `System/mapLibraryName`):

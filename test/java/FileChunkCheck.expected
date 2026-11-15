@@ -1,0 +1,14 @@
+0: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 0
+1: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true d202ef8d
+3: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true f37aca27
+4: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 62210d65
+5: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true b60b6640
+7: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true ac7026df
+4095: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 3b079534
+4096: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 4e30eeb1
+4097: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 739d4c1d
+65535: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 29a2169f
+65536: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 12912136
+65537: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 1daaeb35
+65541: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 4c14129
+200003: file true read1 true read5 true read4096 true read70000 true raf true channel true gzip true 2d562e72

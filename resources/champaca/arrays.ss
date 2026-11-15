@@ -113,3 +113,35 @@
         (set! oom-last o)
         (eq-hashtable-set! ooms-seen e o)
         o)))
+
+;; A Java byte[] and native memory, every file, socket and zlib byte's way in
+;; and out: the slice's bounds checked once, then four bytes a turn through
+;; unchecked accesses, a signed byte read as one (integer-8 is a Java byte,
+;; so no masking either way). runtime.ss's native->vector! and
+;; vector->native! check every element and convert each byte: 2.8 ns a byte
+;; against 1.2 here (measured 2026-11-15, a 64 KB buffer).
+(define (jbytes-range! v voff n)
+  (unless (and (fx>= voff 0) (fx>= n 0) (fx<= (fx+ voff n) (vector-length v)))
+    (jthrow "java/lang/ArrayIndexOutOfBoundsException" #f)))
+(define (jbytes-from-native! p poff v voff n)
+  (jbytes-range! v voff n)
+  (let ([n4 (fxand n -4)])
+    (do ([i 0 (fx+ i 4)]) ((fx= i n4))
+      (let ([j (fx+ voff i)] [q (fx+ poff i)])
+        (#3%vector-set! v j (#3%foreign-ref 'integer-8 p q))
+        (#3%vector-set! v (fx+ j 1) (#3%foreign-ref 'integer-8 p (fx+ q 1)))
+        (#3%vector-set! v (fx+ j 2) (#3%foreign-ref 'integer-8 p (fx+ q 2)))
+        (#3%vector-set! v (fx+ j 3) (#3%foreign-ref 'integer-8 p (fx+ q 3)))))
+    (do ([i n4 (fx+ i 1)]) ((fx= i n))
+      (#3%vector-set! v (fx+ voff i) (#3%foreign-ref 'integer-8 p (fx+ poff i))))))
+(define (jbytes-to-native! v voff p poff n)
+  (jbytes-range! v voff n)
+  (let ([n4 (fxand n -4)])
+    (do ([i 0 (fx+ i 4)]) ((fx= i n4))
+      (let ([j (fx+ voff i)] [q (fx+ poff i)])
+        (#3%foreign-set! 'integer-8 p q (#3%vector-ref v j))
+        (#3%foreign-set! 'integer-8 p (fx+ q 1) (#3%vector-ref v (fx+ j 1)))
+        (#3%foreign-set! 'integer-8 p (fx+ q 2) (#3%vector-ref v (fx+ j 2)))
+        (#3%foreign-set! 'integer-8 p (fx+ q 3) (#3%vector-ref v (fx+ j 3)))))
+    (do ([i n4 (fx+ i 1)]) ((fx= i n))
+      (#3%foreign-set! 'integer-8 p (fx+ poff i) (#3%vector-ref v (fx+ voff i))))))

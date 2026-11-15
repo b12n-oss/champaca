@@ -257,6 +257,11 @@
 
 ;; reusable scratch memory; one thread runs Java at a time (natives.ss)
 (define fs-scratch (foreign-alloc 4096))
+;; a read's or write's bytes on their way between a file and a byte[]: one
+;; system call moves up to 64 KB, as a FileInputStream read of a 64 KB
+;; buffer asks (the JDK's own native reads all of len at once)
+(define fs-io-size 65536)
+(define fs-io-buf (foreign-alloc fs-io-size))
 (define fs-stat-buf (foreign-alloc 256))
 
 ;; --- errors --------------------------------------------------------------------------
@@ -318,24 +323,24 @@
     (jthrow "java/lang/IndexOutOfBoundsException" #f)))
 
 (define (fd-read-into fd arr off n)
-  (let ([want (fxmin n 4096)]
+  (let ([want (fxmin n fs-io-size)]
         [copy (lambda (buf r)
                 (when (< r 0) (io-error "Read error"))
-                (native->vector! buf 0 (jarr-vec arr) off r)
+                (jbytes-from-native! buf 0 (jarr-vec arr) off r)
                 r)])
     (if (fd-may-wait? fd)
         (released-read fd want copy)
-        (copy fs-scratch (restartable (lambda () (libc-read fd fs-scratch want)))))))
+        (copy fs-io-buf (restartable (lambda () (libc-read fd fs-io-buf want)))))))
 
 (define (fd-write-from fd arr off n)
   (let* ([v (jarr-vec arr)]
          [wait? (fd-may-wait? fd)]
-         [buf (if wait? (foreign-alloc 4096) fs-scratch)])
+         [buf (if wait? (foreign-alloc fs-io-size) fs-io-buf)])
     (guard (e [#t (when wait? (foreign-free buf)) (raise e)])
       (let loop ([done 0])
         (when (fx< done n)
-          (let ([k (fxmin (fx- n done) 4096)])
-            (vector->native! v (fx+ off done) buf 0 k)
+          (let ([k (fxmin (fx- n done) fs-io-size)])
+            (jbytes-to-native! v (fx+ off done) buf 0 k)
             (let ([w (if wait?
                          (released-call (lambda () (libc-write-blocking fd buf k)))
                          (restartable (lambda () (libc-write fd buf k))))])

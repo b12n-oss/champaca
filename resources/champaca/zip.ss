@@ -54,10 +54,10 @@
 ;; a byte[] slice copied into fresh native memory, and the copy back
 (define (bytes->native arr off len)
   (let ([p (foreign-alloc (fxmax len 1))])
-    (vector->native! (jarr-vec arr) off p 0 len)
+    (jbytes-to-native! (jarr-vec arr) off p 0 len)
     p))
 (define (native->bytes! p arr off n)
-  (native->vector! p 0 (jarr-vec arr) off n))
+  (jbytes-from-native! p 0 (jarr-vec arr) off n))
 
 (define (z-result read written finished flag)
   (i64 (+ read (ash written 31) (if finished (ash 1 62) 0) (if flag (ash 1 63) 0))))
