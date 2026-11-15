@@ -26,7 +26,7 @@ cp "$src/com.greet/top.txt" "$out/tmp/com.greet/"
 mkdir -p "$out/tmp/com.greet/META-INF" && cp "$src/com.greet/META-INF/greet.txt" "$out/tmp/com.greet/META-INF/"
 "${bin}jar" cf "$out/mods/greet.jar" -C "$out/tmp/com.greet" .
 cp "$out/mods/greet.jar" "$out/mods2/greet.jar"
-"${bin}javac" -p "$out/mods" -d "$out/mods/app" "$src/app/module-info.java" "$src/app/app/Main.java" "$src/app/app/Plain.java" "$src/app/app/Split.java" "$src/app/app/Frames.java"
+"${bin}javac" -p "$out/mods" -d "$out/mods/app" "$src/app/module-info.java" "$src/app/app/Main.java" "$src/app/app/Plain.java" "$src/app/app/Split.java" "$src/app/app/Frames.java" "$src/app/app/Urls.java"
 # mods2's app has a version, which its stack frames print (app@1.0/)
 "${bin}jar" --create --file "$out/mods2/app.jar" --main-class app.Main --module-version 1.0 -C "$out/mods/app" .
 "${bin}javac" -cp "$out/tmp/com.greet" -d "$out/cp" "$src/cp/cp/Probe.java" "$src/cp/cp/Res.java"

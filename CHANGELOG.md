@@ -412,6 +412,11 @@ program may notice, and changes to the tasks.
   your class path as soon as one of its classes has loaded, as on the JVM,
   where they found it only after something had asked one of its classes for
   its package (`test/java/PackageCheck.java`).
+- A resource in a module on the module path had the class path's URL form
+  (`jar:file:/...!/name`, percent-encoded, a directory without its `/`
+  when asked without one). It has the module reader's now:
+  `jar:file:///...!/` and the jar entry's own name, a directory ending in
+  `/` in a jar or an exploded module (`test/modpath` urls).
 - A class's `Package` is the one its class loader defines, so the
   application loader's `getDefinedPackage`, `getDefinedPackages` and
   `Package.getPackage` find your packages, and a `URLClassLoader`'s class
