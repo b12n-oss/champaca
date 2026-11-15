@@ -328,7 +328,8 @@ program may notice, and changes to the tasks.
   handler (`a:b.txt`), or `jar:` without `!/`, was found where the JVM finds
   nothing: its class path loader makes the resource's URL from the name and
   refuses one it can't parse. A colon after a `/` or a leading digit is found
-  as before (`test/java/ColonResourceCheck.java`).
+  as before, and its URL now keeps the `:` as the JDK's does, where champaca
+  wrote `%3a` (`test/java/ColonResourceCheck.java`).
 - A method restored from the library cache could name a call site's lambda
   class this run never made, and threw `NoClassDefFoundError` (seen in
   Scala's `LazyList$.<clinit>`, reached through fansi). The class's

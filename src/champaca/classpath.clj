@@ -522,7 +522,7 @@
 ;; point beyond the BMP is first split into its two UTF-16 units, each written
 ;; as its own three bytes. Written from HotSpot 25's observed URLs.
 (def encode-path-plain
-  (set "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!$&'()*+,-.@_~/"))
+  (set "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!$&'()*+,-.:@_~/"))
 
 (defn encode-unit
   "The %xx text of one UTF-16 unit u (0 to 0xFFFF) as UTF-8 bytes."
