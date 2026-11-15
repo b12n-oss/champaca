@@ -12,7 +12,8 @@
   (:require [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]
             [champaca.libcache :as libcache]
-            [champaca.loader :as loader]))
+            [champaca.loader :as loader]
+            [champaca.state :as st]))
 
 (ldk/init!)
 
@@ -32,3 +33,17 @@
   (is (= {} (libcache/user-deps ["java/lang/String"])))
   (let [n (loader/lambda-class ["java/lang/Runnable"] ["run()V"])]
     (is (= {n :present} (libcache/user-deps [n])))))
+
+(deftest a-dropped-entry-is-known-by-its-fingerprint
+  ;; A restored class's packed entry leaves the library cache's table (the
+  ;; class table holds the class), so a merge that drops it later compares
+  ;; the file's entry by fingerprint: the same text whether held as UTF-8
+  ;; bytes or as a string, every part of a multi-part entry, nothing for nil
+  (let [text "{:name \"a/B\" :x \"\u00e9\"}"
+        bs (.getBytes text "UTF-8")]
+    (is (= (st/packed-fp bs) (st/packed-fp text)))
+    (is (= (st/packed-fp [bs (.getBytes "m" "UTF-8")]) (st/packed-fp [bs "m"])))
+    (is (not= (st/packed-fp [bs "m"]) (st/packed-fp [bs "n"])))
+    (is (not= (st/packed-fp bs) (st/packed-fp [bs "m"])))
+    (is (not= (st/packed-fp text) (st/packed-fp (str text " "))))
+    (is (nil? (st/packed-fp nil)))))

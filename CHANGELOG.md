@@ -436,6 +436,7 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- A class restored from the library cache no longer keeps its packed entry in the library cache's table as well as in the class table. A dropped entry is remembered by a fingerprint (CRC-32 and length) for the save's merge. PetClinic holds 931 MB live after startup instead of 960. `jolt heap` collects through jolt's full collection, which waits for a server's other threads; Chez's `collect` refused while one ran.
 - `BufferedReader.readLine` reads 73 to 85 MB/s, up from 52.
   `StringUTF16.compress`, `StringLatin1.inflate` and
   `StringCoding.countPositives`, which HotSpot intrinsifies, are Scheme
