@@ -112,13 +112,31 @@ jobs:
             rsync -a --exclude champaca-cache --exclude results.md "head/bench/$app/target/" "base/bench/$app/target/"
           done
 
+      # one harness for both sides: head's bench.clj, so a side isn't timed
+      # (or kept going after a failure) differently; base's bench task only
+      # loads the file and calls its main
+      - name: one harness
+        run: cp head/bench/bench.clj base/bench/bench.clj
+
       - name: time both sides
         run: |
           out="$RUNNER_TEMP/results"; mkdir -p "$out"
+          cpus=$(sysctl -n hw.ncpu)
+          # each run starts once the one-minute load is under the CPU count,
+          # waiting at most 15 minutes (a build or another job can leave
+          # the runner busy)
+          quiet() {
+            for i in $(seq 1 60); do
+              l=$(sysctl -n vm.loadavg | awk '{print $2}')
+              awk -v l="$l" -v c="$cpus" 'BEGIN { exit !(l < c) }' && return
+              sleep 15
+            done
+          }
           for app in ${APPS//,/ }; do
             for r in $(seq 1 "$ROUNDS"); do
               if [ $((r % 2)) -eq 1 ]; then order="base head"; else order="head base"; fi
               for side in $order; do
+                quiet
                 echo "::group::$app round $r $side (load $(sysctl -n vm.loadavg))"
                 (cd "$side" && jolt bench "$app" bench)
                 cp "$side/bench/$app/target/results.md" "$out/$app-$side-r$r.md"
