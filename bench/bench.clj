@@ -236,14 +236,29 @@
 
 ;; --- servers ---------------------------------------------------------------------
 
-;; [status body] of one GET, asking for HTML as a browser does
+;; [status body] of one GET, asking for HTML as a browser does; a fetch curl
+;; can't finish (exit 52, the server closed the connection with no reply) is
+;; the status "curl exit <n>", which no reference page has
 (defn- http-get [port path]
   (let [f (str (fs/create-temp-file {:prefix "page-"}))
-        code (:out (p/shell {:out :string :env no-proxy} "curl" "-s" "-o" f "-w" "%{http_code}"
-                            "-H" "Accept: text/html" (str "http://127.0.0.1:" port path)))
+        r (p/shell {:out :string :env no-proxy :continue true} "curl" "-s" "-o" f "-w" "%{http_code}"
+                   "-H" "Accept: text/html" (str "http://127.0.0.1:" port path))
         body (slurp f)]
     (fs/delete f)
-    [(parse-long (str/trim code)) body]))
+    (if (zero? (:exit r))
+      [(parse-long (str/trim (:out r))) body]
+      [(str "curl exit " (:exit r)) ""])))
+
+;; a run that never started or lost a page keeps its server's log, as
+;; <t>/failed-server-<n>.log, and prints its end
+(def ^:private failed-runs (atom 0))
+(defn- keep-failed-log! [t log-file why]
+  (let [kept (str t "/failed-server-" (swap! failed-runs inc) ".log")
+        lines (str/split-lines (slurp log-file))]
+    (fs/copy log-file kept {:replace-existing true})
+    (binding [*out* *err*]
+      (println (str "  " why "; the server's log is " kept ", its last lines:"))
+      (doseq [l (take-last 30 lines)] (println "   " l)))))
 
 ;; one run of a server: started, timed to Tomcat's port and to each page,
 ;; stopped with SIGTERM (its shutdown hooks run); nil when it never started
@@ -257,9 +272,12 @@
                (or (some->> (re-find #"Tomcat started on port (\d+)" (slurp log-file)) second parse-long)
                    (when (and (p/alive? proc) (< (ms) 1800000)) (recur))))]
     (try
-      (when port
+      (if-not port
+        (do (keep-failed-log! t log-file "the server never said it started") nil)
         (let [started (ms)
               fetched (mapv (fn [path] (let [[code body] (http-get port path)] [path code body (ms)])) pages)]
+          (when-let [[path code] (first (filter #(string? (second %)) fetched))]
+            (keep-failed-log! t log-file (str path " failed: " code)))
           {:start started :first (nth (first fetched) 3) :all (nth (peek fetched) 3)
            :pages (mapv (fn [[path code body]] [path code body]) fetched)}))
       (finally
