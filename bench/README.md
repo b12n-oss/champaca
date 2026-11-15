@@ -32,6 +32,8 @@ gh workflow run bench -f base=<ref> [-f head=main] [-f apps=spring-boot,quarkus,
 
 The run's summary page gets a table per application, with each round's median for both sides and the change between their means. HotSpot runs on both sides too, so its rows show how much the runner itself moved. A hosted runner's absolute times vary from one job to the next, so read the difference, not the numbers. Every `results.md` is kept as the run's artifact. On a workstation, `jolt bench:compare <dir>` prints the same table from files saved as `<app>-<base|head>-r<n>.md`.
 
+The workflow sets `JOLT_MAX_HEAP=4g`, and each results header says so. jolt's default heap ceiling is a quarter of physical memory, which is 1.75 GB on the runner's 7 GB. That's less than PetClinic needs on champaca: about 960 MB stays live once it has started, 1.2 GB once it has served its pages, and the total heap passes 1.9 GB. Under the default, every champaca server answered its first page with OutOfMemoryError (run 43705482470). HotSpot runs under its own default, the same quarter of memory.
+
 ## The applications
 
 `demo.boot.BootApp` (Spring Boot 4.1.2, Spring Framework 7) uses

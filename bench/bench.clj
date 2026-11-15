@@ -193,7 +193,8 @@
           [(str "- JDK: " (first (str/split-lines (:err (p/shell {:err :string} java "-version")))))
            (str "- champaca: " (str/trim (:out (p/shell {:out :string :dir repo} "git" "describe" "--always" "--dirty"))))]
           extra
-          [(str "- jolt: " jolt) ""]
+          [(str "- jolt: " jolt (when-let [h (System/getenv "JOLT_MAX_HEAP")] (str ", JOLT_MAX_HEAP=" h)))
+           ""]
           columns))
 
 (defn- write-results!
