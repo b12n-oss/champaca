@@ -320,6 +320,10 @@ program may notice, and changes to the tasks.
   initialized the wrong class. javac refuses such a read, but a class
   compiled before one of the two fields existed can hold one
   (`test/java/FieldOrderCheck.java`).
+- A pattern switch whose case label is a dynamic constant javac doesn't
+  make, such as one `ConstantBootstraps.invoke` computes, failed to
+  translate. Such a site now runs the JDK's own `SwitchBootstraps`, as
+  primitive patterns already did (`test/java/CondyLabelCheck.java`).
 - A method restored from the library cache could name a call site's lambda
   class this run never made, and threw `NoClassDefFoundError` (seen in
   Scala's `LazyList$.<clinit>`, reached through fansi). The class's

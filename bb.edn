@@ -227,6 +227,8 @@
                     _ (shell "java test/gen/OddNameGen.java target/classes")
                     ;; FieldOrderCheck's FoRead: static reads javac calls ambiguous
                     _ (shell "java test/gen/FieldOrderGen.java target/classes")
+                    ;; CondyLabelCheck's CondyLabels: switch labels from ConstantBootstraps.invoke
+                    _ (shell "java test/gen/CondyLabelGen.java target/classes")
                     ;; ShadowCheck's classes in JDK packages (javax.xml), which javac won't compile
                     _ (shell "java test/gen/ShadowGen.java target/classes")
                     ;; LongOpsCheck's LongCmp: lcmp returned, kept in a local, branched on in another block

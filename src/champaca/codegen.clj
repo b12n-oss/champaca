@@ -50,39 +50,37 @@
 ;; --- pattern switches -----------------------------------------------------------------
 ;; typeSwitch and enumSwitch labels as a quoted list for the runtime's
 ;; jswitch-index (handles.ss): Class constants, Strings (enum constant names
-;; under enumSwitch), Integers, and two dynamic constants javac makes:
-;; ConstantBootstraps.primitiveClass for a primitive pattern, and an EnumDesc
-;; for a qualified enum constant (`case Color.RED`) in a switch on another type.
+;; under enumSwitch), Integers, and an EnumDesc dynamic constant javac makes
+;; for a qualified enum constant (`case Color.RED`) in a switch on another
+;; type. Any other label (a primitive pattern's, or a dynamic constant of
+;; another bootstrap, which other compilers or a class file generator can
+;; give) leaves the site to the JDK's own SwitchBootstraps.
 
 (defn- condy-label
   "A switch label given as a dynamic constant: an enum constant qualified by
   its class (EnumDesc.of(ClassDesc.of(binary name), constant name)), or nil
-  for a primitive pattern's (a primitive class, Boolean.TRUE or FALSE)."
+  for any other (a primitive pattern's primitive class, Boolean.TRUE or
+  FALSE, or whatever another bootstrap computes)."
   [cls e]
   (let [cp (:cp cls)
         [bsm-name [mh & args]] (condy cls e)
         target (fn [] (cp (:ref-idx (cp mh))))]
-    (cond
-      (= bsm-name "primitiveClass") nil
-      (and (= bsm-name "invoke") (= "of" (:name (target))) (= "java/lang/Enum$EnumDesc" (:class (target))))
+    (when (and (= bsm-name "invoke") (= "of" (:name (target))) (= "java/lang/Enum$EnumDesc" (:class (target))))
       (let [[_ [_ cname]] (condy cls (cp (first args)))]
         (sx "enum" (str-lit (str/replace (:value (cp cname)) "." "/"))
-            (str-lit (:value (cp (second args))))))
-      (= bsm-name "getStaticFinal") nil
-      :else (throw (ex-info (str "switch label not in spike: condy " bsm-name) {:class (:name cls)})))))
+            (str-lit (:value (cp (second args)))))))))
 
 (defn- switch-label
-  "One case label, from its constant pool entry i, or nil for a primitive
-  pattern's."
+  "One case label, from its constant pool entry i, or nil for one
+  jswitch-index doesn't match (a primitive pattern's, among others)."
   [cls enum? i]
   (let [e ((:cp cls) i)]
     (case (:tag e)
       :class (sx "class" (str-lit (:name e)))
       :string (sx (if enum? "name" "string") (str-lit (:value e)))
       :int (sx "int" (str (:value e)))
-      (:long :float :double) nil
       :dynamic (condy-label cls e)
-      (throw (ex-info (str "switch label not in spike: " (:tag e)) {:class (:name cls)})))))
+      nil)))
 
 (defn- switch-labels
   "The case labels of a typeSwitch or enumSwitch as handles.ss's quoted list,
