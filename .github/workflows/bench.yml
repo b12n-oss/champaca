@@ -48,14 +48,26 @@ jobs:
       COLD_RUNS: "1"
       SERVER_RUNS: "1"
     steps:
+      # the whole history, then head and base as worktrees of it: git
+      # resolves a short commit, a branch or a tag there, where
+      # actions/checkout takes a short commit for a branch name
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.head }}
-          path: head
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.base }}
-          path: base
+          path: repo
+          fetch-depth: 0
+      - name: check out head and base
+        env:
+          HEAD_REF: ${{ inputs.head }}
+          BASE_REF: ${{ inputs.base }}
+        run: |
+          git -C repo fetch --tags origin
+          for side in head base; do
+            if [ $side = head ]; then ref=$HEAD_REF; else ref=$BASE_REF; fi
+            # a branch name means the remote's branch
+            git -C repo rev-parse --verify -q "origin/$ref^{commit}" > /dev/null && ref="origin/$ref"
+            git -C repo worktree add --detach "$PWD/$side" "$ref"
+            echo "$side: $(git -C $side log --oneline -1)"
+          done
 
       # OpenJDK 25.0.2 and the pinned jolt over Homebrew's Chez, as ci.yml's
       # macOS battery; each side builds its own pin (a no-op when they match)
