@@ -164,6 +164,45 @@ first time it runs.
 The warm runs read the cache each SIGTERM saves, so a warm row depends on
 champaca running Java's shutdown hooks on a signal (the last item below).
 
+## Before and after the reflection work, 2026-11-15
+
+The night of 2026-11-14 made reflective calls, `Class.forName` and `Arrays.fill` faster (#223, #224, #226) and the jolt API's calls cheaper (#227-#229). To see what that did for startup, the three applications ran through champaca at `cf5488e`, main before that work, and at `f1177e6`, main after it. Both ran on the same M1 Pro, from the same application builds, on the same pinned jolt. Each side got two rounds, and the rounds alternated: base then head in the first, head then base in the second. Each run waited for the one-minute load average to drop below 3 before starting. A round had three timed runs of each warm variant, one cold run, and one PetClinic run per variant. That's thin, so the HotSpot rows, which run the same JVM on both sides, show how much of a change came from the machine.
+
+Each cell holds the two rounds' medians. The change compares the means of the two sides.
+
+| Spring Boot | `cf5488e` | `f1177e6` | Change |
+|---|---|---|---|
+| HotSpot, fat jar | 904 / 887 ms | 907 / 893 ms | +1% |
+| HotSpot, extracted jar | 754 / 751 ms | 771 / 744 ms | +1% |
+| HotSpot + Spring AOT | 653 / 636 ms | 639 / 640 ms | −1% |
+| champaca, extracted jar, cold | 50.3 / 46.3 s | 44.6 / 45.5 s | −7% |
+| champaca, extracted jar | 3,557 / 3,254 ms | 3,194 / 3,100 ms | −8% |
+| champaca + Spring AOT | 3,059 / 2,945 ms | 2,876 / 3,051 ms | −1% |
+| champaca, fat jar | 4,559 / 4,390 ms | 4,090 / 3,886 ms | −11% |
+
+| Quarkus | `cf5488e` | `f1177e6` | Change |
+|---|---|---|---|
+| HotSpot, fast-jar | 398 / 410 ms | 414 / 403 ms | +1% |
+| HotSpot, uber-jar | 398 / 402 ms | 435 / 440 ms | +9% |
+| champaca, uber-jar, cold | 31.7 / 30.7 s | 31.6 / 31.3 s | +1% |
+| champaca, uber-jar | 1,643 / 1,658 ms | 1,813 / 1,684 ms | +6% |
+| champaca, fast-jar | 2,021 / 1,920 ms | 2,017 / 1,989 ms | +2% |
+
+| Spring PetClinic | `cf5488e` | `f1177e6` | Change |
+|---|---|---|---|
+| HotSpot, started | 3,557 / 3,565 ms | 3,825 / 3,557 ms | +4% |
+| HotSpot, all pages | 4,468 / 4,468 ms | 4,738 / 4,472 ms | +3% |
+| champaca, cold, started | 129.3 / 125.3 s | 121.6 / 132.4 s | ±0% |
+| champaca, cold, all pages | 158.9 / 156.2 s | 150.6 / 162.4 s | −1% |
+| champaca, warm, started | 24.7 / 21.6 s | 22.9 / 26.2 s | +6% |
+| champaca, warm, all pages | 28.0 / 24.9 s | 26.0 / 29.6 s | +5% |
+
+Spring Boot is where the work shows. Its fat jar starts 11% faster and the extracted jar 8%, while HotSpot's rows stayed within a percent. A fat jar's loader leans on reflection and `Class.forName` more than any other variant here, so it gains the most. Spring AOT hardly moved, which fits: it reflects less at startup because its bean definitions were generated at build time. The cold row's −7% rests on one run per round.
+
+Quarkus can't be read from this run. HotSpot's uber-jar came out 9% slower on the `f1177e6` side, whose runs started at a higher load (2.95 and 3.43 against 2.61 and 2.77), so champaca's +6% there is within the machine's drift. PetClinic shows nothing beyond noise. With one server run per round, the warm start varied from 21.6 to 26.2 s on one side alone, which is wider than any effect expected here. Both are worth rerunning with more rounds on a quiet machine.
+
+All three applications printed the same output as HotSpot on every run.
+
 ## What it took
 
 Running these applications turned up these gaps, now fixed:
