@@ -94,12 +94,23 @@
 (defn packed? [x] (or (bytes? x) (string? x) (and (vector? x) (bytes? (first x)))))   ; a string: an entry made this run
 ;; An entry's text; a multi-part entry (packed-entry) answers its first part
 (defn unpack ^String [x] (cond (vector? x) (unpack (first x)) (bytes? x) (String. ^bytes x "UTF-8") (nil? x) nil :else x))
-(defn packed=
-  "Whether two packed entries hold the same text (= on byte arrays is
-  identity), every part of a multi-part entry."
-  [a b]
-  (and (some? a) (some? b)
-       (= (if (vector? a) (mapv unpack a) [(unpack a)]) (if (vector? b) (mapv unpack b) [(unpack b)]))))
+(defn packed-fp
+  "A packed entry's fingerprint, one integer: the CRC-32 of every part's
+  UTF-8 text, each led by its length, in the low 32 bits and their total
+  length above; nil for none. The library cache's merge compares an entry
+  this run dropped with the file's by it, so the entry itself needn't be
+  kept."
+  [x]
+  (when (some? x)
+    (let [c (java.util.zip.CRC32.)
+          total (reduce (fn [n part]
+                          (let [^bytes bs (if (bytes? part) part (.getBytes ^String (unpack part) "UTF-8"))
+                                len (count bs)]
+                            (.update c (.getBytes (str len ":") "UTF-8"))
+                            (.update c bs 0 len)
+                            (+ n len)))
+                        0 (if (vector? x) x [x]))]
+      (bit-or (bit-shift-left total 32) (.getValue c)))))
 
 (def ^:private interned-strings (atom {}))
 (defn- intern-string

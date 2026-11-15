@@ -18,7 +18,7 @@
                                        prune-cache-root! record! runtime-files stale-ms write-units!]]
             [champaca.classpath :refer [class-source layer-module note-class-entry! outside-boot-layer?]]
             [champaca.link :refer [ancestry ancestry-of-unlinked registration-text sealed-refused?]]
-            [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed= thaw-entry
+            [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed-fp thaw-entry
                                     packed-entry strip-for-cache]]
             [jolt.image :as img]))
 
@@ -192,7 +192,7 @@
   [cname src packed]
   (swap! state #(-> %
                     (update-in [:user-cache (:jar src)] dissoc cname)
-                    (assoc-in [:library-dropped (:jar src) cname] packed)
+                    (assoc-in [:library-dropped (:jar src) cname] (packed-fp packed))
                     (update :library-dirty (fnil conj #{}) (:jar src)))))
 
 (defn restore-user-class!
@@ -206,6 +206,8 @@
       (let [info (thaw-library-entry cname packed)]
         (if (and info (entry-deps-hold? src info))
           (do (register-restored! cname src info)
+              ;; the class table holds it now, and the save writes it from there
+              (swap! state update-in [:user-cache (:jar src)] dissoc cname)
               true)
           (do (drop-stale-entry! cname src packed)
               nil))))))
@@ -246,10 +248,14 @@
 
 (defn- register-defined!
   "Put the restored class n (bytes bs, map info) in the table and run its
-  registration, from its cached unit when it has one."
-  [n bs info]
+  registration, from its cached unit when it has one. Its packed entry,
+  from dj's file, goes: the save writes the class from the table, and a
+  merge that drops it later (deps-still-hold!) needs its fingerprint only."
+  [n bs info dj packed]
   (swap! state #(-> %
                     (assoc-in [:classes n] info)
+                    (update-in [:user-cache dj] dissoc n)
+                    (assoc-in [:restored-fps dj n] (packed-fp packed))
                     (assoc-in [:defined-bytes n] bs)
                     (update :dir-bytes dissoc n)
                     (update :restored (fnil inc 0))))
@@ -265,7 +271,7 @@
   [n dj packed]
   (swap! state #(-> %
                     (update-in [:user-cache dj] dissoc n)
-                    (assoc-in [:library-dropped dj n] packed)
+                    (assoc-in [:library-dropped dj n] (packed-fp packed))
                     (update :library-dirty (fnil conj #{}) dj))))
 
 (defn restore-defined-class!
@@ -282,7 +288,7 @@
     (let [refused (volatile! false)
           info (thaw-defined-entry n packed)]
       (if (and info (defined-entry-holds? n fp info refused))
-        (register-defined! n bs info)
+        (register-defined! n bs info dj packed)
         (when-not @refused
           (drop-defined-entry! n dj packed)
           nil)))
@@ -336,7 +342,7 @@
                                                            (-> % (dissoc :cached-methods) (assoc :deps (dissoc deps cname)))
                                                            (dissoc % :cached-methods :src-fp :src-jar :deps)))
                              (update :library-dirty (fnil conj #{}) dj)
-                             (cond-> (not deps) (assoc-in [:library-dropped dj cname] (get-in st [:user-cache dj cname]))))))
+                             (cond-> (not deps) (assoc-in [:library-dropped dj cname] (get-in st [:restored-fps dj cname]))))))
           false))))
 
 (defn- library-entries
@@ -347,7 +353,7 @@
   (unless they were replaced meanwhile); every class of the jar this run
   loaded is written again, with what it compiled."
   [jar classes]
-  (into (reduce-kv (fn [m k seen] (if (packed= seen (get m k)) (dissoc m k) m))
+  (into (reduce-kv (fn [m k seen] (if (and seen (= seen (packed-fp (get m k)))) (dissoc m k) m))
                    (read-library-image jar) (get-in @state [:library-dropped jar]))
         (for [[k info] classes
               :when (and (map? info) (= :user (cache-origin info)) (= jar (:src-jar info)))]

@@ -99,6 +99,8 @@
   (when (= mode "types") (scm/eval-string "(enable-object-counts #t)"))
   (ldk/init! {:classpath (vec (.split ^String cp ":"))})
   (ldk/invoke-static mc "main" (vec args))
-  (scm/eval-string "(collect (collect-maximum-generation))")
+  ;; jolt's full collection waits for the other threads; Chez's (collect)
+  ;; refuses while a server's threads still run
+  (scm/eval-string "(full-collect)")
   (case mode "types" (types) "roots" (roots) "java" (java))
   (System/exit 0))
