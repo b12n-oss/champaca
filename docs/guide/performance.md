@@ -233,10 +233,12 @@ A Java `byte[]` is a Scheme vector with one word per element, so every byte a fi
 |---|---|---|
 | `FileInputStream.read` into 64 KB | 8,985 MB/s | 735 to 752 MB/s |
 | `Files.readAllBytes` | 4,584 MB/s | 223 to 250 MB/s |
-| `BufferedReader.readLine` | 945 MB/s | 46 MB/s |
+| `BufferedReader.readLine` | 945 MB/s | 73 to 85 MB/s (46 before the decode copies below) |
 | `FileOutputStream.write` from 64 KB | 509 MB/s | 673 to 688 MB/s |
 
 Before that change, the copy cost 2.8 ns a byte and a read stopped at 4 KB, which made reads and writes 2 to 3 times slower (236 and 311 MB/s). What's left is the element-per-word layout itself, plus, for text, decoding characters in Java code, which no copy can speed up. Writes landing above HotSpot's figure shouldn't be read as champaca being faster: a single run against the page cache varies that much.
+
+Reading lines spent 60% of its time in three small JDK loops that HotSpot replaces with intrinsics: `StringUTF16.compress`, which makes every `String` from a `char[]`, and `StringLatin1.inflate` and `StringCoding.countPositives`, which run every ASCII decode. `strings.ss` overrides them with Scheme loops that check the ranges once and then read and write without checks. When a range is out of bounds or an array is null, they run the Java loop's steps in its order instead, so the same elements are copied before the same exception, with HotSpot's message. On a 100 MB file, `readLine` went from 52 to between 73 and 85 MB/s (HotSpot 836 on that run). What's left is `readLine`'s own scan for the line end and the copy itself. `StringDecodeCheck` covers the three methods directly, through reflection with `--add-opens`, edge cases included.
 
 ## The pinned jolt
 

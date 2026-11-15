@@ -1,0 +1,40 @@
+compress latin: 6 [97, 98, 127, -128, -1, 122]
+compress offsets: 4 [0, 127, -128, -1, 122, 0]
+compress non-latin stops: 2 [97, 98, 0, 0]
+compress zero: 0 [0, 0]
+compress negative len: -3 [0, 0]
+compress src past end: java.lang.ArrayIndexOutOfBoundsException: Index 6 out of bounds for length 6 [-128, -1, 122, 0, 0, 0]
+compress dst past end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 [97, 98, 127]
+compress non-latin before dst end: 2 [97, 98]
+compress negative src: java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 6 [0, 0, 0, 0, 0, 0]
+compress negative dst: java.lang.ArrayIndexOutOfBoundsException: Index -2 out of bounds for length 6 [0, 0, 0, 0, 0, 0]
+compress null: java.lang.NullPointerException: Cannot load from char array because "src" is null
+compress null dst: java.lang.NullPointerException: Cannot store to byte/boolean array because "dst" is null
+compress null dst, non-latin first: 0
+compress nulls, len 0: 0
+inflate all: null [104, 105, 128, 255, 127, 255]
+inflate offsets: null [0, 0, 105, 128, 255, 0]
+inflate zero: null [0, 0]
+inflate negative len: null [0, 0]
+inflate src past end: java.lang.ArrayIndexOutOfBoundsException: Index 6 out of bounds for length 6 [127, 255, 0, 0, 0, 0]
+inflate dst past end: java.lang.ArrayIndexOutOfBoundsException: Index 3 out of bounds for length 3 [0, 104, 105]
+inflate negative src: java.lang.ArrayIndexOutOfBoundsException: Index -2 out of bounds for length 6 [0, 0, 0, 0]
+inflate null: java.lang.NullPointerException: Cannot store to char array because "dst" is null
+inflate null src: java.lang.NullPointerException: Cannot load from byte/boolean array because "src" is null
+inflate nulls, len 0: null
+countPositives first negative: 3
+countPositives after offset: 2
+countPositives all positive: 3
+countPositives from the negative: 0
+countPositives zero: 0
+countPositives negative len: -4
+countPositives past end: java.lang.ArrayIndexOutOfBoundsException: Index 2 out of bounds for length 2
+countPositives negative off: java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 5
+countPositives int overflow: 2147483647
+countPositives null: java.lang.NullPointerException: Cannot load from byte/boolean array because "ba" is null
+countPositives null, len 0: 0
+String(char[]) latin 5000 1126375876 135
+String(char[]) mixed 4500 1665983561 257
+UTF-8 decode 31 plain ascii, then café and more
+getChars _cdef_
+StringBuilder xy1☃2 5

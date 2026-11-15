@@ -369,3 +369,86 @@
             [(fx= u 1) (loop (cdr rs) (cdr args) consts (units-onto (car args) acc))]
             [(fx= u 2) (loop (cdr rs) args (cdr consts) (units-onto (car consts) acc))]
             [else (loop (cdr rs) args consts (cons u acc))])))))
+
+;; --- the copies behind decoding: what HotSpot intrinsifies ------------------------
+;; StringUTF16.compress(char[] -> byte[]) makes every String from a char[],
+;; StringLatin1.inflate(byte[] -> char[]) and StringCoding.countPositives run
+;; every ASCII decode; as Java loops they were 60% of BufferedReader.readLine.
+;; In range: one check, then unchecked reads and writes. Otherwise the Java
+;; loop itself, element by element in its order: the elements before the
+;; first bad access are copied, and a null array or a bad index throws what
+;; the interpreter throws there (a null array is touched only when len > 0).
+(define (copy-access-error a i what)
+  (if a
+      (let ([n (vector-length (jarr-vec a))])
+        (jthrow "java/lang/ArrayIndexOutOfBoundsException" (format "Index ~a out of bounds for length ~a" i n)))
+      (jthrow "java/lang/NullPointerException" what)))
+(define-syntax checked-ref   ; a[i] as the interpreter reads it; what: the NPE text
+  (syntax-rules ()
+    [(_ a i what) (if (and a (fx>= i 0) (fx< i (vector-length (jarr-vec a))))
+                      (#3%vector-ref (jarr-vec a) i)
+                      (copy-access-error a i what))]))
+(define-syntax checked-set!
+  (syntax-rules ()
+    [(_ a i x what) (if (and a (fx>= i 0) (fx< i (vector-length (jarr-vec a))))
+                        (#3%vector-set! (jarr-vec a) i x)
+                        (copy-access-error a i what))]))
+(define-syntax in-range?   ; a non-null, off .. off+len-1 inside it, len > 0
+  (syntax-rules ()
+    [(_ a off len) (and a (fx>= off 0) (fx<= (fx+ off len) (vector-length (jarr-vec a))))]))
+(define-syntax char->byte   ; (byte) c for c <= 0xff
+  (syntax-rules ()
+    [(_ c) (if (#3%fx>= c 128) (#3%fx- c 256) c)]))
+(define-syntax byte->char   ; (char) (b & 0xff)
+  (syntax-rules ()
+    [(_ b) (#3%fxlogand b #xff)]))
+
+(define-override! "java/lang/StringUTF16.compress([CI[BII)I"
+  (lambda (src soff dst doff len)
+    (if (and (fx> len 0) (in-range? src soff len) (in-range? dst doff len))
+        (let ([s (jarr-vec src)] [d (jarr-vec dst)])
+          (let loop ([i 0])
+            (if (#3%fx= i len)
+                len
+                (let ([c (#3%vector-ref s (#3%fx+ soff i))])
+                  (if (#3%fx> c #xff)
+                      i
+                      (begin (#3%vector-set! d (#3%fx+ doff i) (char->byte c)) (loop (#3%fx+ i 1))))))))
+        (let loop ([i 0])
+          (if (fx>= i len)
+              len
+              (let ([c (checked-ref src (fx+ soff i) "Cannot load from char array because \"src\" is null")])
+                (if (fx> c #xff)
+                    i
+                    (begin (checked-set! dst (fx+ doff i) (char->byte c) "Cannot store to byte/boolean array because \"dst\" is null")
+                           (loop (fx+ i 1))))))))))
+
+(define-override! "java/lang/StringLatin1.inflate([BI[CII)V"
+  (lambda (src soff dst doff len)
+    (if (and (fx> len 0) (in-range? src soff len) (in-range? dst doff len))
+        (let ([s (jarr-vec src)] [d (jarr-vec dst)])
+          (let loop ([i 0])
+            (when (#3%fx< i len)
+              (#3%vector-set! d (#3%fx+ doff i) (byte->char (#3%vector-ref s (#3%fx+ soff i))))
+              (loop (#3%fx+ i 1)))))
+        (let loop ([i 0])
+          (when (fx< i len)
+            ;; the source is read before the store, as in the bytecode
+            (let ([b (checked-ref src (fx+ soff i) "Cannot load from byte/boolean array because \"src\" is null")])
+              (checked-set! dst (fx+ doff i) (byte->char b) "Cannot store to char array because \"dst\" is null"))
+            (loop (fx+ i 1)))))))
+
+(define-override! "java/lang/StringCoding.countPositives([BII)I"
+  (lambda (ba off len)
+    (let ([limit (let ([l (fxlogand (fx+ off len) #xffffffff)])   ; off + len as a Java int
+                   (if (fx>= l #x80000000) (fx- l #x100000000) l))])
+      (if (and (fx> len 0) (in-range? ba off len))   ; off + len past the array, or wrapped, fails here
+          (let ([v (jarr-vec ba)])
+            (let loop ([i off])
+              (cond [(#3%fx= i limit) len]
+                    [(#3%fx< (#3%vector-ref v i) 0) (#3%fx- i off)]
+                    [else (loop (#3%fx+ i 1))])))
+          (let loop ([i off])
+            (cond [(fx>= i limit) len]
+                  [(fx< (checked-ref ba i "Cannot load from byte/boolean array because \"ba\" is null") 0) (fx- i off)]
+                  [else (loop (fx+ i 1))]))))))
