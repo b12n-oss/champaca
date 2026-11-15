@@ -436,6 +436,12 @@ program may notice, and changes to the tasks.
 
 ### Performance
 
+- Files, sockets and zlib move bytes between native memory and a `byte[]`
+  four at a time after one bounds check (1.2 ns a byte, was 2.8), and a file
+  read or write moves up to 64 KB per system call (was 4 KB).
+  `FileInputStream.read` went from 236 to about 740 MB/s, writes from 311 to
+  about 680, `Files.readAllBytes` from 147 to about 235
+  (`test/java/FileChunkCheck.java`).
 - The jolt API keeps each instance field it found, per class and field name,
   where `get-field` and `set-field!` walked the class's fields and built the
   slot's key string on every call. The Scheme side of a `get-field` went

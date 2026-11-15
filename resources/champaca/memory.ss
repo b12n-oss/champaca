@@ -340,9 +340,9 @@
     ;; native memory and a byte[], the shape every file and channel read and
     ;; write takes: one element per byte, no intermediate list
     [(and (not src) (jarr? dst) (string=? (elem-type dst) "B"))
-     (native->vector! soff 0 (jarr-vec dst) (- doff array-base) n)]
+     (jbytes-from-native! soff 0 (jarr-vec dst) (- doff array-base) n)]
     [(and (jarr? src) (not dst) (string=? (elem-type src) "B"))
-     (vector->native! (jarr-vec src) (- soff array-base) doff 0 n)]
+     (jbytes-to-native! (jarr-vec src) (- soff array-base) doff 0 n)]
     [else
      (let ([bytes (let loop ([i (- n 1)] [acc '()]) (if (< i 0) acc (loop (- i 1) (cons (mem-byte src (+ soff i)) acc))))])
        (let loop ([i 0] [bs bytes])
