@@ -200,6 +200,8 @@
                     _ (shell "jar cfm target/lib2.jar test/jar2.mf -C target/lib2-classes .")
                     srcs (map str (fs/glob "test/java" "*.java"))
                     _ (apply shell "javac -parameters -Xlint:-removal -cp target/lib.jar:target/lib2.jar -d target/classes" srcs)
+                    ;; ColonResourceCheck's resources, names with a colon, in a directory and a jar
+                    _ (shell "java test/gen/ColonResourceGen.java target/classes target/lib2.jar")
                     ;; IndyCheck calls bootstraps of its own, which javac can't emit
                     _ (shell "java test/gen/IndyCheckGen.java target/classes")
                     ;; DefaultConflictCheck's classes conflict only at run time, which javac refuses

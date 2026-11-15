@@ -196,17 +196,34 @@
 
 (declare root-directory?)
 
+;; java.base's own URL protocol handlers (sun.net.www.protocol.*)
+(def ^:private handled-protocols #{"file" "ftp" "http" "https" "jar" "jmod" "jrt" "mailto"})
+
+(defn- url-refuses-name?
+  "Whether the JDK's URLClassPath can't make a class path resource's URL for
+  path: it makes it as new URL(entry's URL, name), so a name starting like a
+  URL scheme (a letter, then letters, digits, + . -, then a colon, before any
+  /) with no protocol handler is a MalformedURLException, as is jar: without
+  !/, and the resource isn't found. A scheme with a handler is found by its
+  name, behind a URL champaca doesn't copy."
+  [path]
+  (when-let [[_ scheme] (re-find #"^([A-Za-z][A-Za-z0-9+.\-]*):" path)]
+    (let [p (str/lower-case scheme)]
+      (or (not (handled-protocols p))
+          (and (= p "jar") (not (str/includes? path "!/")))))))
+
 (defn resource-entries
   "Where a resource is looked for, as BuiltinClassLoader.findResource: in a
   named application module's package, that module when it opens the package
   or the resource is a class file, then the class path (a closed package's
   resource is the module's own: the loader goes straight to the class path);
   in a JDK module's package, the class path after the image; any other (a
-  root resource, META-INF/...) in the resolved modules, then the class path."
+  root resource, META-INF/...) in the resolved modules, then the class path,
+  unless the class path's URLs refuse the name (url-refuses-name?)."
   [path]
   (let [m (layer-module path)
         roots (app-roots)
-        cp (:classpath @state)]
+        cp (when-not (url-refuses-name? path) (:classpath @state))]
     (cond (and (string? m) (get roots m))
           ;; a class file, a directory, or an opened package's resource is the
           ;; module's for anyone; a closed package's isn't (findResource's
@@ -505,7 +522,7 @@
 ;; point beyond the BMP is first split into its two UTF-16 units, each written
 ;; as its own three bytes. Written from HotSpot 25's observed URLs.
 (def encode-path-plain
-  (set "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!$&'()*+,-.@_~/"))
+  (set "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!$&'()*+,-.:@_~/"))
 
 (defn encode-unit
   "The %xx text of one UTF-16 unit u (0 to 0xFFFF) as UTF-8 bytes."
