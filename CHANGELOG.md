@@ -581,6 +581,7 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- jolt-metrics is pinned at v0.5.0, up from commit 3e13e1f. The gate's result and the 234 warnings are the same as before. Reports now list the limits they used and 71 near-duplicate pairs of definitions, which the gate doesn't check.
 - The `bench` workflow sets `JOLT_MAX_HEAP=4g`, and a results header names it. Under jolt's default ceiling, a quarter of the runner's 7 GB, champaca's PetClinic answered its first page with OutOfMemoryError, which read as a hung server.
 - `champaca.port` moves two parts into namespaces of their own:
   `champaca.port.rules` holds the tables of JDK members and the jolt forms
