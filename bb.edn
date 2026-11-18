@@ -131,13 +131,14 @@
                     (str home "/dev/jlt-commons/docs-engine")
                     "../docs-engine"]
                    (remove nil?)
-                   (filter (fn [d] (fs/exists? (fs/file d "bb.edn"))))
+                   (filter (fn [d] (fs/exists? (fs/file d "src" "site" "core.clj"))))
                    first)))
           (defn site-task [task & args]
             (if-let [engine (docs-engine-dir)]
-              ;; jolt names its own commands build, run and so on: jolt run <task>
-              ;; reaches the engine's task of that name
-              (let [argv (into (if (= runner "bb") [runner task] [runner "run" task])
+              ;; The engine runs on jolt, whichever runner called this. jolt names
+              ;; its own commands build, run and so on: jolt run <task> reaches
+              ;; the engine's task of that name
+              (let [argv (into ["jolt" "run" task]
                                (cons (str (fs/canonicalize ".")) (remove nil? args)))
                     ;; HTTPS_PROXY cleared: the engine fetches markdown-clj on first run.
                     res (apply process/shell {:dir (str engine) :continue true
