@@ -1320,8 +1320,8 @@
   ;; Reports: findings never fail these. metrics.cli exits non-zero only on
   ;; bad usage or a missing directory, and that exit passes through.
   ;; metrics:gate is the one that fails, as CI's metrics job does. It skips
-  ;; the abstraction pass: the gate doesn't read it, it doubles the run time,
-  ;; and in v0.6.0 a pattern from a .ss file prints Scheme's #\L in the EDN.
+  ;; the abstraction pass: the gate doesn't read it and it triples the run
+  ;; time.
   metrics:gate {:doc "Fail on a critical jolt-metrics finding under ci/metrics-allow.edn's :critical-free paths, or on unused code not listed there with its reason (ci/metrics-gate.clj; CI runs it on every push)"
                 :task (do (fs/create-dirs "target")
                           (shell (jolt-bin) "-M:metrics" "." "target/metrics-report.edn" "--format" "edn" "--no-abstractions")
