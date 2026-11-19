@@ -16,9 +16,9 @@
                  :git/sha "0f08ec2732a0078d7523f274a1507049c06bffe6"}
  :aliases
  {;; Code metrics (jolt metrics, metrics:gate): jolt-metrics' CLI at its
-  ;; v0.5.0 tag
+  ;; v0.6.0 tag
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
                          {:git/url "https://github.com/jlt-commons/jolt-metrics"
-                          :git/tag "v0.5.0"
-                          :git/sha "641dc7911b5142f1b3809b4ebba896ccefef1576"}}
+                          :git/tag "v0.6.0"
+                          :git/sha "0ea0230404f068cc0f0baa700bf4b2ee15017e54"}}
             :main-opts ["-m" "metrics.cli"]}}}
