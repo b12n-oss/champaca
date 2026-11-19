@@ -581,7 +581,7 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
-- jolt-metrics is pinned at v0.6.0, up from commit 3e13e1f by way of v0.5.0. The gate's result and the 234 warnings are the same as before. Reports now list the limits they used, 71 near-duplicate pairs of definitions and the abstraction opportunities, none of which the gate checks. `jolt metrics:gate` runs with `--no-abstractions`, since that pass triples its time (19 s to 62 s) and v0.6.0 writes a Scheme character literal from a .ss pattern into the EDN as it is, which no EDN reader takes.
+- jolt-metrics is pinned at main's af4a7c6, up from commit 3e13e1f by way of v0.5.0 and v0.6.0, for a fix after v0.6.0 that writes Scheme character literals in patterns as EDN. The gate's result and the 234 warnings are the same as before. Reports now list the limits they used, 71 near-duplicate pairs of definitions and the abstraction opportunities, none of which the gate checks. `jolt metrics:gate` runs with `--no-abstractions`, since that pass triples its time (19 s to 62 s).
 - The `bench` workflow sets `JOLT_MAX_HEAP=4g`, and a results header names it. Under jolt's default ceiling, a quarter of the runner's 7 GB, champaca's PetClinic answered its first page with OutOfMemoryError, which read as a hung server.
 - `champaca.port` moves two parts into namespaces of their own:
   `champaca.port.rules` holds the tables of JDK members and the jolt forms
