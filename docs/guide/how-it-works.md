@@ -63,7 +63,7 @@ The comment at the top of `resources/champaca/runtime.ss` has the full mapping. 
 
 ## Natives
 
-The JDK leaves its `native` methods to the JVM, and champaca writes them in Scheme: `natives.ss` for the general ones (`System.arraycopy`, time zones and so on), `memory.ss` for `Unsafe` and memory access, `threads.ss` for threads and monitors, `management.ss` for the management beans, `loaders.ss` for modules and class loaders, `varhandles.ss` for VarHandles, `reflect.ss` for reflection, `files.ss` for files, `net.ss` for sockets, `spawn.ss` for child processes and `foreign.ss` for `java.lang.foreign`'s calls into C.
+The JDK leaves its `native` methods to the JVM, and champaca writes them in Scheme: `natives.ss`, `vmprops.ss` and `natives-misc.ss` for the general ones (`System.arraycopy`, time zones and so on), `memory.ss` for `Unsafe` and memory access, `threads.ss` for threads and monitors, `management.ss` for the management beans, `loaders.ss` for modules and class loaders, `varhandles.ss` for VarHandles, `reflect.ss` for reflection, `files.ss` for files, `net.ss` for sockets, `spawn.ss` for child processes and `foreign.ss` for `java.lang.foreign`'s calls into C.
 
 Where the JDK's own code would need machinery champaca doesn't have, a Java method is overridden outright. Serialization's constructor is one. The JDK builds the constructor that allocates a serializable class and runs its first non-serializable superclass's no-arg constructor from a method handle on a `MemberName`, which needs `MethodHandleNatives`. `reflect.ss` hands the JDK its own native constructor accessor instead, with a side table naming the class to allocate.
 
@@ -187,7 +187,9 @@ A jolt fn passed as a single-method interface becomes an instance of a generated
 | `src/champaca/api.clj` | the jolt-facing API |
 | `src/champaca/jimage.clj` | reads the JDK's runtime image, `lib/modules` |
 | `src/champaca/npe.clj` | the JVM's helpful `NullPointerException` messages, from the failing bytecode (written from JEP 358) |
-| `resources/champaca/runtime.ss` | numbers, objects, arrays, exceptions, `Class` mirrors, lambdas, records |
+| `resources/champaca/runtime.ss` | hooks into jolt and numbers: the `int` and `long` operations generated code uses |
+| `resources/champaca/objects.ss` | the object model: object and array records, the class table, class initialization, `instanceof` and `checkcast`, null checks, virtual dispatch and its inline caches |
+| `resources/champaca/support.ss` | array access, exceptions, `Class` mirrors, identity hashes, the native method table, `CHAMPACA_BT` backtraces, lambdas and boxing, records, descriptors |
 | `resources/champaca/arrays.ss` | making arrays: the allocators, the limits on an array's size, and jolt's out-of-memory error as `OutOfMemoryError` ([limitations](limitations.md)) |
 | `resources/champaca/inline.ss` | call-site forms for the JDK methods HotSpot intrinsifies: range checks, `requireNonNull`, boxing ([performance](performance.md#allocation-boxing-and-calls-that-see-many-classes)) |
 | `resources/champaca/strings.ss` | `java.lang.String` to and from Scheme strings, concatenation |
@@ -195,7 +197,9 @@ A jolt fn passed as a single-method interface becomes an instance of a generated
 | `resources/champaca/units.ss` | evaluating and compiling generated code, globals as their own labels, the cache's unit files |
 | `resources/champaca/structure.ss` | structured method code (`CHAMPACA_STRUCTURED=1`): a method's generated form rewritten for reading before it's compiled ([debugging](debugging.md#structured-method-code)) |
 | `resources/champaca/launch.ss` | launching `main`, `System.exit`'s halt, uncaught-exception reports |
-| `resources/champaca/natives.ss` | JDK native methods not covered by the files below, resources, a few overrides |
+| `resources/champaca/natives.ss` | JDK native methods not covered by the files below: `Object`, `System`, the environment, the Vector API's VM side, `Class` |
+| `resources/champaca/vmprops.ss` | natives for strings and numbers, `Throwable`'s stack traces, the VM and CDS, system properties |
+| `resources/champaca/natives-misc.ss` | natives for file descriptors and output, references, the methods HotSpot intrinsifies, `UnixFileSystem`'s queries, performance counters, `ByteArray`, zip checksums, plus a few overrides |
 | `resources/champaca/management.ss` | `java.management`: the runtime, memory, OS, class-loading and thread beans, the heap pool and collector, GC notifications |
 | `resources/champaca/memory.ss` | `Unsafe` (named natives plus pattern rules), scoped memory access, the `Unaligned` accessors |
 | `resources/champaca/threads.ss` | the GIL, threads, parking, monitors and `Thread`'s natives |

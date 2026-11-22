@@ -391,7 +391,7 @@
 (def ^:private array-load-types {:laload "J" :faload "F" :daload "D" :aaload "A"})
 
 (defn- array-op
-  "The name of the array access at pc in e's method: runtime.ss's inline
+  "The name of the array access at pc in e's method: support.ss's inline
   macro, or in a method over ic-vector-limit, outside its loops, the
   procedure of the same name with big-."
   [e pc op]
@@ -853,7 +853,7 @@
     (push! e (sx "jnew-ic" ((:ic! e)) (str "'" (sym c)) (site pc)) "A")))
 
 (defn- emit-newarray
-  "The element descriptor is interned once per method (runtime.ss)."
+  "The element descriptor is interned once per method (objects.ss intern-elem)."
   [e {:keys [args pc]} _]
   (let [elem (newarray-elem (first args)) el ((:ic! e) (sx "intern-elem" (str-lit elem)))]
     (un! e #(sx (at pc "jnewarray-interned") el % (if (#{"F" "D"} elem) "0.0" "0")) "A")))
@@ -1170,7 +1170,7 @@
 ;; jump into it from outside goes through #V<header>, which checks once that
 ;; each such local holds an array, takes its vector and length, and runs a
 ;; copy of the loop's blocks (#F<pc>) in which an access checks its index
-;; alone (runtime.ss vec-ref); a null or anything else runs the loop as it
+;; alone (support.ss vec-ref); a null or anything else runs the loop as it
 ;; was, so an exception comes where it would have.
 
 (defn- locals-plan
@@ -1202,7 +1202,7 @@
     (merge ctx
            (locals-plan method insns blks cover)
            {:method-key (str (:name method) (:desc method))
-            ;; a giant method's array accesses are calls (runtime.ss big-array-ref),
+            ;; a giant method's array accesses are calls (support.ss big-array-ref),
             ;; but not inside a loop: every backward jump's [target jump] range
             ;; keeps the inline form, so a lexer's scanning loop in a giant method
             ;; runs as fast as before (a loop took 117 ms through calls, 50 inline)

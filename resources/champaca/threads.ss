@@ -208,7 +208,7 @@
 ;; good elsewhere (the Reference Handler) would otherwise make every exit
 ;; take the GIL's mutex and broadcast, which cost 60% on synchronized code.
 
-;; hash: the object's identity hash once it has one (runtime.ss identity-hash)
+;; hash: the object's identity hash once it has one (support.ss identity-hash)
 (define-record-type jmonitor (fields (mutable owner) (mutable count) (mutable waiters) (mutable blocked) (mutable seq) (mutable hash))
   (sealed #t) (nongenerative champaca-jmonitor-3))
 ;; An object keeps its monitor in its lock field; an array's sits in a weak

@@ -294,7 +294,7 @@
 ;; so the pc of that call, hence its line, is right there. A try or
 ;; synchronized body (and a CHAMPACA_BT method body) runs in an unnamed thunk
 ;; under dynamic-wind, so its pending pc belongs to the next named frame
-;; out. getCallerClass and the stack traces (natives.ss) both read this.
+;; out. getCallerClass and the stack traces (vmprops.ss) both read this.
 
 ;; A continuation object covers a stack segment of several frames; splitting
 ;; the first frame off, as the inspector does, makes the link the next frame
@@ -701,7 +701,7 @@
         native-accessor-slot-cache)))
 
 ;; Boxing for reflection's hot paths, each primitive's box class, valueOf
-;; global and xxxValue key made once: runtime.ss's jbox and junbox built and
+;; global and xxxValue key made once: support.ss's jbox and junbox built and
 ;; interned the names on every call, a third of a reflective call's time.
 ;; The box class's jinit is skipped once it has run.
 (define-record-type refl-box-plan (fields cname value-of unbox-key (mutable ready?)) (sealed #t))
@@ -745,7 +745,7 @@
           p))))
 ;; the procedure an instance method's call runs on obj, as virtual-target
 ;; finds it, with the plan's symbols: a private method is its own, a
-;; package-private one is selected by run-time package (runtime.ss), any
+;; package-private one is selected by run-time package (objects.ss), any
 ;; other through obj's vtable by the key's symbol (jvirt interned a string)
 (define (plan-target p obj)
   (let ([flags (caddr (member-plan-meta p))])

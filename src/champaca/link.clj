@@ -311,7 +311,7 @@
 (defn package-private-decl
   "The class declaring the method cname.mname(desc) an invokevirtual resolves
   to, when that method is package-private, or nil. Selection for it has to
-  follow JVMS 5.4.5's run-time package rule (runtime.ss jvirt-pp-ic), where
+  follow JVMS 5.4.5's run-time package rule (objects.ss jvirt-pp-ic), where
   any other resolved method is overridden by the nearest same-named one, as
   the vtable has it."
   [cname mname desc]
@@ -352,7 +352,7 @@
 
 (defn- parse-class-bytes
   "cname's bytes parsed. Bytes that aren't a class file are the JVM's
-  ClassFormatError for the code that needs the class (codegen, runtime.ss
+  ClassFormatError for the code that needs the class (codegen, objects.ss
   find-class): the message ends with HotSpot's text, which find-class reads
   off; a version this release refuses names the class asked for."
   [cname bytes]
@@ -655,7 +655,7 @@
 
 (defn linkage-error
   "The ex-info for a class the JVM refuses to define, error the JVM class's
-  slashed name: runtime.ss find-class, define-class! and codegen read it."
+  slashed name: objects.ss find-class, define-class! and codegen read it."
   [cname error msg]
   (ex-info (str "linkage error in " cname ": " error "|" msg) {:class cname :linkage error :message msg}))
 

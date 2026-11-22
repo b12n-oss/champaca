@@ -30,9 +30,9 @@
 
 (def runtime-files
   "The Scheme runtime, in load order."
-  ["champaca/runtime.ss" "champaca/arrays.ss" "champaca/inline.ss" "champaca/strings.ss" "champaca/modules.ss" "champaca/units.ss"
+  ["champaca/runtime.ss" "champaca/objects.ss" "champaca/support.ss" "champaca/arrays.ss" "champaca/inline.ss" "champaca/strings.ss" "champaca/modules.ss" "champaca/units.ss"
    "champaca/structure.ss" "champaca/launch.ss"
-   "champaca/natives.ss" "champaca/management.ss" "champaca/memory.ss"
+   "champaca/natives.ss" "champaca/vmprops.ss" "champaca/natives-misc.ss" "champaca/management.ss" "champaca/memory.ss"
    "champaca/threads.ss" "champaca/loaders.ss" "champaca/varhandles.ss" "champaca/reflect.ss" "champaca/handles.ss"
    "champaca/files.ss" "champaca/zip.ss" "champaca/prefs.ss"
    "champaca/net.ss" "champaca/netif.ss" "champaca/spawn.ss" "champaca/foreign.ss" "champaca/archive.ss"])

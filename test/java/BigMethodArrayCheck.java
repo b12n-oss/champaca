@@ -1,5 +1,5 @@
 // Array access inside a method over codegen's ic-vector-limit (4000 bytecode
-// bytes), where champaca calls runtime.ss's big-array-* procedures instead
+// bytes), where champaca calls support.ss's big-array-* procedures instead
 // of inlining the array macros. table() is that method: a getContents-style
 // table of 300 rows keeps it near 6000 bytes (javap -c shows its length),
 // and every array instruction and failure runs inside it, so the values,
