@@ -7,8 +7,9 @@
 
 (ns champaca.bytecode
   "Bytecode as data: decoding instructions, basic blocks and control flow,
-  and the natural loops array-loop versioning looks for."
-  (:require [champaca.cgtext :refer [at]]))
+  the natural loops array-loop versioning looks for, and the long locals
+  and stack values codegen can keep as halves."
+  (:require [champaca.cgtext :refer [at parse-desc wide?]]))
 
 ;; --- decoding ----------------------------------------------------------------
 
@@ -304,3 +305,99 @@
             preds (predecessors succs (set rpo))
             dom (dominator-sets rpo preds)]
         (versionable-loops blks (loop-bodies rpo succs preds dom))))))
+
+;; --- long halves and locals: what codegen needs to know about a method's
+;; stack and locals before it emits a block -------------------------------------
+
+(def ^:private long-ops #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lcmp :l2i})
+
+(def ^:private fixed-stack-effects
+  "[values popped, values pushed] of each instruction halves-use? follows
+  whose effect doesn't depend on its operand."
+  (into {}
+        (for [[effect ops]
+              {[0 1] [:aconst_null :iconst_m1 :iconst_0 :iconst_1 :iconst_2 :iconst_3 :iconst_4 :iconst_5
+                      :lconst_0 :lconst_1 :fconst_0 :fconst_1 :fconst_2 :dconst_0 :dconst_1 :bipush :sipush
+                      :ldc :ldc_w :ldc2_w :iload :lload :fload :dload :aload :getstatic :new]
+               [0 0] [:nop :iinc]
+               [1 0] [:istore :lstore :fstore :dstore :astore :pop :putstatic]
+               [2 0] [:putfield]
+               [3 0] [:iastore :lastore :fastore :dastore :aastore :bastore :castore :sastore]
+               [1 1] [:getfield :i2l :l2i :i2d :l2d :i2f :l2f :f2d :d2f :f2i :d2i :f2l :d2l :i2b :i2c :i2s
+                      :ineg :lneg :fneg :dneg :arraylength :checkcast :instanceof :newarray :anewarray]
+               [2 1] [:iadd :isub :imul :idiv :irem :ishl :ishr :iushr :iand :ior :ixor
+                      :ladd :lsub :lmul :ldiv :lrem :lshl :lshr :lushr :land :lor :lxor
+                      :fadd :fsub :fmul :fdiv :frem :dadd :dsub :dmul :ddiv :drem
+                      :lcmp :fcmpl :fcmpg :dcmpl :dcmpg
+                      :iaload :laload :faload :daload :aaload :baload :caload :saload]}
+              op ops]
+          [op effect])))
+
+(def ^:private invoke-ops #{:invokevirtual :invokeinterface :invokespecial :invokestatic})
+
+(defn- stack-effect
+  "[values popped, values pushed] of an instruction, or nil for one
+  halves-use? doesn't follow."
+  [cp {:keys [op args]}]
+  (or (fixed-stack-effects op)
+      (when (invoke-ops op)
+        (let [{as :args ret :ret} (parse-desc (:desc (cp (first args))))]
+          [(+ (count as) (if (= op :invokestatic) 0 1)) (if (= ret "V") 0 1)]))))
+
+(defn- takes-halves?
+  "Whether an instruction takes as halves the long pos values below the top
+  of the stack it pops."
+  [split {:keys [op args]} pos]
+  (boolean (or (and (long-ops op) (not (and (#{:lshl :lshr :lushr} op) (= pos 0))))
+               (and (= op :lstore) (split (first args))))))
+
+(defn halves-use?
+  "Whether the value an instruction leaves on top of the stack goes next to
+  something that takes a long as halves: a long operation (as the value a
+  shift shifts, not its count), or a store to a local kept as halves. insns
+  are the block's instructions after it."
+  [cp split insns]
+  (loop [insns (take 32 insns) pos 0]
+    (let [i (first insns)
+          [pops pushes] (when i (stack-effect cp i))]
+      (cond (nil? pops) false
+            (> pops pos) (takes-halves? split i pos)
+            :else (recur (rest insns) (+ (- pos pops) pushes))))))
+
+(defn param-slots
+  "The local slot of each parameter, a long or double taking two."
+  [arg-types]
+  (loop [ts arg-types slot 0 out []]
+    (if-let [t (first ts)]
+      (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
+      out)))
+
+(def ^:private long-makers
+  "The operations whose long result, stored straight away, marks a local as
+  worth keeping in halves."
+  #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lconst_0 :lconst_1 :ldc2_w :i2l})
+
+(defn split-locals
+  "The long locals kept as halves (emit-block): loaded and stored as longs
+  only, not method-wide, and given a long operation's result somewhere,
+  which is what would otherwise box."
+  [insns boxed param-set param-types]
+  (let [uses (group-by #(first (:args %)) (filter #(or (load-ops (:op %)) (store-ops (:op %))) insns))
+        made (set (for [[p i] (map vector insns (rest insns))
+                        :when (and (= :lstore (:op i)) (long-makers (:op p)))]
+                    (first (:args i))))]
+    (set (for [[i us] uses
+               :when (and (made i) (not (boxed i))
+                          (every? #(#{:lload :lstore} (:op %)) us)
+                          (or (not (param-set i)) (= "J" (param-types i))))]
+           i))))
+
+(defn live-locals
+  "The locals a jump has to carry: the parameters and every slot the method
+  loads or stores, less the boxed ones, which stay method-wide."
+  [insns param-set boxed]
+  (vec (sort (remove boxed
+                     (into param-set
+                           (for [{:keys [op args]} insns
+                                 :when (or (load-ops op) (store-ops op))]
+                             (first args)))))))
