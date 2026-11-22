@@ -40,7 +40,7 @@
 (def ^:private translator-sources
   ["champaca/codegen.clj" "champaca/cgtext.clj" "champaca/intrinsics.clj" "champaca/bytecode.clj" "champaca/linkage.clj"
    "champaca/lambdas.clj" "champaca/main.clj" "champaca/classfile.clj" "champaca/jimage.clj"
-   "champaca/state.clj" "champaca/launcher.clj" "champaca/classpath.clj" "champaca/cachedir.clj"
+   "champaca/state.clj" "champaca/extras.clj" "champaca/launcher.clj" "champaca/classpath.clj" "champaca/cachedir.clj"
    "champaca/link.clj" "champaca/libcache.clj" "champaca/loader.clj" "champaca/jit.clj"
    "champaca/boot.clj"])
 

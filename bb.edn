@@ -91,6 +91,7 @@
                          ["collections" "jolt collections as java.util and back"]
                          ["callsite" "the call-site cache"]
                          ["library-cache" "what the library cache records about a class's dependencies"]
+                         ["extras" "the startup cache's index of later programs' class entries"]
                          ["jolt-after-init" "jolt itself still works after init!"]
                          ["threads" "Java threads started from jolt"]
                          ["files" "files and MessageDigest from jolt"]
