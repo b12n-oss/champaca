@@ -329,6 +329,15 @@ jobs:
       - uses: jlt-commons/setup-jolt@v1
         with:
           version: "0.8.28"
+      # jolt-metrics and its Maven dependencies, so a run doesn't fetch them
+      # from Maven Central each time: two runs on 2026-11-22 failed here when
+      # Central answered HTTP 429
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.jolt/gitlibs
+          key: metrics-deps-${{ hashFiles('deps.edn') }}
       - name: jolt metrics:gate
         run: jolt metrics:gate
       - name: the report
