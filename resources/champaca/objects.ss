@@ -104,23 +104,26 @@
 
 ;; Classes load lazily: a miss asks jolt to load the classfile and register it.
 (define (find-class name)
-  (or (hashtable-ref classes name #f)
-      (cond
-        [(fx= 0 (string-length name)) (error 'champaca "empty class name")]
-        [(char=? (string-ref name 0) #\[) (pseudo-class! name 'array)]
-        [(prim-name? name) (pseudo-class! name 'prim)]
-        ;; a class whose bytes are nowhere, or whose superclass or an
-        ;; interface's are, is the JVM's NoClassDefFoundError for the code
-        ;; that named it (an ldc, a catch clause's type, a descriptor); one
-        ;; that is there but fails otherwise stays the error it is, which
-        ;; names the cause (class-exists?, condition-text: natives.ss)
-        [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing]
-                        [(and (not (jobj? e)) (class-format-of e))
-                         => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))]
-                        [(and (not (jobj? e)) (linkage-error-of e))
-                         => (lambda (x) (jthrow (car x) (cdr x)))])
-                (call-unbounded (lambda () (load-hook name))))
-              (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))])))
+  (or (hashtable-ref classes name #f) (find-class-slow name)))
+;; a class not registered yet: an array or primitive pseudo-class, or one
+;; the load hook loads and registers
+(define (find-class-slow name)
+  (cond
+    [(fx= 0 (string-length name)) (error 'champaca "empty class name")]
+    [(char=? (string-ref name 0) #\[) (pseudo-class! name 'array)]
+    [(prim-name? name) (pseudo-class! name 'prim)]
+    ;; a class whose bytes are nowhere, or whose superclass or an
+    ;; interface's are, is the JVM's NoClassDefFoundError for the code
+    ;; that named it (an ldc, a catch clause's type, a descriptor); one
+    ;; that is there but fails otherwise stays the error it is, which
+    ;; names the cause (class-exists?, condition-text: natives.ss)
+    [else (guard (e [(and (not (jobj? e)) (missing-class-of e name)) => jthrow-missing]
+                    [(and (not (jobj? e)) (class-format-of e))
+                     => (lambda (msg) (jthrow "java/lang/ClassFormatError" msg))]
+                    [(and (not (jobj? e)) (linkage-error-of e))
+                     => (lambda (x) (jthrow (car x) (cdr x)))])
+            (call-unbounded (lambda () (load-hook name))))
+          (or (hashtable-ref classes name #f) (error 'champaca "class not registered" name))]))
 
 ;; the class a failed load says isn't there: name itself when its bytes are
 ;; nowhere, else the one a "class not found: X" from the linker names
@@ -222,6 +225,9 @@
 ;; non-abstract, non-static method, walking each interfaces array in order
 ;; and an interface's superinterfaces before it. One with only abstract or
 ;; static methods waits for a use of its own.
+;; whether interface i declares a method neither abstract nor static
+(define (declares-default? i)
+  (exists (lambda (m) (fxzero? (fxlogand (caddr m) #x408))) (car (jclass-meta i))))
 (define (init-default-interfaces c)
   (let walk ([is (jclass-interfaces c)] [seen '()])
     (if (null? is)
@@ -231,8 +237,7 @@
               (walk (cdr is) seen)
               (let* ([i (find-class n)]
                      [seen (walk (jclass-interfaces i) (cons n seen))])
-                (when (exists (lambda (m) (fxzero? (fxlogand (caddr m) #x408))) (car (jclass-meta i)))
-                  (jinit n))
+                (when (declares-default? i) (jinit n))
                 (walk (cdr is) seen)))))))
 
 ;; the current Java thread's name, "main" outside any
@@ -553,21 +558,30 @@
 (define (package-private-selection rc dc name desc)
   ;; rc the receiver's class, dc the resolved method's; #f when rc isn't
   ;; below dc (dispatch then goes by the vtable)
-  (let ([below (let loop ([c rc] [acc '()])
-                 (cond [(eq? c dc) acc]
-                       [(jclass-super c) (loop (find-class (jclass-super c)) (cons c acc))]
-                       [else #f]))])
+  (let ([below (classes-below rc dc)])
     (and below
          (let loop ([cs below] [anchors (list (cons dc (or (own-method-flags dc name desc) 0)))] [sel dc])
            (if (null? cs)
                sel
                (let* ([c (car cs)] [f (own-method-flags c name desc)])
-                 (if (and f (fxzero? (fxlogand f #x000a))   ; neither private nor static
-                          (exists (lambda (a) (or (fxpositive? (fxlogand (cdr a) #x0005))
-                                                  (same-runtime-package? c (car a))))
-                                  anchors))
+                 (if (overrides-anchor? c f anchors)
                      (loop (cdr cs) (cons (cons c f) anchors) c)
                      (loop (cdr cs) anchors sel))))))))
+;; the classes from just below dc down to rc, nearest dc first, or #f when
+;; rc isn't below dc
+(define (classes-below rc dc)
+  (let loop ([c rc] [acc '()])
+    (cond [(eq? c dc) acc]
+          [(jclass-super c) (loop (find-class (jclass-super c)) (cons c acc))]
+          [else #f])))
+;; whether c's own method, flags f (#f when it declares none), overrides
+;; one of the anchors ((class . flags) ...): neither private nor static, and
+;; the anchor public or protected or in c's run-time package
+(define (overrides-anchor? c f anchors)
+  (and f (fxzero? (fxlogand f #x000a))
+       (exists (lambda (a) (or (fxpositive? (fxlogand (cdr a) #x0005))
+                               (same-runtime-package? c (car a))))
+               anchors)))
 (define (package-private-select o dc key)
   (let* ([i (let find ([i 0]) (if (char=? (string-ref key i) #\() i (find (fx+ i 1))))]
          [sel (and (jobj? o) (package-private-selection (jobj-cls o) dc (substring key 0 i) (substring key i (string-length key))))])
