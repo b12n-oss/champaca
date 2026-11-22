@@ -7,13 +7,12 @@
 
 (ns champaca.extras
   "The startup cache's index of later programs' class entries: a data file of
-  deflated entries and a small index, sorted by class name, that a run
-  searches in place and reads one entry from at a time.
-  extras.idx, big-endian: magic CXT1, n, the data file's name length and
-  name, then n records of five ints (name-off name-len data-off data-len
-  inflated-len, name-off relative to the names block), then the names' UTF-8
-  bytes in sorted order. A data frame before deflating is a part count (1 or
-  3) and, per part, a length (-1 for nil) and the bytes."
+  deflated entries and an index sorted by class name, searched in place.
+  extras.idx, big-endian: magic CXT1, n, data-name length and name, n records
+  of five ints (name-off name-len data-off data-len inflated-len, name-off
+  relative to the names block), then the sorted names' UTF-8 bytes. A data
+  frame before deflating: a part count (1 or 3), per part a length (-1 for
+  nil) and the bytes."
   (:require [clojure.java.io :as io])
   (:import (java.nio ByteBuffer)
            (java.io ByteArrayOutputStream RandomAccessFile)
@@ -21,7 +20,6 @@
 
 (def ^:private magic (.getBytes "CXT1" "UTF-8"))
 (def ^:private rec-size 20)
-
 (defn- damaged! [why]
   (throw (ex-info (str "damaged extras index: " why) {:extras :damaged})))
 
@@ -36,43 +34,43 @@
     (.array bb)))
 
 (defn entry->bytes
-  "A packed entry, a byte array or [core vt ms] with any part nil, framed and
-  deflated at level 1."
+  "A packed entry (a byte array or [core vt ms]) framed and deflated, level 1."
   ^bytes [e]
   (let [^bytes raw (frame e)
         d (Deflater. 1)
         out (ByteArrayOutputStream. (alength raw))
         buf (byte-array 8192)]
-    (.setInput d raw)
-    (.finish d)
+    (.setInput d raw) (.finish d)
     (loop []
       (when-not (.finished d)
         (.write out buf 0 (.deflate d buf))
         (recur)))
-    (.end d)
-    (.toByteArray out)))
+    (.end d) (.toByteArray out)))
 
 (defn bytes->entry
-  "The inverse of entry->bytes, given the inflated length."
+  "The inverse of entry->bytes. A corrupt entry throws :damaged."
   [^bytes deflated inflated-len]
-  (let [inf (Inflater.)
-        raw (byte-array inflated-len)]
-    (.setInput inf deflated)
-    (loop [off 0]
-      (when (< off inflated-len)
-        (let [n (.inflate inf raw off (- inflated-len off))]
-          (when (and (zero? n) (or (.finished inf) (.needsInput inf)))
-            (damaged! "short entry"))
-          (recur (+ off n)))))
-    (.end inf)
-    (let [bb (ByteBuffer/wrap raw)
-          cnt (.getInt bb)
-          part (fn []
-                 (let [n (.getInt bb)]
-                   (when-not (neg? n)
-                     (let [p (byte-array n)] (.get bb p) p))))
-          parts (vec (repeatedly cnt part))]
-      (if (= cnt 1) (first parts) parts))))
+  (let [inf (Inflater.)]
+    (try
+      (let [raw (byte-array inflated-len)]
+        (.setInput inf deflated)
+        (loop [off 0]
+          (when (< off inflated-len)
+            (let [n (.inflate inf raw off (- inflated-len off))]
+              (when (and (zero? n) (or (.finished inf) (.needsInput inf)))
+                (damaged! "short entry"))
+              (recur (+ off n)))))
+        (let [bb (ByteBuffer/wrap raw)
+              cnt (.getInt bb)
+              part (fn []
+                     (let [n (.getInt bb)]
+                       (when-not (neg? n)
+                         (let [p (byte-array n)] (.get bb p) p))))]
+          (when-not (contains? #{1 3} cnt) (damaged! "bad part count"))
+          (let [parts (vec (repeatedly cnt part))] (if (= cnt 1) (first parts) parts))))
+      (catch Exception e
+        (if (:extras (ex-data e)) (throw e) (damaged! (str "bad entry: " (.getMessage e)))))
+      (finally (.end inf)))))
 
 (defn- compare-bytes
   "Unsigned lexicographic compare of a[ao, ao+al) with b[bo, bo+bl)."
@@ -80,8 +78,7 @@
   (let [m (min al bl)]
     (loop [i 0]
       (if (< i m)
-        (let [x (bit-and (aget a (+ ao i)) 0xff)
-              y (bit-and (aget b (+ bo i)) 0xff)]
+        (let [x (bit-and (aget a (+ ao i)) 0xff) y (bit-and (aget b (+ bo i)) 0xff)]
           (cond (< x y) -1 (> x y) 1 :else (recur (inc i))))
         (compare al bl)))))
 
@@ -102,13 +99,11 @@
         bb (ByteBuffer/allocate (+ 12 (alength dn) (* rec-size (count recs)) nb))]
     (with-open [o (io/output-stream (io/file dir dat))]
       (.put bb ^bytes magic)
-      (.putInt bb (count recs))
-      (.putInt bb (alength dn))
+      (doseq [v [(count recs) (alength dn)]] (.putInt bb (int v)))
       (.put bb dn)
       (loop [rs recs ns names noff 0 doff 0]
         (when (seq rs)
-          (let [[_ ^bytes d ilen] (first rs)
-                nl (alength ^bytes (first ns))]
+          (let [[_ ^bytes d ilen] (first rs) nl (alength ^bytes (first ns))]
             (.write o d)
             (doseq [v [noff nl doff (alength d) ilen]] (.putInt bb (int v)))
             (recur (rest rs) (rest ns) (+ noff nl) (+ doff (alength d))))))
@@ -119,9 +114,26 @@
         (throw (ex-info "extras index rename failed" {:dir dir}))))
     dat))
 
+(defn- check-records!
+  "Every record field non-negative and in bounds, the file ending with the
+  last name."
+  [^bytes idx n names-at ^RandomAccessFile raf]
+  (let [bb (ByteBuffer/wrap idx)
+        names-len (- (alength idx) names-at)
+        dat-len (.length raf)
+        base (- names-at (* rec-size n))]
+    (loop [i 0 end 0]
+      (if (< i n)
+        (let [[no nl dof dl il] (map #(.getInt bb (+ base (* rec-size i) (* 4 %))) (range 5))]
+          (when-not (and (<= 0 no) (<= 0 nl) (<= (+ no nl) names-len)
+                         (<= 0 dof) (<= 0 dl) (<= (+ dof dl) dat-len) (<= 0 il))
+            (damaged! "record out of bounds"))
+          (recur (inc i) (max end (+ no nl))))
+        (when-not (= end names-len) (damaged! "names block size"))))))
+
 (defn open-extras
   "A handle for dir's extras.idx, or nil when there is none. The data file is
-  opened once, so a later writer's replacement doesn't disturb a reader."
+  opened once. Throws :damaged when either file is short or inconsistent."
   [dir]
   (let [f (io/file dir "extras.idx")]
     (when (.exists f)
@@ -129,18 +141,19 @@
             len (alength idx)
             _ (when (< len 12) (damaged! "truncated"))
             bb (ByteBuffer/wrap idx)
-            _ (when-not (= (seq magic) (seq (java.util.Arrays/copyOfRange idx 0 4)))
-                (damaged! "bad magic"))
+            _ (when-not (= (seq magic) (seq (java.util.Arrays/copyOfRange idx 0 4))) (damaged! "bad magic"))
             n (.getInt bb 4)
             dl (.getInt bb 8)]
-        (when (or (neg? n) (neg? dl) (< (- len 12 dl) (* rec-size n)))
-          (damaged! "truncated"))
-        (let [dat (String. idx 12 (int dl) "UTF-8")]
-          (try
-            {:idx idx :n n :dat dat :raf (RandomAccessFile. (io/file dir dat) "r")}
-            (catch java.io.IOException _ (damaged! "no data file"))))))))
+        (when (or (neg? n) (neg? dl) (< (- len 12 dl) (* rec-size n))) (damaged! "truncated"))
+        (let [dat (String. idx 12 (int dl) "UTF-8") base (+ 12 dl)
+              names-at (+ base (* rec-size n))
+              raf (try (RandomAccessFile. (io/file dir dat) "r")
+                       (catch java.io.IOException _ (damaged! "no data file")))]
+          (try (check-records! idx n names-at raf)
+               (catch Throwable e (.close raf) (throw e)))
+          {:idx idx :n n :dat dat :raf raf :base base :names-at names-at})))))
 
-(defn- rec-base [h i] (+ 12 (alength (.getBytes ^String (:dat h) "UTF-8")) (* rec-size i)))
+(defn- rec-base [h i] (+ (:base h) (* rec-size i)))
 
 (defn extras-find
   "The record index of name, or nil, by binary search over name bytes."
@@ -148,7 +161,7 @@
   (let [^bytes idx (:idx h)
         ^bytes nm (.getBytes name "UTF-8")
         bb (ByteBuffer/wrap idx)
-        names-at (+ (rec-base h 0) (* rec-size (:n h)))]
+        names-at (:names-at h)]
     (loop [lo 0 hi (dec (:n h))]
       (when (<= lo hi)
         (let [mid (quot (+ lo hi) 2)
@@ -161,27 +174,23 @@
 (defn extras-raw
   "[deflated inflated-len] of record i, one seek and read."
   [h i]
-  (let [bb (ByteBuffer/wrap (:idx h))
-        r (+ (rec-base h i) 8)
-        d (byte-array (.getInt bb (+ r 4)))
-        ^RandomAccessFile raf (:raf h)]
-    (locking raf
-      (.seek raf (long (.getInt bb r)))
-      (.readFully raf d))
+  (let [bb (ByteBuffer/wrap (:idx h)) r (+ (rec-base h i) 8)
+        d (byte-array (.getInt bb (+ r 4))) ^RandomAccessFile raf (:raf h)]
+    (locking raf (.seek raf (long (.getInt bb r))) (.readFully raf d))
     [d (.getInt bb (+ r 8))]))
 
 (defn extras-entry
   "The packed entry for name, or nil."
   [h name]
   (when-let [i (extras-find h name)]
-    (let [[d n] (extras-raw h i)] (bytes->entry d n))))
+    (apply bytes->entry (extras-raw h i))))
 
 (defn extras-names
   "Every name, in index order."
   [h]
   (let [^bytes idx (:idx h)
         bb (ByteBuffer/wrap idx)
-        names-at (+ (rec-base h 0) (* rec-size (:n h)))]
+        names-at (:names-at h)]
     (for [i (range (:n h))]
       (let [r (rec-base h i)]
         (String. idx (int (+ names-at (.getInt bb r))) (int (.getInt bb (+ r 4))) "UTF-8")))))

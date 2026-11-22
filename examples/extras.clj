@@ -63,6 +63,37 @@
     (spit (io/file dir "extras.idx") "garbage")
     (is (= :damaged (:extras (ex-data (try (x/open-extras dir) (catch Exception e e))))))))
 
+(defn- damaged? [f]
+  (= :damaged (:extras (ex-data (try (f) (catch Exception e e))))))
+
+(defn- spit-bytes! [file ^bytes b] (with-open [o (io/output-stream file)] (.write o b)))
+
+(deftest damaged-files-throw-damaged-not-raw-errors
+  (let [names ["a/B" "c/D" "e/F"]
+        trunc (fn [file k]
+                (let [b (java.nio.file.Files/readAllBytes (.toPath file))]
+                  (spit-bytes! file (java.util.Arrays/copyOfRange b 0 (- (alength b) k)))))]
+    (let [dir (write-names! names) f (io/file dir "extras.idx")
+          b (java.nio.file.Files/readAllBytes (.toPath f))]
+      (aset b 0 (byte 88))
+      (spit-bytes! f b)
+      (is (damaged? #(x/open-extras dir))))
+    (let [dir (write-names! names)]
+      (trunc (io/file dir "extras.idx") 2)
+      (is (damaged? #(x/open-extras dir))))
+    (let [dir (write-names! names) h (x/open-extras dir) dat (io/file dir (:dat h))]
+      (x/close-extras! h)
+      (trunc dat 3)
+      (is (damaged? #(x/open-extras dir))))
+    (let [dir (write-names! names) h (x/open-extras dir) dat (io/file dir (:dat h))
+          b (java.nio.file.Files/readAllBytes (.toPath dat))]
+      (x/close-extras! h)
+      (dotimes [i (alength b)] (aset b i (unchecked-byte (bit-xor (aget b i) 0x5a))))
+      (spit-bytes! dat b)
+      (let [h (x/open-extras dir)]
+        (is (damaged? #(x/extras-entry h "a/B")))
+        (x/close-extras! h)))))
+
 (deftest a-deleted-data-file-still-reads
   (let [dir (write-names! ["a/B" "c/D"]) h (x/open-extras dir)]
     (.delete (io/file dir (:dat h)))
