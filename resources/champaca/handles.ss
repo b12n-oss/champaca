@@ -112,19 +112,25 @@
         [(string=? to "V") v]
         [(string=? from "V") (if (prim-desc? to) (elem-default to) #f)]
         [(prim-desc? from) (if (prim-desc? to) (widen from to v) (jbox from v))]
-        [(prim-desc? to)
-         (let ([p (box-prim-of (nn v))])
-           (unless p
-             (jthrow "java/lang/ClassCastException"
-                     (string-append "Cannot cast " (class-name-of v) " to " (cdr (assoc to prim-names)))))
-           ;; only a widening unbox: a Long is not an int
-           (unless (prim-convertible? p to)
-             (jthrow "java/lang/ClassCastException"
-                     (string-append "Cannot cast " (slashes->dots (class-name-of v)) " to "
-                                    (slashes->dots (cadr (assoc to box-classes))))))
-           (widen p to (junbox p v)))]
-        ;; a reference narrowing is Class.cast, as asType makes it, with its text
-        [(or (not v) (string=? to obj-desc)) v]
+        [(prim-desc? to) (adapt-unbox to v)]
+        [else (adapt-ref-cast to v)]))
+
+;; a reference v unboxed for primitive type to: its wrapper's value, widened
+;; when to is wider, as asType allows; a Long is not an int
+(define (adapt-unbox to v)
+  (let ([p (box-prim-of (nn v))])
+    (unless p
+      (jthrow "java/lang/ClassCastException"
+              (string-append "Cannot cast " (class-name-of v) " to " (cdr (assoc to prim-names)))))
+    (unless (prim-convertible? p to)
+      (jthrow "java/lang/ClassCastException"
+              (string-append "Cannot cast " (slashes->dots (class-name-of v)) " to "
+                             (slashes->dots (cadr (assoc to box-classes))))))
+    (widen p to (junbox p v))))
+
+;; a reference narrowing is Class.cast, as asType makes it, with its text
+(define (adapt-ref-cast to v)
+  (cond [(or (not v) (string=? to obj-desc)) v]
         [(jinstance? v (desc->class-name to)) v]
         [else (jthrow "java/lang/ClassCastException"
                       (string-append "Cannot cast " (external-class-name (class-name-of v))
@@ -1126,22 +1132,28 @@
   (let ([v (eq-hashtable-ref table key absent)])
     (cond [(failed? v) (raise (renew (cdr v) keep-cause? null-msg))]
           [(not (eq? v absent)) v]
-          [else
-           (let ([v (guard (e [(and (jobj? e) (jinstance? e "java/lang/LinkageError"))
-                               ;; as HotSpot's save_and_throw_exception: kept when
-                               ;; nothing is yet; another thread's failure kept first
-                               ;; is thrown instead; after another thread's success,
-                               ;; this thread still throws its own (only a class entry
-                               ;; takes the success there)
-                               (let ([kept (eq-hashtable-ref table key absent)])
-                                 (cond [(eq? kept absent) (eq-hashtable-set! table key (cons failed-tag e)) (raise e)]
-                                       [(failed? kept) (raise (renew (cdr kept) keep-cause? null-msg))]
-                                       [else (raise e)]))])
-                      (thunk))])
-             (let ([kept (eq-hashtable-ref table key absent)])
-               (cond [(failed? kept) (raise (renew (cdr kept) keep-cause? null-msg))]
-                     [(not (eq? kept absent)) kept]
-                     [else (eq-hashtable-set! table key v) v])))])))
+          [else (resolve-first table key thunk (lambda (kept) (raise (renew (cdr kept) keep-cause? null-msg))))])))
+
+;; the first resolution of key: thunk's value, or the one another thread
+;; kept first; rethrow raises a kept failure
+(define (resolve-first table key thunk rethrow)
+  (let* ([v (guard (e [(and (jobj? e) (jinstance? e "java/lang/LinkageError"))
+                       (keep-or-raise table key e rethrow)])
+              (thunk))]
+         [kept (eq-hashtable-ref table key absent)])
+    (cond [(failed? kept) (rethrow kept)]
+          [(not (eq? kept absent)) kept]
+          [else (eq-hashtable-set! table key v) v])))
+
+;; a LinkageError e resolving key, as HotSpot's save_and_throw_exception
+;; handles it: kept when nothing is yet; another thread's failure kept first
+;; is thrown instead; after another thread's success, this thread still
+;; throws its own (only a class entry takes the success there)
+(define (keep-or-raise table key e rethrow)
+  (let ([kept (eq-hashtable-ref table key absent)])
+    (cond [(eq? kept absent) (eq-hashtable-set! table key (cons failed-tag e)) (raise e)]
+          [(failed? kept) (rethrow kept)]
+          [else (raise e)])))
 ;; the text a kept failure of entry datum d gets when its error had no message
 (define (entry-null-msg d)
   (case (car d)
@@ -1227,28 +1239,33 @@
 ;; call's, is "CallSite bootstrap method initialization exception", with the
 ;; JDK's texts for the causes
 (define (indy-link caller spec name desc)
-  (let ([cs (bootstrap-guarded name
-              (lambda ()
-                (let ([cs (run-bootstrap caller (car spec)
-                                         (list (caller-lookup caller) (jstring-lit name) (desc->method-type desc))
-                                         (cadr spec))])
-                  (when (and cs (not (jinstance? cs "java/lang/invoke/CallSite")))
-                    (jthrow "java/lang/ClassCastException"
-                            (string-append "Cannot cast " (slashes->dots (jclass-cname (jobj-cls cs))) " to java.lang.invoke.CallSite")))
-                  cs)))])
-    (call-site-guarded
-     (lambda ()
-       (unless cs
-         (jthrow "java/lang/ClassCastException" "CallSite bootstrap method failed to produce an instance of CallSite"))
-       (let* ([target (call-site-target cs)]
-              [t (mt-desc ((jvirt target "type()Ljava/lang/invoke/MethodType;") target))])
-         (unless (string=? t desc)
-           (let ([str (lambda (o) (jstring->scheme ((jvirt o "toString()Ljava/lang/String;") o)))])
-             (jthrow "java/lang/invoke/WrongMethodTypeException"
-                     (string-append (str target) " should be of type " (str (desc->method-type desc)))))))))
+  (let ([cs (bootstrap-guarded name (lambda () (bootstrap-call-site caller spec name desc)))])
+    (call-site-guarded (lambda () (check-call-site-type! cs desc)))
     (if (jinstance? cs constant-call-site)
         (cons 'constant (call-site-target cs))
         (cons 'mutable cs))))
+
+;; what the bootstrap method returns for the call site: a CallSite or null,
+;; anything else a ClassCastException
+(define (bootstrap-call-site caller spec name desc)
+  (let ([cs (run-bootstrap caller (car spec)
+                           (list (caller-lookup caller) (jstring-lit name) (desc->method-type desc))
+                           (cadr spec))])
+    (when (and cs (not (jinstance? cs "java/lang/invoke/CallSite")))
+      (jthrow "java/lang/ClassCastException"
+              (string-append "Cannot cast " (slashes->dots (jclass-cname (jobj-cls cs))) " to java.lang.invoke.CallSite")))
+    cs))
+
+;; a null CallSite, or one whose target's type isn't exactly desc, fails
+(define (check-call-site-type! cs desc)
+  (unless cs
+    (jthrow "java/lang/ClassCastException" "CallSite bootstrap method failed to produce an instance of CallSite"))
+  (let* ([target (call-site-target cs)]
+         [t (mt-desc ((jvirt target "type()Ljava/lang/invoke/MethodType;") target))])
+    (unless (string=? t desc)
+      (let ([str (lambda (o) (jstring->scheme ((jvirt o "toString()Ljava/lang/String;") o)))])
+        (jthrow "java/lang/invoke/WrongMethodTypeException"
+                (string-append (str target) " should be of type " (str (desc->method-type desc))))))))
 
 (define (call-site-target cs) ((jvirt cs "getTarget()Ljava/lang/invoke/MethodHandle;") cs))
 
