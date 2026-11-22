@@ -1327,23 +1327,29 @@
           call)
       call)))
 
+(defn- entry-clauses
+  "The jtry clauses guarding pc's entry, in exception table order: each tests
+  the exception against its handler's type and enters the handler with the
+  live locals and the exception."
+  [{:keys [cover handlers split live] :as plan} pc]
+  (doall
+   (for [i (cover pc)
+         :let [{:keys [type handler]} (nth handlers i)]]
+     (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
+         (apply sx (enter-label plan handler) (concat (mapcat #(local-names split %) live) ["e"]))))))
+
 (defn- entry-defs
   "Each guarded entry: one handler for the region (jtry), whose clauses
   follow the exception table order and pass the handler the exception and
   the locals as the region got them. Building one can enter a handler's
   region, so this runs until no new entry turns up."
-  [{:keys [entered cover handlers split live] :as plan} emitted]
+  [{:keys [entered] :as plan} emitted]
   (loop [out [] done #{}]
     (if-let [pc (first (remove done @entered))]
-      (let [as (block-args plan (first (emitted pc)))
-            clauses (doall
-                     (for [i (cover pc)
-                           :let [{:keys [type handler]} (nth handlers i)]]
-                       (sx (if type (sx "jinstance?" "e" (str-lit type)) (sx "jobj?" "e"))
-                           (apply sx (enter-label plan handler) (concat (mapcat #(local-names split %) live) ["e"])))))]
+      (let [as (block-args plan (first (emitted pc)))]
         (recur (conj out (sx (entry-label pc)
                              (sx "lambda" (apply sx as)
-                                 (sx "jtry" "e" (apply sx clauses)
+                                 (sx "jtry" "e" (apply sx (entry-clauses plan pc))
                                      (apply sx (label pc) as)))))
                (conj done pc)))
       out)))
