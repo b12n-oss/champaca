@@ -15,10 +15,11 @@
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
                  :git/sha "1b33066fdfbd5003de5556fde16d0c70d80423e4"}
  :aliases
- {;; Code metrics (jolt metrics, metrics:gate): jolt-metrics' CLI at its
-  ;; main at af4a7c6, after v0.6.0, for its EDN fix (jlt-commons/jolt-metrics
-  ;; #20); move to a tag once a reviewed release has it
+ {;; Code metrics (jolt metrics, metrics:gate): jolt-metrics' CLI at the
+  ;; v0.7.1 tag, the first release with its EDN fix (jlt-commons/jolt-metrics
+  ;; #20)
   :metrics {:extra-deps {io.github.jlt-commons/jolt-metrics
                          {:git/url "https://github.com/jlt-commons/jolt-metrics"
-                          :git/sha "af4a7c6040042eb672bf6821b9bcaf24470ae459"}}
+                          :git/tag "v0.7.1"
+                          :git/sha "d134ab131364170c1b3171443e848f13e6db7638"}}
             :main-opts ["-m" "metrics.cli"]}}}

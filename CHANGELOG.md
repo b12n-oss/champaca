@@ -581,6 +581,7 @@ program may notice, and changes to the tasks.
 
 Refactors and licensing work with no change in behavior.
 
+- jolt-metrics moves from main's af4a7c6 to the v0.7.1 tag, its first release with that EDN fix. The gate passes as before, in 18.8 s, with the same 234 warnings and 71 near-duplicate pairs. Reports gain a `:lints` section from the clj-kondo rules v0.7.0 adopted, which the gate doesn't check. It found a redundant `let` in `codegen.clj`'s `compile-method`, now folded into the outer one (the Scheme it generates for a cache-off `Hello` is the same, 932 methods), and a one-argument `str` in `examples/fields.clj`, which is there on purpose so the field name isn't a literal.
 - jolt-metrics is pinned at main's af4a7c6, up from commit 3e13e1f by way of v0.5.0 and v0.6.0, for a fix after v0.6.0 that writes Scheme character literals in patterns as EDN. The gate's result and the 234 warnings are the same as before. Reports now list the limits they used, 71 near-duplicate pairs of definitions and the abstraction opportunities, none of which the gate checks. `jolt metrics:gate` runs with `--no-abstractions`, since that pass triples its time (19 s to 62 s).
 - The `bench` workflow sets `JOLT_MAX_HEAP=4g`, and a results header names it. Under jolt's default ceiling, a quarter of the runner's 7 GB, champaca's PetClinic answered its first page with OutOfMemoryError, which read as a hung server.
 - `champaca.port` moves two parts into namespaces of their own:
