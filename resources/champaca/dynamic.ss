@@ -56,12 +56,15 @@
 (define (java-value? v) (or (jobj? v) (jarr? v)))
 
 ;; the single abstract method of interface iface, as "name(desc)", or #f
-;; iface and every interface it extends, breadth first, each once
-(define (interface-closure iface)
-  (let loop ([todo (list iface)] [seen '()])
+;; the interfaces named in todo and every interface they extend, breadth
+;; first, each once
+(define (interfaces-closure todo)
+  (let loop ([todo todo] [seen '()])
     (cond [(null? todo) (reverse seen)]
           [(member (car todo) seen) (loop (cdr todo) seen)]
           [else (loop (append (cdr todo) (jclass-interfaces (find-class (car todo)))) (cons (car todo) seen))])))
+;; iface and every interface it extends
+(define (interface-closure iface) (interfaces-closure (list iface)))
 ;; found with the abstract methods of class n added (name+desc), but not
 ;; Object's three and not a name found already (an override keeps one)
 (define (abstract-method-keys n found)
@@ -429,21 +432,27 @@
         [(string? v) 'string]
         [(boolean? v) 'boolean]
         [(char? v) 'char]
-        ;; byte and short apart, since only those fit a narrowing pick
-        [(exact-int? v) (cond [(byte-range? v) 'byte] [(short-range? v) 'short] [(int-range? v) 'int]
-                              [(long-range? v) 'long] [else 'big])]
+        [(exact-int? v) (arg-int-key v)]
         [(flonum? v) 'double]
         [(coll-arg? v) (coll-arg-kind v)]
         [(procedure? v) 'fn]
-        ;; a vector whose elements share one key fits like any other of that
-        ;; key, whatever its length; integers key by the widest range among
-        ;; them ([1 300] as int), and any other mixed vector isn't cached
         [(null? v) 'empty-vector]
-        [(and (pair? v) (for-all exact-int? v))
-         (list 'vector (fold-left (lambda (k x) (wider-int-key k (arg-key x))) 'byte v))]
-        [(pair? v) (let ([k (arg-key (car v))])
-                     (and k (for-all (lambda (x) (equal? (arg-key x) k)) (cdr v)) (list 'vector k)))]
+        [(pair? v) (arg-vector-key v)]
         [else #f]))
+
+;; byte and short apart, since only those fit a narrowing pick
+(define (arg-int-key v)
+  (cond [(byte-range? v) 'byte] [(short-range? v) 'short] [(int-range? v) 'int]
+        [(long-range? v) 'long] [else 'big]))
+
+;; a vector whose elements share one key fits like any other of that key,
+;; whatever its length; integers key by the widest range among them ([1 300]
+;; as int), and any other mixed vector isn't cached (#f)
+(define (arg-vector-key v)
+  (if (for-all exact-int? v)
+      (list 'vector (fold-left (lambda (k x) (wider-int-key k (arg-int-key x))) 'byte v))
+      (let ([k (arg-key (car v))])
+        (and k (for-all (lambda (x) (equal? (arg-key x) k)) (cdr v)) (list 'vector k)))))
 
 (define int-keys '(byte short int long big))
 (define (wider-int-key a b) (if (memq b (memq a int-keys)) b a))
@@ -531,16 +540,16 @@
 ;; superclass. An instance field the same way up the superclasses only.
 (define (find-static-field cname fname)
   (let loop ([todo (list cname)] [seen '()])
-    (and (pair? todo)
-         (let ([o (car todo)])
-           (if (member o seen)
-               (loop (cdr todo) seen)
-               (let* ([c (find-class o)]
-                      [f (find (lambda (f) (and (string=? (car f) fname) (static-flag? (caddr f)))) (meta-fields c))])
-                 (if f
-                     (list o (cadr f) (caddr f))
-                     (loop (append (jclass-interfaces c) (if (jclass-super c) (list (jclass-super c)) '()) (cdr todo))
-                           (cons o seen)))))))))
+    (cond [(null? todo) #f]
+          [(member (car todo) seen) (loop (cdr todo) seen)]
+          [else (let ([c (find-class (car todo))])
+                  (or (own-static-field c (car todo) fname)
+                      (loop (append (jclass-interfaces c) (if (jclass-super c) (list (jclass-super c)) '()) (cdr todo))
+                            (cons (car todo) seen))))])))
+;; o's own static field fname, as (o desc flags), or #f
+(define (own-static-field c o fname)
+  (let ([f (find (lambda (f) (and (string=? (car f) fname) (static-flag? (caddr f)))) (meta-fields c))])
+    (and f (list o (cadr f) (caddr f)))))
 (define (find-instance-field cname fname)
   (let loop ([n cname])
     (let* ([c (find-class n)]
@@ -690,15 +699,39 @@
       [(char=? c #\V) #f]
       [(char=? c #\Z) (jbox "Z" (if (jolt-true? r) 1 0))]
       [(memv c '(#\L #\[)) (convert-arg r d)]
-      ;; an int in range or a char already gets the right box below
-      [(case c
-         [(#\J) (long-range? r)]
-         [(#\S) (and (exact-int? r) (<= -32768 r 32767))]
-         [(#\B) (and (exact-int? r) (<= -128 r 127))]
-         [(#\D #\F) (and (number? r) (real? r))]
-         [else #f])
-       (jbox d (convert-arg r d))]
+      [(proxy-fits-box? c r) (jbox d (convert-arg r d))]
       [else (convert-arg r "Ljava/lang/Object;")])))
+
+;; whether r goes back boxed as the primitive c of a long, short, byte,
+;; double or float return; an int in range or a char already gets the right
+;; box from convert-arg
+(define (proxy-fits-box? c r)
+  (case c
+    [(#\J) (long-range? r)]
+    [(#\S) (and (exact-int? r) (<= -32768 r 32767))]
+    [(#\B) (and (exact-int? r) (<= -128 r 127))]
+    [(#\D #\F) (and (number? r) (real? r))]
+    [else #f]))
+
+;; an argument of the proxied call as a Java method takes it: a reference
+;; as it came, a primitive unboxed
+(define (proxy-java-arg d a) (if (memv (string-ref d 0) '(#\L #\[)) a (junbox d a)))
+
+;; a method's result boxed for invoke's Object return, #f for void
+(define (proxy-box-return rd r)
+  (case (string-ref rd 0)
+    [(#\V) #f]
+    [(#\L #\[) r]
+    [else (jbox rd r)]))
+
+;; a default method the jolt side didn't give, called on the proxy itself
+(define (proxy-default-call info proxy argv)
+  (let ([name (vector-ref info 0)] [pds (vector-ref info 1)] [rd (vector-ref info 2)])
+    (proxy-box-return
+     rd
+     (apply (method-proc (vector-ref info 3) (string-append name "(" (apply string-append pds) ")" rd))
+            proxy
+            (map proxy-java-arg pds argv)))))
 
 (define (proxy-handler lookup)
   (lambda (proxy m args)
@@ -708,18 +741,9 @@
            [f (lookup name)])
       (cond
         [(procedure? f)
-         (proxy-result rd (call-from-java f (map (lambda (d a) (dyn-out d (if (memv (string-ref d 0) '(#\L #\[)) a (junbox d a))))
-                                                 pds argv)))]
+         (proxy-result rd (call-from-java f (map (lambda (d a) (dyn-out d (proxy-java-arg d a))) pds argv)))]
         [(vector-ref info 4) (jthrow "java/lang/UnsupportedOperationException" name)]
-        [else
-         (let ([r (apply (method-proc (vector-ref info 3)
-                                      (string-append name "(" (apply string-append pds) ")" rd))
-                         proxy
-                         (map (lambda (d a) (if (memv (string-ref d 0) '(#\L #\[)) a (junbox d a))) pds argv))])
-           (case (string-ref rd 0)
-             [(#\V) #f]
-             [(#\L #\[) r]
-             [else (jbox rd r)]))]))))
+        [else (proxy-default-call info proxy argv)]))))
 
 (define (dyn-proxy ifaces lookup)
   (with-java-errors (lambda () (make-proxy ifaces lookup))))
@@ -784,6 +808,18 @@
 ;; annotation), ("[" value ...); anns as a jolt-class-spec's, of which the
 ;; class's annotations (the first) and the constructors' ((desc . anns) ...,
 ;; the fourth) are read here
+(define (cf-octets n k)
+  ;; the integer n as k big-endian octets, two's complement
+  (let loop ([i 0] [n n] [acc '()])
+    (if (fx= i k) acc (loop (fx+ i 1) (bitwise-arithmetic-shift-right n 8) (cons (bitwise-and n 255) acc)))))
+(define (cf-ieee x single?)
+  ;; x as the big-endian octets of an IEEE single or double
+  (let ([bv (make-bytevector (if single? 4 8))])
+    (if single?
+        (bytevector-ieee-single-set! bv 0 x (endianness big))
+        (bytevector-ieee-double-set! bv 0 x (endianness big)))
+    (bytevector->u8-list bv)))
+
 (define (class-file-bytes name super ifaces fields ctors methods anns)
   (let ([pool '()] [count 0] [index (make-hashtable equal-hash equal?)]
         [class-anns (car anns)] [ctor-anns (cadddr anns)])
@@ -798,24 +834,14 @@
     (define (class n) (let ([u (utf8 n)]) (entry (list 'class n) (cons 7 (u2 u)))))
     (define (nat n d) (let ([a (utf8 n)] [b (utf8 d)]) (entry (list 'nat n d) (append '(12) (u2 a) (u2 b)))))
     (define (methodref c n d) (let ([a (class c)] [b (nat n d)]) (entry (list 'mref c n d) (append '(10) (u2 a) (u2 b)))))
-    ;; the integer n as k big-endian octets, two's complement
-    (define (octets n k)
-      (let loop ([i 0] [n n] [acc '()])
-        (if (fx= i k) acc (loop (fx+ i 1) (bitwise-arithmetic-shift-right n 8) (cons (bitwise-and n 255) acc)))))
-    (define (ieee x single?)
-      (let ([bv (make-bytevector (if single? 4 8))])
-        (if single?
-            (bytevector-ieee-single-set! bv 0 x (endianness big))
-            (bytevector-ieee-double-set! bv 0 x (endianness big)))
-        (bytevector->u8-list bv)))
     (define (element v)
       (let ([tag (string-ref (car v) 0)] [x (cdr v)])
         (cons (char->integer tag)
               (case tag
-                [(#\B #\C #\I #\S #\Z) (u2 (entry (list 'int (car x)) (cons 3 (octets (car x) 4))))]
-                [(#\J) (u2 (entry (list 'long (car x)) (cons 5 (octets (car x) 8)) #t))]
-                [(#\F) (let ([o (ieee (inexact (car x)) #t)]) (u2 (entry (cons 'float o) (cons 4 o))))]
-                [(#\D) (let ([o (ieee (inexact (car x)) #f)]) (u2 (entry (cons 'double o) (cons 6 o) #t)))]
+                [(#\B #\C #\I #\S #\Z) (u2 (entry (list 'int (car x)) (cons 3 (cf-octets (car x) 4))))]
+                [(#\J) (u2 (entry (list 'long (car x)) (cons 5 (cf-octets (car x) 8)) #t))]
+                [(#\F) (let ([o (cf-ieee (inexact (car x)) #t)]) (u2 (entry (cons 'float o) (cons 4 o))))]
+                [(#\D) (let ([o (cf-ieee (inexact (car x)) #f)]) (u2 (entry (cons 'double o) (cons 6 o) #t)))]
                 [(#\s #\c) (u2 (utf8 (car x)))]
                 [(#\e) (append (u2 (utf8 (car x))) (u2 (utf8 (cadr x))))]
                 [(#\@) (annotation (car x))]
@@ -867,26 +893,41 @@
 ;; signature, the superclasses' before the interfaces', public or protected,
 ;; neither final nor a bridge. A final one is (name desc #f), so the api
 ;; can say so when it is named.
+(define acc-private 2)
+(define acc-final #x10)
+(define acc-public-or-protected 5)
+(define acc-bridge-or-synthetic #x1040)
+
+;; m, a class's (name desc flags), as overridable-methods lists it, or #f
+;; when it isn't overridable; seen holds the signatures declared below it,
+;; and m's is added unless it's a constructor, static or private
+(define (overridable-entry m seen)
+  (let ([n (car m)] [d (cadr m)] [f (caddr m)])
+    (and (not (or (char=? (string-ref n 0) #\<) (static-flag? f) (fxpositive? (fxlogand f acc-private))
+                  (hashtable-ref seen (string-append n d) #f)))
+         (begin (hashtable-set! seen (string-append n d) #t)
+                (and (fxpositive? (fxlogand f acc-public-or-protected))
+                     (fxzero? (fxlogand f acc-bridge-or-synthetic))
+                     (list n d (if (fxpositive? (fxlogand f acc-final)) #f f)))))))
+
 (define (overridable-methods super ifaces)
-  (let ([seen (make-hashtable string-hash string=?)] [acc '()])
-    (define (visit c)
-      (for-each (lambda (m)
-                  (let ([n (car m)] [d (cadr m)] [f (caddr m)])
-                    (unless (or (char=? (string-ref n 0) #\<) (static-flag? f) (fxpositive? (fxlogand f 2))
-                                (hashtable-ref seen (string-append n d) #f))
-                      (hashtable-set! seen (string-append n d) #t)
-                      (when (and (fxpositive? (fxlogand f 5)) (fxzero? (fxlogand f #x1040)))
-                        (set! acc (cons (list n d (if (fxpositive? (fxlogand f #x10)) #f f)) acc))))))
-                (meta-methods c)))
-    (let chain ([n super] [is '()])
-      (if n
-          (let ([c (find-class n)]) (visit c) (chain (jclass-super c) (append is (jclass-interfaces c))))
-          (let walk ([todo (append ifaces is)] [done '()])
-            (cond [(null? todo) (reverse acc)]
-                  [(member (car todo) done) (walk (cdr todo) done)]
-                  [else (let ([c (find-class (car todo))])
-                          (visit c)
-                          (walk (append (cdr todo) (jclass-interfaces c)) (cons (car todo) done)))]))))))
+  (let ([seen (make-hashtable string-hash string=?)])
+    (let-values ([(classes is) (superclass-chain super)])
+      (reverse
+       (fold-left (lambda (acc c)
+                    (fold-left (lambda (acc m) (let ([e (overridable-entry m seen)]) (if e (cons e acc) acc)))
+                               acc (meta-methods c)))
+                  '()
+                  (append classes (map find-class (interfaces-closure (append ifaces is)))))))))
+
+;; super and its superclasses, nearest first, and the interfaces they
+;; declare, in that order
+(define (superclass-chain super)
+  (let chain ([n super] [cs '()] [is '()])
+    (if n
+        (let ([c (find-class n)]) (chain (jclass-super c) (cons c cs) (append is (jclass-interfaces c))))
+        (values (reverse cs) is))))
+
 
 (define (prim-type-name c)
   (case c [(#\I) "int"] [(#\J) "long"] [(#\S) "short"] [(#\B) "byte"] [(#\C) "char"]
