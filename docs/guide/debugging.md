@@ -63,7 +63,7 @@ Both are covered in [calling-java](calling-java.md#exceptions), with the few err
 
 ### A missing native
 
-The JDK declares many of its methods `native` and leaves them to the JVM. Champaca writes the ones the tested paths reach in Scheme, in `resources/champaca/natives.ss` (and `reflect.ss` for reflection, `files.ss` for files, `net.ss` for sockets, `spawn.ss` for processes), and adds more as programs need them. Calling one that isn't there throws `UnsatisfiedLinkError`, as the JVM does for a `native` method whose library was never loaded, so a library that wraps an optional feature in a try/catch keeps going. Uncaught, it ends the program like any other exception. Before champaca had helpful `NullPointerException` messages, printing one ended like this:
+The JDK declares many of its methods `native` and leaves them to the JVM. Champaca writes the ones the tested paths reach in Scheme, in `resources/champaca/natives.ss` and the two files split from it, `vmprops.ss` and `natives-misc.ss` (and `reflect.ss` for reflection, `files.ss` for files, `net.ss` for sockets, `spawn.ss` for processes), and adds more as programs need them. Calling one that isn't there throws `UnsatisfiedLinkError`, as the JVM does for a `native` method whose library was never loaded, so a library that wraps an optional feature in a try/catch keeps going. Uncaught, it ends the program like any other exception. Before champaca had helpful `NullPointerException` messages, printing one ended like this:
 
 ```text
 Exception in thread "main" java.lang.UnsatisfiedLinkError: java/lang/NullPointerException.getExtendedNPEMessage()Ljava/lang/String;

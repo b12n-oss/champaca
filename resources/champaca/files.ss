@@ -472,7 +472,7 @@
     (fdo-fd-set! this -1)))
 
 ;; --- FileOutputStream ------------------------------------------------------------
-;; fds 1 and 2 write through Chez's ports (natives.ss).
+;; fds 1 and 2 write through Chez's ports (natives-misc.ss).
 
 (define fos "java/io/FileOutputStream")
 

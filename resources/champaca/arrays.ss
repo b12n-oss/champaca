@@ -8,7 +8,7 @@
 ;; Making arrays, and running out of room: the allocators generated code and
 ;; the natives call, the limits on an array's size, and jolt's out-of-memory
 ;; error as Java's OutOfMemoryError. Access to an array's elements is in
-;; runtime.ss, next to the macros generated code reads them through.
+;; support.ss, next to the macros generated code reads them through.
 
 ;; An array is a vector of eight-byte words whatever its element type. A
 ;; length past HotSpot's limit (Integer.MAX_VALUE - 2), or a vector that
