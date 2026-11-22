@@ -140,13 +140,15 @@
   (do ([dv (jarr-vec dst)] [i 0 (fx+ i 1)]) ((fx= i n))
     (let ([x (vector-ref sv (fx+ sp i))])
       (unless (or (not x) (array-store-ok? dst x))
-        (let ([sn (slashes->dots (desc->class-name se))] [dn (slashes->dots (desc->class-name de))])
-          (arraycopy-fail "java/lang/ArrayStoreException"
-                          (if (class-assignable? (string-append "[" de) (string-append "[" se))
-                              (string-append "element type mismatch: can not cast one of the elements of "
-                                             sn "[] to the type of the destination array, " dn)
-                              (string-append "type mismatch: can not copy " sn "[] into " dn "[]")))))
+        (arraycopy-element-fail se de))
       (vector-set! dv (fx+ dp i) x))))
+(define (arraycopy-element-fail se de)
+  (let ([sn (slashes->dots (desc->class-name se))] [dn (slashes->dots (desc->class-name de))])
+    (arraycopy-fail "java/lang/ArrayStoreException"
+                    (if (class-assignable? (string-append "[" de) (string-append "[" se))
+                        (string-append "element type mismatch: can not cast one of the elements of "
+                                       sn "[] to the type of the destination array, " dn)
+                        (string-append "type mismatch: can not copy " sn "[] into " dn "[]")))))
 (defnative "java/lang/System.setIn0(Ljava/io/InputStream;)V" (s) (set-top-level-value! '|java/lang/System:in| s))
 (defnative "java/lang/System.setOut0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:out| s))
 (defnative "java/lang/System.setErr0(Ljava/io/PrintStream;)V" (s) (set-top-level-value! '|java/lang/System:err| s))
@@ -376,19 +378,21 @@
   (let ([len (string-length s)])
     (let loop ([i 0]) (and (fx< i len) (or (char=? (string-ref s i) ch) (loop (fx+ i 1)))))))
 (define (valid-class-name? n)
+  (and (fx> (string-length n) 0)
+       (if (char=? (string-ref n 0) #\[) (valid-array-name? n) (cn-plain-name? n))))
+;; an array descriptor: at most 255 dimensions, then a primitive element or
+;; L<plain name>;
+(define (valid-array-name? n)
   (let ([len (string-length n)])
-    (and (fx> len 0)
-         (if (char=? (string-ref n 0) #\[)
-             (let skip ([d 0])
-               (cond
-                 [(fx= d len) #f]
-                 [(char=? (string-ref n d) #\[) (skip (fx+ d 1))]
-                 [(fx> d 255) #f]
-                 [(char=? (string-ref n d) #\L)
-                  (and (fx> len (fx+ d 2)) (char=? (string-ref n (fx- len 1)) #\;)
-                       (cn-plain-name? (substring n (fx+ d 1) (fx- len 1))))]
-                 [else (and (fx= d (fx- len 1)) (memv (string-ref n d) '(#\B #\C #\D #\F #\I #\J #\S #\Z)) #t)]))
-             (cn-plain-name? n)))))
+    (let skip ([d 0])
+      (cond
+        [(fx= d len) #f]
+        [(char=? (string-ref n d) #\[) (skip (fx+ d 1))]
+        [(fx> d 255) #f]
+        [(char=? (string-ref n d) #\L)
+         (and (fx> len (fx+ d 2)) (char=? (string-ref n (fx- len 1)) #\;)
+              (cn-plain-name? (substring n (fx+ d 1) (fx- len 1))))]
+        [else (and (fx= d (fx- len 1)) (memv (string-ref n d) '(#\B #\C #\D #\F #\I #\J #\S #\Z)) #t)]))))
 
 ;; The modified UTF-8 bytes of a list of UTF-16 units, as a bytevector.
 (define (cn-mutf8-bytes units)
@@ -406,6 +410,13 @@
                     (bytevector-u8-set! bv (fx+ i 1) (fxlogor #x80 (fxlogand (fxsrl u 6) #x3f)))
                     (bytevector-u8-set! bv (fx+ i 2) (fxlogor #x80 (fxlogand u #x3f)))
                     (loop (cdr us) (fx+ i 3))]))))))
+;; the unit a 2- or 3-byte UTF-8 sequence at i encodes
+(define (cn-utf8-2 bv i)
+  (fxlogor (fxsll (fxlogand (bytevector-u8-ref bv i) #x1f) 6) (fxlogand (bytevector-u8-ref bv (fx+ i 1)) #x3f)))
+(define (cn-utf8-3 bv i)
+  (fxlogor (fxsll (fxlogand (bytevector-u8-ref bv i) #x0f) 12)
+           (fxsll (fxlogand (bytevector-u8-ref bv (fx+ i 1)) #x3f) 6)
+           (fxlogand (bytevector-u8-ref bv (fx+ i 2)) #x3f)))
 ;; Bytes lo..hi as UTF-16 units: a complete 2- or 3-byte sequence is one unit,
 ;; any other byte (a cut sequence's pieces) one unit of its own value.
 (define (cn-bytes->units bv lo hi)
@@ -415,13 +426,9 @@
           (let ([b (bytevector-u8-ref bv i)])
             (cond
               [(and (fx>= b #xc0) (fx< b #xe0) (fx< (fx+ i 1) hi) (cont? (fx+ i 1)))
-               (loop (fx+ i 2) (cons (fxlogor (fxsll (fxlogand b #x1f) 6) (fxlogand (bytevector-u8-ref bv (fx+ i 1)) #x3f)) acc))]
+               (loop (fx+ i 2) (cons (cn-utf8-2 bv i) acc))]
               [(and (fx>= b #xe0) (fx< b #xf0) (fx< (fx+ i 2) hi) (cont? (fx+ i 1)) (cont? (fx+ i 2)))
-               (loop (fx+ i 3)
-                     (cons (fxlogor (fxsll (fxlogand b #x0f) 12)
-                                    (fxsll (fxlogand (bytevector-u8-ref bv (fx+ i 1)) #x3f) 6)
-                                    (fxlogand (bytevector-u8-ref bv (fx+ i 2)) #x3f))
-                           acc))]
+               (loop (fx+ i 3) (cons (cn-utf8-3 bv i) acc))]
               [else (loop (fx+ i 1) (cons b acc))]))))))
 ;; A name over 65535 bytes of modified UTF-8 (counted on the slashed form) is
 ;; ClassNotFoundException "Class name exceeds maximum length of 65535: " plus
