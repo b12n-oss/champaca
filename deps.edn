@@ -7,13 +7,13 @@
 
 {:paths ["src" "resources"]
  :jolt/min-version "0.8.24"
- ;; The jolt the tasks build and test on: the v0.8.27 tag. The tasks need
+ ;; The jolt the tasks build and test on: the v0.8.28 tag. The tasks need
  ;; 0.8.26 or later (System/mapLibraryName, #1580, when jolt runs them);
  ;; 0.8.27 adds jolt.ffi/stack-args-correct? (#1632), which foreign.ss asks
  ;; before making a call Chez 10.4.1 would misplace. The minimum stays
  ;; 0.8.24, the first release champaca itself needs.
  :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                 :git/sha "0f08ec2732a0078d7523f274a1507049c06bffe6"}
+                 :git/sha "1b33066fdfbd5003de5556fde16d0c70d80423e4"}
  :aliases
  {;; Code metrics (jolt metrics, metrics:gate): jolt-metrics' CLI at its
   ;; main at af4a7c6, after v0.6.0, for its EDN fix (jlt-commons/jolt-metrics
