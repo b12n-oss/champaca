@@ -1170,16 +1170,17 @@
         defs (volatile! [])             ; [label lambda-text], in order
         inline! (inliner cls resolve ic! tag defs)
         f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
-        f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)]
+        f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)
+        g (method-global (:name cls) (:name method) (:desc method))
+        ;; the cells are all allocated once f is compiled
+        body (with-ic-cells @ics vector-ics? f)]
     ;; set-top-level-value!, not define: a top-level define compiled to a
     ;; cached unit carries the expander's record of the binding ($sc-put-cte,
     ;; a syntax object with its ribcage), 15% of a unit's bytes and a fifth
     ;; of its load time (spike 72); the value cell is the same. The let names
     ;; the procedure as define did (a code name is what stack traces and
     ;; getCallerClass read; a bare lambda has none).
-    (let [g (method-global (:name cls) (:name method) (:desc method))
-          body (with-ic-cells @ics vector-ics? f)]
-      (sx "set-top-level-value!" (str "'" g) (sx "let" (sx (sx g body)) g)))))
+    (sx "set-top-level-value!" (str "'" g) (sx "let" (sx (sx g body)) g))))
 
 ;; --- array loops ------------------------------------------------------------------
 ;; An array access checks for null, takes the array's vector and checks the
