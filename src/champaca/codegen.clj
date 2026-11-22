@@ -19,8 +19,8 @@
   ;; this namespace's own pop! (a block-state helper) replaces clojure.core's
   (:refer-clojure :exclude [pop!])
   (:require [clojure.string :as str]
-            [champaca.bytecode :refer [array-loops backward-ranges blocks decode load-ops store-ops successors]]
-            [champaca.cgtext :refer [*inline-site* *method-tag* at jstring-lit-arg jstring-lit-form label method-global num-lit parse-desc site static-global str-lit sx sym wide?]]
+            [champaca.bytecode :refer [array-loops backward-ranges blocks decode halves-use? live-locals load-ops param-slots split-locals store-ops successors]]
+            [champaca.cgtext :refer [*inline-site* *method-tag* at jstring-lit-arg jstring-lit-form label method-global num-lit parse-desc site static-global str-lit sx sym]]
             [champaca.intrinsics :refer [direct-form static-form]]
             [champaca.lambdas :refer [condy const-datum lambda-expr]]
             [champaca.linkage :refer [bad-class local-names missing-class missing-method refused-class resolve-bsm-args! resolve-site! resolve-type! wrong-kind]]))
@@ -163,49 +163,6 @@
   [steps term]
   (close-scopes (add-to-scope (step-scopes steps) term)))
 
-(def ^:private long-ops #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lcmp :l2i})
-
-(defn- stack-effect
-  "[values popped, values pushed] of an instruction, or nil for one
-  halves-use? doesn't follow."
-  [cp {:keys [op args]}]
-  (case op
-    (:aconst_null :iconst_m1 :iconst_0 :iconst_1 :iconst_2 :iconst_3 :iconst_4 :iconst_5
-     :lconst_0 :lconst_1 :fconst_0 :fconst_1 :fconst_2 :dconst_0 :dconst_1 :bipush :sipush
-     :ldc :ldc_w :ldc2_w :iload :lload :fload :dload :aload :getstatic :new) [0 1]
-    (:nop :iinc) [0 0]
-    (:istore :lstore :fstore :dstore :astore :pop :putstatic) [1 0]
-    :putfield [2 0]
-    (:iastore :lastore :fastore :dastore :aastore :bastore :castore :sastore) [3 0]
-    (:getfield :i2l :l2i :i2d :l2d :i2f :l2f :f2d :d2f :f2i :d2i :f2l :d2l :i2b :i2c :i2s
-     :ineg :lneg :fneg :dneg :arraylength :checkcast :instanceof :newarray :anewarray) [1 1]
-    (:iadd :isub :imul :idiv :irem :ishl :ishr :iushr :iand :ior :ixor
-     :ladd :lsub :lmul :ldiv :lrem :lshl :lshr :lushr :land :lor :lxor
-     :fadd :fsub :fmul :fdiv :frem :dadd :dsub :dmul :ddiv :drem
-     :lcmp :fcmpl :fcmpg :dcmpl :dcmpg
-     :iaload :laload :faload :daload :aaload :baload :caload :saload) [2 1]
-    (:invokevirtual :invokeinterface :invokespecial :invokestatic)
-    (let [{as :args ret :ret} (parse-desc (:desc (cp (first args))))]
-      [(+ (count as) (if (= op :invokestatic) 0 1)) (if (= ret "V") 0 1)])
-    nil))
-
-(defn- halves-use?
-  "Whether the value an instruction leaves on top of the stack goes next to
-  something that takes a long as halves: a long operation (as the value a
-  shift shifts, not its count), or a store to a local kept as halves. insns
-  are the block's instructions after it."
-  [cp split insns]
-  (loop [insns (take 32 insns) pos 0]
-    (if-let [i (first insns)]
-      (if-let [[pops pushes] (stack-effect cp i)]
-        (if (> pops pos)
-          (let [{:keys [op args]} i]
-            (boolean (or (and (long-ops op) (not (and (#{:lshl :lshr :lushr} op) (= pos 0))))
-                         (and (= op :lstore) (split (first args))))))
-          (recur (rest insns) (+ (- pos pops) pushes)))
-        false)
-      false)))
-
 ;; --- one basic block ----------------------------------------------------------
 ;; emit-block translates a block one instruction at a time. Its state, e, is
 ;; the ctx it was given plus:
@@ -338,7 +295,7 @@
 (defn- callee
   "What a direct call names: the callee inlined into this method when it is a
   small leaf (compile-method), else its top-level definition."
-  [e pc decl name desc]
+  [e pc decl {:keys [name desc]}]
   (or (binding [*inline-site* [pc *method-tag*]] ((:inline! e) decl name desc))
       (method-global decl name desc)))
 
@@ -704,8 +661,9 @@
   dispatch would do (for invokeinterface that is a private interface method,
   which javac calls this way). A package-private method is overridden only
   from its run-time package (JVMS 5.4.5), which the vtable's keys can't say."
-  [e op pc {:keys [class name desc]} recv argv]
-  (let [resolve (:resolve e)
+  [e {:keys [op pc ref recv argv]}]
+  (let [{:keys [class name desc]} ref
+        resolve (:resolve e)
         key #(str "'" (sym (str name desc)))]
     (when-not (str/starts-with? class "[") ((:ensure-loaded resolve) class))
     ((:check-virtual resolve) class name desc)
@@ -713,7 +671,7 @@
     (if-let [decl ((:direct-target resolve) class name desc)]
       (or (and (not *plain*)
                (direct-form (str decl "." name desc) (sx "nn-at" recv (site pc)) argv (at pc (method-global decl name desc))))
-          (apply sx (at pc (callee e pc decl name desc)) (sx "nn-at" recv (site pc)) argv))
+          (apply sx (at pc (callee e pc decl ref)) (sx "nn-at" recv (site pc)) argv))
       (if-let [pp (and (= op :invokevirtual) ((:package-private-decl resolve) class name desc))]
         (apply sx (at pc (sx "jvirt-pp-ic" ((:ic! e)) recv (key) (str "'" (sym pp)) (site pc))) recv argv)
         (apply sx (at pc (sx "jvirt-ic" ((:ic! e)) recv (key) (site pc))) recv argv)))))
@@ -722,8 +680,9 @@
   "invokevirtual or invokeinterface. A VarHandle access mode and
   MethodHandle.invoke/invokeExact are signature-polymorphic: the runtime
   adapts the call site's types to the access mode's, as asType would."
-  [e op pc {:keys [class name desc] :as ref} recv argv]
-  (let [resolve (:resolve e)]
+  [e {:keys [pc ref recv argv] :as call}]
+  (let [{:keys [class name desc]} ref
+        resolve (:resolve e)]
     (cond
       (and (= class "java/lang/invoke/VarHandle") (varhandle-modes name))
       (do (resolve-site! resolve desc)
@@ -732,45 +691,65 @@
       (do (resolve-site! resolve desc)
           (apply sx (at pc (if (= name "invokeExact") "mh-call-exact" "mh-call"))
                  (sx "nn-at" recv (site pc)) (str-lit desc) argv))
-      :else (dispatch-call e op pc ref recv argv))))
+      :else (dispatch-call e call))))
+
+(defn- special-call
+  "invokespecial: a constructor, a private method or a super call, called
+  directly. Object's constructor does nothing, so it is no call (nil)."
+  [e {:keys [pc ref recv argv]}]
+  (let [{:keys [class name desc]} ref
+        resolve (:resolve e)
+        decl ((:resolve-method resolve) class name desc)]
+    ((:check-kind resolve) :special class name desc)
+    (when-not (and (= decl "java/lang/Object") (= name "<init>"))
+      (apply sx (at pc (callee e pc decl ref)) recv argv))))
+
+(defn- static-call
+  "invokestatic, after initializing the declaring class: done in line at
+  the call site when static-form knows the method, else a direct call."
+  [e {:keys [pc ref argv]}]
+  (let [{:keys [class name desc]} ref
+        resolve (:resolve e)
+        decl ((:resolve-method resolve) class name desc)]
+    ((:check-kind resolve) :static class name desc)
+    (init-class! e decl pc)
+    (or (and (not *plain*)
+             (static-form (str decl "." name desc) argv (at pc (method-global decl name desc)) (:ic! e) (site pc)))
+        (apply sx (at pc (callee e pc decl ref)) argv))))
 
 (defn- emit-invoke [e {:keys [op args pc]} _]
-  (let [{:keys [class name desc] :as ref} ((:cp e) (first args))
-        resolve (:resolve e)
-        {params :args ret :ret} (parse-desc desc)
+  (let [ref ((:cp e) (first args))
+        {params :args ret :ret} (parse-desc (:desc ref))
         argv (popn! e (count params))
         recv (when-not (= op :invokestatic) (pop! e))
+        invocation {:op op :pc pc :ref ref :recv recv :argv argv}
         call (case op
-               (:invokevirtual :invokeinterface) (virtual-call e op pc ref recv argv)
-               :invokespecial
-               (let [decl ((:resolve-method resolve) class name desc)]
-                 ((:check-kind resolve) :special class name desc)
-                 ;; Object's constructor does nothing
-                 (when-not (and (= decl "java/lang/Object") (= name "<init>"))
-                   (apply sx (at pc (callee e pc decl name desc)) recv argv)))
-               :invokestatic
-               (let [decl ((:resolve-method resolve) class name desc)]
-                 ((:check-kind resolve) :static class name desc)
-                 (init-class! e decl pc)
-                 (or (and (not *plain*)
-                          (static-form (str decl "." name desc) argv (at pc (method-global decl name desc)) (:ic! e) (site pc)))
-                     (apply sx (at pc (callee e pc decl name desc)) argv))))]
+               (:invokevirtual :invokeinterface) (virtual-call e invocation)
+               :invokespecial (special-call e invocation)
+               :invokestatic (static-call e invocation))]
     (cond (nil? call) nil
           (= ret "V") (stmt! e call)
           :else (push! e call (desc->t ret)))))
 
 ;; --- invokedynamic -------------------------------------------------------------------
 
+(defn- recipe-tag? [c] (contains? #{\u0001 \u0002} c))
+
+(defn- recipe-run-parts
+  "The parts of one run of a recipe: its tags as 1 or 2, or its literal
+  characters as one string literal."
+  [run]
+  (if (recipe-tag? (first run))
+    (map #(if (= % \u0001) "1" "2") run)
+    [(str-lit (apply str run))]))
+
 (defn- recipe-parts
   "A makeConcatWithConstants recipe as the text of its parts: each run of
   literal characters as a string literal, \u0001 (the next argument) as 1
   and \u0002 (the next constant) as 2."
   [recipe]
-  (->> (partition-by #(contains? #{\u0001 \u0002} %) recipe)
-       (mapcat (fn [run]
-                 (if (contains? #{\u0001 \u0002} (first run))
-                   (map #(if (= % \u0001) "1" "2") run)
-                   [(str-lit (apply str run))])))))
+  (->> (partition-by recipe-tag? recipe)
+       (mapcat recipe-run-parts)))
 
 (defn- concat-call
   "makeConcatWithConstants: jconcat over the recipe, the arguments as text
@@ -1118,7 +1097,7 @@
   (let [{c :cls m :method} ((:inline-candidate resolve) (:name cls) decl name desc)]
     (when (and m (leaf? c m))
       (when-let [text (try (binding [*method-tag* ctag]
-                             (compile-method* c m resolve ic! (constantly nil)))
+                             (compile-method* {:cls c :resolve resolve :ic! ic! :inline! (constantly nil)} m))
                            (catch Exception _ nil))]
         (let [l (sym (str tag "#I:" ctag "@" (first *inline-site*)))]
           (vswap! defs conj [l text])
@@ -1169,7 +1148,8 @@
         ic! (ic-allocator ics vector-ics?)
         defs (volatile! [])             ; [label lambda-text], in order
         inline! (inliner cls resolve ic! tag defs)
-        f (binding [*method-tag* tag] (compile-method* cls method resolve ic! inline!))
+        f (binding [*method-tag* tag]
+            (compile-method* {:cls cls :resolve resolve :ic! ic! :inline! inline!} method))
         f (if (seq @defs) (sx "let" (apply sx (map (fn [[l t]] (sx l t)) @defs)) f) f)
         g (method-global (:name cls) (:name method) (:desc method))
         ;; the cells are all allocated once f is compiled
@@ -1193,78 +1173,49 @@
 ;; alone (runtime.ss vec-ref); a null or anything else runs the loop as it
 ;; was, so an exception comes where it would have.
 
-(defn- param-slots
-  "The local slot of each parameter, a long or double taking two."
-  [arg-types]
-  (loop [ts arg-types slot 0 out []]
-    (if-let [t (first ts)]
-      (recur (rest ts) (+ slot (if (wide? t) 2 1)) (conj out slot))
-      out)))
-
-(def ^:private long-makers
-  "The operations whose long result, stored straight away, marks a local as
-  worth keeping in halves."
-  #{:ladd :lsub :lmul :land :lor :lxor :lshl :lshr :lushr :lneg :lconst_0 :lconst_1 :ldc2_w :i2l})
-
-(defn- split-locals
-  "The long locals kept as halves (emit-block): loaded and stored as longs
-  only, not method-wide, and given a long operation's result somewhere,
-  which is what would otherwise box."
-  [insns boxed param-set param-types]
-  (let [uses (group-by #(first (:args %)) (filter #(or (load-ops (:op %)) (store-ops (:op %))) insns))
-        made (set (for [[p i] (map vector insns (rest insns))
-                        :when (and (= :lstore (:op i)) (long-makers (:op p)))]
-                    (first (:args i))))]
-    (set (for [[i us] uses
-               :when (and (made i) (not (boxed i))
-                          (every? #(#{:lload :lstore} (:op %)) us)
-                          (or (not (param-set i)) (= "J" (param-types i))))]
-           i))))
-
-(defn- live-locals
-  "The locals a jump has to carry: the parameters and every slot the method
-  loads or stores, less the boxed ones, which stay method-wide."
-  [insns param-set boxed]
-  (vec (sort (remove boxed
-                     (into param-set
-                           (for [{:keys [op args]} insns
-                                 :when (or (load-ops op) (store-ops op))]
-                             (first args)))))))
+(defn- locals-plan
+  "The method's parameter slots, and its locals boxed (method-wide, when it
+  has handlers), split into halves and carried by a jump."
+  [method insns blks cover]
+  (let [handlers (:handlers (:code method))
+        {:keys [args]} (parse-desc (:desc method))
+        arg-types (if (pos? (bit-and (:flags method) 0x0008)) args (cons "L" args))
+        params (param-slots arg-types)
+        param-set (set params)
+        boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})]
+    {:params params :param-set param-set :boxed boxed
+     :split (split-locals insns boxed param-set (zipmap params arg-types))
+     :live (live-locals insns param-set boxed)}))
 
 (defn- method-plan
   "What translating the method needs to know before any block is emitted:
   its blocks, the handler regions covering each, the locals boxed, split
   and carried, the array loops to version. :entered collects the covered
-  blocks a jump enters from outside their region."
-  [cls method resolve ic! inline!]
+  blocks a jump enters from outside their region. ctx (compile-method*)
+  goes into the plan as it is."
+  [ctx method]
   (let [{:keys [code handlers]} (:code method)
         insns (decode code)
         blks (blocks insns handlers)
-        {:keys [args]} (parse-desc (:desc method))
-        arg-types (if (pos? (bit-and (:flags method) 0x0008)) args (cons "L" args))
-        params (param-slots arg-types)
-        param-set (set params)
         cover (into {} (map (fn [pc] [pc (covering handlers pc)]) (keys blks)))
-        boxed (if (seq handlers) (boxed-locals blks handlers cover) #{})]
-    {:cls cls :resolve resolve :ic! ic! :inline! inline!
-     :method-key (str (:name method) (:desc method))
-     ;; a giant method's array accesses are calls (runtime.ss big-array-ref),
-     ;; but not inside a loop: every backward jump's [target jump] range
-     ;; keeps the inline form, so a lexer's scanning loop in a giant method
-     ;; runs as fast as before (a loop took 117 ms through calls, 50 inline)
-     :big? (> (count code) ic-vector-limit)
-     :loop-ranges (when (> (count code) ic-vector-limit) (backward-ranges insns))
-     :handlers handlers :blks blks :cover cover :boxed boxed
-     :params params :param-set param-set
-     :next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
-     :split (split-locals insns boxed param-set (zipmap params arg-types))
-     :live (live-locals insns param-set boxed)
-     ;; array loops to version (handler-free methods of a size whose
-     ;; blocks' dominators are cheap to find)
-     :loops (or (when (and (not *plain*) (empty? handlers) (<= (count code) ic-vector-limit))
-                  (array-loops blks))
-                {})
-     :entered (volatile! (sorted-set))}))
+        big? (> (count code) ic-vector-limit)]
+    (merge ctx
+           (locals-plan method insns blks cover)
+           {:method-key (str (:name method) (:desc method))
+            ;; a giant method's array accesses are calls (runtime.ss big-array-ref),
+            ;; but not inside a loop: every backward jump's [target jump] range
+            ;; keeps the inline form, so a lexer's scanning loop in a giant method
+            ;; runs as fast as before (a loop took 117 ms through calls, 50 inline)
+            :big? big?
+            :loop-ranges (when big? (backward-ranges insns))
+            :handlers handlers :blks blks :cover cover
+            :next-pc (into {} (map vector (keys blks) (concat (rest (keys blks)) [nil])))
+            ;; array loops to version (handler-free methods of a size whose
+            ;; blocks' dominators are cheap to find)
+            :loops (or (when (and (not *plain*) (empty? handlers) (not big?))
+                         (array-loops blks))
+                       {})
+            :entered (volatile! (sorted-set))})))
 
 (defn- version-label [pc] (sym (str *method-tag* "#V" pc)))
 (defn- fast-label [pc] (sym (str *method-tag* "#F" pc)))
@@ -1437,13 +1388,14 @@
             (sx "lambda" "()" (sx "jmonitor-exit" "lock"))))))
 
 (defn- compile-method*
-  "The method as a lambda. ic! names a fresh inline-cache cell, inline! the
+  "The method as a lambda. ctx holds the class map :cls, :resolve, :ic!,
+  which names a fresh inline-cache cell, and :inline!, which gives the
   inlined procedure for a direct callee or nil."
-  [cls method resolve ic! inline!]
+  [{:keys [cls ic!] :as ctx} method]
   ;; the order matters: ic! cells are numbered as they're asked for, and
   ;; the guarded entries are known only once the blocks and the start are
   ;; emitted. version-defs is lazy and emits its copies inside blocks-body.
-  (let [plan (method-plan cls method resolve ic! inline!)
+  (let [plan (method-plan ctx method)
         emitted (emit-blocks plan)
         block-fns (block-defs plan emitted)
         versions (version-defs plan emitted)
