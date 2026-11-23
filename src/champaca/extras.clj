@@ -13,7 +13,8 @@
   relative to the names block), then the sorted names' UTF-8 bytes. A data
   frame before deflating: a part count (1 or 3), per part a length (-1 for
   nil) and the bytes."
-  (:require [clojure.java.io :as io])
+  (:require [clojure.java.io :as io]
+            [champaca.state :refer [state]])
   (:import (java.nio ByteBuffer)
            (java.io ByteArrayOutputStream RandomAccessFile)
            (java.util.zip Deflater Inflater)))
@@ -196,3 +197,30 @@
         (String. idx (int (+ names-at (.getInt bb r))) (int (.getInt bb (+ r 4))) "UTF-8")))))
 
 (defn close-extras! [h] (.close ^RandomAccessFile (:raf h)))
+
+;; champaca.link installs its stderr line and cache drop for a damaged entry,
+;; since cachedir, where those live, sits above this namespace
+(defonce damaged-entry-fn (atom nil))
+
+(defn- fault-in!
+  "name's entry from the extras into the class table, or nil, noting a name
+  the extras lack so it is searched once. A damaged entry runs the hook, then
+  throws."
+  [name]
+  (let [st @state h (:extras st)]
+    (when (and h (not (contains? (:extras-misses st) name)))
+      (if-let [found (try (extras-entry h name)
+                          (catch Exception ex
+                            (when-let [f @damaged-entry-fn] (f name ex))
+                            (throw ex)))]
+        (-> (swap! state #(-> % (update-in [:classes name] (fn [e] (or e found)))
+                              (update :lazy (fnil conj #{}) name)))
+            (get-in [:classes name]))
+        (do (swap! state update :extras-misses (fnil conj #{}) name) nil)))))
+
+(defn class-entry
+  "name's class table entry, or nil. An entry in memory answers; otherwise the
+  startup cache's extras are searched, and a hit goes into the table and :lazy
+  as a packed entry, for ensure-loaded! to register."
+  [name]
+  (or (get-in @state [:classes name]) (fault-in! name)))

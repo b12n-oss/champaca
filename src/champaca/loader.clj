@@ -17,6 +17,7 @@
             [champaca.cachedir :refer [cache-origin load-unit! record!]]
             [champaca.classfile :as cf]
             [champaca.classpath :refer [bytes-fp jar-path refuse-outside-layer!]]
+            [champaca.extras :refer [class-entry]]
             [champaca.libcache :refer [library-cache-keys restore-defined-class! restore-user-class!
                                        uncheckable-dep user-deps]]
             [champaca.link :refer [check-definition! class-map dotted final-sealed? link linkage-error
@@ -86,14 +87,15 @@
   (when-not (restore-user-class! cname)
     (when-let [info (timed :parse #(normalize cname))]
       (load-supertypes! info)
-      (when-not (get-in @state [:classes cname])
+      (when-not (class-entry cname)
         (link-and-register! cname info)))))
 
 (defn ensure-loaded! [cname]
   (refuse-outside-layer! cname)
+  (class-entry cname) ; faults an extras entry in, so :lazy sees it
   (cond
     (contains? (:lazy @state) cname) (register-lazy-class! cname)
-    (not (get-in @state [:classes cname])) (load-new-class! cname))
+    (not (class-entry cname)) (load-new-class! cname))
   cname)
 
 ;; the var, so a REPL redefinition of ensure-loaded! reaches class-info too
@@ -124,7 +126,7 @@
         n (if caller
             (str caller "$$Lambda/0x" (format "%016x" h))
             (str "champaca/$$Lambda$" (str/replace (first ifaces) "/" "$") "$" h))]
-    (if (get-in @state [:classes n])
+    (if (class-entry n)
       (ensure-loaded! n) ; an earlier run's, maybe not registered in this one yet
       (let [info (cond-> {:name n :super "java/lang/Object" :interfaces (vec ifaces) :flags 0x1011 :origin :jdk
                           :fields [{:name "fn" :desc "Ljava/lang/Object;" :flags 0x12 :static false}]
@@ -199,7 +201,7 @@
     (and (pos? (bit-and (:flags c) 0x0200)) (not= "java/lang/Object" (:super c)))
     (str "bad Interfaces must have java.lang.Object as superclass in class file " (or given (:name c)))
     (final-sealed? c) (str "bad PermittedSubclasses attribute in final class file " (or given (:name c)))
-    (and (not hidden?) (not renamed?) (get-in @state [:classes (:name c)])) (str "dup " (:name c))))
+    (and (not hidden?) (not renamed?) (class-entry (:name c))) (str "dup " (:name c))))
 
 (defn- defined-deps!
   "A defined class n's library cache dependencies from what its link and
@@ -277,7 +279,7 @@
   (let [bs (.getBytes ^String text "ISO-8859-1")
         fp (when (and cacheable? given (not internal)) (timed :fingerprint #(bytes-fp bs)))
         dj (when fp (defined-jar generated?))
-        answer (or (when (and fp (not (get-in @state [:classes given])))
+        answer (or (when (and fp (not (class-entry given)))
                      (restore-defined-class! given bs fp dj))
                    (let [c (parse-defined bs given)]
                      (or (definition-refusal c given hidden? (boolean internal))

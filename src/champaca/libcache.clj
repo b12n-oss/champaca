@@ -17,6 +17,7 @@
             [champaca.cachedir :refer [cache-origin cache-read-only? cache-unusable! delete-tree! load-unit!
                                        prune-cache-root! record! runtime-files stale-ms write-units!]]
             [champaca.classpath :refer [class-source layer-module note-class-entry! outside-boot-layer?]]
+            [champaca.extras :refer [class-entry]]
             [champaca.link :refer [ancestry ancestry-of-unlinked registration-text sealed-refused?]]
             [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed-fp thaw-entry
                                     packed-entry strip-for-cache]]
@@ -70,7 +71,7 @@
   "The :origin of n's class table entry (:jdk, :user, :defined, whatever it
   holds), :jdk for an entry still packed, nil when the table has none."
   [n]
-  (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))
+  (let [e (class-entry n)] (if (packed? e) :jdk (:origin e))))
 
 (defn- dep-value
   "What user-deps records for the class n: its fingerprint, :present (a
@@ -78,7 +79,7 @@
   class that needs nothing, or ::unchecked for one that can't be checked
   later."
   [n defined?]
-  (case (if (:preview (get-in @state [:classes n])) :preview (class-origin n))
+  (case (if (:preview (class-entry n)) :preview (class-origin n))
     ;; a class outside java.base is :layer, there only when the boot layer
     ;; holds its module (--limit-modules may leave it out of a later run,
     ;; outside-boot-layer?)
@@ -91,7 +92,7 @@
                (not= "java.base" (layer-module n)) :layer
                :else nil)
     :user (or (:fp (class-source n)) ::unchecked)
-    :defined (or (when defined? (get-in @state [:classes n :src-fp])) ::unchecked)
+    :defined (or (when defined? (:src-fp (class-entry n))) ::unchecked)
     ::unchecked))
 
 (defn user-deps
@@ -121,7 +122,7 @@
   "The first of names, or of their ancestry, that user-deps can't record a
   fingerprint for (why an entry isn't cached), or nil."
   [names defined?]
-  (let [e (fn [n] (get-in @state [:classes n]))]
+  (let [e (fn [n] (class-entry n))]
     (or (first (remove e names))
         (first (filter (fn [n] (let [x (e n)]
                                  (and (not (packed? x))
@@ -162,7 +163,7 @@
   [src info]
   (and (= (:fp src) (:src-fp info))
        (every? (fn [[d fp]]
-                 (let [e (get-in @state [:classes d])]
+                 (let [e (class-entry d)]
                    (case fp
                      :present (some? e)
                      :layer (not (outside-boot-layer? d))
@@ -180,7 +181,7 @@
   (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
     (ensure-loaded!* dep))
   (swap! state update :restored (fnil inc 0))
-  (when-not (get-in @state [:classes cname])
+  (when-not (class-entry cname)
     (swap! state assoc-in [:classes cname] info)
     (or (load-unit! (:cached-class info))
         (let [text (registration-text info)]
@@ -308,7 +309,7 @@
   mismatch."
   [d fp]
   (let [e (when-not (= fp :layer)
-            (or (get-in @state [:classes d])
+            (or (class-entry d)
                 (do (try (ensure-loaded!* d) (catch Exception _ nil))
                     (get-in @state [:classes d]))))]
     (cond (= fp :layer) (not (outside-boot-layer? d)) ; a JDK class outside java.base

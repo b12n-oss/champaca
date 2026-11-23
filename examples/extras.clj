@@ -12,7 +12,8 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
             [champaca.api :as ldk]
-            [champaca.extras :as x]))
+            [champaca.extras :as x]
+            [champaca.state :as st]))
 
 ;; the runner saves the startup cache after the tests, which needs the runtime
 (ldk/init!)
@@ -99,3 +100,47 @@
     (.delete (io/file dir (:dat h)))
     (is (= "c/D" (String. ^bytes (x/extras-entry h "c/D") "UTF-8")))
     (x/close-extras! h)))
+
+(defn- with-extras*
+  "Runs f with the state's extras over a temp dir holding names, the class
+  table and :lazy empty, and the old state put back after."
+  [names f]
+  (let [h (x/open-extras (write-names! names))
+        old @st/state]
+    (swap! st/state assoc :extras h :classes {} :lazy #{} :extras-misses #{})
+    (try (f)
+         (finally (reset! st/state old) (x/close-extras! h)))))
+
+(defmacro ^:private with-extras [names & body] `(with-extras* ~names (fn [] ~@body)))
+
+(deftest a-miss-in-memory-faults-in-from-the-extras
+  (with-extras ["x/Y"]
+    (is (some? (x/class-entry "x/Y")))
+    (is (contains? (:lazy @st/state) "x/Y"))
+    (is (some? (get-in @st/state [:classes "x/Y"])))))
+
+(deftest a-name-in-neither-is-searched-once
+  (with-extras ["x/Y"]
+    (is (nil? (x/class-entry "q/Absent")))
+    (is (contains? (:extras-misses @st/state) "q/Absent"))))
+
+(deftest an-entry-in-memory-wins
+  (with-extras ["x/Y"]
+    (swap! st/state assoc-in [:classes "x/Y"] {:name "x/Y" :origin :jdk})
+    (is (= {:name "x/Y" :origin :jdk} (x/class-entry "x/Y")))
+    (is (not (contains? (:lazy @st/state) "x/Y")))))
+
+(deftest a-damaged-entry-runs-the-hook-and-throws
+  (let [dir (write-names! ["x/Y"])
+        h (x/open-extras dir)
+        old @st/state
+        seen (atom nil)
+        saved @x/damaged-entry-fn]
+    ;; corrupt the data file in place: the handle holds it open
+    (let [dat (io/file dir (:dat h))]
+      (spit dat (apply str (repeat (.length dat) "z"))))
+    (swap! st/state assoc :extras h :classes {} :lazy #{} :extras-misses #{})
+    (reset! x/damaged-entry-fn (fn [n ex] (reset! seen [n (:extras (ex-data ex))])))
+    (try (is (thrown? Exception (x/class-entry "x/Y")))
+         (is (= ["x/Y" :damaged] @seen))
+         (finally (reset! x/damaged-entry-fn saved) (reset! st/state old) (x/close-extras! h)))))

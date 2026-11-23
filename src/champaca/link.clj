@@ -19,10 +19,27 @@
             [champaca.classpath :refer [bytes-fp class-bytes jdk-class-bytes outside-boot-layer? package-dir
                                         refuse-outside-layer! user-class-bytes]]
             [champaca.cgtext :as cgt]
+            [champaca.extras :as x]
             [champaca.state :refer [state timed *reads* ensure-loaded!* packed? unpack thaw-entry
                                     intern-keys intern-members]]))
 
 (declare ancestry-of-unlinked)
+
+(defn- discard-damaged-cache!
+  "Report a damaged entry for cname and drop the startup cache, or say it
+  can't be dropped when it's read-only."
+  [cname ex]
+  (binding [*out* *err*]
+    (println "champaca: discarding a damaged startup cache (bad entry for"
+             (str cname "):") (ex-message ex)))
+  (when-let [dir (:cache-dir @state)]
+    (if (cache-read-only? dir)
+      (binding [*out* *err*]
+        (println "champaca: the cache can't be written, so it can't be dropped either: rebuild or reinstall it (" (str dir) ")"))
+      (delete-tree! dir))))
+
+;; class-entry (champaca.extras) calls this for a damaged extras entry
+(reset! x/damaged-entry-fn discard-damaged-cache!)
 
 (defn- parse-entry
   "thaw-entry for one packed class entry. Damage inside an entry of an
@@ -32,14 +49,7 @@
   [cname e]
   (try (thaw-entry e)
        (catch Exception ex
-         (binding [*out* *err*]
-           (println "champaca: discarding a damaged startup cache (bad entry for"
-                    (str cname "):") (ex-message ex)))
-         (when-let [dir (:cache-dir @state)]
-           (if (cache-read-only? dir)
-             (binding [*out* *err*]
-               (println "champaca: the cache can't be written, so it can't be dropped either: rebuild or reinstall it (" (str dir) ")"))
-             (delete-tree! dir)))
+         (discard-damaged-cache! cname ex)
          (throw ex))))
 
 (defn thaw!
@@ -50,7 +60,7 @@
   assoc-in on the same entry is never overwritten."
   [cname]
   (when-let [r *reads*] (vswap! r conj cname))
-  (let [e (get-in @state [:classes cname])]
+  (let [e (x/class-entry cname)]
     (if (packed? e)
       (let [u (parse-entry cname e)]
         (-> (swap! state update-in [:classes cname] #(if (packed? %) u %))
