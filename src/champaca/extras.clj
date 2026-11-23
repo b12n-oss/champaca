@@ -17,6 +17,8 @@
             [champaca.state :refer [state packed? packed-entry]])
   (:import (java.nio ByteBuffer)
            (java.io ByteArrayOutputStream RandomAccessFile)
+           (java.nio.channels FileChannel OverlappingFileLockException)
+           (java.nio.file OpenOption StandardOpenOption)
            (java.util.zip Deflater Inflater)))
 
 (def ^:private magic (.getBytes "CXT1" "UTF-8"))
@@ -277,51 +279,42 @@
                                     (or (packed? v) (and (:cached-class v) (= :jdk (:origin v)) (not (:no-cache v)))))))
         classes))
 
-(defn- listing [^java.io.File d] (vec (sort (.list d))))
-(defn- stale? [^java.io.File d]
-  (and (.exists d) (< (.lastModified d) (- (System/currentTimeMillis) 60000))))
-
-(defn- steal-lock!
-  "Move a lock judged stale aside and delete it. seen is its listing, read
-  before its age, so a lock taken since has a fresh mtime and isn't judged.
-  One stealer's rename wins, and it deletes only a dir that still lists seen
-  and is still stale itself (a rename keeps the dir's mtime, so a fresh
-  lock, owned or not yet, never passes); anything else goes back."
-  [^java.io.File lock seen]
-  (let [aside (io/file (.getParentFile lock) (str (.getName lock) ".stale-" (System/nanoTime)))]
-    (when (.renameTo lock aside)
-      (if (and (= seen (listing aside)) (stale? aside))
-        (do (doseq [^java.io.File f (.listFiles aside)] (.delete f)) (.delete aside))
-        (.renameTo aside lock)))))
+(defn- file-locks?
+  "Whether this jolt's FileChannel locks hold between processes. They do
+  from 0.8.29, the release that also added jolt.host/build-id."
+  []
+  (some? (resolve 'jolt.host/build-id)))
 
 (defn- take-lock!
-  "Make the lock directory and put this taker's token in it, stealing one
-  older than a minute (a save that died holding it); the token, or nil after
-  5 s of trying. A token that can't be written (a stealer moved the dir
-  meanwhile) removes the dir, if it is still there and empty, and tries
-  again."
+  "Lock dir's extras.lock file, trying every 50 ms for up to 5 s: the open
+  channel holding the lock, or nil when another holder kept it throughout.
+  The OS drops a lock when its process dies, so a save that died holding it
+  blocks nobody. :unlocked on a jolt older than 0.8.29, whose FileChannel
+  can't lock; saves there go ahead unlocked, and two at once can lose one's
+  new entries for a later run to compile again."
   [^java.io.File lock]
-  (let [token (str "owner-" (System/nanoTime) "-" (rand-int Integer/MAX_VALUE))]
-    (loop [waited 0]
-      (if (.mkdir lock)
-        (let [t (try (when (.createNewFile (io/file lock token)) token)
-                     (catch Exception _ nil))]
-          (cond t t
-                (>= waited 5000) (do (.delete lock) nil)
-                :else (do (.delete lock) (recur (+ waited 50)))))
-        (if (>= waited 5000)
-          nil
-          (let [seen (listing lock)]
-            (if (stale? lock)
-              (steal-lock! lock seen)
-              (Thread/sleep 50))
-            (recur (+ waited 50))))))))
+  (if-not (file-locks?)
+    :unlocked
+    (let [ch (FileChannel/open (.toPath lock)
+                               (into-array OpenOption [StandardOpenOption/CREATE StandardOpenOption/WRITE]))
+          got? #(try (some? (.tryLock ch))
+                     ;; held by this process, outside save-lock
+                     (catch OverlappingFileLockException _ false))]
+      (try
+        (loop [waited 0]
+          (cond (got?) ch
+                (>= waited 5000) (do (.close ch) nil)
+                :else (do (Thread/sleep 50) (recur (+ waited 50)))))
+        (catch Throwable e (.close ch) (throw e))))))
 
 (defn- release-lock!
-  "Remove the lock only while it still holds token, so a lock another taker
-  stole and made its own stays."
-  [^java.io.File lock token]
-  (when (.delete (io/file lock token)) (.delete lock)))
+  "Close the lock's channel, which releases it."
+  [l]
+  (when (instance? FileChannel l) (.close ^FileChannel l)))
+
+;; one save at a time in this process: a FileChannel lock is per process, and
+;; a second tryLock from it throws
+(defonce ^:private save-lock (Object.))
 
 (defn- damaged-index!
   "One stderr line for a damaged extras.idx a save replaces, and the data
@@ -340,42 +333,41 @@
 (defn save-extras!
   "Rewrite dir's extras from the files as they are now and entries, this
   process's non-boot JDK class entries by name (a packed entry or a thawed
-  map), under the lock directory extras.lock. An entry this process holds as
-  a map, or one the files lack, is written from memory; any other is copied
-  as the files have it. Then this process reads the new files, and searches
-  again the names it missed. The wait for the lock, up to 5 s, runs under
-  the GIL; a lock not had by then skips the save (:extras-skipped, one stderr
-  line). A damaged index is replaced, not merged from. Known limits: three
-  takers inside one steal, or a release while the lock sits aside, can give
-  two holders, which loses one process's new entries for a later run to
-  compile again, as every save did before the extras."
+  map), under a FileChannel lock on extras.lock (take-lock!). An entry this
+  process holds as a map, or one the files lack, is written from memory; any
+  other is copied as the files have it. Then this process reads the new
+  files, and searches again the names it missed. The wait for the lock, up
+  to 5 s, runs under the GIL; a lock not had by then skips the save
+  (:extras-skipped, one stderr line). A damaged index is replaced, not
+  merged from."
   [dir entries]
-  (let [lock (io/file dir "extras.lock")
-        token (take-lock! lock)]
-    (if-not token
-      (do (swap! state update :extras-skipped (fnil inc 0))
-          (binding [*out* *err*]
-            (println "champaca: the startup cache's extras lock was held for 5 s, so this save keeps no new class entries (" (str lock) ")")))
-      (do
-        (try
-          (let [cur (try (open-extras dir)
-                         (catch Exception e
-                           (when-not (:extras (ex-data e)) (throw e))
-                           (damaged-index! dir e)))]
-            (try
-              (let [own (for [[n e] entries
-                              :when (or (map? e) (nil? cur) (nil? (extras-find cur n)))
-                              :let [p (cond (map? e) (packed-entry e) :else e)]]
-                          [n (entry->bytes p) (frame-len p)])
-                    copied (when cur
-                             (for [[i n] (map-indexed vector (extras-names cur)) :when (not (map? (get entries n)))]
-                               (into [n] (extras-raw cur i))))
-                    dat (write-extras! dir (concat own copied))]
-                (when (and cur (not= dat (:dat cur)))
-                  (.delete (io/file dir (:dat cur)))))
-              (finally (when cur (close-extras! cur)))))
-          (finally (release-lock! lock token)))
-        (let [h (open-extras dir)
-              [old] (swap-vals! state #(-> % (assoc :extras h) (dissoc :extras-misses)))]
-          (when-let [o (:extras old)] (close-extras! o)))))
+  (locking save-lock
+    (let [lock (io/file dir "extras.lock")
+          held (take-lock! lock)]
+      (if-not held
+        (do (swap! state update :extras-skipped (fnil inc 0))
+            (binding [*out* *err*]
+              (println "champaca: the startup cache's extras lock was held for 5 s, so this save keeps no new class entries (" (str lock) ")")))
+        (do
+          (try
+            (let [cur (try (open-extras dir)
+                           (catch Exception e
+                             (when-not (:extras (ex-data e)) (throw e))
+                             (damaged-index! dir e)))]
+              (try
+                (let [own (for [[n e] entries
+                                :when (or (map? e) (nil? cur) (nil? (extras-find cur n)))
+                                :let [p (cond (map? e) (packed-entry e) :else e)]]
+                            [n (entry->bytes p) (frame-len p)])
+                      copied (when cur
+                               (for [[i n] (map-indexed vector (extras-names cur)) :when (not (map? (get entries n)))]
+                                 (into [n] (extras-raw cur i))))
+                      dat (write-extras! dir (concat own copied))]
+                  (when (and cur (not= dat (:dat cur)))
+                    (.delete (io/file dir (:dat cur)))))
+                (finally (when cur (close-extras! cur)))))
+            (finally (release-lock! held)))
+          (let [h (open-extras dir)
+                [old] (swap-vals! state #(-> % (assoc :extras h) (dissoc :extras-misses)))]
+            (when-let [o (:extras old)] (close-extras! o))))))
     nil))
