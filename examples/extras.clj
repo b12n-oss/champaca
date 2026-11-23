@@ -254,3 +254,28 @@
       (is (= ["e/F"] (vec (x/extras-names (:extras @st/state)))))
       (x/close-extras! (:extras @st/state))
       (finally (reset! st/state old)))))
+
+(defn- empty-lock! [dir old?]
+  (let [lock (io/file dir "extras.lock")]
+    (.mkdir lock)
+    (when old? (.setLastModified lock (- (System/currentTimeMillis) 120000)))
+    lock))
+
+(deftest a-steal-that-moved-a-fresh-empty-lock-puts-it-back
+  ;; a taker between its mkdir and its token: judged by an empty listing
+  ;; seen on the dead lock it replaced, but its own dir is fresh
+  (let [dir (temp-dir)
+        lock (empty-lock! dir false)]
+    (#'x/steal-lock! lock [])
+    (is (.isDirectory lock))
+    (is (= ["extras.lock"] (vec (.list (io/file dir)))))))
+
+(deftest a-stale-empty-lock-is-stolen
+  (let [dir (temp-dir)
+        lock (empty-lock! dir true)]
+    (#'x/steal-lock! lock [])
+    (is (empty? (vec (.list (io/file dir)))))
+    (let [token (#'x/take-lock! lock)]
+      (is (some? token))
+      (#'x/release-lock! lock token)
+      (is (not (.exists lock))))))

@@ -266,29 +266,45 @@
                                     (or (packed? v) (and (:cached-class v) (= :jdk (:origin v)) (not (:no-cache v)))))))
         classes))
 
+(defn- listing [^java.io.File d] (vec (sort (.list d))))
+(defn- stale? [^java.io.File d]
+  (and (.exists d) (< (.lastModified d) (- (System/currentTimeMillis) 60000))))
+
 (defn- steal-lock!
-  "Move a lock judged stale (its listing was seen) aside and delete it. One
-  stealer's rename wins; one that moved a lock taken since (its listing
-  differs) puts it back."
+  "Move a lock judged stale aside and delete it. seen is its listing, read
+  before its age, so a lock taken since has a fresh mtime and isn't judged.
+  One stealer's rename wins, and it deletes only a dir that still lists seen
+  and is still stale itself (a rename keeps the dir's mtime, so a fresh
+  lock, owned or not yet, never passes); anything else goes back."
   [^java.io.File lock seen]
   (let [aside (io/file (.getParentFile lock) (str (.getName lock) ".stale-" (System/nanoTime)))]
     (when (.renameTo lock aside)
-      (if (= seen (vec (sort (.list aside))))
+      (if (and (= seen (listing aside)) (stale? aside))
         (do (doseq [^java.io.File f (.listFiles aside)] (.delete f)) (.delete aside))
         (.renameTo aside lock)))))
 
 (defn- take-lock!
   "Make the lock directory and put this taker's token in it, stealing one
   older than a minute (a save that died holding it); the token, or nil after
-  5 s of trying."
+  5 s of trying. A token that can't be written (a stealer moved the dir
+  meanwhile) removes the dir, if it is still there and empty, and tries
+  again."
   [^java.io.File lock]
   (let [token (str "owner-" (System/nanoTime) "-" (rand-int Integer/MAX_VALUE))]
     (loop [waited 0]
-      (cond (.mkdir lock) (if (.createNewFile (io/file lock token)) token (do (.delete lock) nil))
-            (>= waited 5000) nil
-            (and (.exists lock) (< (.lastModified lock) (- (System/currentTimeMillis) 60000)))
-            (do (steal-lock! lock (vec (sort (.list lock)))) (recur (+ waited 50)))
-            :else (do (Thread/sleep 50) (recur (+ waited 50)))))))
+      (if (.mkdir lock)
+        (let [t (try (when (.createNewFile (io/file lock token)) token)
+                     (catch Exception _ nil))]
+          (cond t t
+                (>= waited 5000) (do (.delete lock) nil)
+                :else (do (.delete lock) (recur (+ waited 50)))))
+        (if (>= waited 5000)
+          nil
+          (let [seen (listing lock)]
+            (if (stale? lock)
+              (steal-lock! lock seen)
+              (Thread/sleep 50))
+            (recur (+ waited 50))))))))
 
 (defn- release-lock!
   "Remove the lock only while it still holds token, so a lock another taker
@@ -318,7 +334,10 @@
   as the files have it. Then this process reads the new files, and searches
   again the names it missed. The wait for the lock, up to 5 s, runs under
   the GIL; a lock not had by then skips the save (:extras-skipped, one stderr
-  line). A damaged index is replaced, not merged from."
+  line). A damaged index is replaced, not merged from. Known limits: three
+  takers inside one steal, or a release while the lock sits aside, can give
+  two holders, which loses one process's new entries for a later run to
+  compile again, as every save did before the extras."
   [dir entries]
   (let [lock (io/file dir "extras.lock")
         token (take-lock! lock)]
