@@ -150,7 +150,7 @@ The seventh run, back on `base-v1.jar`, gets `Base` from that jar's own file, wh
 
 The directory name is a hash of everything the compiled code depends on. That's the JDK (its `release` file plus the size and mtime of `lib/modules`), the translator's own source, the jolt build (`jolt.host/build-id`, which names the exact build, so a release and a source build of one tag get separate caches; a jolt older than 0.8.29 gives its `*jolt-version*` instead) and the Chez Scheme version under it, and whether `CHAMPACA_BT` is on. In an [app bundle](app-bundles.md), where a copy changes every mtime, a CRC-32 of the image's index stands in for the size and mtime; the index names every resource with its offset and sizes. Change any of them and the next run builds a fresh cache in a new directory.
 
-The runtime and the compiled methods call jolt's own procedures, so two jolt builds never share a cache, even on one Chez. Before 0.8.29 the key has only the version string, so two builds that report the same version do share one. The price is a cold start after every jolt upgrade, and after every new local build. Run `jolt warm` once after switching to get the common JDK paths back.
+The runtime and the compiled methods call jolt's own procedures, so from jolt 0.8.29 on, two jolt builds never share a cache, even on one Chez. The price is a cold start after every jolt upgrade, and after every new local build. An older jolt is keyed by its version string alone, so two builds that report the same version share one cache and a rebuild doesn't start cold. Run `jolt warm` once after switching to get the common JDK paths back.
 
 Two switches control it:
 
