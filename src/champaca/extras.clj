@@ -266,16 +266,49 @@
                                     (or (packed? v) (and (:cached-class v) (= :jdk (:origin v)) (not (:no-cache v)))))))
         classes))
 
+(defn- steal-lock!
+  "Move a lock judged stale (its listing was seen) aside and delete it. One
+  stealer's rename wins; one that moved a lock taken since (its listing
+  differs) puts it back."
+  [^java.io.File lock seen]
+  (let [aside (io/file (.getParentFile lock) (str (.getName lock) ".stale-" (System/nanoTime)))]
+    (when (.renameTo lock aside)
+      (if (= seen (vec (sort (.list aside))))
+        (do (doseq [^java.io.File f (.listFiles aside)] (.delete f)) (.delete aside))
+        (.renameTo aside lock)))))
+
 (defn- take-lock!
-  "Make the lock directory, removing one older than a minute (a save that
-  died holding it); false after 5 s of trying."
+  "Make the lock directory and put this taker's token in it, stealing one
+  older than a minute (a save that died holding it); the token, or nil after
+  5 s of trying."
   [^java.io.File lock]
-  (loop [waited 0]
-    (cond (.mkdir lock) true
-          (>= waited 5000) false
-          (and (.exists lock) (< (.lastModified lock) (- (System/currentTimeMillis) 60000)))
-          (do (.delete lock) (recur (+ waited 50)))
-          :else (do (Thread/sleep 50) (recur (+ waited 50))))))
+  (let [token (str "owner-" (System/nanoTime) "-" (rand-int Integer/MAX_VALUE))]
+    (loop [waited 0]
+      (cond (.mkdir lock) (if (.createNewFile (io/file lock token)) token (do (.delete lock) nil))
+            (>= waited 5000) nil
+            (and (.exists lock) (< (.lastModified lock) (- (System/currentTimeMillis) 60000)))
+            (do (steal-lock! lock (vec (sort (.list lock)))) (recur (+ waited 50)))
+            :else (do (Thread/sleep 50) (recur (+ waited 50)))))))
+
+(defn- release-lock!
+  "Remove the lock only while it still holds token, so a lock another taker
+  stole and made its own stays."
+  [^java.io.File lock token]
+  (when (.delete (io/file lock token)) (.delete lock)))
+
+(defn- damaged-index!
+  "One stderr line for a damaged extras.idx a save replaces, and the data
+  file it names deleted when the name can be read. nil, for no index."
+  [dir ex]
+  (binding [*out* *err*]
+    (println "champaca: replacing a damaged startup cache extras index:" (ex-message ex)))
+  (try (let [idx (java.nio.file.Files/readAllBytes (.toPath (io/file dir "extras.idx")))
+             dl (when (>= (alength idx) 12) (.getInt (ByteBuffer/wrap idx) 8))]
+         (when (and dl (< 0 dl 256) (<= (+ 12 dl) (alength idx)))
+           (let [dat (String. idx 12 (int dl) "UTF-8")]
+             (when (re-matches #"extras-\d+\.dat" dat) (.delete (io/file dir dat))))))
+       (catch Exception _ nil))
+  nil)
 
 (defn save-extras!
   "Rewrite dir's extras from the files as they are now and entries, this
@@ -283,15 +316,22 @@
   map), under the lock directory extras.lock. An entry this process holds as
   a map, or one the files lack, is written from memory; any other is copied
   as the files have it. Then this process reads the new files, and searches
-  again the names it missed. A lock not had within 5 s skips the save
-  (:extras-skipped), and a damaged index is replaced, not merged from."
+  again the names it missed. The wait for the lock, up to 5 s, runs under
+  the GIL; a lock not had by then skips the save (:extras-skipped, one stderr
+  line). A damaged index is replaced, not merged from."
   [dir entries]
-  (let [lock (io/file dir "extras.lock")]
-    (if-not (take-lock! lock)
-      (swap! state update :extras-skipped (fnil inc 0))
+  (let [lock (io/file dir "extras.lock")
+        token (take-lock! lock)]
+    (if-not token
+      (do (swap! state update :extras-skipped (fnil inc 0))
+          (binding [*out* *err*]
+            (println "champaca: the startup cache's extras lock was held for 5 s, so this save keeps no new class entries (" (str lock) ")")))
       (do
         (try
-          (let [cur (try (open-extras dir) (catch Exception e (when-not (:extras (ex-data e)) (throw e))))]
+          (let [cur (try (open-extras dir)
+                         (catch Exception e
+                           (when-not (:extras (ex-data e)) (throw e))
+                           (damaged-index! dir e)))]
             (try
               (let [own (for [[n e] entries
                               :when (or (map? e) (nil? cur) (nil? (extras-find cur n)))
@@ -304,7 +344,7 @@
                 (when (and cur (not= dat (:dat cur)))
                   (.delete (io/file dir (:dat cur)))))
               (finally (when cur (close-extras! cur)))))
-          (finally (.delete lock)))
+          (finally (release-lock! lock token)))
         (let [h (open-extras dir)
               [old] (swap-vals! state #(-> % (assoc :extras h) (dissoc :extras-misses)))]
           (when-let [o (:extras old)] (close-extras! o)))))

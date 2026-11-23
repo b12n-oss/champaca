@@ -413,17 +413,18 @@
         (let [{:keys [classes lazy]} (timed :cache-read-state #(img/read-image (str img-file)))]
           (when-not (and (map? classes) (set? lazy))
             (throw (ex-info "not a champaca state image" {})))
+          ;; before boot.so: a damaged index must fail before its code is in
+          (swap! state assoc :extras (timed :cache-read-extras #(open-extras dir)))
           ;; the names in the class table as read: its entries are what
           ;; boot.so registers, and the lazy ones (dump-classes!). The names
           ;; alone: the map itself would pin every packed entry for the run
           (swap! state assoc :classes classes :lazy lazy :boot-classes (set (keys classes)))
           (timed :cache-load-code #(s/call "load" (str so)))
-          (swap! state assoc :extras (timed :cache-read-extras #(open-extras dir)))
           true)
         ;; a damaged cache would fail every run the same way: drop it, boot
         ;; cold, and the cold boot writes a new one
         (catch Exception e
-          (swap! state assoc :classes {} :lazy #{} :boot-classes #{})
+          (swap! state assoc :classes {} :lazy #{} :boot-classes #{} :extras nil)
           (if (cache-read-only? dir)
             (cache-unusable! dir (str "its copy doesn't load (" (ex-message e) ")"))
             (do (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))

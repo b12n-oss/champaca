@@ -189,3 +189,68 @@
       (is (= 1 (:extras-skipped @st/state)))
       (is (nil? (:extras @st/state)))
       (finally (reset! st/state old)))))
+
+(deftest extras-entries-pass-maps-through-raw
+  (let [m {:name "a/B" :origin :jdk :cached-class ["extra-1.so" 0 1]}
+        p (utf8 "c/D")
+        got (x/extras-entries {:classes {"a/B" m "c/D" p
+                                         "e/F" (assoc m :no-cache true)
+                                         "g/H" (assoc m :origin :user)
+                                         "i/J" (dissoc m :cached-class)
+                                         "k/L" m}
+                               :boot-classes #{"k/L"}})]
+    (is (= #{"a/B" "c/D"} (set (keys got))))
+    (is (identical? m (get got "a/B")))
+    (is (identical? p (get got "c/D")))))
+
+(defn- lock-with! [dir token old?]
+  (let [lock (io/file dir "extras.lock")]
+    (.mkdir lock)
+    (.createNewFile (io/file lock token))
+    (when old? (.setLastModified lock (- (System/currentTimeMillis) 120000)))
+    lock))
+
+(deftest a-stale-lock-is-stolen-and-the-save-goes-ahead
+  (let [dir (write-names! ["a/B"])
+        old @st/state]
+    (lock-with! dir "owner-dead" true)
+    (swap! st/state assoc :extras nil :extras-skipped 0)
+    (try
+      (x/save-extras! dir {"e/F" (utf8 "e/F")})
+      (is (= 0 (:extras-skipped @st/state)))
+      (is (= ["a/B" "e/F"] (vec (x/extras-names (:extras @st/state)))))
+      (is (empty? (filter #(.startsWith ^String % "extras.lock") (.list (io/file dir)))))
+      (x/close-extras! (:extras @st/state))
+      (finally (reset! st/state old)))))
+
+(deftest a-steal-that-moved-a-fresh-lock-puts-it-back
+  (let [dir (temp-dir)
+        lock (lock-with! dir "owner-live" false)]
+    ;; judged stale while it held owner-dead, taken by owner-live since
+    (#'x/steal-lock! lock ["owner-dead"])
+    (is (.exists (io/file lock "owner-live")))
+    (is (= ["extras.lock"] (vec (.list (io/file dir)))))))
+
+(deftest a-release-leaves-a-lock-another-taker-holds
+  (let [dir (temp-dir)
+        lock (lock-with! dir "owner-other" false)]
+    (#'x/release-lock! lock "owner-mine")
+    (is (.exists (io/file lock "owner-other")))))
+
+(deftest a-damaged-index-at-save-is-replaced-and-its-data-file-dropped
+  (let [dir (write-names! ["a/B" "c/D"])
+        h (x/open-extras dir)
+        dat (:dat h)
+        idx (io/file dir "extras.idx")
+        bs (java.nio.file.Files/readAllBytes (.toPath idx))
+        old @st/state]
+    (x/close-extras! h)
+    ;; cut the names block short: the header and data file name still read
+    (with-open [o (io/output-stream idx)] (.write o bs 0 (- (alength bs) 2)))
+    (swap! st/state assoc :extras nil)
+    (try
+      (x/save-extras! dir {"e/F" (utf8 "e/F")})
+      (is (not (.exists (io/file dir dat))))
+      (is (= ["e/F"] (vec (x/extras-names (:extras @st/state)))))
+      (x/close-extras! (:extras @st/state))
+      (finally (reset! st/state old)))))

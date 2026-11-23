@@ -545,11 +545,14 @@
                     ;; (b) a program's warm run loads and compiles the same whether
                     ;; or not another program saved between; (c) a run after that
                     ;; compiles no more than it did; (d) two programs saving at once
-                    ;; both keep their entries. Nothing to check with the cache off
+                    ;; both keep their entries; (e) a damaged extras.idx, or one whose
+                    ;; data file is gone, is dropped with the cache as a damaged
+                    ;; state.img is, and the run still gives its output. Nothing to
+                    ;; check with the cache off
                     tiered-fails (if (= "off" (System/getenv "CHAMPACA_CACHE"))
                                    (do (println "PASS" "the startup cache's two tiers (skipped, CHAMPACA_CACHE=off)") [])
-                                   (let [caches (vec (repeatedly 6 (fn [] (str (fs/create-temp-dir {:prefix "champaca-tiered-"})))))
-                                         [ca cp cq cd c1 c2] caches
+                                   (let [caches (vec (repeatedly 8 (fn [] (str (fs/create-temp-dir {:prefix "champaca-tiered-"})))))
+                                         [ca cp cq cd c1 c2 ce cm] caches
                                          start (fn [cache m]
                                                  (process/process {:out :string :err :string
                                                                    :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_NPE_STRICT" "1" "CHAMPACA_STATS" "1"}}
@@ -588,8 +591,18 @@
                                                      want (into (names-of c1) (names-of c2))
                                                      got (names-of cd)
                                                      d (when-not (and solo both (seq want) (every? got want))
-                                                         (str "(d) programs ran " (boolean (and solo both)) ", " (count (remove got want)) " of " (count want) " names missing"))]
-                                                 (remove nil? [a b c d]))
+                                                         (str "(d) programs ran " (boolean (and solo both)) ", " (count (remove got want)) " of " (count want) " names missing"))
+                                                     damage (fn [cache what spoil!]
+                                                              (when (fill cache ["Hello" "CollectionsCheck"])
+                                                                (spoil! (key-dir cache))
+                                                                (let [r (ch cache "CollectionsCheck")]
+                                                                  (when-not (and (same? "CollectionsCheck" r)
+                                                                                 (str/includes? (str (:err r)) "discarding a damaged startup cache")
+                                                                                 (seq (names-of cache)))
+                                                                    (str "(e) " what ": exit " (:exit r) ", " (count (names-of cache)) " names after")))))
+                                                     e1 (damage ce "garbage extras.idx" (fn [k] (spit (str k "/extras.idx") "CXT1garbagegarbage")))
+                                                     e2 (damage cm "data file gone" (fn [k] (doseq [f (fs/glob k "extras-*.dat")] (fs/delete f))))]
+                                                 (remove nil? [a b c d e1 e2]))
                                                (finally (doseq [cache caches] (fs/delete-tree cache))))]
                                      (println (if (seq bad) "FAIL" "PASS") "the startup cache's two tiers: state.img holds boot's entries, the extras the rest"
                                               (str/join "; " bad))
