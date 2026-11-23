@@ -17,6 +17,7 @@
             [champaca.cachedir :refer [cache-origin cache-read-only? cache-unusable! delete-tree! load-unit!
                                        prune-cache-root! record! runtime-files stale-ms write-units!]]
             [champaca.classpath :refer [class-source layer-module note-class-entry! outside-boot-layer?]]
+            [champaca.extras :refer [class-entry close-extras! extras-entries open-extras save-extras!]]
             [champaca.link :refer [ancestry ancestry-of-unlinked registration-text sealed-refused?]]
             [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed-fp thaw-entry
                                     packed-entry strip-for-cache]]
@@ -70,7 +71,7 @@
   "The :origin of n's class table entry (:jdk, :user, :defined, whatever it
   holds), :jdk for an entry still packed, nil when the table has none."
   [n]
-  (let [e (get-in @state [:classes n])] (if (packed? e) :jdk (:origin e))))
+  (let [e (class-entry n)] (if (packed? e) :jdk (:origin e))))
 
 (defn- dep-value
   "What user-deps records for the class n: its fingerprint, :present (a
@@ -78,7 +79,7 @@
   class that needs nothing, or ::unchecked for one that can't be checked
   later."
   [n defined?]
-  (case (if (:preview (get-in @state [:classes n])) :preview (class-origin n))
+  (case (if (:preview (class-entry n)) :preview (class-origin n))
     ;; a class outside java.base is :layer, there only when the boot layer
     ;; holds its module (--limit-modules may leave it out of a later run,
     ;; outside-boot-layer?)
@@ -91,7 +92,7 @@
                (not= "java.base" (layer-module n)) :layer
                :else nil)
     :user (or (:fp (class-source n)) ::unchecked)
-    :defined (or (when defined? (get-in @state [:classes n :src-fp])) ::unchecked)
+    :defined (or (when defined? (:src-fp (class-entry n))) ::unchecked)
     ::unchecked))
 
 (defn user-deps
@@ -121,7 +122,7 @@
   "The first of names, or of their ancestry, that user-deps can't record a
   fingerprint for (why an entry isn't cached), or nil."
   [names defined?]
-  (let [e (fn [n] (get-in @state [:classes n]))]
+  (let [e (fn [n] (class-entry n))]
     (or (first (remove e names))
         (first (filter (fn [n] (let [x (e n)]
                                  (and (not (packed? x))
@@ -162,7 +163,7 @@
   [src info]
   (and (= (:fp src) (:src-fp info))
        (every? (fn [[d fp]]
-                 (let [e (get-in @state [:classes d])]
+                 (let [e (class-entry d)]
                    (case fp
                      :present (some? e)
                      :layer (not (outside-boot-layer? d))
@@ -180,7 +181,7 @@
   (doseq [dep (remove nil? (cons (:super info) (:interfaces info)))]
     (ensure-loaded!* dep))
   (swap! state update :restored (fnil inc 0))
-  (when-not (get-in @state [:classes cname])
+  (when-not (class-entry cname)
     (swap! state assoc-in [:classes cname] info)
     (or (load-unit! (:cached-class info))
         (let [text (registration-text info)]
@@ -308,7 +309,7 @@
   mismatch."
   [d fp]
   (let [e (when-not (= fp :layer)
-            (or (get-in @state [:classes d])
+            (or (class-entry d)
                 (do (try (ensure-loaded!* d) (catch Exception _ nil))
                     (get-in @state [:classes d]))))]
     (cond (= fp :layer) (not (outside-boot-layer? d)) ; a JDK class outside java.base
@@ -360,22 +361,13 @@
           [k (packed-entry info)])))
 
 (defn- dump-classes!
-  "state.img: each class entry as edn text, plus the set of classes whose
-  registration sits in a generation, so a load knows what is lazy without
-  parsing anything. A JDK class goes in only when its registration is cached
-  somewhere: boot.so (:boot-classes, the names of the class table as this
-  process read it, or of a cold boot's registrations) or a generation
-  (:cached-class). A
-  later run takes any other entry for registered and fails with \"class
-  not registered\": one whose save failed, so that a later save in the
-  process found its map and not its code, or one linked and not yet
-  recorded. Left out, it loads again in the run that needs it."
+  "state.img: the entries of the classes boot.so registers (:boot-classes,
+  the names of the class table as this process read it, or of a cold boot's
+  registrations) as edn text, with an empty :lazy, since none of those is
+  lazy. The rest go to the extras (save-extras!)."
   [img]
-  (let [{:keys [classes lazy boot-classes]} @state
-        classes (into {} (filter (fn [[k v]] (or (packed? v) (contains? boot-classes k) (:cached-class v)))) classes)]
-    (img/dump! (str img) {:lazy (into (set lazy)
-                                      (for [[k v] classes :when (and (map? v) (= :jdk (:origin v)) (:cached-class v))] k))
-                          :classes (strip-for-cache classes)})))
+  (let [{:keys [classes boot-classes]} @state]
+    (img/dump! (str img) {:lazy #{} :classes (strip-for-cache (select-keys classes boot-classes))})))
 
 (defn write-cache!
   "Compile the recorded boot forms to boot.so and save the class table to
@@ -421,6 +413,8 @@
         (let [{:keys [classes lazy]} (timed :cache-read-state #(img/read-image (str img-file)))]
           (when-not (and (map? classes) (set? lazy))
             (throw (ex-info "not a champaca state image" {})))
+          ;; before boot.so: a damaged index must fail before its code is in
+          (swap! state assoc :extras (timed :cache-read-extras #(open-extras dir)))
           ;; the names in the class table as read: its entries are what
           ;; boot.so registers, and the lazy ones (dump-classes!). The names
           ;; alone: the map itself would pin every packed entry for the run
@@ -430,7 +424,8 @@
         ;; a damaged cache would fail every run the same way: drop it, boot
         ;; cold, and the cold boot writes a new one
         (catch Exception e
-          (swap! state assoc :classes {} :lazy #{} :boot-classes #{})
+          (try (some-> (:extras @state) close-extras!) (catch Exception _ nil))
+          (swap! state assoc :classes {} :lazy #{} :boot-classes #{} :extras nil)
           (if (cache-read-only? dir)
             (cache-unusable! dir (str "its copy doesn't load (" (ex-message e) ")"))
             (do (binding [*out* *err*] (println "champaca: discarding a damaged startup cache:" (ex-message e)))
@@ -461,7 +456,8 @@
 
 (defn- save-units!
   "Write the recorded units as one more extra-N.so in dir, note where each
-  sits, and rewrite state.img (written beside, then renamed)."
+  sits, and rewrite state.img and the extras (each written beside, then
+  renamed)."
   [dir units]
   (vreset! (:recording @state) [])
   (let [stamp (System/currentTimeMillis)
@@ -476,7 +472,10 @@
       (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
              [file start (- end start)]))
     (dump-classes! img-tmp)
-    (.renameTo img-tmp (io/file dir "state.img"))))
+    (.renameTo img-tmp (io/file dir "state.img"))
+    (try (save-extras! dir (extras-entries @state))
+         (catch Exception e   ; the generation is written: only the extras merge is lost
+           (binding [*out* *err*] (println "champaca: the startup cache's extras were not saved:" (ex-message e)))))))
 
 (defn- save-library-file!
   "Rewrite jar's library file (written beside, then renamed). A failure

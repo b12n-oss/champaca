@@ -176,11 +176,12 @@ A jolt fn passed as a single-method interface becomes an instance of a generated
 | `src/champaca/lambdas.clj` | lambda sites and bootstrap constants |
 | `src/champaca/main.clj` | the `java`-like launcher: reads the command line and runs the main class |
 | `src/champaca/state.clj` | the state the others share (one atom), tracing and profiling, and packing cache entries |
+| `src/champaca/extras.clj` | the startup cache's extras: the class entries later programs added, in `extras.idx` and a data file, read one at a time on a miss by `class-entry`, and merged on a save under a lock |
 | `src/champaca/launcher.clj` | the `java`-like command line: options, `-D` properties, module options, the class path |
 | `src/champaca/classpath.clj` | where class and resource bytes come from: the JDK image, class path entries and their manifests, boot layer lookups, resource URLs |
 | `src/champaca/cachedir.clj` | where the caches live and what keys them: the cache root and key directory, the translator fingerprint, read-only caches and a bundle's user copy, pruning, compiled units |
 | `src/champaca/link.clj` | the class table's readers and the linker: resolution of fields and methods, the class map with its field layout and vtable (interface defaults included), the registration text the runtime evaluates, HotSpot's checks of a definition |
-| `src/champaca/libcache.clj` | the caches that outlive a process: the library cache (classes from jars, directories and a program's own loaders, restored while what they depend on is unchanged) and the startup cache (`boot.so`, `state.img` and the generations later saves add) |
+| `src/champaca/libcache.clj` | the caches that outlive a process: the library cache (classes from jars, directories and a program's own loaders, restored while what they depend on is unchanged) and the startup cache (`boot.so`, `state.img` with the classes boot registers, the extras and the generations later saves add) |
 | `src/champaca/loader.clj` | loads and defines classes (from the class path, the JDK's runtime image or a loader's `defineClass`), and the synthetic classes behind lambdas |
 | `src/champaca/jit.clj` | compiles methods on first call, and answers the runtime's hooks for NPE messages, stack frames' lines and constant pool entries |
 | `src/champaca/boot.clj` | boots the JDK: loads the runtime, installs its hooks and runs the JVM's boot before main, from the startup cache when it can |

@@ -13,6 +13,7 @@
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [jolt.scheme :as s]
+            [champaca.extras :refer [class-entry]]
             [champaca.jimage :as ji]
             [champaca.state :refer [state env packed?]])
   (:import [java.util.zip ZipFile]))
@@ -58,7 +59,7 @@
   that the boot layer leaves out (outside-boot-layer?): a startup cache made
   under another layer, or champaca's boot, may hold it."
   [cname]
-  (let [e (get-in @state [:classes cname])]
+  (let [e (class-entry cname)]
     (when (and e (or (packed? e) (= :jdk (:origin e))) (outside-boot-layer? cname))
       (throw (ex-info (str "class not found: " cname) {:class cname})))))
 
