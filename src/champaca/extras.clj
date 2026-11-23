@@ -63,7 +63,7 @@
         (loop [off 0]
           (when (< off inflated-len)
             (let [n (.inflate inf raw off (- inflated-len off))]
-              (when (and (zero? n) (or (.finished inf) (.needsInput inf)))
+              (when (and (zero? n) (or (.finished inf) (.needsInput inf) (.needsDictionary inf)))
                 (damaged! "short entry"))
               (recur (+ off n)))))
         (let [bb (ByteBuffer/wrap raw)
@@ -71,6 +71,7 @@
               part (fn []
                      (let [n (.getInt bb)]
                        (when-not (neg? n)
+                         (when (> n (.remaining bb)) (damaged! "part longer than the entry"))
                          (let [p (byte-array n)] (.get bb p) p))))]
           (when-not (contains? #{1 3} cnt) (damaged! "bad part count"))
           (let [parts (vec (repeatedly cnt part))] (if (= cnt 1) (first parts) parts))))
@@ -130,7 +131,9 @@
         base (- names-at (* rec-size n))]
     (loop [i 0 end 0]
       (if (< i n)
-        (let [[no nl dof dl il] (map #(.getInt bb (+ base (* rec-size i) (* 4 %))) (range 5))]
+        (let [r (+ base (* rec-size i))
+              no (.getInt bb r) nl (.getInt bb (+ r 4)) dof (.getInt bb (+ r 8))
+              dl (.getInt bb (+ r 12)) il (.getInt bb (+ r 16))]
           (when-not (and (<= 0 no) (<= 0 nl) (<= (+ no nl) names-len)
                          (<= 0 dof) (<= 0 dl) (<= (+ dof dl) dat-len) (<= 0 il))
             (damaged! "record out of bounds"))
@@ -219,6 +222,14 @@
 ;; since cachedir, where those live, sits above this namespace
 (defonce damaged-entry-fn (atom nil))
 
+;; one stderr line per process for a read error that is not damage
+(defonce ^:private failure-noted (atom false))
+
+(defn- note-failure! [ex]
+  (when (compare-and-set! failure-noted false true)
+    (binding [*out* *err*]
+      (println "champaca: reading the startup cache's extras failed:" (ex-message ex)))))
+
 (defn- fault-in!
   "name's entry from the extras into the class table, or nil, noting a name
   the extras lack so it is searched once. A damaged entry runs the hook, then
@@ -234,7 +245,7 @@
                                ;; a save swapped in new files and closed h: search those
                                (not (identical? h (:extras @state))) ::retry
                                ;; an I/O error: a miss this time, not remembered
-                               :else ::failed)))]
+                               :else (do (note-failure! ex) ::failed))))]
         (cond
           (= ::retry found) (fault-in! name)
           (= ::failed found) nil
@@ -354,7 +365,7 @@
             (try
               (let [own (for [[n e] entries
                               :when (or (map? e) (nil? cur) (nil? (extras-find cur n)))
-                              :let [p (cond (map? e) (packed-entry e) (string? e) (.getBytes ^String e "UTF-8") :else e)]]
+                              :let [p (cond (map? e) (packed-entry e) :else e)]]
                           [n (entry->bytes p) (frame-len p)])
                     copied (when cur
                              (for [[i n] (map-indexed vector (extras-names cur)) :when (not (map? (get entries n)))]

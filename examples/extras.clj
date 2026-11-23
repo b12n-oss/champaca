@@ -95,6 +95,22 @@
         (is (damaged? #(x/extras-entry h "a/B")))
         (x/close-extras! h)))))
 
+(defn- deflate [^bytes raw]
+  (let [d (java.util.zip.Deflater. 1) out (java.io.ByteArrayOutputStream.) buf (byte-array 256)]
+    (.setInput d raw) (.finish d)
+    (loop [] (when-not (.finished d) (.write out buf 0 (.deflate d buf)) (recur)))
+    (.end d) (.toByteArray out)))
+
+(deftest a-corrupt-entry-throws-damaged-and-does-not-hang-or-allocate
+  ;; a zlib header with FDICT set: inflate returns 0, needing a dictionary
+  (let [fdict (byte-array (map unchecked-byte [0x78 0x20 0 0 0 1 1 2 3 4 5 6]))]
+    (is (damaged? #(x/bytes->entry fdict 20))))
+  ;; a part length far beyond the entry, which would allocate 2 GB
+  (let [bb (java.nio.ByteBuffer/allocate 12)
+        _ (doto bb (.putInt 1) (.putInt 0x7ffffff0) (.putInt 0))
+        raw (.array bb)]
+    (is (damaged? #(x/bytes->entry (deflate raw) (alength raw))))))
+
 (deftest a-deleted-data-file-still-reads
   (let [dir (write-names! ["a/B" "c/D"]) h (x/open-extras dir)]
     (.delete (io/file dir (:dat h)))

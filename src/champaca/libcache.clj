@@ -17,7 +17,7 @@
             [champaca.cachedir :refer [cache-origin cache-read-only? cache-unusable! delete-tree! load-unit!
                                        prune-cache-root! record! runtime-files stale-ms write-units!]]
             [champaca.classpath :refer [class-source layer-module note-class-entry! outside-boot-layer?]]
-            [champaca.extras :refer [class-entry extras-entries open-extras save-extras!]]
+            [champaca.extras :refer [class-entry close-extras! extras-entries open-extras save-extras!]]
             [champaca.link :refer [ancestry ancestry-of-unlinked registration-text sealed-refused?]]
             [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed-fp thaw-entry
                                     packed-entry strip-for-cache]]
@@ -424,6 +424,7 @@
         ;; a damaged cache would fail every run the same way: drop it, boot
         ;; cold, and the cold boot writes a new one
         (catch Exception e
+          (try (some-> (:extras @state) close-extras!) (catch Exception _ nil))
           (swap! state assoc :classes {} :lazy #{} :boot-classes #{} :extras nil)
           (if (cache-read-only? dir)
             (cache-unusable! dir (str "its copy doesn't load (" (ex-message e) ")"))
@@ -472,7 +473,9 @@
              [file start (- end start)]))
     (dump-classes! img-tmp)
     (.renameTo img-tmp (io/file dir "state.img"))
-    (save-extras! dir (extras-entries @state))))
+    (try (save-extras! dir (extras-entries @state))
+         (catch Exception e   ; the generation is written: only the extras merge is lost
+           (binding [*out* *err*] (println "champaca: the startup cache's extras were not saved:" (ex-message e)))))))
 
 (defn- save-library-file!
   "Rewrite jar's library file (written beside, then renamed). A failure

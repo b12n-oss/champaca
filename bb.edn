@@ -543,8 +543,11 @@
                     ;; boot's entries and extras.idx the rest (champaca.extras), each
                     ;; check on caches of its own. (a) state.img has nothing lazy;
                     ;; (b) a program's warm run loads and compiles the same whether
-                    ;; or not another program saved between; (c) a run after that
-                    ;; compiles no more than it did; (d) two programs saving at once
+                    ;; or not another program saved between, and the warm run compiles
+                    ;; no method (without that, a broken lookup recompiling everything
+                    ;; on both sides would still be equal); (c) a run after that
+                    ;; compiles no more than it did (a regression count only: the
+                    ;; written-from-memory rule is covered by examples/extras.clj); (d) two programs saving at once
                     ;; both keep their entries; (e) a damaged extras.idx, or one whose
                     ;; data file is gone, is dropped with the cache as a damaged
                     ;; state.img is, and the run still gives its output. Nothing to
@@ -578,10 +581,10 @@
                                                      p (mapv (fn [m] (ch cp m)) ["CollectionsCheck" "CollectionsCheck"])
                                                      q (mapv (fn [m] (ch cq m)) ["CollectionsCheck" "EncoderCheck" "CollectionsCheck" "CollectionsCheck"])
                                                      ok-runs (and (every? (fn [r] (same? "CollectionsCheck" r)) (concat p [(q 0) (q 2) (q 3)])) (same? "EncoderCheck" (q 1)))
-                                                     b (when-not (and ok-runs (= (counts (p 1)) (counts (q 2))))
-                                                         (str "(b) last runs' [compiled units] " (counts (p 1)) " alone, " (counts (q 2)) " after EncoderCheck"))
+                                                     b (when-not (and ok-runs (zero? (first (counts (p 1)))) (= (counts (p 1)) (counts (q 2))))
+                                                         (str "(b) last runs' [compiled units] " (counts (p 1)) " alone, " (counts (q 2)) " after EncoderCheck, want 0 compiled"))
                                                      c (when-not (and ok-runs (= (first (counts (q 3))) (first (counts (q 2)))))
-                                                         (str "(c) methods compiled " (first (counts (q 2))) " then " (first (counts (q 3)))))
+                                                         (str "(c) regression: methods compiled " (first (counts (q 2))) " then " (first (counts (q 3)))))
                                                      solo (and (fill c1 ["Hello" "CollectionsCheck"]) (fill c2 ["Hello" "EncoderCheck"]))
                                                      both (when (fill cd ["Hello"])
                                                             (let [ps [(start cd "CollectionsCheck") (start cd "EncoderCheck")]
