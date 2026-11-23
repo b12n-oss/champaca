@@ -40,6 +40,7 @@ jolt test      # every test program against the JVM, plus the examples
   `modes` takes groups separated by spaces, one job each (`-f modes="cold,warm bt"`), and a group without `cold` starts on an empty cache, so it runs cold anyway. `repeat` (up to 20) runs each job that many times, which is how you catch a rare hang. A failed job names its failing programs in annotations and keeps its logs, with any hang's sample, as an artifact.
 - Docs ship with the change. Put a new behavior in the guide page that covers its area, and a new gap in [limitations](limitations.md).
 - The pull request says what changed and how it was checked: which tests, which comparison, which numbers.
+- [CodeRabbit](https://coderabbit.ai) reviews each pull request and posts a walkthrough comment with its findings. It's advisory, since main requires only `ci ok`, but answer or resolve what it raises. `.coderabbit.yaml` holds its settings, and you can talk to it in the pull request with `@coderabbitai`.
 - Commit messages and the pull request description carry no AI assistant attribution (a `Co-Authored-By: Claude` line, a session link, a "Generated with" footer). CI checks with `tools/attributioncheck.sh`, which you can run yourself: `sh tools/attributioncheck.sh origin/main..HEAD`.
 
 Writing a change with an LLM's help is fine. You own what you submit either way, so it goes through the same review, tests and gates as any other change. [AI_POLICY.md](../../AI_POLICY.md) states the project's stance in full.
