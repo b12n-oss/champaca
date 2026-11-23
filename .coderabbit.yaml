@@ -1,0 +1,99 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# CodeRabbit reviews pull requests here, free for open source. It is advisory:
+# main requires only `ci ok`, so a review never blocks a merge.
+#
+# Commits and pull request descriptions stay the author's own
+# (attribution.yml): the summary goes in CodeRabbit's walkthrough comment, not
+# the description, and nothing pushes commits to a branch.
+language: en-US
+tone_instructions: >-
+  Be direct and brief. Lead with the bug and the input that triggers it.
+  Skip praise, restating the diff, and style nits a formatter would fix.
+
+reviews:
+  profile: chill
+  high_level_summary: false
+  high_level_summary_in_walkthrough: true
+  poem: false
+  in_progress_fortune: false
+  sequence_diagrams: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_review:
+    enabled: true
+    drafts: false
+  finishing_touches:
+    unit_tests:
+      enabled: false
+    simplify:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+
+  # Java test programs and their recorded JVM output are fixtures: an
+  # .expected file is what HotSpot printed, so a review can't improve it.
+  path_filters:
+    - "!**/*.expected"
+    - "!**/*.args"
+    - "!**/*.options"
+    - "!target/**"
+    - "!docs/images/**"
+
+  path_instructions:
+    - path: "src/champaca/**/*.clj"
+      instructions: >-
+        jolt Clojure (jolt-lang/jolt on Chez Scheme), not JVM Clojure. It
+        translates JVM bytecode to Chez Scheme text that is compiled at run
+        time, re-implementing OpenLDK. Look for wrong JVM semantics (int
+        overflow, null, exceptions, class init order), races between Java
+        threads, files written without a temp name and rename, and catches
+        that hide a failure. In jolt, Scheme #f comes back as false, so a
+        test must use boolean, not some?. Keep each file under 500 lines.
+    - path: "resources/champaca/**/*.ss"
+      instructions: >-
+        Chez Scheme runtime, loaded in the order runtime-files gives, into
+        jolt's top-level environment. Flag a top-level define of a name jolt
+        already binds, a Java-shaped global defined at top level instead of
+        through define-global!, a macro used before it is defined, set! on a
+        local in a hot path (Chez boxes it), and a hot-path call to a Chez
+        library procedure by name where the #3% form would do. Keep each
+        file under 500 code lines.
+    - path: "bb.edn"
+      instructions: >-
+        Task file read by both jolt and babashka's EDN reader: no #"regex",
+        no @deref, no #(...). Checks in jolt test print PASS or FAIL lines
+        and must stay correct with CHAMPACA_CACHE=off, CHAMPACA_BT=1 and
+        CHAMPACA_STRUCTURED=1.
+    - path: "test/java/**/*.java"
+      instructions: >-
+        Test programs. Their output is compared with a .expected file that
+        HotSpot produced, so output must be deterministic (no hash order,
+        timing or addresses) and file names ASCII.
+    - path: "**/*.md"
+      instructions: >-
+        Plain, direct prose. Flag em-dashes, claims without a measured
+        number or a source, and commands that wouldn't run as written. A
+        CHANGELOG entry goes under the right Keep a Changelog heading.
+
+# Context from this repository only. Install the GitHub App on champaca
+# alone ("Only select repositories"); these keep its learnings, issue and PR
+# lookups and repository links to this repo even if the install widens.
+knowledge_base:
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
+  automatic_linking_mode: disabled
+  linked_repositories: []
+  mcp:
+    usage: disabled
+
+chat:
+  auto_reply: true

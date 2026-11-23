@@ -245,6 +245,9 @@ The first public version. Champaca is still experimental: the
 Behavior that now follows the JVM where champaca did something else, which a
 program may notice, and changes to the tasks.
 
+- Pull requests get an advisory review from CodeRabbit, set up in
+  `.coderabbit.yaml`. It doesn't edit pull request descriptions or push
+  commits, and main still requires only `ci ok`.
 - The startup cache's `state.img` holds only the classes `boot.so` registers.
   The class entries that later programs add live in `extras.idx` and an
   `extras-<stamp>.dat` beside it, and a run reads one when it first needs the
