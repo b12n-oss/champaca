@@ -14,7 +14,7 @@
   frame before deflating: a part count (1 or 3), per part a length (-1 for
   nil) and the bytes."
   (:require [clojure.java.io :as io]
-            [champaca.state :refer [state]])
+            [champaca.state :refer [state packed? packed-entry]])
   (:import (java.nio ByteBuffer)
            (java.io ByteArrayOutputStream RandomAccessFile)
            (java.util.zip Deflater Inflater)))
@@ -24,9 +24,14 @@
 (defn- damaged! [why]
   (throw (ex-info (str "damaged extras index: " why) {:extras :damaged})))
 
+(defn- frame-len
+  "A framed entry's size: the inflated length its record keeps."
+  [e]
+  (+ 4 (reduce + (map #(+ 4 (if % (alength ^bytes %) 0)) (if (vector? e) e [e])))))
+
 (defn- frame [e]
   (let [parts (if (vector? e) e [e])
-        bb (ByteBuffer/allocate (+ 4 (reduce + (map #(+ 4 (if % (alength ^bytes %) 0)) parts))))]
+        bb (ByteBuffer/allocate (frame-len e))]
     (.putInt bb (count parts))
     (doseq [^bytes p parts]
       (if p
@@ -134,8 +139,11 @@
 
 (defn open-extras
   "A handle for dir's extras.idx, or nil when there is none. The data file is
-  opened once. Throws :damaged when either file is short or inconsistent."
-  [dir]
+  opened once. Throws :damaged when either file is short or inconsistent. A
+  data file gone because a save replaced the index meanwhile reads the new
+  index, up to tries times."
+  ([dir] (open-extras dir 3))
+  ([dir tries]
   (let [f (io/file dir "extras.idx")]
     (when (.exists f)
       (let [idx (java.nio.file.Files/readAllBytes (.toPath f))
@@ -149,10 +157,14 @@
         (let [dat (String. idx 12 (int dl) "UTF-8") base (+ 12 dl)
               names-at (+ base (* rec-size n))
               raf (try (RandomAccessFile. (io/file dir dat) "r")
-                       (catch java.io.IOException _ (damaged! "no data file")))]
-          (try (check-records! idx n names-at raf)
-               (catch Throwable e (.close raf) (throw e)))
-          {:idx idx :n n :dat dat :raf raf :base base :names-at names-at})))))
+                       (catch java.io.IOException _ nil))]
+          (cond
+            raf (do (try (check-records! idx n names-at raf)
+                         (catch Throwable e (.close raf) (throw e)))
+                    {:idx idx :n n :dat dat :raf raf :base base :names-at names-at})
+            (and (> tries 1) (not= (seq idx) (some-> (when (.exists f) (java.nio.file.Files/readAllBytes (.toPath f))) seq)))
+            (open-extras dir (dec tries))
+            :else (damaged! "no data file"))))))))
 
 (defn- rec-base [h i] (+ (:base h) (* rec-size i)))
 
@@ -196,7 +208,12 @@
       (let [r (rec-base h i)]
         (String. idx (int (+ names-at (.getInt bb r))) (int (.getInt bb (+ r 4))) "UTF-8")))))
 
-(defn close-extras! [h] (.close ^RandomAccessFile (:raf h)))
+(defn close-extras!
+  "Close h's data file, under the lock extras-raw reads it with, so no read is
+  cut off partway; a later read through h throws, which fault-in! takes for
+  a handle a save replaced."
+  [h]
+  (let [^RandomAccessFile raf (:raf h)] (locking raf (.close raf))))
 
 ;; champaca.link installs its stderr line and cache drop for a damaged entry,
 ;; since cachedir, where those live, sits above this namespace
@@ -205,18 +222,29 @@
 (defn- fault-in!
   "name's entry from the extras into the class table, or nil, noting a name
   the extras lack so it is searched once. A damaged entry runs the hook, then
-  throws."
+  throws; any other read error is a miss not remembered, or, when a save
+  swapped the handle meanwhile, a search of the new one."
   [name]
   (let [st @state h (:extras st)]
     (when (and h (not (contains? (:extras-misses st) name)))
-      (if-let [found (try (extras-entry h name)
-                          (catch Exception ex
-                            (when-let [f @damaged-entry-fn] (f name ex))
-                            (throw ex)))]
-        (-> (swap! state #(-> % (update-in [:classes name] (fn [e] (or e found)))
-                              (update :lazy (fnil conj #{}) name)))
-            (get-in [:classes name]))
-        (do (swap! state update :extras-misses (fnil conj #{}) name) nil)))))
+      (let [found (try (extras-entry h name)
+                       (catch Exception ex
+                         (cond (= :damaged (:extras (ex-data ex)))
+                               (do (when-let [f @damaged-entry-fn] (f name ex)) (throw ex))
+                               ;; a save swapped in new files and closed h: search those
+                               (not (identical? h (:extras @state))) ::retry
+                               ;; an I/O error: a miss this time, not remembered
+                               :else ::failed)))]
+        (cond
+          (= ::retry found) (fault-in! name)
+          (= ::failed found) nil
+          (nil? found) (do (swap! state update :extras-misses (fnil conj #{}) name) nil)
+          ;; into :lazy only when this swap put it in the table, not a racing thread
+          :else
+          (-> (swap! state #(if (get-in % [:classes name])
+                              %
+                              (-> % (assoc-in [:classes name] found) (update :lazy (fnil conj #{}) name))))
+              (get-in [:classes name])))))))
 
 (defn class-entry
   "name's class table entry, or nil. An entry in memory answers; otherwise the
@@ -224,3 +252,60 @@
   as a packed entry, for ensure-loaded! to register."
   [name]
   (or (get-in @state [:classes name]) (fault-in! name)))
+
+(defn extras-entries
+  "The non-boot class entries of st's table the extras keep, as st holds them
+  (save-extras! packs a map): a JDK class only when its registration sits in
+  a generation (:cached-class). A later run takes any other entry for
+  registered and fails with \"class not registered\": one whose save
+  failed, so that a later save in the process found its map and not its
+  code, or one linked and not yet recorded. Left out, it loads again in the
+  run that needs it. A packed entry is kept as it is (strip-for-cache)."
+  [{:keys [classes boot-classes]}]
+  (into {} (filter (fn [[k v]] (and (not (contains? boot-classes k))
+                                    (or (packed? v) (and (:cached-class v) (= :jdk (:origin v)) (not (:no-cache v)))))))
+        classes))
+
+(defn- take-lock!
+  "Make the lock directory, removing one older than a minute (a save that
+  died holding it); false after 5 s of trying."
+  [^java.io.File lock]
+  (loop [waited 0]
+    (cond (.mkdir lock) true
+          (>= waited 5000) false
+          (and (.exists lock) (< (.lastModified lock) (- (System/currentTimeMillis) 60000)))
+          (do (.delete lock) (recur (+ waited 50)))
+          :else (do (Thread/sleep 50) (recur (+ waited 50))))))
+
+(defn save-extras!
+  "Rewrite dir's extras from the files as they are now and entries, this
+  process's non-boot JDK class entries by name (a packed entry or a thawed
+  map), under the lock directory extras.lock. An entry this process holds as
+  a map, or one the files lack, is written from memory; any other is copied
+  as the files have it. Then this process reads the new files, and searches
+  again the names it missed. A lock not had within 5 s skips the save
+  (:extras-skipped), and a damaged index is replaced, not merged from."
+  [dir entries]
+  (let [lock (io/file dir "extras.lock")]
+    (if-not (take-lock! lock)
+      (swap! state update :extras-skipped (fnil inc 0))
+      (do
+        (try
+          (let [cur (try (open-extras dir) (catch Exception e (when-not (:extras (ex-data e)) (throw e))))]
+            (try
+              (let [own (for [[n e] entries
+                              :when (or (map? e) (nil? cur) (nil? (extras-find cur n)))
+                              :let [p (cond (map? e) (packed-entry e) (string? e) (.getBytes ^String e "UTF-8") :else e)]]
+                          [n (entry->bytes p) (frame-len p)])
+                    copied (when cur
+                             (for [[i n] (map-indexed vector (extras-names cur)) :when (not (map? (get entries n)))]
+                               (into [n] (extras-raw cur i))))
+                    dat (write-extras! dir (concat own copied))]
+                (when (and cur (not= dat (:dat cur)))
+                  (.delete (io/file dir (:dat cur)))))
+              (finally (when cur (close-extras! cur)))))
+          (finally (.delete lock)))
+        (let [h (open-extras dir)
+              [old] (swap-vals! state #(-> % (assoc :extras h) (dissoc :extras-misses)))]
+          (when-let [o (:extras old)] (close-extras! o)))))
+    nil))

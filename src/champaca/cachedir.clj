@@ -143,16 +143,21 @@
 
 (defn- seed-id
   "What a bundle's key directory d holds, as far as a user copy of it needs to
-  know: state.img's CRC-32 and size, boot.so's size and the generations' names
-  (all written only by a build or a save), nil when d has no cache."
+  know: state.img's and extras.idx's CRC-32 and size, boot.so's size and the
+  generations' names (all written only by a build or a save), nil when d has
+  no cache."
   [^java.io.File d]
-  (let [img (io/file d "state.img") so (io/file d "boot.so")]
+  (let [img (io/file d "state.img") so (io/file d "boot.so")
+        crc (fn [^java.io.File f]
+              (if (.isFile f)
+                (let [c (java.util.zip.CRC32.)
+                      bs (with-open [in (io/input-stream f)] (.readAllBytes in))]
+                  (.update c bs 0 (count bs))
+                  (str (.getValue c) ":" (count bs)))
+                "-"))]
     (when (and (.isFile img) (.isFile so))
-      (let [c (java.util.zip.CRC32.)
-            bs (with-open [in (io/input-stream img)] (.readAllBytes in))]
-        (.update c bs 0 (count bs))
-        (str (.getValue c) ":" (count bs) ":" (.length so) ":"
-             (str/join "," (sort (filter #(str/starts-with? % "extra-") (map #(.getName ^java.io.File %) (.listFiles d))))))))))
+      (str (crc img) ":" (.length so) ":" (crc (io/file d "extras.idx")) ":"
+           (str/join "," (sort (filter #(str/starts-with? % "extra-") (map #(.getName ^java.io.File %) (.listFiles d)))))))))
 
 (defn- copy-tree! [^java.io.File from ^java.io.File to]
   (doseq [^java.io.File f (file-seq from)

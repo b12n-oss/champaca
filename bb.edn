@@ -539,6 +539,61 @@
                                           (finally (fs/delete-tree cache)))]
                                  (println (if ok "PASS" "FAIL") "a warm boot's new classes reach the startup cache (EncoderCheck)")
                                  (if ok [] ["boot generation"]))
+                    ;; the startup cache's class table in two tiers: state.img keeps
+                    ;; boot's entries and extras.idx the rest (champaca.extras), each
+                    ;; check on caches of its own. (a) state.img has nothing lazy;
+                    ;; (b) a program's warm run loads and compiles the same whether
+                    ;; or not another program saved between; (c) a run after that
+                    ;; compiles no more than it did; (d) two programs saving at once
+                    ;; both keep their entries. Nothing to check with the cache off
+                    tiered-fails (if (= "off" (System/getenv "CHAMPACA_CACHE"))
+                                   (do (println "PASS" "the startup cache's two tiers (skipped, CHAMPACA_CACHE=off)") [])
+                                   (let [caches (vec (repeatedly 6 (fn [] (str (fs/create-temp-dir {:prefix "champaca-tiered-"})))))
+                                         [ca cp cq cd c1 c2] caches
+                                         start (fn [cache m]
+                                                 (process/process {:out :string :err :string
+                                                                   :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_NPE_STRICT" "1" "CHAMPACA_STATS" "1"}}
+                                                                  (jolt-bin) "-M" "-m" "champaca.main" "target/classes" m))
+                                         ch (fn [cache m]
+                                              (run-limited 300 {:label (str "tiered-" m) :err :string
+                                                                :extra-env {"CHAMPACA_CACHE_DIR" cache "CHAMPACA_NPE_STRICT" "1" "CHAMPACA_STATS" "1"}}
+                                                           (jolt-bin) "-M" "-m" "champaca.main" "target/classes" m))
+                                         same? (fn [m r] (and (zero? (:exit r)) (= (:out r) (slurp (str "test/java/" m ".expected")))))
+                                         ;; [methods compiled, cached units loaded] from the end-of-run stats line
+                                         counts (fn [r] (mapv parse-long (rest (last (re-seq (re-pattern "(\\d+) methods compiled .*, (\\d+) cached units loaded") (str (:err r)))))))
+                                         key-dir (fn [cache] (some-> (first (fs/glob cache "*/state.img")) fs/parent str))
+                                         jolt-e (fn [code] (let [r (run-limited 120 {:label "tiered-read" :err :string} (jolt-bin) "-M" "-e" code)]
+                                                             (when (zero? (:exit r)) (edn/read-string (:out r)))))
+                                         lazy-of (fn [cache] (jolt-e (str "(require '[jolt.image :as img]) (prn (:lazy (img/read-image " (pr-str (str (key-dir cache) "/state.img")) ")))")))
+                                         names-of (fn [cache] (set (jolt-e (str "(require '[champaca.extras :as x]) (let [h (x/open-extras (clojure.java.io/file " (pr-str (key-dir cache)) "))]"
+                                                                                " (prn (if h (vec (x/extras-names h)) [])))"))))
+                                         fill (fn [cache ms] (every? (fn [m] (same? m (ch cache m))) ms))
+                                         bad (try
+                                               (let [a (when-not (and (fill ca ["Hello" "CollectionsCheck" "EncoderCheck"])
+                                                                      (= #{} (lazy-of ca)) (some-> (key-dir ca) (str "/extras.idx") fs/exists?))
+                                                         (str "(a) state.img's :lazy holds " (count (lazy-of ca)) " names, extras.idx " (some-> (key-dir ca) (str "/extras.idx") fs/exists?)))
+                                                     p (mapv (fn [m] (ch cp m)) ["CollectionsCheck" "CollectionsCheck"])
+                                                     q (mapv (fn [m] (ch cq m)) ["CollectionsCheck" "EncoderCheck" "CollectionsCheck" "CollectionsCheck"])
+                                                     ok-runs (and (every? (fn [r] (same? "CollectionsCheck" r)) (concat p [(q 0) (q 2) (q 3)])) (same? "EncoderCheck" (q 1)))
+                                                     b (when-not (and ok-runs (= (counts (p 1)) (counts (q 2))))
+                                                         (str "(b) last runs' [compiled units] " (counts (p 1)) " alone, " (counts (q 2)) " after EncoderCheck"))
+                                                     c (when-not (and ok-runs (= (first (counts (q 3))) (first (counts (q 2)))))
+                                                         (str "(c) methods compiled " (first (counts (q 2))) " then " (first (counts (q 3)))))
+                                                     solo (and (fill c1 ["Hello" "CollectionsCheck"]) (fill c2 ["Hello" "EncoderCheck"]))
+                                                     both (when (fill cd ["Hello"])
+                                                            (let [ps [(start cd "CollectionsCheck") (start cd "EncoderCheck")]
+                                                                  rs (mapv (fn [pr] (deref pr 300000 :timed-out)) ps)]
+                                                              (when (some keyword? rs) (doseq [pr ps] (process/destroy-tree pr)))
+                                                              (and (not-any? keyword? rs) (same? "CollectionsCheck" (rs 0)) (same? "EncoderCheck" (rs 1)))))
+                                                     want (into (names-of c1) (names-of c2))
+                                                     got (names-of cd)
+                                                     d (when-not (and solo both (seq want) (every? got want))
+                                                         (str "(d) programs ran " (boolean (and solo both)) ", " (count (remove got want)) " of " (count want) " names missing"))]
+                                                 (remove nil? [a b c d]))
+                                               (finally (doseq [cache caches] (fs/delete-tree cache))))]
+                                     (println (if (seq bad) "FAIL" "PASS") "the startup cache's two tiers: state.img holds boot's entries, the extras the rest"
+                                              (str/join "; " bad))
+                                     (if (seq bad) ["tiered class table"] [])))
                     ;; structured method code (CHAMPACA_STRUCTURED=1, structure.ss): a few
                     ;; programs on a cache of their own, cold and then the first one warm,
                     ;; and the pass's own counters to show it ran. The whole suite under
@@ -1052,8 +1107,8 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails structured-fails save-fails signal-fails heap-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
-                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails tiered-fails structured-fails save-fails signal-fails heap-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "tiered class table" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
                                   (map (fn [i] (str "libcache-def-" i)) (range 1 13))

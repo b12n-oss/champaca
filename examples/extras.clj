@@ -144,3 +144,48 @@
     (try (is (thrown? Exception (x/class-entry "x/Y")))
          (is (= ["x/Y" :damaged] @seen))
          (finally (reset! x/damaged-entry-fn saved) (reset! st/state old) (x/close-extras! h)))))
+
+(deftest link-installs-the-damaged-entry-hook
+  (is (some? @x/damaged-entry-fn)))
+
+(deftest a-read-through-a-closed-handle-is-a-miss-not-damage
+  (let [seen (atom nil) saved @x/damaged-entry-fn]
+    (reset! x/damaged-entry-fn (fn [n _] (reset! seen n)))
+    (try
+      (with-extras ["x/Y"]
+        (x/close-extras! (:extras @st/state))
+        (is (nil? (x/class-entry "x/Y")))
+        (is (nil? @seen))
+        (is (not (contains? (:extras-misses @st/state) "x/Y"))))
+      (finally (reset! x/damaged-entry-fn saved)))))
+
+(deftest a-save-merges-with-the-files-and-swaps-them-in
+  (let [dir (write-names! ["a/B" "c/D"])
+        before (x/open-extras dir)
+        old @st/state
+        m {:name "a/B" :origin :jdk}]
+    (x/close-extras! before)
+    (swap! st/state assoc :extras nil :extras-misses #{"e/F"})
+    (try
+      ;; a/B held as a map is written from memory, e/F is new, c/D copied
+      (x/save-extras! dir {"a/B" m "e/F" (utf8 "e/F")})
+      (let [h (:extras @st/state)]
+        (is (= ["a/B" "c/D" "e/F"] (vec (x/extras-names h))))
+        (is (= (seq (st/packed-entry m)) (seq (x/extras-entry h "a/B"))))
+        (is (= "c/D" (String. ^bytes (x/extras-entry h "c/D") "UTF-8")))
+        (is (empty? (:extras-misses @st/state)))
+        (is (not (.exists (io/file dir (:dat before)))))
+        (is (not (.exists (io/file dir "extras.lock"))))
+        (x/close-extras! h))
+      (finally (reset! st/state old)))))
+
+(deftest a-save-that-cant-take-the-lock-is-skipped
+  (let [dir (write-names! ["a/B"])
+        old @st/state]
+    (.mkdir (io/file dir "extras.lock"))
+    (swap! st/state assoc :extras nil :extras-skipped 0)
+    (try
+      (x/save-extras! dir {"e/F" (utf8 "e/F")})
+      (is (= 1 (:extras-skipped @st/state)))
+      (is (nil? (:extras @st/state)))
+      (finally (reset! st/state old)))))

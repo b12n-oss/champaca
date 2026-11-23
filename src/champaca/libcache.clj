@@ -17,7 +17,7 @@
             [champaca.cachedir :refer [cache-origin cache-read-only? cache-unusable! delete-tree! load-unit!
                                        prune-cache-root! record! runtime-files stale-ms write-units!]]
             [champaca.classpath :refer [class-source layer-module note-class-entry! outside-boot-layer?]]
-            [champaca.extras :refer [class-entry]]
+            [champaca.extras :refer [class-entry extras-entries open-extras save-extras!]]
             [champaca.link :refer [ancestry ancestry-of-unlinked registration-text sealed-refused?]]
             [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed-fp thaw-entry
                                     packed-entry strip-for-cache]]
@@ -361,22 +361,13 @@
           [k (packed-entry info)])))
 
 (defn- dump-classes!
-  "state.img: each class entry as edn text, plus the set of classes whose
-  registration sits in a generation, so a load knows what is lazy without
-  parsing anything. A JDK class goes in only when its registration is cached
-  somewhere: boot.so (:boot-classes, the names of the class table as this
-  process read it, or of a cold boot's registrations) or a generation
-  (:cached-class). A
-  later run takes any other entry for registered and fails with \"class
-  not registered\": one whose save failed, so that a later save in the
-  process found its map and not its code, or one linked and not yet
-  recorded. Left out, it loads again in the run that needs it."
+  "state.img: the entries of the classes boot.so registers (:boot-classes,
+  the names of the class table as this process read it, or of a cold boot's
+  registrations) as edn text, with an empty :lazy, since none of those is
+  lazy. The rest go to the extras (save-extras!)."
   [img]
-  (let [{:keys [classes lazy boot-classes]} @state
-        classes (into {} (filter (fn [[k v]] (or (packed? v) (contains? boot-classes k) (:cached-class v)))) classes)]
-    (img/dump! (str img) {:lazy (into (set lazy)
-                                      (for [[k v] classes :when (and (map? v) (= :jdk (:origin v)) (:cached-class v))] k))
-                          :classes (strip-for-cache classes)})))
+  (let [{:keys [classes boot-classes]} @state]
+    (img/dump! (str img) {:lazy #{} :classes (strip-for-cache (select-keys classes boot-classes))})))
 
 (defn write-cache!
   "Compile the recorded boot forms to boot.so and save the class table to
@@ -427,6 +418,7 @@
           ;; alone: the map itself would pin every packed entry for the run
           (swap! state assoc :classes classes :lazy lazy :boot-classes (set (keys classes)))
           (timed :cache-load-code #(s/call "load" (str so)))
+          (swap! state assoc :extras (timed :cache-read-extras #(open-extras dir)))
           true)
         ;; a damaged cache would fail every run the same way: drop it, boot
         ;; cold, and the cold boot writes a new one
@@ -462,7 +454,8 @@
 
 (defn- save-units!
   "Write the recorded units as one more extra-N.so in dir, note where each
-  sits, and rewrite state.img (written beside, then renamed)."
+  sits, and rewrite state.img and the extras (each written beside, then
+  renamed)."
   [dir units]
   (vreset! (:recording @state) [])
   (let [stamp (System/currentTimeMillis)
@@ -477,7 +470,8 @@
       (swap! state assoc-in (if k [:classes cname :cached-methods k] [:classes cname :cached-class])
              [file start (- end start)]))
     (dump-classes! img-tmp)
-    (.renameTo img-tmp (io/file dir "state.img"))))
+    (.renameTo img-tmp (io/file dir "state.img"))
+    (save-extras! dir (extras-entries @state))))
 
 (defn- save-library-file!
   "Rewrite jar's library file (written beside, then renamed). A failure
