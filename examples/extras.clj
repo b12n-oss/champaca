@@ -21,6 +21,18 @@
 (defn- temp-dir []
   (str (java.nio.file.Files/createTempDirectory "extras" (make-array java.nio.file.attribute.FileAttribute 0))))
 
+(defn- lock-channel ^java.nio.channels.FileChannel [dir]
+  (java.nio.channels.FileChannel/open
+   (.toPath (io/file dir "extras.lock"))
+   (into-array java.nio.file.OpenOption [java.nio.file.StandardOpenOption/CREATE
+                                         java.nio.file.StandardOpenOption/WRITE])))
+
+(defn- lock-free?
+  "Whether this process can lock dir's extras.lock now: no save left it held."
+  [dir]
+  (with-open [ch (lock-channel dir)]
+    (some? (.tryLock ch))))
+
 (defn- utf8 [^String s] (.getBytes s "UTF-8"))
 
 (defn- inflated-len [e]
@@ -191,20 +203,24 @@
         (is (= "c/D" (String. ^bytes (x/extras-entry h "c/D") "UTF-8")))
         (is (empty? (:extras-misses @st/state)))
         (is (not (.exists (io/file dir (:dat before)))))
-        (is (not (.exists (io/file dir "extras.lock"))))
+        (is (lock-free? dir))
         (x/close-extras! h))
       (finally (reset! st/state old)))))
 
 (deftest a-save-that-cant-take-the-lock-is-skipped
+  ;; held here outside save-extras!, as another process would hold it
   (let [dir (write-names! ["a/B"])
-        old @st/state]
-    (.mkdir (io/file dir "extras.lock"))
+        old @st/state
+        ch (lock-channel dir)
+        l (.tryLock ch)]
     (swap! st/state assoc :extras nil :extras-skipped 0)
     (try
+      (is (some? l))
       (x/save-extras! dir {"e/F" (utf8 "e/F")})
       (is (= 1 (:extras-skipped @st/state)))
       (is (nil? (:extras @st/state)))
-      (finally (reset! st/state old)))))
+      (finally (.close ch) (reset! st/state old)))
+    (is (lock-free? dir))))
 
 (deftest extras-entries-pass-maps-through-raw
   (let [m {:name "a/B" :origin :jdk :cached-class ["extra-1.so" 0 1]}
@@ -218,40 +234,6 @@
     (is (= #{"a/B" "c/D"} (set (keys got))))
     (is (identical? m (get got "a/B")))
     (is (identical? p (get got "c/D")))))
-
-(defn- lock-with! [dir token old?]
-  (let [lock (io/file dir "extras.lock")]
-    (.mkdir lock)
-    (.createNewFile (io/file lock token))
-    (when old? (.setLastModified lock (- (System/currentTimeMillis) 120000)))
-    lock))
-
-(deftest a-stale-lock-is-stolen-and-the-save-goes-ahead
-  (let [dir (write-names! ["a/B"])
-        old @st/state]
-    (lock-with! dir "owner-dead" true)
-    (swap! st/state assoc :extras nil :extras-skipped 0)
-    (try
-      (x/save-extras! dir {"e/F" (utf8 "e/F")})
-      (is (= 0 (:extras-skipped @st/state)))
-      (is (= ["a/B" "e/F"] (vec (x/extras-names (:extras @st/state)))))
-      (is (empty? (filter #(.startsWith ^String % "extras.lock") (.list (io/file dir)))))
-      (x/close-extras! (:extras @st/state))
-      (finally (reset! st/state old)))))
-
-(deftest a-steal-that-moved-a-fresh-lock-puts-it-back
-  (let [dir (temp-dir)
-        lock (lock-with! dir "owner-live" false)]
-    ;; judged stale while it held owner-dead, taken by owner-live since
-    (#'x/steal-lock! lock ["owner-dead"])
-    (is (.exists (io/file lock "owner-live")))
-    (is (= ["extras.lock"] (vec (.list (io/file dir)))))))
-
-(deftest a-release-leaves-a-lock-another-taker-holds
-  (let [dir (temp-dir)
-        lock (lock-with! dir "owner-other" false)]
-    (#'x/release-lock! lock "owner-mine")
-    (is (.exists (io/file lock "owner-other")))))
 
 (deftest a-damaged-index-at-save-is-replaced-and-its-data-file-dropped
   (let [dir (write-names! ["a/B" "c/D"])
@@ -270,28 +252,3 @@
       (is (= ["e/F"] (vec (x/extras-names (:extras @st/state)))))
       (x/close-extras! (:extras @st/state))
       (finally (reset! st/state old)))))
-
-(defn- empty-lock! [dir old?]
-  (let [lock (io/file dir "extras.lock")]
-    (.mkdir lock)
-    (when old? (.setLastModified lock (- (System/currentTimeMillis) 120000)))
-    lock))
-
-(deftest a-steal-that-moved-a-fresh-empty-lock-puts-it-back
-  ;; a taker between its mkdir and its token: judged by an empty listing
-  ;; seen on the dead lock it replaced, but its own dir is fresh
-  (let [dir (temp-dir)
-        lock (empty-lock! dir false)]
-    (#'x/steal-lock! lock [])
-    (is (.isDirectory lock))
-    (is (= ["extras.lock"] (vec (.list (io/file dir)))))))
-
-(deftest a-stale-empty-lock-is-stolen
-  (let [dir (temp-dir)
-        lock (empty-lock! dir true)]
-    (#'x/steal-lock! lock [])
-    (is (empty? (vec (.list (io/file dir)))))
-    (let [token (#'x/take-lock! lock)]
-      (is (some? token))
-      (#'x/release-lock! lock token)
-      (is (not (.exists lock))))))

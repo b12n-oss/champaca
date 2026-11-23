@@ -253,6 +253,12 @@ program may notice, and changes to the tasks.
   of one tag, or two builds of one dirty commit, no longer share a cache and
   load each other's compiled code. An older jolt still keys on
   `*jolt-version*`.
+- The startup cache's extras lock is an OS file lock on `extras.lock`
+  (FileChannel, jolt 0.8.29), where it was a directory with an owner token
+  that a waiting save stole after a minute. The system drops the lock when
+  its process dies, so a crashed save no longer makes the saves after it skip
+  for a minute, and a save that runs long can't have its lock taken. On an
+  older jolt saves go ahead unlocked.
 - The startup cache's `state.img` holds only the classes `boot.so` registers.
   The class entries that later programs add live in `extras.idx` and an
   `extras-<stamp>.dat` beside it, and a run reads one when it first needs the
