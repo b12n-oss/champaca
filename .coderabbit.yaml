@@ -80,5 +80,20 @@ reviews:
         number or a source, and commands that wouldn't run as written. A
         CHANGELOG entry goes under the right Keep a Changelog heading.
 
+# Context from this repository only. Install the GitHub App on champaca
+# alone ("Only select repositories"); these keep its learnings, issue and PR
+# lookups and repository links to this repo even if the install widens.
+knowledge_base:
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local
+  automatic_linking_mode: disabled
+  linked_repositories: []
+  mcp:
+    usage: disabled
+
 chat:
   auto_reply: true
