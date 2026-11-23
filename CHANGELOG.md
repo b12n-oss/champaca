@@ -245,6 +245,17 @@ The first public version. Champaca is still experimental: the
 Behavior that now follows the JVM where champaca did something else, which a
 program may notice, and changes to the tasks.
 
+- The startup cache's `state.img` holds only the classes `boot.so` registers.
+  The class entries that later programs add live in `extras.idx` and an
+  `extras-<stamp>.dat` beside it, and a run reads one when it first needs the
+  class, where it used to read every entry any program had left. After a full
+  `jolt test` (8,613 entries in the extras) a warm `Hello` read `state.img` in
+  12 ms where it took 105 ms, and finished in 267 ms against 334 ms (load
+  average near 26). On a cache only `Hello` had filled it took 228 ms against
+  220 ms. Saves merge into the extras under a lock, so programs that exit at
+  the same time keep each other's entries. A cache made before this change
+  has a different key and is rebuilt. `examples/extras.clj` and the
+  `tiered-fails` cases in `jolt test` check it.
 - A foreign call whose stack arguments Chez Scheme 10.4.1 would put in the
   wrong place is made, not refused, when jolt says its Chez places them
   right (`jolt.ffi/stack-args-correct?`, a jolt with Chez patches 0006/0007
