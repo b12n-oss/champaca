@@ -221,6 +221,12 @@
       (swap! state assoc :user-copy r)
       r)))
 
+(defn- jolt-build
+  "The running jolt's build id, or its version string on a jolt older than
+  0.8.29, which has no jolt.host/build-id."
+  []
+  (if-let [id (resolve 'jolt.host/build-id)] (id) *jolt-version*))
+
 (defn cache-dir []
   (when-not (= "off" (env "CHAMPACA_CACHE"))
     (let [modules (io/file (java-home) "lib" "modules")
@@ -237,11 +243,13 @@
           ;; img/runtime-version is the Chez version alone, so two jolt
           ;; releases on one Chez shared a key; the cached runtime.so and
           ;; method code call jolt's own procedures, which a release may
-          ;; change, hence jolt's version string too (a local build's is its
-          ;; git describe)
+          ;; change, hence jolt's build too. jolt.host/build-id (0.8.29) names
+          ;; the exact build: two builds of one commit, a release and a source
+          ;; build of one tag, share *jolt-version* but not the id. An older
+          ;; jolt has only the version string (a local build's git describe)
           key (hash [(when (.exists release) (slurp release)) (.length modules)
                      (if @bundle-root (image-index-crc) (.lastModified modules))
-                     (translator-fingerprint) (img/runtime-version) *jolt-version*
+                     (translator-fingerprint) (img/runtime-version) (jolt-build)
                      (some? (env "CHAMPACA_BT")) (some-> (env "CHAMPACA_LINES") str/lower-case)
                      (some? (env "CHAMPACA_STRUCTURED"))])
           d (io/file (cache-root) (Long/toHexString (bit-and key 0xffffffff)))

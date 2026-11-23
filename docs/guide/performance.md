@@ -148,9 +148,9 @@ The seventh run, back on `base-v1.jar`, gets `Base` from that jar's own file, wh
 
 ### When it's rebuilt
 
-The directory name is a hash of everything the compiled code depends on. That's the JDK (its `release` file plus the size and mtime of `lib/modules`), the translator's own source, the jolt version (`*jolt-version*`: a release's tag, or a local build's `git describe` string) and the Chez Scheme version under it, and whether `CHAMPACA_BT` is on. In an [app bundle](app-bundles.md), where a copy changes every mtime, a CRC-32 of the image's index stands in for the size and mtime; the index names every resource with its offset and sizes. Change any of them and the next run builds a fresh cache in a new directory.
+The directory name is a hash of everything the compiled code depends on. That's the JDK (its `release` file plus the size and mtime of `lib/modules`), the translator's own source, the jolt build (`jolt.host/build-id`, which names the exact build, so a release and a source build of one tag get separate caches; a jolt older than 0.8.29 gives its `*jolt-version*` instead) and the Chez Scheme version under it, and whether `CHAMPACA_BT` is on. In an [app bundle](app-bundles.md), where a copy changes every mtime, a CRC-32 of the image's index stands in for the size and mtime; the index names every resource with its offset and sizes. Change any of them and the next run builds a fresh cache in a new directory.
 
-The runtime and the compiled methods call jolt's own procedures, so two jolt versions never share a cache, even on one Chez. The price is a cold start after every jolt upgrade, and after every new local build, whose version names its commit. Run `jolt warm` once after switching to get the common JDK paths back.
+The runtime and the compiled methods call jolt's own procedures, so two jolt builds never share a cache, even on one Chez. The price is a cold start after every jolt upgrade, and after every new local build. Run `jolt warm` once after switching to get the common JDK paths back.
 
 Two switches control it:
 
