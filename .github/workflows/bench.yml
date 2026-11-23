@@ -88,7 +88,7 @@ jobs:
           echo "$home/bin" >> "$GITHUB_PATH"
       - uses: jlt-commons/setup-jolt@v1
         with:
-          version: "0.8.28"
+          version: "0.8.29"
       - name: restore the jolt build
         id: jolt
         uses: actions/cache/restore@v6
