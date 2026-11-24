@@ -175,30 +175,26 @@ The startup cache keeps structured and generated code apart (`CHAMPACA_STRUCTURE
 
 ```console
 $ CHAMPACA_PROF=1 jolt -M -m champaca.main target/classes Hello
-champaca prof (boot, cache hit): wall 215.67 ms
-  cache-load-code 90.1 ms
-  cache-read-state 29.28 ms
-  cache-load-runtime 18.41 ms
-  cache-load-unit 0.25 ms
-  java+runtime (rest) 77.64 ms
+champaca prof (boot, cache hit): wall 223.65 ms
+  cache-load-code 64.84 ms
+  cache-load-runtime 37.49 ms
+  gc 22.64 ms
+  cache-read-state 4.1 ms
+  cache-read-extras 0.37 ms
+  java+runtime (rest) 94.21 ms
 Hello, World!
-champaca prof (run, cache hit): wall 228.66 ms
-  cache-load-code 90.1 ms
-  cache-read-state 29.28 ms
-  cache-load-runtime 18.41 ms
-  cache-load-unit 2.4 ms
-  codegen 0.95 ms
-  chez-compile 0.61 ms
-  class-bytes 0.28 ms
-  link 0.2 ms
-  cf-parse 0.12 ms
-  register-text 0.09 ms
-  register-eval 0.08 ms
-  parse 0.02 ms
-  java+runtime (rest) 86.12 ms
+champaca prof (run, cache hit): wall 243.23 ms
+  cache-load-code 64.84 ms
+  cache-load-runtime 37.49 ms
+  gc 22.64 ms
+  cache-load-unit 4.13 ms
+  cache-read-state 4.1 ms
+  cache-read-extras 0.37 ms
+  cache-read-library 0.19 ms
+  java+runtime (rest) 109.47 ms
 ```
 
-The second report covers the whole run up to `main`'s return, boot included. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars-and-directories)).
+The second report covers the whole run up to `main`'s return, boot included. `gc` is the time Chez spent collecting over the same span as `wall`, and each phase leaves out the collections that ran inside it. Where a collection lands depends on everything allocated before it, so without that a phase could gain or lose 20 ms whenever an unrelated change moved one. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars-and-directories)).
 
 On a cache miss the phases are parsing, registering classes, code generation, Chez compilation and writing the cache.
 

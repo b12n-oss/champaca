@@ -32,29 +32,55 @@
 (defn trace? [] (some? (env "CHAMPACA_TRACE")))
 
 ;; CHAMPACA_PROF: exclusive (self) time per phase. A nested phase's time is
-;; charged to it and taken out of its parent.
+;; charged to it and taken out of its parent. A collection is taken out of
+;; the phase it interrupted and reported on a line of its own, with the ones
+;; between phases: where a collection lands depends on how much was
+;; allocated before it, so it would move between phases from one build to
+;; the next (b12n-oss/champaca#264). Each stack frame holds its children's
+;; [time gc-time].
 (def prof-stack (volatile! []))
+
+(defn- gc-ns
+  "Chez's collection time so far, real (wall) nanoseconds."
+  []
+  (let [t (s/call "sstats-gc-real" (s/call "statistics"))]
+    (+ (* 1000000000 (s/call "time-second" t)) (s/call "time-nanosecond" t))))
 
 (defn timed [k f]
   (if-not (env "CHAMPACA_PROF")
     (f)
-    (let [t0 (System/nanoTime)]
-      (vswap! prof-stack conj 0)
+    (let [t0 (System/nanoTime) g0 (gc-ns)]
+      (vswap! prof-stack conj [0 0])
       (try (f)
            (finally
-             (let [total (- (System/nanoTime) t0)
-                   child (peek @prof-stack)]
+             ;; gc first: gc-ns allocates, so a collection it sets off falls inside total
+             (let [gc (- (gc-ns) g0)
+                   total (- (System/nanoTime) t0)
+                   [child child-gc] (peek @prof-stack)
+                   own-gc (- gc child-gc)]
                (vswap! prof-stack pop)
                (when (seq @prof-stack)
-                 (vswap! prof-stack #(conj (pop %) (+ (peek %) total))))
-               (swap! state update-in [:prof k] (fnil + 0) (- total child))))))))
+                 (vswap! prof-stack #(conj (pop %) (mapv + (peek %) [total gc]))))
+               (swap! state update-in [:prof k] (fnil + 0) (- total child own-gc))))))))
 
-(defn prof-report [label wall-ns]
-  (let [p (:prof @state) ms #(/ (Math/round (/ % 1e4)) 100.0)
-        accounted (reduce + (vals p))]
+(defn prof-start
+  "Where a run's reports count from: the time, and under CHAMPACA_PROF the
+  collection time so far, so gc and wall cover the same interval."
+  []
+  {:t0 (System/nanoTime) :gc0 (when (env "CHAMPACA_PROF") (gc-ns))})
+
+(defn prof-report
+  "Print the phases' times since start (prof-start). gc is every collection
+  since then, each taken out of the phase it interrupted; rest is what no
+  phase or collection accounts for."
+  [label {:keys [t0 gc0]}]
+  (let [gc (- (gc-ns) gc0)
+        wall-ns (- (System/nanoTime) t0)
+        p (:prof @state) ms #(/ (Math/round (/ % 1e4)) 100.0)
+        accounted (+ gc (reduce + (vals p)))]
     (binding [*out* *err*]
       (println (str "champaca prof (" label ", cache " (name (or (:cache @state) :off)) "): wall " (ms wall-ns) " ms"))
-      (doseq [[k v] (sort-by (comp - val) p)] (println (str "  " (name k) " " (ms v) " ms")))
+      (doseq [[k v] (sort-by (comp - val) (assoc p :gc gc))] (println (str "  " (name k) " " (ms v) " ms")))
       (println (str "  java+runtime (rest) " (ms (- wall-ns accounted)) " ms")))))
 
 (defn scheme-trace!

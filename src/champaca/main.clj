@@ -17,7 +17,7 @@
             [champaca.launcher :refer [launcher-error jvm-options expand-class-path
                                        source-mode-of apply-launcher-options! program-args print-usage!]]
             [champaca.libcache :refer [save-generation! saves-generation!]]
-            [champaca.state :refer [state env prof-report]]))
+            [champaca.state :refer [state env prof-report prof-start]]))
 
 (defn- stats []
   (let [{:keys [classes lazy jitted jitted-user units-loaded restored]} @state]
@@ -77,14 +77,14 @@
   version first; a nil cname runs nothing after it (-version)."
   [classpath cname args]
   (saves-generation!) ; save-generation! runs at exit below
-  (let [t0 (System/nanoTime)
+  (let [start (prof-start)
         status (init! classpath)
-        _ (when (env "CHAMPACA_PROF") (prof-report "boot" (- (System/nanoTime) t0)))]
+        _ (when (env "CHAMPACA_PROF") (prof-report "boot" start))]
     (when (env "CHAMPACA_STATS") (binding [*out* *err*] (print "after boot: ")) (stats))
     (if (zero? status)
       (let [_ (install-exit-saves!)
             status (launch! cname args)]
-        (when (env "CHAMPACA_PROF") (prof-report "run" (- (System/nanoTime) t0)))
+        (when (env "CHAMPACA_PROF") (prof-report "run" start))
         (when (env "CHAMPACA_STATS") (stats))
         (save-generation!)
         status)

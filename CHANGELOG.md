@@ -339,6 +339,15 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- `CHAMPACA_PROF` charged a garbage collection to whichever phase it
+  interrupted, so a phase's time moved by 20 ms or more when an unrelated
+  change shifted where a collection landed. After the tiered class table,
+  a warm `Hello` showed `cache-load-unit` at 27 ms where the unit loads
+  themselves took 4 ms (#264). Each phase now leaves out the collections
+  inside it, and a `gc` line reports every collection over the same span
+  as `wall`.
+  Checked by timing `Hello` on a cache `jolt test` filled, on the commits
+  before and after the tiered class table.
 - A `getstatic` or `putstatic` through a class that inherits a field of that
   name from both an interface and a superclass found the superclass's, where
   the JVM searches the class's interfaces first (JVMS 5.4.3.2), and it
