@@ -163,7 +163,7 @@ jobs:
       - if: matrix.platform == 'amd64'
         uses: jlt-commons/setup-jolt@v1
         with:
-          version: "0.8.29"
+          version: "0.8.30"
       - name: install babashka
         if: matrix.platform == 'arm64'
         run: |
@@ -236,7 +236,7 @@ jobs:
       - if: matrix.platform == 'macos'
         uses: jlt-commons/setup-jolt@v1
         with:
-          version: "0.8.29"
+          version: "0.8.30"
       - name: restore the jolt build (macOS)
         if: matrix.platform == 'macos'
         id: jolt-macos
@@ -328,7 +328,7 @@ jobs:
           fetch-depth: 0
       - uses: jlt-commons/setup-jolt@v1
         with:
-          version: "0.8.29"
+          version: "0.8.30"
       # jolt-metrics and its Maven dependencies, so a run doesn't fetch them
       # from Maven Central each time: two runs on 2026-11-22 failed here when
       # Central answered HTTP 429
