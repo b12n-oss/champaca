@@ -53,8 +53,9 @@
       (vswap! prof-stack conj [0 0])
       (try (f)
            (finally
-             (let [total (- (System/nanoTime) t0)
-                   gc (- (gc-ns) g0)
+             ;; gc first: gc-ns allocates, so a collection it sets off falls inside total
+             (let [gc (- (gc-ns) g0)
+                   total (- (System/nanoTime) t0)
                    [child child-gc] (peek @prof-stack)
                    own-gc (- gc child-gc)]
                (vswap! prof-stack pop)
@@ -73,9 +74,9 @@
   since then, each taken out of the phase it interrupted; rest is what no
   phase or collection accounts for."
   [label {:keys [t0 gc0]}]
-  (let [wall-ns (- (System/nanoTime) t0)
+  (let [gc (- (gc-ns) gc0)
+        wall-ns (- (System/nanoTime) t0)
         p (:prof @state) ms #(/ (Math/round (/ % 1e4)) 100.0)
-        gc (- (gc-ns) gc0)
         accounted (+ gc (reduce + (vals p)))]
     (binding [*out* *err*]
       (println (str "champaca prof (" label ", cache " (name (or (:cache @state) :off)) "): wall " (ms wall-ns) " ms"))
