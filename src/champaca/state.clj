@@ -46,9 +46,6 @@
   (let [t (s/call "sstats-gc-real" (s/call "statistics"))]
     (+ (* 1000000000 (s/call "time-second" t)) (s/call "time-nanosecond" t))))
 
-;; collection time before this namespace loaded, jolt's own start-up
-(def ^:private prof-gc0 (when (env "CHAMPACA_PROF") (gc-ns)))
-
 (defn timed [k f]
   (if-not (env "CHAMPACA_PROF")
     (f)
@@ -65,13 +62,20 @@
                  (vswap! prof-stack #(conj (pop %) (mapv + (peek %) [total gc]))))
                (swap! state update-in [:prof k] (fnil + 0) (- total child own-gc))))))))
 
+(defn prof-start
+  "Where a run's reports count from: the time, and under CHAMPACA_PROF the
+  collection time so far, so gc and wall cover the same interval."
+  []
+  {:t0 (System/nanoTime) :gc0 (when (env "CHAMPACA_PROF") (gc-ns))})
+
 (defn prof-report
-  "Print the phases' times for the run so far. gc is every collection since
-  this namespace loaded, each taken out of the phase it interrupted; rest is
-  what no phase or collection accounts for."
-  [label wall-ns]
-  (let [p (:prof @state) ms #(/ (Math/round (/ % 1e4)) 100.0)
-        gc (- (gc-ns) (or prof-gc0 0))
+  "Print the phases' times since start (prof-start). gc is every collection
+  since then, each taken out of the phase it interrupted; rest is what no
+  phase or collection accounts for."
+  [label {:keys [t0 gc0]}]
+  (let [wall-ns (- (System/nanoTime) t0)
+        p (:prof @state) ms #(/ (Math/round (/ % 1e4)) 100.0)
+        gc (- (gc-ns) gc0)
         accounted (+ gc (reduce + (vals p)))]
     (binding [*out* *err*]
       (println (str "champaca prof (" label ", cache " (name (or (:cache @state) :off)) "): wall " (ms wall-ns) " ms"))

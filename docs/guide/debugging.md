@@ -175,26 +175,26 @@ The startup cache keeps structured and generated code apart (`CHAMPACA_STRUCTURE
 
 ```console
 $ CHAMPACA_PROF=1 jolt -M -m champaca.main target/classes Hello
-champaca prof (boot, cache hit): wall 212.66 ms
-  cache-load-code 64.52 ms
-  gc 46.2 ms
-  cache-load-runtime 33.83 ms
-  cache-read-state 4.29 ms
-  cache-read-extras 2.06 ms
-  java+runtime (rest) 61.76 ms
+champaca prof (boot, cache hit): wall 223.65 ms
+  cache-load-code 64.84 ms
+  cache-load-runtime 37.49 ms
+  gc 22.64 ms
+  cache-read-state 4.1 ms
+  cache-read-extras 0.37 ms
+  java+runtime (rest) 94.21 ms
 Hello, World!
-champaca prof (run, cache hit): wall 257.54 ms
-  gc 67.21 ms
-  cache-load-code 64.52 ms
-  cache-load-runtime 33.83 ms
-  cache-read-state 4.29 ms
-  cache-load-unit 4.2 ms
-  cache-read-library 3.44 ms
-  cache-read-extras 2.06 ms
-  java+runtime (rest) 78.0 ms
+champaca prof (run, cache hit): wall 243.23 ms
+  cache-load-code 64.84 ms
+  cache-load-runtime 37.49 ms
+  gc 22.64 ms
+  cache-load-unit 4.13 ms
+  cache-read-state 4.1 ms
+  cache-read-extras 0.37 ms
+  cache-read-library 0.19 ms
+  java+runtime (rest) 109.47 ms
 ```
 
-The second report covers the whole run up to `main`'s return, boot included. `gc` is the time Chez spent collecting, and each phase leaves out the collections that ran inside it. Where a collection lands depends on everything allocated before it, so without that a phase could gain or lose 20 ms whenever an unrelated change moved one. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars-and-directories)).
+The second report covers the whole run up to `main`'s return, boot included. `gc` is the time Chez spent collecting over the same span as `wall`, and each phase leaves out the collections that ran inside it. Where a collection lands depends on everything allocated before it, so without that a phase could gain or lose 20 ms whenever an unrelated change moved one. `cache-read-library` shows up there when the run read the library cache ([performance](performance.md#classes-from-jars-and-directories)).
 
 On a cache miss the phases are parsing, registering classes, code generation, Chez compilation and writing the cache.
 
