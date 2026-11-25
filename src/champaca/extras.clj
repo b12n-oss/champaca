@@ -316,18 +316,24 @@
 ;; a second tryLock from it throws
 (defonce ^:private save-lock (Object.))
 
+(defn index-dat
+  "The data file dir's extras.idx names, read from its header alone, or nil
+  when there is no index or the name can't be read."
+  [dir]
+  (try (let [idx (java.nio.file.Files/readAllBytes (.toPath (io/file dir "extras.idx")))
+             dl (when (>= (alength idx) 12) (.getInt (ByteBuffer/wrap idx) 8))]
+         (when (and dl (< 0 dl 256) (<= (+ 12 dl) (alength idx)))
+           (let [dat (String. idx 12 (int dl) "UTF-8")]
+             (when (re-matches #"extras-\d+\.dat" dat) dat))))
+       (catch Exception _ nil)))
+
 (defn- damaged-index!
   "One stderr line for a damaged extras.idx a save replaces, and the data
   file it names deleted when the name can be read. nil, for no index."
   [dir ex]
   (binding [*out* *err*]
     (println "champaca: replacing a damaged startup cache extras index:" (ex-message ex)))
-  (try (let [idx (java.nio.file.Files/readAllBytes (.toPath (io/file dir "extras.idx")))
-             dl (when (>= (alength idx) 12) (.getInt (ByteBuffer/wrap idx) 8))]
-         (when (and dl (< 0 dl 256) (<= (+ 12 dl) (alength idx)))
-           (let [dat (String. idx 12 (int dl) "UTF-8")]
-             (when (re-matches #"extras-\d+\.dat" dat) (.delete (io/file dir dat))))))
-       (catch Exception _ nil))
+  (when-let [dat (index-dat dir)] (.delete (io/file dir dat)))
   nil)
 
 (defn save-extras!

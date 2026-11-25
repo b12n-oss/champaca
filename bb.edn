@@ -697,6 +697,48 @@
                                                      cache-off "(generation not checked, CHAMPACA_CACHE=off)"
                                                      :else ""))
                                       (if ok [] ["exit-save"]))
+                    ;; a save deletes the generations no run has loaded from for a
+                    ;; week, a crash's leftovers and data files no index names, and
+                    ;; keeps a generation a run loaded from (test/cacheprune, #265).
+                    ;; The test ages the files by hand. With the cache off nothing is
+                    ;; saved, so nothing is checked
+                    prune-fails (if (= "off" (System/getenv "CHAMPACA_CACHE"))
+                                  (do (println "PASS a save prunes generations no run used for a week (test/cacheprune) (not checked, CHAMPACA_CACHE=off)")
+                                      [])
+                                  (let [_ (shell "javac -d target/cacheprune-classes test/cacheprune/PruneUsed.java test/cacheprune/PruneOther.java")
+                                        cache (str (fs/create-temp-dir {:prefix "champaca-prune-"}))
+                                        ok-run (fn [m]
+                                                 (let [{:keys [exit out]} (run-limited 300 {:label (str "prune-" m) :extra-env {"CHAMPACA_CACHE_DIR" cache}}
+                                                                                       (jolt-bin) "-M" "-m" "champaca.main" "target/cacheprune-classes" m)]
+                                                   (and (zero? exit) (= out (slurp (str "test/cacheprune/" m ".expected"))))))
+                                        names (fn [k glob] (set (map (fn [p] (str (fs/file-name p))) (fs/glob k glob))))
+                                        stale ["extra-1.so" "extras-1.dat" "extra-2.so.tmp" "state.img.tmp-1"]
+                                        bad (try
+                                              (let [cold (ok-run "PruneUsed")
+                                                    k (str (fs/parent (first (fs/glob cache "*/boot.so"))))
+                                                    used (names k "extra-*.so")
+                                                    ;; an unreferenced generation, two data files no index names
+                                                    ;; (one fresh) and the temp files a crash leaves
+                                                    _ (fs/copy (fs/path k (first used)) (fs/path k "extra-1.so"))
+                                                    _ (doseq [n (rest stale)] (spit (str k "/" n) n))
+                                                    _ (spit (str k "/extras-2.dat") "fresh")
+                                                    week-ago (- (System/currentTimeMillis) (* 8 24 60 60 1000))
+                                                    _ (doseq [n (concat used stale)] (.setLastModified (fs/file k n) week-ago))
+                                                    warm (ok-run "PruneUsed")
+                                                    other (ok-run "PruneOther")
+                                                    after (names k "*")
+                                                    again (ok-run "PruneUsed")]
+                                                (cond-> []
+                                                  (not (and cold warm other again)) (conj (str "exit or output: cold " cold ", warm " warm ", other " other ", again " again))
+                                                  (not (every? after used)) (conj (str "a used generation went: " (pr-str (sort after))))
+                                                  (some after stale) (conj (str "a stale file stayed: " (pr-str (sort after))))
+                                                  (not (after "extras-2.dat")) (conj "a fresh data file no index names went")
+                                                  (not (< (count used) (count (names k "extra-*.so")))) (conj "PruneOther saved no generation")))
+                                              (catch Exception e [(str "threw " (ex-message e))])
+                                              (finally (fs/delete-tree cache)))]
+                                    (println (if (seq bad) "FAIL" "PASS") "a save prunes generations no run used for a week (test/cacheprune)"
+                                             (str/join "; " bad))
+                                    (if (seq bad) ["cache-prune"] [])))
                     ;; programs a user runs alone, each on a fresh cache of its own,
                     ;; cold then warm: the run above shares one cache across every
                     ;; program, which hid a bug only a program's own second run shows
@@ -1127,7 +1169,7 @@
                                           ok (zero? exit)]]
                                 (do (println (if ok "PASS" "FAIL") (str "examples/" n ".clj (" what ")"))
                                     (when-not ok (print out) (flush) n))))
-                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails tiered-fails structured-fails save-fails signal-fails heap-fails exit-save-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
+                    fails (remove nil? (concat fails jar-fails opt-fails mainsel-fails srclaunch-fails modopts-fails modpath-fails encoding-fails boot-fails tiered-fails structured-fails save-fails signal-fails heap-fails exit-save-fails prune-fails alone-fails bundle-fails libcache-fails nolines-fails lam-fails edit-fails def-fails fix-fails aaa-fails ex-fails))
                     mains (concat mains ["-jar" "-D -jar" "bad option" "ignored options" "-cp" "-cp star dir" "-cp missing" "-cp -jar" "accepted options" "boot generation" "tiered class table" "cache save"] (map (fn [i] (str "libcache-" i)) (range 1 15))
                                   ["libcache-nolines" "libcache-nolines-cache-off" "stackcheck-lines-off"] (map (fn [i] (str "libcache-lam-" i)) (range 1 9))
                                   (map (fn [i] (str "libcache-edit-" i)) (range 1 4))
