@@ -132,7 +132,7 @@
 
 (define (load-unit path off len)
   (let ([p (or (hashtable-ref unit-ports path #f)
-               (let ([p (guard (c [(not (file-exists? path)) #f])
+               (let ([p (guard (c [(i/o-file-does-not-exist-error? c) #f])
                           (open-file-input-port path))])
                  (when p (hashtable-set! unit-ports path p))
                  p))])
