@@ -245,6 +245,20 @@ The first public version. Champaca is still experimental: the
 Behavior that now follows the JVM where champaca did something else, which a
 program may notice, and changes to the tasks.
 
+- A save to the startup cache deletes the generations (`extra-<n>.so`) no
+  run has loaded from for a week, the way the library cache's files and old
+  key directories already go. The first unit a process loads from a
+  generation marks the file as used. The same save also deletes week-old
+  temp files a crashed save left and `extras-*.dat` files the current index
+  doesn't name (#265). A cache `jolt test` filled held 335 generations
+  (99.8 MB), and 328 of them (99.7 MB) were still referenced, so compacting
+  them would have freed almost nothing. A class whose code was deleted
+  compiles again on its next use, and that run's save caches it, even when
+  another process deletes the file between the check and the first open.
+  When `extras.idx` exists but its data file's name can't be read, every
+  data file stays. Checked by the cache-prune row of `jolt test`
+  (test/cacheprune), which ages a cache's files by hand and deletes a
+  generation that classes still use.
 - Pull requests get an advisory review from CodeRabbit, set up in
   `.coderabbit.yaml`. It doesn't edit pull request descriptions or push
   commits, and main still requires only `ci ok`.

@@ -130,6 +130,28 @@
             :when (or (< (.lastModified d) cutoff) (over d))]
       (delete-tree! d))))
 
+;; Inside a key directory, a generation no run has loaded from for a week goes
+;; (load-unit! touches each one a process uses), and so do a crash's leftover
+;; temp files and data files no index names (#265). Almost every generation
+;; stays referenced from some class entry, so age is what bounds the
+;; directory: a class whose code went compiles again and the next save caches
+;; it. Racy by design, like the library pruning: a process already reading a
+;; file keeps its open port, and one that opens it after the delete misses.
+(defn prune-generations!
+  "Delete dir's generations and leftovers untouched for stale-ms. live-dat is
+  the data file extras.idx names, which stays whatever its age. With an
+  extras.idx whose name can't be read (live-dat nil), every data file stays."
+  [^java.io.File dir live-dat]
+  (let [cutoff (- (System/currentTimeMillis) stale-ms)
+        dats? (or live-dat (not (.exists (io/file dir "extras.idx"))))]
+    (doseq [^java.io.File f (.listFiles dir)
+            :let [n (.getName f)]
+            :when (and (.isFile f) (< (.lastModified f) cutoff)
+                       (or (re-matches #"extra-\d+\.so(\.tmp)?" n)
+                           (re-matches #"(state\.img|extras\.idx)\.tmp-\d+" n)
+                           (and dats? (re-matches #"extras-\d+\.dat" n) (not= n live-dat))))]
+      (.delete f))))
+
 (defn- user-cache-root
   "Where a bundle whose own cache can't be written keeps a writable one:
   CHAMPACA_USER_CACHE_DIR (off for none), else ~/.cache/champaca/bundles, one
@@ -330,14 +352,24 @@
                    (throw e)))]
     (conj starts (s/call "end-units!"))))
 
+;; the generations this process has loaded from, each touched once
+(defonce ^:private touched (volatile! #{}))
+
 (defn load-unit!
   "Run one unit of a cached generation: [file offset length]. False when the
   generation file is gone (pruned under a live process, cleared by hand), so
-  callers fall back to compiling and the next save re-caches the unit."
+  callers fall back to compiling and the next save re-caches the unit. The
+  first unit a process loads from a generation marks the file as used, which
+  keeps prune-generations! from deleting it."
   [[file off len]]
   (let [f (io/file (:cache-dir @state) file)]
     (if (.exists f)
-      (do (swap! state update :units-loaded (fnil inc 0))
-          (timed :cache-load-unit #(s/call "load-unit" (str f) off len))
-          true)
+      (do (when-not (contains? @touched file)
+            (vswap! touched conj file)
+            ;; answers false in a cache this process can't write
+            (.setLastModified f (System/currentTimeMillis)))
+          ;; false when a prune deleted the file since the check
+          (when (boolean (timed :cache-load-unit #(s/call "load-unit" (str f) off len)))
+            (swap! state update :units-loaded (fnil inc 0))
+            true))
       false)))

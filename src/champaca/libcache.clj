@@ -15,9 +15,9 @@
             [clojure.string :as str]
             [jolt.scheme :as s]
             [champaca.cachedir :refer [cache-origin cache-read-only? cache-unusable! delete-tree! load-unit!
-                                       prune-cache-root! record! runtime-files stale-ms write-units!]]
+                                       prune-cache-root! prune-generations! record! runtime-files stale-ms write-units!]]
             [champaca.classpath :refer [class-source layer-module note-class-entry! outside-boot-layer?]]
-            [champaca.extras :refer [class-entry close-extras! extras-entries open-extras save-extras!]]
+            [champaca.extras :refer [class-entry close-extras! extras-entries index-dat open-extras save-extras!]]
             [champaca.link :refer [ancestry ancestry-of-unlinked registration-text sealed-refused?]]
             [champaca.state :refer [state trace? timed scheme! ensure-loaded!* packed? packed-fp thaw-entry
                                     packed-entry strip-for-cache]]
@@ -504,7 +504,9 @@
   (when-let [dir (writable-cache-dir)]
     (let [units (some-> (:recording @state) deref)]
       (when (seq units)
-        (save-units! dir units)))
+        (save-units! dir units)
+        ;; only a save adds a generation, so only a save needs to prune
+        (prune-generations! dir (index-dat dir))))
     ;; after the units above have their places; one jar's failure leaves it
     ;; dirty and the others still go
     (when (seq (:library-dirty @state))
