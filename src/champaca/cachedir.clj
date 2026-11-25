@@ -139,15 +139,17 @@
 ;; file keeps its open port, and one that opens it after the delete misses.
 (defn prune-generations!
   "Delete dir's generations and leftovers untouched for stale-ms. live-dat is
-  the data file extras.idx names, which stays whatever its age."
+  the data file extras.idx names, which stays whatever its age. With an
+  extras.idx whose name can't be read (live-dat nil), every data file stays."
   [^java.io.File dir live-dat]
-  (let [cutoff (- (System/currentTimeMillis) stale-ms)]
+  (let [cutoff (- (System/currentTimeMillis) stale-ms)
+        dats? (or live-dat (not (.exists (io/file dir "extras.idx"))))]
     (doseq [^java.io.File f (.listFiles dir)
             :let [n (.getName f)]
             :when (and (.isFile f) (< (.lastModified f) cutoff)
                        (or (re-matches #"extra-\d+\.so(\.tmp)?" n)
                            (re-matches #"(state\.img|extras\.idx)\.tmp-\d+" n)
-                           (and (re-matches #"extras-\d+\.dat" n) (not= n live-dat))))]
+                           (and dats? (re-matches #"extras-\d+\.dat" n) (not= n live-dat))))]
       (.delete f))))
 
 (defn- user-cache-root
@@ -366,7 +368,8 @@
             (vswap! touched conj file)
             ;; answers false in a cache this process can't write
             (.setLastModified f (System/currentTimeMillis)))
-          (swap! state update :units-loaded (fnil inc 0))
-          (timed :cache-load-unit #(s/call "load-unit" (str f) off len))
-          true)
+          ;; false when a prune deleted the file since the check
+          (when (boolean (timed :cache-load-unit #(s/call "load-unit" (str f) off len)))
+            (swap! state update :units-loaded (fnil inc 0))
+            true))
       false)))

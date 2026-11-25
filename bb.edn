@@ -727,13 +727,24 @@
                                                     warm (ok-run "PruneUsed")
                                                     other (ok-run "PruneOther")
                                                     after (names k "*")
-                                                    again (ok-run "PruneUsed")]
+                                                    again (ok-run "PruneUsed")
+                                                    ;; a referenced generation gone, as a prune by another
+                                                    ;; process leaves it: its classes compile again and the
+                                                    ;; save caches them in a new generation
+                                                    before-gone (names k "extra-*.so")
+                                                    _ (doseq [n used] (fs/delete (fs/path k n)))
+                                                    gone (ok-run "PruneUsed")
+                                                    after-gone (names k "extra-*.so")
+                                                    recached (ok-run "PruneUsed")]
                                                 (cond-> []
-                                                  (not (and cold warm other again)) (conj (str "exit or output: cold " cold ", warm " warm ", other " other ", again " again))
+                                                  (not (and cold warm other again gone recached))
+                                                  (conj (str "exit or output: cold " cold ", warm " warm ", other " other ", again " again
+                                                             ", gone " gone ", recached " recached))
                                                   (not (every? after used)) (conj (str "a used generation went: " (pr-str (sort after))))
                                                   (some after stale) (conj (str "a stale file stayed: " (pr-str (sort after))))
                                                   (not (after "extras-2.dat")) (conj "a fresh data file no index names went")
-                                                  (not (< (count used) (count (names k "extra-*.so")))) (conj "PruneOther saved no generation")))
+                                                  (not (< (count used) (count before-gone))) (conj "PruneOther saved no generation")
+                                                  (not (seq (remove before-gone after-gone))) (conj "no generation saved after a referenced one went")))
                                               (catch Exception e [(str "threw " (ex-message e))])
                                               (finally (fs/delete-tree cache)))]
                                     (println (if (seq bad) "FAIL" "PASS") "a save prunes generations no run used for a week (test/cacheprune)"

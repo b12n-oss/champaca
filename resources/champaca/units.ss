@@ -125,17 +125,22 @@
     (set! unit-out #f)
     n))
 
-;; Generation files stay open once read; a unit is a slice of one.
+;; Generation files stay open once read; a unit is a slice of one. #f when
+;; the file went before this process first opened it (another process's prune,
+;; #265), so the caller compiles instead; any other failure raises.
 (define unit-ports (make-hashtable string-hash string=?))
 
 (define (load-unit path off len)
   (let ([p (or (hashtable-ref unit-ports path #f)
-               (let ([p (open-file-input-port path)])
-                 (hashtable-set! unit-ports path p)
+               (let ([p (guard (c [(not (file-exists? path)) #f])
+                          (open-file-input-port path))])
+                 (when p (hashtable-set! unit-ports path p))
                  p))])
-    (set-port-position! p off)
-    (load-compiled-from-port (open-bytevector-input-port (get-bytevector-n p len)))
-    (void)))
+    (and p
+         (begin
+           (set-port-position! p off)
+           (load-compiled-from-port (open-bytevector-input-port (get-bytevector-n p len)))
+           #t))))
 
 ;; One compiled procedure makes every method stub, so registration text (and
 ;; the boot cache built from it) carries a call per method, not a lambda. The
