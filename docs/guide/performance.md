@@ -248,11 +248,11 @@ Reading lines spent 60% of its time in three small JDK loops that HotSpot replac
 
 ## The pinned jolt
 
-Inside this repo, `deps.edn` names a jolt commit, the v0.8.30 tag (the tasks need 0.8.26 or later, for `System/mapLibraryName`):
+Inside this repo, `deps.edn` names a jolt commit, the v0.8.31 tag (the tasks need 0.8.26 or later, for `System/mapLibraryName`):
 
 ```clojure
 :champaca/jolt {:git/url "https://github.com/jolt-lang/jolt.git"
-                :git/sha "f6ed60a335960dc0657f7f98457b01426ae4cf90"}
+                :git/sha "3f9506266ca422e2d1f1370659289cde88cbbf2a"}
 ```
 
 It's built from source, not taken from a release binary. Built that way, v0.8.24 ran a warm `Hello` in 0.42 s (median of eight, interleaved, on a loaded machine), where the installed release binary of the same version took 0.59 s and started jolt itself 70 ms slower. The same held for 0.8.23 (0.32 s against 0.45 s). A local build of v0.8.23 runs a warm `Hello` as fast as one of v0.8.24, so the gap came from how the release binaries were built and not from jolt's code.

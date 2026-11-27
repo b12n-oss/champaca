@@ -358,11 +358,13 @@
         (set! overflow-recovery-installed #t)))))
 (install-overflow-recovery!)
 (define overflows-seen (make-weak-eq-hashtable))
+;; jolt's throwable record by its uid: -v2 through 0.8.30, -v3 since 0.8.31
+;; (its cause became mutable). Both keep the class name in field 0.
 (define (jolt-stack-overflow? e)
   (and jolt-overflow-names (condition? e) ((car jolt-overflow-names) e)
        (let ([v ((cadr jolt-overflow-names) e)])
          (and (record? v)
-              (eq? (record-type-uid (record-rtd v)) 'jolt-ex-info-record-v2)
+              (memq (record-type-uid (record-rtd v)) '(jolt-ex-info-record-v2 jolt-ex-info-record-v3))
               (equal? ((record-accessor (record-rtd v) 0) v) "java.lang.StackOverflowError")))))
 ;; jolt's out-of-memory error is OutOfMemoryError to Java (arrays.ss)
 (define (java-raise-of e)
