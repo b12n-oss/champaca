@@ -353,6 +353,12 @@ program may notice, and changes to the tasks.
 
 ### Fixed
 
+- On jolt 0.8.31, a Java program's deep recursion ended the process with
+  jolt's "stack limit ... was exceeded" error instead of throwing
+  `StackOverflowError` to the program's own handler. jolt 0.8.31 renamed its
+  throwable record from `jolt-ex-info-record-v2` to `-v3`, and
+  `jolt-stack-overflow?` in runtime.ss matched only the old name. It now
+  accepts both. StackOverflowCheck caught it.
 - `CHAMPACA_PROF` charged a garbage collection to whichever phase it
   interrupted, so a phase's time moved by 20 ms or more when an unrelated
   change shifted where a collection landed. After the tiered class table,
